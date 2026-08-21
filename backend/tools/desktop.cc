@@ -11,9 +11,10 @@
 // (third_party/webview/webview.h, v0.10.0). Its built-in loader resolves the
 // installed WebView2 runtime directly, so no WebView2Loader.dll is shipped.
 //
-// Build (package.sh does this):
+// Build (package.sh does this). --subsystem=windows links the shell as a GUI
+// binary so double-clicking it never pops a console window:
 //   zig c++ -std=c++17 -O1 -I third_party/webview -o c-agent-desktop.exe tools/desktop.cc \
-//     -lole32 -loleaut32 -luuid -lshlwapi -luser32 -lgdi32 -lws2_32 -lshell32
+//     -Wl,--subsystem=windows -lole32 -loleaut32 -luuid -lshlwapi -luser32 -lgdi32 -lws2_32 -lshell32
 
 #define WIN32_LEAN_AND_MEAN
 #include <winsock2.h>
