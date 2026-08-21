@@ -1,0 +1,12 @@
+# Normalize line endings: sources stay LF, Windows batch stays CRLF.
+*.c   text eol=lf
+*.h   text eol=lf
+*.cc  text eol=lf
+*.cpp text eol=lf
+*.py  text eol=lf
+*.md  text eol=lf
+*.json text eol=lf
+*.html text eol=lf
+*.iss text eol=lf
+*.sh  text eol=lf
+*.bat text eol=crlf

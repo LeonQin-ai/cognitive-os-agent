@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>c-agent — Cognitive OS Console</title>
+<style>
+  :root{--bg:#0f1115;--card:#171a21;--border:#262b36;--fg:#e6e6e6;--muted:#8a93a3;--accent:#2f6feb;--ok:#4ade80;--warn:#ffd166}
+  *{box-sizing:border-box}
+  body{font-family:system-ui,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--fg);margin:0;display:flex;height:100vh;overflow:hidden}
+  aside{width:210px;background:#0b0d11;border-right:1px solid var(--border);padding:16px 0;display:flex;flex-direction:column;flex-shrink:0}
+  aside h1{font-size:15px;margin:0 16px 4px}
+  aside .sub{color:var(--muted);font-size:11px;margin:0 16px 16px}
+  nav{flex:1;overflow-y:auto}
+  nav button{display:block;width:100%;text-align:left;background:none;border:0;color:var(--fg);padding:9px 16px;font-size:13px;cursor:pointer}
+  nav button:hover{background:#14171d}
+  nav button.on{background:#1a1f2b;border-left:3px solid var(--accent);color:#fff}
+  main{flex:1;display:flex;flex-direction:column;min-width:0}
+  .top{display:flex;align-items:center;justify-content:space-between;padding:14px 20px;border-bottom:1px solid var(--border)}
+  .top .title{font-size:14px;font-weight:600}
+  .top .flow{color:var(--muted);font-size:11px;letter-spacing:.5px}
+  .content{flex:1;padding:20px;overflow-y:auto}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:14px}
+  .card h2{font-size:13px;margin:0 0 10px;color:var(--fg)}
+  .hint{color:var(--muted);font-size:12px;margin:4px 0 10px}
+  textarea,input[type=text]{width:100%;background:var(--bg);color:var(--fg);border:1px solid #2c3340;border-radius:6px;padding:8px;font-family:ui-monospace,Consolas,monospace;font-size:13px}
+  textarea{height:64px}
+  .row{display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap}
+  button{background:var(--accent);color:#fff;border:0;border-radius:6px;padding:8px 14px;font-size:13px;cursor:pointer}
+  button.sec{background:var(--card);border:1px solid var(--border);color:var(--fg)}
+  button:disabled{opacity:.5;cursor:not-allowed}
+  pre{background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:10px;font-size:12px;overflow:auto;white-space:pre-wrap;word-break:break-word;max-height:50vh;min-height:60px;margin:0}
+  .badge-ok{color:var(--ok)} .badge-warn{color:var(--warn)}
+  table{width:100%;border-collapse:collapse;font-size:12px}
+  th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--border)}
+  th{color:var(--muted);font-weight:600}
+  .muted{color:var(--muted)}
+</style>
+</head>
+<body>
+<aside>
+  <h1>c-agent</h1>
+  <div class="sub">Cognitive OS Runtime</div>
+  <nav id="nav">
+    <button data-p="tasks" class="on">Tasks</button>
+    <button data-p="tools">Tools</button>
+    <button data-p="memory">Memory</button>
+    <button data-p="snapshots">Snapshots</button>
+    <button data-p="trace">Trace</button>
+    <button data-p="models">Models</button>
+    <button data-p="usage">Usage</button>
+    <button data-p="plugins">Plugins</button>
+    <button data-p="skills">Skills</button>
+    <button data-p="mcp">MCP</button>
+    <button data-p="cluster">Cluster</button>
+    <button data-p="metrics">Metrics</button>
+  </nav>
+</aside>
+
+<main>
+  <div class="top">
+    <div class="title">Console</div>
+    <div class="flow">RECEIVE → UNDERSTAND → REASON → PLAN → ACT → VERIFY → LEARN</div>
+  </div>
+  <div class="content" id="content"></div>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+
+async function call(method, path, body) {
+  try {
+    const r = await fetch(path, {method, headers:{'Content-Type':'application/json'}, body: body ? JSON.stringify(body) : undefined});
+    const text = await r.text();
+    let obj; try { obj = JSON.parse(text); } catch { obj = {raw: text}; }
+    return {status: r.status, obj, text};
+  } catch (e) {
+    return {status: 0, obj: {error: String(e)}, text: ''};
+  }
+}
+
+function esc(s){ return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+function renderPre(obj){
+  return '<div class="card"><h2>Output</h2><pre>' + esc(JSON.stringify(obj, null, 2)) + '</pre></div>';
+}
+
+/* ---- panels ---- */
+const panels = {};
+
+panels.tasks = `
+  <div class="card">
+    <h2>Run a task</h2>
+    <div class="hint">提交一个自然语言任务，走完整 RECEIVE→…→LEARN 链路。</div>
+    <textarea id="prompt" placeholder="例如：在 test/ 建文件 a.txt 并写入 hello"></textarea>
+    <div class="row">
+      <button onclick="runTask()">Run</button>
+      <span id="taskstat" class="muted"></span>
+    </div>
+  </div>
+  <div class="card"><h2>Result</h2><pre id="out">等待输入…</pre></div>`;
+
+async function runTask(){
+  const prompt = $('prompt').value.trim();
+  if(!prompt) return;
+  $('taskstat').textContent = 'submitting…';
+  const c = await call('POST','/v1/tasks',{prompt});
+  const id = c.obj && c.obj.id;
+  if(id === undefined){ $('out').textContent = JSON.stringify(c.obj,null,2); $('taskstat').textContent=''; return; }
+  for(let i=0;i<120;i++){
+    const r = await call('GET','/v1/tasks/'+id);
+    $('out').textContent = JSON.stringify(r.obj,null,2);
+    const st = r.obj.status;
+    $('taskstat').textContent = st || '';
+    if(st==='DONE'||st==='FAILED'||st==='CANCELLED'||st==='TIMEOUT') return;
+    await new Promise(res=>setTimeout(res,300));
+  }
+}
+
+panels.tools = '<div class="card"><h2>Tools</h2><pre id="tools-out">加载中…</pre></div>';
+panels.memory = '<div class="card"><h2>Memory</h2><pre id="memory-out">加载中…</pre></div>';
+panels.snapshots = `
+  <div class="card"><h2>Snapshots</h2>
+    <div class="row"><button onclick="load('snapshots')">Refresh</button>
+    <button class="sec" onclick="rollback()">Rollback latest</button></div>
+  </div>
+  <div class="card"><pre id="snapshots-out">加载中…</pre></div>`;
+panels.trace = '<div class="card"><h2>Trace (spans)</h2><pre id="trace-out">加载中…</pre></div>';
+panels.models = '<div class="card"><h2>Model routes</h2><pre id="models-out">加载中…</pre></div>';
+panels.usage = '<div class="card"><h2>Token usage</h2><pre id="usage-out">加载中…</pre></div>';
+panels.plugins = '<div class="card"><h2>Plugin registry</h2><pre id="plugins-out">加载中…</pre></div>';
+panels.skills = `
+  <div class="card"><h2>Skills</h2>
+    <div class="hint">静态 Shell/Python 技能。</div>
+    <div class="row">
+      <input type="text" id="skillname" placeholder="技能名，例如 echo_hello" style="flex:1;min-width:180px">
+      <button onclick="runSkill()">Run</button>
+    </div>
+  </div>
+  <div class="card"><pre id="skills-out">加载中…</pre></div>`;
+panels.mcp = '<div class="card"><h2>MCP connections</h2><pre id="mcp-out">加载中…</pre></div>';
+panels.cluster = '<div class="card"><h2>Cluster nodes</h2><pre id="cluster-out">加载中…</pre></div>';
+panels.metrics = '<div class="card"><h2>Metrics</h2><pre id="metrics-out">加载中…</pre></div>';
+
+const fetchers = {
+  tools:     {path:'/v1/tools',     out:'tools-out'},
+  memory:    {path:'/v1/memory',    out:'memory-out'},
+  snapshots: {path:'/v1/snapshots', out:'snapshots-out'},
+  trace:     {path:'/v1/trace',     out:'trace-out'},
+  models:    {path:'/v1/routes',    out:'models-out'},
+  usage:     {path:'/v1/usage',     out:'usage-out'},
+  plugins:   {path:'/v1/plugins',   out:'plugins-out'},
+  skills:    {path:'/v1/skills',    out:'skills-out'},
+  mcp:       {path:'/v1/mcp',       out:'mcp-out'},
+  cluster:   {path:'/v1/cluster',   out:'cluster-out'},
+  metrics:   {path:'/metrics',      out:'metrics-out'},
+};
+
+async function load(panel){
+  if(panel === 'metrics'){
+    const r = await call('GET','/metrics');
+    const el = $('metrics-out'); if(el) el.textContent = r.text;
+    return;
+  }
+  const f = fetchers[panel];
+  if(!f) return;
+  const r = await call('GET', f.path);
+  const el = $(f.out); if(el) el.textContent = JSON.stringify(r.obj, null, 2);
+}
+
+async function rollback(){
+  const r = await call('POST','/v1/snapshots/rollback');
+  $('snapshots-out').textContent = JSON.stringify(r.obj, null, 2);
+  load('snapshots');
+}
+
+async function runSkill(){
+  const name = $('skillname').value.trim();
+  if(!name) return;
+  const r = await call('POST','/v1/skills/run',{name});
+  $('skills-out').textContent = JSON.stringify(r.obj, null, 2);
+}
+
+/* ---- navigation ---- */
+let current = 'tasks';
+function switchPanel(p){
+  current = p;
+  document.querySelectorAll('#nav button').forEach(b => b.classList.toggle('on', b.dataset.p === p));
+  $('content').innerHTML = panels[p];
+  if(p === 'tasks') return;
+  load(p);
+}
+
+document.querySelectorAll('#nav button').forEach(b => {
+  b.addEventListener('click', () => switchPanel(b.dataset.p));
+});
+
+/* init */
+$('content').innerHTML = panels.tasks;
+$('prompt').addEventListener('keydown', e => { if(e.key==='Enter' && (e.ctrlKey||e.metaKey)) runTask(); });
+</script>
+</body>
+</html>

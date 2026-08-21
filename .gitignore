@@ -1,0 +1,23 @@
+# --- build / packaging artifacts ---
+backend/build/
+backend/dist/
+backend/out/
+backend/data/
+backend/-p/
+
+# --- runtime state (never commit) ---
+backend/state/
+backend/state*/
+
+# --- scratch / notes ---
+backend/test/
+
+# --- binaries, logs, platform cruft ---
+*.exe
+*.pdb
+*.dll
+*.log
+*.o
+*.obj
+.DS_Store
+Thumbs.db
