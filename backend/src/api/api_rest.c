@@ -300,6 +300,27 @@ static int h_route_delete(const ca_http_request *req, ca_http_response *resp, vo
     return 0;
 }
 
+static int h_config_llm_get(const ca_http_request *req, ca_http_response *resp, void *ud) {
+    cagent_ctx *ctx = (cagent_ctx *)ud;
+    if (!authz_ok(ctx, req, resp)) return 0;
+    (void)req;
+    /* active LLM as persisted in config (set by cagent_set_llm / env / defaults) */
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddStringToObject(o, "provider",
+        ca_config_get_str(ctx->config, "llm.provider", "mock"));
+    cJSON_AddStringToObject(o, "model",
+        ca_config_get_str(ctx->config, "llm.model", ""));
+    cJSON_AddStringToObject(o, "base_url",
+        ca_config_get_str(ctx->config, "llm.base_url", ""));
+    const char *ak = ca_config_get_str(ctx->config, "llm.api_key", NULL);
+    cJSON_AddBoolToObject(o, "api_key_set", ak && *ak);
+    char *s = cJSON_PrintUnformatted(o);
+    ca_http_resp_json(resp, s ? s : "{}");
+    free(s);
+    cJSON_Delete(o);
+    return 0;
+}
+
 static int h_config_llm(const ca_http_request *req, ca_http_response *resp, void *ud) {
     cagent_ctx *ctx = (cagent_ctx *)ud;
     if (!authz_ok(ctx, req, resp)) return 0;
@@ -436,6 +457,7 @@ int cagent_api_attach(cagent_ctx *ctx) {
     ca_http_server_route(ctx->http, "GET", "/v1/routes", h_routes, ctx);
     ca_http_server_route(ctx->http, "POST", "/v1/routes", h_route_add, ctx);
     ca_http_server_route(ctx->http, "DELETE", "/v1/routes/", h_route_delete, ctx);
+    ca_http_server_route(ctx->http, "GET", "/v1/config/llm", h_config_llm_get, ctx);
     ca_http_server_route(ctx->http, "POST", "/v1/config/llm", h_config_llm, ctx);
     ca_http_server_route(ctx->http, "GET", "/v1/usage", h_usage, ctx);
     ca_http_server_route(ctx->http, "GET", "/v1/plugins", h_plugins, ctx);

@@ -5,16 +5,20 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>c-agent — Cognitive OS Console</title>
 <style>
-  :root{--bg:#0f1115;--card:#171a21;--border:#262b36;--fg:#e6e6e6;--muted:#8a93a3;--accent:#2f6feb;--ok:#4ade80;--warn:#ffd166}
+  :root{--bg:#0f1115;--card:#171a21;--border:#262b36;--fg:#e6e6e6;--muted:#8a93a3;--accent:#2f6feb;--ok:#4ade80;--warn:#ffd166;--sidebar:#0b0d11;--nav-hover:#14171d;--nav-on:#1a1f2b;--input:#2c3340}
+  body[data-theme=light]{--bg:#f4f6fa;--card:#fff;--border:#d9dfe8;--fg:#1c2333;--muted:#5a6478;--accent:#2563eb;--ok:#15803d;--warn:#b45309;--sidebar:#e9edf3;--nav-hover:#dfe5ee;--nav-on:#fff;--input:#cbd5e1}
+  body[data-theme=ocean]{--bg:#0a1420;--card:#0f1d2e;--border:#1e3550;--fg:#d7e7ff;--muted:#7fa3c9;--accent:#38bdf8;--ok:#34d399;--warn:#fbbf24;--sidebar:#08111b;--nav-hover:#102236;--nav-on:#123049;--input:#1e3550}
+  body[data-theme=forest]{--bg:#0d1410;--card:#13201a;--border:#22382d;--fg:#d9f2e4;--muted:#8fb8a0;--accent:#34d399;--ok:#4ade80;--warn:#fbbf24;--sidebar:#0a100c;--nav-hover:#16261e;--nav-on:#1c3a2b;--input:#22382d}
+  body[data-theme=sunset]{--bg:#171019;--card:#221a24;--border:#3a2c40;--fg:#f0e2ee;--muted:#b39bb0;--accent:#e879f9;--ok:#4ade80;--warn:#fbbf24;--sidebar:#120c14;--nav-hover:#2a1f2d;--nav-on:#3a2c40;--input:#3a2c40}
   *{box-sizing:border-box}
   body{font-family:system-ui,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--fg);margin:0;display:flex;height:100vh;overflow:hidden}
-  aside{width:210px;background:#0b0d11;border-right:1px solid var(--border);padding:16px 0;display:flex;flex-direction:column;flex-shrink:0}
+  aside{width:210px;background:var(--sidebar);border-right:1px solid var(--border);padding:16px 0;display:flex;flex-direction:column;flex-shrink:0}
   aside h1{font-size:15px;margin:0 16px 4px}
   aside .sub{color:var(--muted);font-size:11px;margin:0 16px 16px}
   nav{flex:1;overflow-y:auto}
   nav button{display:block;width:100%;text-align:left;background:none;border:0;color:var(--fg);padding:9px 16px;font-size:13px;cursor:pointer}
-  nav button:hover{background:#14171d}
-  nav button.on{background:#1a1f2b;border-left:3px solid var(--accent);color:#fff}
+  nav button:hover{background:var(--nav-hover)}
+  nav button.on{background:var(--nav-on);border-left:3px solid var(--accent);color:var(--fg)}
   main{flex:1;display:flex;flex-direction:column;min-width:0}
   .top{display:flex;align-items:center;justify-content:space-between;padding:14px 20px;border-bottom:1px solid var(--border)}
   .top .title{font-size:14px;font-weight:600}
@@ -23,8 +27,14 @@
   .card{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:14px}
   .card h2{font-size:13px;margin:0 0 10px;color:var(--fg)}
   .hint{color:var(--muted);font-size:12px;margin:4px 0 10px}
-  textarea,input[type=text]{width:100%;background:var(--bg);color:var(--fg);border:1px solid #2c3340;border-radius:6px;padding:8px;font-family:ui-monospace,Consolas,monospace;font-size:13px}
+  textarea,input[type=text],select{width:100%;background:var(--bg);color:var(--fg);border:1px solid var(--input);border-radius:6px;padding:8px;font-family:ui-monospace,Consolas,monospace;font-size:13px}
+  select{height:36px;cursor:pointer}
   textarea{height:64px}
+  .topright{display:flex;align-items:center;gap:14px}
+  #theme{width:auto;min-width:90px}
+  button.sm{padding:4px 8px;font-size:12px}
+  button.danger{background:transparent;color:#f87171;border:1px solid #f87171}
+  button.danger:hover{background:#f871711a}
   .row{display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap}
   button{background:var(--accent);color:#fff;border:0;border-radius:6px;padding:8px 14px;font-size:13px;cursor:pointer}
   button.sec{background:var(--card);border:1px solid var(--border);color:var(--fg)}
@@ -35,6 +45,8 @@
   th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--border)}
   th{color:var(--muted);font-weight:600}
   .muted{color:var(--muted)}
+  tr.active-row td{background:var(--nav-on)}
+  tr.active-row td:first-child{box-shadow:inset 3px 0 0 var(--accent)}
 </style>
 </head>
 <body>
@@ -60,7 +72,16 @@
 <main>
   <div class="top">
     <div class="title">Console</div>
-    <div class="flow">RECEIVE → UNDERSTAND → REASON → PLAN → ACT → VERIFY → LEARN</div>
+    <div class="topright">
+      <div class="flow">RECEIVE → UNDERSTAND → REASON → PLAN → ACT → VERIFY → LEARN</div>
+      <select id="theme" title="主题">
+        <option value="dark">Dark</option>
+        <option value="light">Light</option>
+        <option value="ocean">Ocean</option>
+        <option value="forest">Forest</option>
+        <option value="sunset">Sunset</option>
+      </select>
+    </div>
   </div>
   <div class="content" id="content"></div>
 </main>
@@ -126,7 +147,26 @@ panels.snapshots = `
   </div>
   <div class="card"><pre id="snapshots-out">加载中…</pre></div>`;
 panels.trace = '<div class="card"><h2>Trace (spans)</h2><pre id="trace-out">加载中…</pre></div>';
-panels.models = '<div class="card"><h2>Model routes</h2><pre id="models-out">加载中…</pre></div>';
+panels.models = `
+  <div class="card">
+    <h2>Model routes</h2>
+    <div class="hint">管理 LLM 路由：点 <b>Set active</b> 把某条路由设为当前活跃模型（实时切换并持久化到 state/cagent.json）；<b>Delete</b> 移除一条路由。</div>
+    <div class="row"><button onclick="loadModels()">Refresh</button><span id="models-stat" class="muted"></span></div>
+    <div style="overflow:auto">
+    <table>
+      <thead><tr><th>Name</th><th>Provider</th><th>Model</th><th>Base URL</th><th>W</th><th>Calls</th><th></th></tr></thead>
+      <tbody id="routes-body"><tr><td colspan="7" class="muted">加载中…</td></tr></tbody>
+    </table>
+    </div>
+  </div>
+  <div class="card">
+    <h2>Add / update route</h2>
+    <div class="hint">新增或覆盖一条命名路由（相同 name 即覆盖）。保存后点 <b>Set active</b> 使其生效。</div>
+    <div class="row"><input id="r-name" placeholder="name (如 gpt4)" style="flex:1;min-width:140px"><select id="r-provider"><option value="mock">mock</option><option value="openai">openai</option><option value="anthropic">anthropic</option></select></div>
+    <div class="row"><input id="r-model" placeholder="model (如 gpt-4o)" style="flex:2;min-width:180px"><input id="r-base" placeholder="base_url (如 https://api.openai.com/v1)" style="flex:3;min-width:220px"></div>
+    <div class="row"><input id="r-key" type="text" placeholder="api_key" style="flex:2;min-width:180px"><input id="r-weight" placeholder="weight (默认 1)" value="1" style="flex:1;min-width:80px"></div>
+    <div class="row"><button onclick="addRoute()">Add route</button><span id="routes-msg" class="muted"></span></div>
+  </div>`;
 panels.usage = '<div class="card"><h2>Token usage</h2><pre id="usage-out">加载中…</pre></div>';
 panels.plugins = '<div class="card"><h2>Plugin registry</h2><pre id="plugins-out">加载中…</pre></div>';
 panels.skills = `
@@ -157,6 +197,7 @@ const fetchers = {
 };
 
 async function load(panel){
+  if(panel === 'models') return loadModels();
   if(panel === 'metrics'){
     const r = await call('GET','/metrics');
     const el = $('metrics-out'); if(el) el.textContent = r.text;
@@ -181,6 +222,77 @@ async function runSkill(){
   $('skills-out').textContent = JSON.stringify(r.obj, null, 2);
 }
 
+/* ---- models config ---- */
+let ROUTES = [];
+let ACTIVE = {provider:'', model:'', api_key_set:false};
+
+async function loadModels(){
+  const r  = await call('GET','/v1/routes');
+  const cfg = await call('GET','/v1/config/llm');
+  ROUTES = Array.isArray(r.obj) ? r.obj : [];
+  ACTIVE = (cfg.obj && typeof cfg.obj === 'object') ? cfg.obj : ACTIVE;
+  const st = $('models-stat');
+  if(st) st.textContent = 'active: ' + (ACTIVE.provider || '?')
+      + (ACTIVE.model ? ' / ' + ACTIVE.model : '')
+      + (ACTIVE.api_key_set ? '' : ' (未配置 api_key)');
+  const t = $('routes-body');
+  if(!t) return;
+  if(!ROUTES.length){ t.innerHTML = '<tr><td colspan="7" class="muted">(empty)</td></tr>'; return; }
+  const ap = ACTIVE.provider || '';
+  t.innerHTML = ROUTES.map((x,i) => {
+    const isActive = x.name === ap;  /* set_llm keys the active route by provider */
+    return '<tr class="'+(isActive?'active-row':'')+'">'
+      +'<td>'+esc(x.name||'')+(isActive?' <span class="badge-ok">● active</span>':'')+'</td>'
+      +'<td>'+esc(x.provider||'')+'</td>'
+      +'<td>'+esc(x.model||'')+'</td>'
+      +'<td class="muted">'+esc(x.base_url||'')+'</td>'
+      +'<td>'+(x.weight!=null?x.weight:1)+'</td>'
+      +'<td>'+(x.calls!=null?x.calls:0)+'</td>'
+      +'<td><button onclick="setActive('+i+')" class="sec sm"'+(isActive?' disabled':'')+'>Set active</button> '
+      +'<button onclick="deleteRoute('+i+')" class="sec sm danger">Delete</button></td></tr>';
+  }).join('');
+}
+
+async function setActive(i){
+  const x = ROUTES[i]; if(!x) return;
+  const st = $('models-stat'); if(st) st.textContent = 'switching…';
+  const r = await call('POST','/v1/config/llm',{
+    provider: x.provider, base_url: x.base_url||'', model: x.model||'', api_key: x.api_key||''
+  });
+  if(st) st.textContent = (r.obj && r.obj.ok)
+      ? 'switched to ' + (x.model || x.provider)
+      : (r.obj && r.obj.error) ? 'error: ' + r.obj.error : 'error ' + r.status;
+  loadModels();
+}
+
+async function deleteRoute(i){
+  const x = ROUTES[i]; if(!x) return;
+  const r = await call('DELETE','/v1/routes/'+encodeURIComponent(x.name));
+  loadModels();
+}
+
+async function addRoute(){
+  const name = $('r-name').value.trim();
+  const provider = $('r-provider').value;
+  const msg = $('routes-msg');
+  if(!name){ if(msg) msg.textContent = 'need name'; return; }
+  const body = {
+    name, provider,
+    base_url: $('r-base').value.trim(),
+    model: $('r-model').value.trim(),
+    api_key: $('r-key').value.trim()
+  };
+  const w = parseFloat($('r-weight').value);
+  if(!isNaN(w)) body.weight = w;
+  const r = await call('POST','/v1/routes',body);
+  if(msg) msg.textContent = (r.status < 300) ? 'route saved'
+      : (r.obj && r.obj.error) ? 'error: ' + r.obj.error : 'error ' + r.status;
+  if(r.status < 300){
+    $('r-name').value=''; $('r-base').value=''; $('r-key').value=''; $('r-model').value='';
+  }
+  loadModels();
+}
+
 /* ---- navigation ---- */
 let current = 'tasks';
 function switchPanel(p){
@@ -194,6 +306,17 @@ function switchPanel(p){
 document.querySelectorAll('#nav button').forEach(b => {
   b.addEventListener('click', () => switchPanel(b.dataset.p));
 });
+
+/* ---- theme ---- */
+const THEMES = ['dark','light','ocean','forest','sunset'];
+function applyTheme(t){
+  if(!THEMES.includes(t)) t = 'dark';
+  document.body.dataset.theme = t;
+  localStorage.setItem('cagent-theme', t);
+  const sel = $('theme'); if(sel) sel.value = t;
+}
+$('theme').addEventListener('change', e => applyTheme(e.target.value));
+applyTheme(localStorage.getItem('cagent-theme') || 'dark');
 
 /* init */
 $('content').innerHTML = panels.tasks;

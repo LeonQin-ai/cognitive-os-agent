@@ -138,6 +138,7 @@ char *ca_router_json(ca_router *r) {
         cJSON_AddStringToObject(o, "provider", e->provider);
         if (e->base_url) cJSON_AddStringToObject(o, "base_url", e->base_url);
         if (e->model) cJSON_AddStringToObject(o, "model", e->model);
+        if (e->api_key) cJSON_AddStringToObject(o, "api_key", e->api_key);
         cJSON_AddNumberToObject(o, "weight", e->weight);
         cJSON_AddNumberToObject(o, "calls", (double)e->calls);
         cJSON_AddItemToArray(arr, o);
