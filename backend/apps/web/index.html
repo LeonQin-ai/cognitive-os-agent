@@ -563,18 +563,27 @@ panels.im = `
   <div class="card">
     <div class="im-layout">
       <div>
-        <div class="row" style="margin:0 0 10px">
-          <input id="im-new" type="text" placeholder="新会话名称" style="flex:1">
+        <div class="row" style="margin:0 0 8px">
+          <input id="im-new" type="text" placeholder="会话名称" style="flex:1">
           <button onclick="imCreate()">＋</button>
         </div>
+        <label class="toggle-row" style="display:flex;align-items:center;gap:6px;margin:0 0 6px;font-size:12px;color:var(--muted)">
+          <input type="checkbox" id="im-group" style="width:16px;height:16px;accent-color:var(--accent)"> 群聊
+        </label>
+        <input id="im-members" type="text" placeholder="群成员（逗号分隔，如 alice,bob）" style="margin-bottom:10px" hidden>
         <div class="im-sessions" id="im-sessions"></div>
       </div>
       <div>
+        <div class="row" style="margin:0 0 8px">
+          <input id="im-search" type="text" placeholder="搜索历史消息…" style="flex:1">
+          <button class="sec sm" onclick="imSearch()">Search</button>
+        </div>
+        <div id="im-search-results"></div>
         <div class="im-thread" id="im-thread">
           <span class="muted" style="font-size:12px">选择一个会话开始聊天</span>
         </div>
         <div class="im-input-row">
-          <input id="im-input" type="text" placeholder="输入消息，Enter 发送">
+          <input id="im-input" type="text" placeholder="消息内容，Enter 发送（@成员名 可指定发送者）">
           <button onclick="imSend()">Send</button>
         </div>
       </div>
@@ -724,8 +733,15 @@ let IM_ACTIVE = null;
 let WS = null;
 
 function imCreate(){
-  const name = $('im-new').value.trim();
-  call('POST', '/v1/im/sessions', {name: name || '新会话'}).then(() => { $('im-new').value = ''; renderIm(); });
+  const name = $('im-new').value.trim() || '新会话';
+  const isGroup = $('im-group').checked;
+  const members = $('im-members').value.split(',').map(s => s.trim()).filter(Boolean);
+  const body = {name: name, kind: isGroup ? 'group' : 'direct'};
+  if(members.length) body.members = members;
+  call('POST', '/v1/im/sessions', body).then(() => {
+    $('im-new').value = ''; $('im-members').value = '';
+    renderIm();
+  });
 }
 
 function imDelete(id){
@@ -746,12 +762,14 @@ function appendImMessage(m){
   if(!t) return;
   const d = new Date(m.ts_ms || Date.now());
   const time = d.getHours() + ':' + String(d.getMinutes()).padStart(2, '0');
+  const isMine = (m.role === 'user') && (!m.sender || m.sender === 'me');
   const div = document.createElement('div');
-  div.className = 'im-msg ' + ((m.role === 'user') ? 'user' : 'assistant');
+  div.className = 'im-msg ' + (isMine ? 'user' : 'assistant');
   div.textContent = m.content || '';
   const meta = document.createElement('div');
   meta.className = 'meta';
-  meta.textContent = (m.role === 'user' ? 'user' : 'assistant') + ' · ' + time;
+  const who = m.sender || (m.role === 'user' ? 'user' : 'assistant');
+  meta.textContent = who + ' · ' + time;
   div.appendChild(meta);
   t.appendChild(div);
   t.scrollTop = t.scrollHeight;
@@ -775,6 +793,11 @@ async function renderImThread(){
 async function renderIm(){
   const list = $('im-sessions');
   if(!list) return;
+  const g = $('im-group');
+  if(g && !g.dataset.bound){
+    g.dataset.bound = '1';
+    g.addEventListener('change', () => { const el = $('im-members'); if(el) el.hidden = !g.checked; });
+  }
   const r = await call('GET', '/v1/im/sessions');
   const sessions = (r.obj && Array.isArray(r.obj.sessions)) ? r.obj.sessions : [];
   list.innerHTML = '';
@@ -783,6 +806,7 @@ async function renderIm(){
     return;
   }
   sessions.forEach(s => {
+    const isGroup = s.kind === 'group';
     const div = document.createElement('div');
     div.className = 'im-session' + (s.id === IM_ACTIVE ? ' on' : '');
     div.dataset.id = s.id;
@@ -790,12 +814,20 @@ async function renderIm(){
     const name = document.createElement('span');
     name.className = 'name';
     name.textContent = (s.name || ('#' + s.id)) + ' · ' + (s.messages || 0);
+    if(isGroup) name.textContent += ' · ' + ((s.members || []).length) + '人';
+    const badge = document.createElement('span');
+    badge.className = 'badge ' + (isGroup ? 'badge-ok' : 'badge-warn');
+    badge.textContent = isGroup ? '群' : '单';
     const del = document.createElement('button');
     del.className = 'del';
     del.textContent = '✕';
     del.title = '删除会话';
     del.onclick = (e) => { e.stopPropagation(); imDelete(s.id); };
-    div.appendChild(name);
+    const left = document.createElement('span');
+    left.style.cssText = 'display:flex;align-items:center;gap:6px;min-width:0;flex:1';
+    left.appendChild(badge);
+    left.appendChild(name);
+    div.appendChild(left);
     div.appendChild(del);
     list.appendChild(div);
   });
@@ -804,16 +836,38 @@ async function renderIm(){
 
 function imSend(){
   const input = $('im-input');
-  const content = input.value.trim();
+  let content = input.value.trim();
   if(!content || IM_ACTIVE === null) return;
+  let sender = 'me';
+  const m = content.match(/^@(\S+)\s+/);
+  if(m){ sender = m[1]; content = content.slice(m[0].length); }
+  if(!content) return;
   input.value = '';
+  const payload = {type:'im.send', session_id: IM_ACTIVE, content, sender};
   if(WS && WS.readyState === WebSocket.OPEN){
-    WS.send(JSON.stringify({type:'im.send', session_id: IM_ACTIVE, content}));
+    WS.send(JSON.stringify(payload));
   } else {
-    call('POST', '/v1/im/sessions/' + IM_ACTIVE + '/messages', {role:'user', content}).then(r => {
+    call('POST', '/v1/im/sessions/' + IM_ACTIVE + '/messages', {role:'user', content, sender}).then(r => {
       if(r.obj && r.obj.ok) renderImThread();
     });
   }
+}
+
+async function imSearch(){
+  const q = $('im-search').value.trim();
+  const box = $('im-search-results');
+  if(!q){ if(box) box.innerHTML = ''; return; }
+  const r = await call('GET', '/v1/im/search?q=' + encodeURIComponent(q));
+  const hits = Array.isArray(r.obj) ? r.obj : [];
+  if(!box) return;
+  if(!hits.length){
+    box.innerHTML = '<div class="muted" style="font-size:12px;margin:0 0 8px">无匹配</div>';
+    return;
+  }
+  box.innerHTML = '<div class="chips" style="margin-bottom:8px">' + hits.map(h =>
+    '<button class="chip" onclick="imSelect(' + h.session_id + ')" title="' + esc(h.content) + '">' +
+    '<b>' + esc(h.session_name || ('#' + h.session_id)) + '</b><span>' + esc(h.content) + '</span></button>'
+  ).join('') + '</div>';
 }
 
 /* ================= WebSocket 实时推送 ================= */

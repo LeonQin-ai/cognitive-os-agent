@@ -466,13 +466,14 @@ static int h_cluster(const ca_http_request *req, ca_http_response *resp, void *u
 
 /* Push a new IM message to every WebSocket client + record an experience. */
 static void im_push(cagent_ctx *ctx, int64_t session_id, int64_t msg_id,
-                    const char *role, const char *content) {
+                    const char *role, const char *sender, const char *content) {
     if (!ctx || !content) return;
     cJSON *o = cJSON_CreateObject();
     cJSON_AddStringToObject(o, "type", "im.message");
     cJSON_AddNumberToObject(o, "session_id", (double)session_id);
     cJSON_AddNumberToObject(o, "id", (double)msg_id);
     cJSON_AddStringToObject(o, "role", role ? role : "user");
+    if (sender && *sender) cJSON_AddStringToObject(o, "sender", sender);
     cJSON_AddStringToObject(o, "content", content);
     cJSON_AddNumberToObject(o, "ts_ms", (double)ca_time_now_ms());
     char *js = cJSON_PrintUnformatted(o);
@@ -483,13 +484,15 @@ static void im_push(cagent_ctx *ctx, int64_t session_id, int64_t msg_id,
     }
     if (ctx->memory) {
         char buf[384];
-        snprintf(buf, sizeof(buf), "im session %lld (%s)", (long long)session_id, role ? role : "user");
+        snprintf(buf, sizeof(buf), "im session %lld (%s%s%s)",
+                 (long long)session_id, role ? role : "user",
+                 (sender && *sender) ? " by " : "", (sender && *sender) ? sender : "");
         ca_memory_record_experience(ctx->memory, buf, content);
     }
 }
 
 /* Inbound WebSocket text protocol:
- *   {"type":"im.send","session_id":N,"content":"..."}  -> send an IM message
+ *   {"type":"im.send","session_id":N,"content":"...","sender":"..."} -> IM message
  *   {"type":"im.ping"}                                  -> server replies pong
  */
 static void on_ws_msg(const char *text, void *ud) {
@@ -502,10 +505,12 @@ static void on_ws_msg(const char *text, void *ud) {
     if (strcmp(t, "im.send") == 0) {
         cJSON *sid = cJSON_GetObjectItemCaseSensitive(root, "session_id");
         cJSON *content = cJSON_GetObjectItemCaseSensitive(root, "content");
+        cJSON *sender = cJSON_GetObjectItemCaseSensitive(root, "sender");
         if (sid && cJSON_IsNumber(sid) && content && cJSON_IsString(content) && ctx->im) {
-            int64_t id = ca_im_send(ctx->im, (int64_t)sid->valuedouble, "user",
-                                    content->valuestring);
-            if (id > 0) im_push(ctx, (int64_t)sid->valuedouble, id, "user", content->valuestring);
+            const char *snd = (sender && cJSON_IsString(sender)) ? sender->valuestring : NULL;
+            int64_t id = ca_im_send_ex(ctx->im, (int64_t)sid->valuedouble, "user",
+                                       content->valuestring, snd);
+            if (id > 0) im_push(ctx, (int64_t)sid->valuedouble, id, "user", snd, content->valuestring);
         }
     } else if (strcmp(t, "im.ping") == 0) {
         if (ctx->http) ca_http_server_ws_broadcast(ctx->http, "{\"type\":\"pong\"}");
@@ -528,13 +533,26 @@ static int h_im_session_create(const ca_http_request *req, ca_http_response *res
     char *b = body_str(req);
     cJSON *root = b ? cJSON_Parse(b) : NULL;
     free(b);
-    const char *name = NULL;
+    const char *name = NULL, *kind = NULL;
+    const char *members[64];
+    size_t n_members = 0;
     if (root && cJSON_IsObject(root)) {
         cJSON *n = cJSON_GetObjectItemCaseSensitive(root, "name");
+        cJSON *k = cJSON_GetObjectItemCaseSensitive(root, "kind");
+        cJSON *m = cJSON_GetObjectItemCaseSensitive(root, "members");
         if (n && cJSON_IsString(n)) name = n->valuestring;
+        if (k && cJSON_IsString(k)) kind = k->valuestring;
+        if (m && cJSON_IsArray(m)) {
+            int mn = cJSON_GetArraySize(m);
+            for (int i = 0; i < mn && n_members < 64; i++) {
+                cJSON *mv = cJSON_GetArrayItem(m, i);
+                if (mv && cJSON_IsString(mv)) members[n_members++] = mv->valuestring;
+            }
+        }
     }
     if (!ctx->im) { if (root) cJSON_Delete(root); resp->status = 500; ca_http_resp_json(resp, "{\"error\":\"im disabled\"}"); return 0; }
-    int64_t id = ca_im_create_session(ctx->im, name ? name : "");
+    int64_t id = ca_im_create_session_ex(ctx->im, name ? name : "",
+                                         kind ? kind : "direct", members, n_members);
     if (root) cJSON_Delete(root);
     if (id < 0) { resp->status = 500; ca_http_resp_json(resp, "{\"error\":\"create failed\"}"); return 0; }
     ca_http_resp_appendf(resp, "{\"id\":%lld}", (long long)id);
@@ -571,19 +589,21 @@ static int h_im_session_route(const ca_http_request *req, ca_http_response *resp
         char *b = body_str(req);
         cJSON *root = b ? cJSON_Parse(b) : NULL;
         free(b);
-        const char *role = NULL, *content = NULL;
+        const char *role = NULL, *content = NULL, *sender = NULL;
         if (root && cJSON_IsObject(root)) {
             cJSON *r = cJSON_GetObjectItemCaseSensitive(root, "role");
             cJSON *c = cJSON_GetObjectItemCaseSensitive(root, "content");
+            cJSON *s = cJSON_GetObjectItemCaseSensitive(root, "sender");
             if (r && cJSON_IsString(r)) role = r->valuestring;
             if (c && cJSON_IsString(c)) content = c->valuestring;
+            if (s && cJSON_IsString(s)) sender = s->valuestring;
         }
         if (root) cJSON_Delete(root);
         if (!content || !*content) { resp->status = 400; ca_http_resp_json(resp, "{\"error\":\"need 'content' string\"}"); return 0; }
         if (!role || !*role) role = "user";
-        int64_t id = ca_im_send(ctx->im, session_id, role, content);
+        int64_t id = ca_im_send_ex(ctx->im, session_id, role, content, sender);
         if (id < 0) { resp->status = 404; ca_http_resp_json(resp, "{\"error\":\"session not found\"}"); return 0; }
-        im_push(ctx, session_id, id, role, content);
+        im_push(ctx, session_id, id, role, sender, content);
         ca_http_resp_appendf(resp, "{\"id\":%lld,\"ok\":true}", (long long)id);
         return 0;
     }
@@ -595,6 +615,7 @@ static int h_im_session_route(const ca_http_request *req, ca_http_response *resp
         cJSON *o = cJSON_CreateObject();
         cJSON_AddNumberToObject(o, "id", (double)msgs[i].id);
         cJSON_AddStringToObject(o, "role", msgs[i].role);
+        if (msgs[i].sender) cJSON_AddStringToObject(o, "sender", msgs[i].sender);
         cJSON_AddStringToObject(o, "content", msgs[i].content);
         cJSON_AddNumberToObject(o, "ts_ms", (double)msgs[i].ts_ms);
         cJSON_AddItemToArray(arr, o);
@@ -602,6 +623,19 @@ static int h_im_session_route(const ca_http_request *req, ca_http_response *resp
     ca_im_messages_free(msgs, n);
     char *s = cJSON_PrintUnformatted(arr);
     cJSON_Delete(arr);
+    ca_http_resp_json(resp, s ? s : "[]");
+    free(s);
+    return 0;
+}
+
+/* GET /v1/im/search?q=term  — history search across all sessions */
+static int h_im_search(const ca_http_request *req, ca_http_response *resp, void *ud) {
+    cagent_ctx *ctx = (cagent_ctx *)ud;
+    if (!authz_ok(ctx, req, resp)) return 0;
+    if (!ctx->im) { resp->status = 500; ca_http_resp_json(resp, "{\"error\":\"im disabled\"}"); return 0; }
+    const char *q = strstr(req->query, "q=");
+    const char *query = q ? q + 2 : "";
+    char *s = ca_im_search(ctx->im, query, 200);
     ca_http_resp_json(resp, s ? s : "[]");
     free(s);
     return 0;
@@ -637,6 +671,7 @@ int cagent_api_attach(cagent_ctx *ctx) {
     ca_http_server_route(ctx->http, "GET", "/v1/cluster", h_cluster, ctx);
     ca_http_server_route(ctx->http, "GET", "/v1/im/sessions", h_im_sessions, ctx);
     ca_http_server_route(ctx->http, "POST", "/v1/im/sessions", h_im_session_create, ctx);
+    ca_http_server_route(ctx->http, "GET", "/v1/im/search", h_im_search, ctx);
     ca_http_server_route(ctx->http, "GET", "/v1/im/sessions/", h_im_session_route, ctx);
     ca_http_server_route(ctx->http, "POST", "/v1/im/sessions/", h_im_session_route, ctx);
     ca_http_server_route(ctx->http, "DELETE", "/v1/im/sessions/", h_im_session_route, ctx);

@@ -17,6 +17,7 @@
 typedef struct im_msg {
     int64_t id;
     char *role;
+    char *sender;
     char *content;
     int64_t ts_ms;
 } im_msg;
@@ -24,6 +25,9 @@ typedef struct im_msg {
 typedef struct im_sess {
     int64_t id;
     char *name;
+    char *kind;
+    char **members;
+    size_t n_members;
     int64_t created_ms;
     im_msg *msgs;
     size_t count, cap;
@@ -43,7 +47,8 @@ static im_sess *find_sess(ca_im *im, int64_t id) {
     return NULL;
 }
 
-static void sess_add_msg(im_sess *s, int64_t id, const char *role, const char *content, int64_t ts) {
+static void sess_add_msg(im_sess *s, int64_t id, const char *role, const char *sender,
+                         const char *content, int64_t ts) {
     if (s->count == s->cap) {
         size_t cap = s->cap ? s->cap * 2 : 8;
         im_msg *nm = realloc(s->msgs, cap * sizeof(im_msg));
@@ -53,6 +58,7 @@ static void sess_add_msg(im_sess *s, int64_t id, const char *role, const char *c
     }
     s->msgs[s->count].id = id;
     s->msgs[s->count].role = ca_strdup(role);
+    s->msgs[s->count].sender = (sender && *sender) ? ca_strdup(sender) : NULL;
     s->msgs[s->count].content = ca_strdup(content);
     s->msgs[s->count].ts_ms = ts;
     s->count++;
@@ -61,10 +67,14 @@ static void sess_add_msg(im_sess *s, int64_t id, const char *role, const char *c
 static void sess_free(im_sess *s) {
     for (size_t i = 0; i < s->count; i++) {
         free(s->msgs[i].role);
+        free(s->msgs[i].sender);
         free(s->msgs[i].content);
     }
     free(s->msgs);
     free(s->name);
+    free(s->kind);
+    for (size_t i = 0; i < s->n_members; i++) free(s->members[i]);
+    free(s->members);
 }
 
 static void im_persist(ca_im *im) {
@@ -76,12 +86,17 @@ static void im_persist(ca_im *im) {
         cJSON *o = cJSON_CreateObject();
         cJSON_AddNumberToObject(o, "id", (double)s->id);
         cJSON_AddStringToObject(o, "name", s->name ? s->name : "");
+        cJSON_AddStringToObject(o, "kind", s->kind ? s->kind : "direct");
+        cJSON *mem = cJSON_AddArrayToObject(o, "members");
+        for (size_t j = 0; j < s->n_members; j++)
+            cJSON_AddItemToArray(mem, cJSON_CreateString(s->members[j]));
         cJSON_AddNumberToObject(o, "created_ms", (double)s->created_ms);
         cJSON *ma = cJSON_AddArrayToObject(o, "messages");
         for (size_t j = 0; j < s->count; j++) {
             cJSON *m = cJSON_CreateObject();
             cJSON_AddNumberToObject(m, "id", (double)s->msgs[j].id);
             cJSON_AddStringToObject(m, "role", s->msgs[j].role);
+            if (s->msgs[j].sender) cJSON_AddStringToObject(m, "sender", s->msgs[j].sender);
             cJSON_AddStringToObject(m, "content", s->msgs[j].content);
             cJSON_AddNumberToObject(m, "ts_ms", (double)s->msgs[j].ts_ms);
             cJSON_AddItemToArray(ma, m);
@@ -116,6 +131,22 @@ static void im_load(ca_im *im) {
             s.id = (int64_t)id->valuedouble;
             cJSON *nm = cJSON_GetObjectItemCaseSensitive(it, "name");
             s.name = ca_strdup(nm && cJSON_IsString(nm) ? nm->valuestring : "");
+            cJSON *kd = cJSON_GetObjectItemCaseSensitive(it, "kind");
+            s.kind = ca_strdup(kd && cJSON_IsString(kd) ? kd->valuestring : "direct");
+            cJSON *mem = cJSON_GetObjectItemCaseSensitive(it, "members");
+            if (mem && cJSON_IsArray(mem)) {
+                int mn = cJSON_GetArraySize(mem);
+                if (mn > 0) {
+                    s.members = calloc((size_t)mn, sizeof(char *));
+                    if (s.members) {
+                        s.n_members = (size_t)mn;
+                        for (int mi = 0; mi < mn; mi++) {
+                            cJSON *mv = cJSON_GetArrayItem(mem, mi);
+                            s.members[mi] = ca_strdup(mv && cJSON_IsString(mv) ? mv->valuestring : "");
+                        }
+                    }
+                }
+            }
             cJSON *cr = cJSON_GetObjectItemCaseSensitive(it, "created_ms");
             s.created_ms = (cr && cJSON_IsNumber(cr)) ? (int64_t)cr->valuedouble : 0;
             cJSON *ms = cJSON_GetObjectItemCaseSensitive(it, "messages");
@@ -125,11 +156,13 @@ static void im_load(ca_im *im) {
                     if (!cJSON_IsObject(m)) continue;
                     cJSON *mid = cJSON_GetObjectItemCaseSensitive(m, "id");
                     cJSON *role = cJSON_GetObjectItemCaseSensitive(m, "role");
+                    cJSON *sender = cJSON_GetObjectItemCaseSensitive(m, "sender");
                     cJSON *cont = cJSON_GetObjectItemCaseSensitive(m, "content");
                     cJSON *ts = cJSON_GetObjectItemCaseSensitive(m, "ts_ms");
                     sess_add_msg(&s,
                         (mid && cJSON_IsNumber(mid)) ? (int64_t)mid->valuedouble : 0,
                         (role && cJSON_IsString(role)) ? role->valuestring : "",
+                        (sender && cJSON_IsString(sender)) ? sender->valuestring : NULL,
                         (cont && cJSON_IsString(cont)) ? cont->valuestring : "",
                         (ts && cJSON_IsNumber(ts)) ? (int64_t)ts->valuedouble : 0);
                 }
@@ -177,6 +210,11 @@ void ca_im_free(ca_im *im) {
 }
 
 int64_t ca_im_create_session(ca_im *im, const char *name) {
+    return ca_im_create_session_ex(im, name, "direct", NULL, 0);
+}
+
+int64_t ca_im_create_session_ex(ca_im *im, const char *name, const char *kind,
+                                const char **members, size_t n_members) {
     if (!im) return -1;
     ca_mutex_lock(&im->mtx);
     if (im->count == im->cap) {
@@ -190,6 +228,15 @@ int64_t ca_im_create_session(ca_im *im, const char *name) {
     memset(s, 0, sizeof(*s));
     s->id = im->next_id++;
     s->name = ca_strdup(name && *name ? name : "新会话");
+    s->kind = ca_strdup(kind && *kind ? kind : "direct");
+    if (members && n_members) {
+        s->members = calloc(n_members, sizeof(char *));
+        if (s->members) {
+            s->n_members = n_members;
+            for (size_t i = 0; i < n_members; i++)
+                s->members[i] = ca_strdup(members[i] ? members[i] : "");
+        }
+    }
     s->created_ms = ca_time_now_ms();
     im->count++;
     im_persist(im);
@@ -226,7 +273,16 @@ ca_im_session *ca_im_list_sessions(ca_im *im, size_t *count) {
             for (size_t i = 0; i < im->count; i++) {
                 out[i].id = im->sessions[i].id;
                 out[i].name = ca_strdup(im->sessions[i].name);
+                out[i].kind = ca_strdup(im->sessions[i].kind ? im->sessions[i].kind : "direct");
                 out[i].created_ms = im->sessions[i].created_ms;
+                if (im->sessions[i].n_members) {
+                    out[i].members = calloc(im->sessions[i].n_members, sizeof(char *));
+                    if (out[i].members) {
+                        out[i].n_members = im->sessions[i].n_members;
+                        for (size_t j = 0; j < out[i].n_members; j++)
+                            out[i].members[j] = ca_strdup(im->sessions[i].members[j]);
+                    }
+                }
             }
         }
     }
@@ -236,7 +292,12 @@ ca_im_session *ca_im_list_sessions(ca_im *im, size_t *count) {
 }
 
 void ca_im_sessions_free(ca_im_session *s, size_t count) {
-    for (size_t i = 0; i < count; i++) free(s[i].name);
+    for (size_t i = 0; i < count; i++) {
+        free(s[i].name);
+        free(s[i].kind);
+        for (size_t j = 0; j < s[i].n_members; j++) free(s[i].members[j]);
+        free(s[i].members);
+    }
     free(s);
 }
 
@@ -252,6 +313,7 @@ ca_im_message *ca_im_messages(ca_im *im, int64_t session_id, size_t *count) {
             for (size_t i = 0; i < s->count; i++) {
                 out[i].id = s->msgs[i].id;
                 out[i].role = ca_strdup(s->msgs[i].role);
+                out[i].sender = s->msgs[i].sender ? ca_strdup(s->msgs[i].sender) : NULL;
                 out[i].content = ca_strdup(s->msgs[i].content);
                 out[i].ts_ms = s->msgs[i].ts_ms;
             }
@@ -266,18 +328,24 @@ ca_im_message *ca_im_messages(ca_im *im, int64_t session_id, size_t *count) {
 void ca_im_messages_free(ca_im_message *m, size_t count) {
     for (size_t i = 0; i < count; i++) {
         free(m[i].role);
+        free(m[i].sender);
         free(m[i].content);
     }
     free(m);
 }
 
 int64_t ca_im_send(ca_im *im, int64_t session_id, const char *role, const char *content) {
+    return ca_im_send_ex(im, session_id, role, content, NULL);
+}
+
+int64_t ca_im_send_ex(ca_im *im, int64_t session_id, const char *role,
+                      const char *content, const char *sender) {
     if (!im || !content) return -1;
     ca_mutex_lock(&im->mtx);
     im_sess *s = find_sess(im, session_id);
     if (!s) { ca_mutex_unlock(&im->mtx); return -1; }
     int64_t id = im->next_id++;
-    sess_add_msg(s, id, role ? role : "user", content, ca_time_now_ms());
+    sess_add_msg(s, id, role ? role : "user", sender, content, ca_time_now_ms());
     im_persist(im);
     ca_mutex_unlock(&im->mtx);
     return id;
@@ -304,6 +372,10 @@ char *ca_im_sessions_json(ca_im *im) {
         cJSON *o = cJSON_CreateObject();
         cJSON_AddNumberToObject(o, "id", (double)s->id);
         cJSON_AddStringToObject(o, "name", s->name ? s->name : "");
+        cJSON_AddStringToObject(o, "kind", s->kind ? s->kind : "direct");
+        cJSON *mem = cJSON_AddArrayToObject(o, "members");
+        for (size_t j = 0; j < s->n_members; j++)
+            cJSON_AddItemToArray(mem, cJSON_CreateString(s->members[j]));
         cJSON_AddNumberToObject(o, "created_ms", (double)s->created_ms);
         cJSON_AddNumberToObject(o, "messages", (double)s->count);
         cJSON_AddItemToArray(arr, o);
@@ -313,4 +385,52 @@ char *ca_im_sessions_json(ca_im *im) {
     cJSON_Delete(root);
     ca_mutex_unlock(&im->mtx);
     return js ? js : ca_strdup("{}");
+}
+
+/* case-insensitive substring match */
+static int ci_strstr(const char *hay, const char *needle) {
+    if (!hay || !needle || !*needle) return 0;
+    size_t nlen = strlen(needle);
+    size_t hlen = strlen(hay);
+    if (hlen < nlen) return 0;
+    for (size_t i = 0; i + nlen <= hlen; i++) {
+        size_t j = 0;
+        for (j = 0; j < nlen; j++) {
+            int a = (unsigned char)hay[i + j], b = (unsigned char)needle[j];
+            if (a >= 'A' && a <= 'Z') a += 32;
+            if (b >= 'A' && b <= 'Z') b += 32;
+            if (a != b) break;
+        }
+        if (j == nlen) return 1;
+    }
+    return 0;
+}
+
+char *ca_im_search(ca_im *im, const char *query, int limit) {
+    if (!im) return ca_strdup("[]");
+    if (!query || !*query) return ca_strdup("[]");
+    ca_mutex_lock(&im->mtx);
+    cJSON *arr = cJSON_CreateArray();
+    int count = 0;
+    for (size_t i = 0; i < im->count && (limit <= 0 || count < limit); i++) {
+        im_sess *s = &im->sessions[i];
+        for (size_t j = 0; j < s->count && (limit <= 0 || count < limit); j++) {
+            if (!ci_strstr(s->msgs[j].content, query)) continue;
+            cJSON *o = cJSON_CreateObject();
+            cJSON_AddNumberToObject(o, "session_id", (double)s->id);
+            cJSON_AddStringToObject(o, "session_name", s->name ? s->name : "");
+            cJSON_AddStringToObject(o, "kind", s->kind ? s->kind : "direct");
+            cJSON_AddNumberToObject(o, "id", (double)s->msgs[j].id);
+            cJSON_AddStringToObject(o, "role", s->msgs[j].role);
+            if (s->msgs[j].sender) cJSON_AddStringToObject(o, "sender", s->msgs[j].sender);
+            cJSON_AddStringToObject(o, "content", s->msgs[j].content);
+            cJSON_AddNumberToObject(o, "ts_ms", (double)s->msgs[j].ts_ms);
+            cJSON_AddItemToArray(arr, o);
+            count++;
+        }
+    }
+    char *js = cJSON_PrintUnformatted(arr);
+    cJSON_Delete(arr);
+    ca_mutex_unlock(&im->mtx);
+    return js ? js : ca_strdup("[]");
 }

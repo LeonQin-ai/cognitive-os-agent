@@ -1153,8 +1153,14 @@ static void test_im(void) {
     CHECK(s1 > 0);
     int64_t s2 = ca_im_create_session(im, "general");
     CHECK(s2 > 0 && s2 != s1);
+    /* group session with members */
+    const char *members[] = {"alice", "bob", "carol"};
+    int64_t g1 = ca_im_create_session_ex(im, "研发群", "group", members, 3);
+    CHECK(g1 > 0);
     CHECK(ca_im_send(im, s1, "user", "你好") > 0);
-    CHECK(ca_im_send(im, s1, "assistant", "你好！") > 0);
+    CHECK(ca_im_send_ex(im, s1, "assistant", "你好！", "c-agent") > 0);
+    CHECK(ca_im_send_ex(im, g1, "user", "群聊消息 hello-group", "alice") > 0);
+    CHECK(ca_im_send_ex(im, g1, "assistant", "收到 hello-group", "c-agent") > 0);
     CHECK(ca_im_send(im, 9999, "user", "x") < 0);   /* unknown session */
     size_t n = 0;
     ca_im_message *msgs = ca_im_messages(im, s1, &n);
@@ -1162,30 +1168,83 @@ static void test_im(void) {
     if (msgs) {
         CHECK_STR(msgs[0].role, "user");
         CHECK_STR(msgs[0].content, "你好");
+        CHECK(msgs[0].sender == NULL);
         CHECK_STR(msgs[1].role, "assistant");
+        CHECK_STR(msgs[1].sender, "c-agent");
     }
     ca_im_messages_free(msgs, n);
-    CHECK(ca_im_total_messages(im) == 2);
+    /* group membership surfaced */
+    size_t ns = 0;
+    ca_im_session *sess = ca_im_list_sessions(im, &ns);
+    CHECK(sess != NULL && ns == 3);
+    if (sess) {
+        for (size_t i = 0; i < ns; i++) {
+            if (sess[i].id == g1) {
+                CHECK_STR(sess[i].kind, "group");
+                CHECK(sess[i].n_members == 3);
+                CHECK_STR(sess[i].members[1], "bob");
+            }
+        }
+    }
+    ca_im_sessions_free(sess, ns);
+    CHECK(ca_im_total_messages(im) == 4);
     CHECK(ca_im_delete_session(im, s2) == 1);
     CHECK(ca_im_delete_session(im, 9999) == 0);
     ca_im_free(im);
-    /* reload from disk */
+    /* reload from disk: kind/members/sender persisted */
     ca_im *im2 = ca_im_new(root);
     CHECK(im2 != NULL);
     if (im2) {
-        size_t ns = 0;
-        ca_im_session *sess = ca_im_list_sessions(im2, &ns);
-        CHECK(sess != NULL && ns == 1);
-        if (sess) {
-            CHECK(sess[0].id == s1);
-            CHECK_STR(sess[0].name, "测试会话");
+        size_t ns2 = 0;
+        ca_im_session *ss2 = ca_im_list_sessions(im2, &ns2);
+        CHECK(ss2 != NULL && ns2 == 2);
+        if (ss2) {
+            CHECK(ss2[0].id == s1);
+            CHECK_STR(ss2[0].name, "测试会话");
+            for (size_t i = 0; i < ns2; i++) {
+                if (ss2[i].id == g1) {
+                    CHECK_STR(ss2[i].kind, "group");
+                    CHECK(ss2[i].n_members == 3);
+                    CHECK_STR(ss2[i].members[2], "carol");
+                }
+            }
         }
-        ca_im_sessions_free(sess, ns);
+        ca_im_sessions_free(ss2, ns2);
         char *j = ca_im_sessions_json(im2);
         CHECK(j && strstr(j, "测试会话") != NULL);
+        CHECK(j && strstr(j, "研发群") != NULL);
         free(j);
         ca_im_free(im2);
     }
+    ca_fs_remove(store);
+    ca_fs_remove(root);
+}
+
+static void test_im_search(void) {
+    section("im_search");
+    const char *root = "state-im-search-test";
+    char store[600];
+    snprintf(store, sizeof(store), "%s/im/sessions.json", root);
+    ca_fs_remove(store);
+    ca_im *im = ca_im_new(root);
+    CHECK(im != NULL);
+    if (!im) return;
+    int64_t s = ca_im_create_session(im, "会议");
+    CHECK(s > 0);
+    CHECK(ca_im_send(im, s, "user", "今天部署 v2 到生产") > 0);
+    CHECK(ca_im_send(im, s, "assistant", "确认，v2 已上线") > 0);
+    CHECK(ca_im_send(im, s, "user", "下午复盘 QEMU crash 日志") > 0);
+    /* case-insensitive substring search */
+    char *r = ca_im_search(im, "v2", 20);
+    CHECK(r && strstr(r, "部署 v2") != NULL && strstr(r, "已上线") != NULL);
+    free(r);
+    r = ca_im_search(im, "qemu", 20);
+    CHECK(r && strstr(r, "QEMU crash") != NULL);
+    free(r);
+    r = ca_im_search(im, "不存在词", 20);
+    CHECK(r && strcmp(r, "[]") == 0);
+    free(r);
+    ca_im_free(im);
     ca_fs_remove(store);
     ca_fs_remove(root);
 }
@@ -1330,6 +1389,7 @@ int main(void) {
     test_attention();
     test_sandbox_wasm();
     test_im();
+    test_im_search();
     test_plugin_generate();
     test_task();
     printf("\n%d passed, %d failed\n", g_pass, g_fail);
