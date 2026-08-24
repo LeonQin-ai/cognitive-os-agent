@@ -1,17 +1,13 @@
 cagent release (Windows) - IM External Channel Bridge
 ====================================================
-Binary: cagent.exe
+Binary: cagent.exe (rebuilt 2026-08-24, includes IM channel bridge)
 
-Features included:
+Features:
 - IM external channel bridge: channel registry (feishu/telegram/webhook)
   persisted under state/im/channels.json
-- REST endpoints: GET/POST /v1/im/channels, DELETE /v1/im/channels/<name>,
+- REST: GET/POST /v1/im/channels, DELETE /v1/im/channels/<name>,
   POST /v1/im/channels/<name>/send
-- Session<->channel linkage (ca_im_session_set_channel / by_channel)
-- Inbound Telegram polling (channel_poller_loop, idempotent via offset, dedup)
-- Forward agent replies to linked channel (fire-and-forget)
-- Console UI (apps/web/index.html) channel manager + channel badge
-- Catalog at /v1/catalog/models (7 models)
-
-Build: zig cc -O2 -std=c11 -Wall -Wextra
-Tests: 622 passed / 0 failed (cagent-test.exe)
+- Session<->channel linkage + inbound Telegram polling + reply forwarding
+- Console UI channel manager + channel badge
+- Catalog /v1/catalog/models (7 models)
+Tests: 622 passed / 0 failed.
