@@ -485,8 +485,57 @@ panels.tasks = `
     <pre id="out">等待输入…</pre>
   </div>`;
 
-panels.agents    = outPanel('Agent pool', 'agents-out', 'agents');
-panels.mcp       = outPanel('MCP connections', 'mcp-out', 'mcp');
+panels.agents = `
+  <div class="card">
+    <h2>Create agent</h2>
+    <div class="hint">多智能体协调器：注册命名 agent（带角色描述），通过共享黑板协同工作、可发布事实。</div>
+    <div class="row">
+      <input id="agent-name" type="text" placeholder="name (如 writer)" style="flex:1;min-width:140px">
+      <input id="agent-role" type="text" placeholder="role (如 负责写作)" style="flex:2;min-width:200px">
+      <button onclick="agentAdd()">Add</button>
+      <span id="agent-stat" class="muted"></span>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-head">
+      <h2>Agent pool</h2>
+      <button class="sec sm" onclick="loadAgents()">Refresh</button>
+    </div>
+    <div id="agents-out2">加载中…</div>
+  </div>
+  <div class="card">
+    <h2>发布事实到黑板</h2>
+    <div class="hint">向指定 agent 的共享黑板写入 key/value 事实。</div>
+    <div class="row">
+      <input id="agent-post-name" type="text" placeholder="agent name" style="flex:1;min-width:120px">
+      <input id="agent-post-key" type="text" placeholder="key" style="flex:1;min-width:100px">
+      <input id="agent-post-val" type="text" placeholder="value" style="flex:1;min-width:100px">
+      <button onclick="agentPost()">Post</button>
+    </div>
+  </div>`;
+
+panels.mcp = `
+  <div class="card">
+    <h2>Add MCP connection</h2>
+    <div class="hint">注册一个 JSON-RPC 2.0 MCP 服务器连接（例如本地 mock：http://127.0.0.1:9000）。注册后 agent 可调用其工具。</div>
+    <div class="row">
+      <input id="mcp-name" type="text" placeholder="name (如 local-mock)" style="flex:1;min-width:140px">
+      <input id="mcp-url" type="text" placeholder="url (如 http://host:port/mcp)" style="flex:2;min-width:200px">
+    </div>
+    <div class="row">
+      <input id="mcp-token" type="text" placeholder="token (可选)" style="flex:1;min-width:140px">
+      <button onclick="mcpAdd()">Add</button>
+      <span id="mcp-stat" class="muted"></span>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-head">
+      <h2>MCP connections</h2>
+      <button class="sec sm" onclick="loadMcp()">Refresh</button>
+    </div>
+    <div id="mcp-list">加载中…</div>
+  </div>`;
+
 panels.memory    = outPanel('Memory (working / long-term)', 'memory-out', 'memory');
 panels.cluster   = outPanel('Cluster nodes', 'cluster-out', 'cluster');
 panels.metrics   = outPanel('Metrics (Prometheus)', 'metrics-out', 'metrics');
@@ -638,15 +687,12 @@ panels.models = `
   </div>`;
 
 const fetchers = {
-  agents:    {path:'/v1/agents',    out:'agents-out'},
-  tools:     {path:'/v1/tools',     out:'tools-out'},
   memory:    {path:'/v1/memory',    out:'memory-out'},
   snapshots: {path:'/v1/snapshots', out:'snapshots-out'},
   trace:     {path:'/v1/trace',     out:'trace-out'},
   usage:     {path:'/v1/usage',     out:'usage-out'},
   plugins:   {path:'/v1/plugins',   out:'plugins-out'},
   skills:    {path:'/v1/skills',    out:'skills-out'},
-  mcp:       {path:'/v1/mcp',       out:'mcp-out'},
   cluster:   {path:'/v1/cluster',   out:'cluster-out'},
   metrics:   {path:'/metrics',      out:'metrics-out'},
 };
@@ -657,6 +703,8 @@ async function load(panel){
   if(panel === 'models') return loadModels();
   if(panel === 'dashboard') return loadDashboard();
   if(panel === 'im') return renderIm();
+  if(panel === 'agents') return loadAgents();
+  if(panel === 'mcp') return loadMcp();
   if(panel === 'metrics'){
     const r = await call('GET', '/metrics');
     const el = $('metrics-out'); if(el) el.textContent = r.text;
@@ -666,6 +714,83 @@ async function load(panel){
   if(!f) return;
   const r = await call('GET', f.path);
   const el = $(f.out); if(el) renderJSON(r.obj, el);
+}
+
+/* ================= Agents ================= */
+
+let AGENTS = [];
+
+async function loadAgents(){
+  const r = await call('GET', '/v1/agents');
+  const box = $('agents-out2');
+  if(!box) return;
+  const obj = (r.obj && typeof r.obj === 'object') ? r.obj : {};
+  AGENTS = Array.isArray(obj.agents) ? obj.agents : [];
+  let html = '<div class="table-wrap"><table><thead><tr><th>Agent</th><th>Role</th></tr></thead><tbody>';
+  if(!AGENTS.length) html += '<tr><td colspan="2" class="muted">（暂无 agent，先创建一个）</td></tr>';
+  AGENTS.forEach(a => { html += '<tr><td>' + esc(a.name || '') + '</td><td>' + esc(a.role || '') + '</td></tr>'; });
+  html += '</tbody></table></div>';
+  html += '<div class="hint" style="margin-top:8px">共享黑板 facts:</div><pre>' + esc(JSON.stringify(obj.facts || {}, null, 2)) + '</pre>';
+  box.innerHTML = html;
+}
+
+function agentAdd(){
+  const name = $('agent-name').value.trim();
+  const role = $('agent-role').value.trim();
+  const st = $('agent-stat');
+  if(!name){ if(st) st.textContent = '需要 name'; return; }
+  call('POST', '/v1/agents', {name, role}).then(r => {
+    if(st) st.textContent = (r.status < 300) ? '✔ 已创建' : ((r.obj && r.obj.error) ? 'error: ' + r.obj.error : 'error ' + r.status);
+    if(r.status < 300){ $('agent-name').value = ''; $('agent-role').value = ''; loadAgents(); }
+  });
+}
+
+function agentPost(){
+  const name = $('agent-post-name').value.trim();
+  const key = $('agent-post-key').value.trim();
+  const val = $('agent-post-val').value.trim();
+  if(!name || !key || !val) return;
+  call('POST', '/v1/agents/' + encodeURIComponent(name) + '/post', {key, value: val}).then(r => {
+    if(r.obj && r.obj.ok){ $('agent-post-key').value = ''; $('agent-post-val').value = ''; loadAgents(); }
+  });
+}
+
+/* ================= MCP ================= */
+
+let MCP_CONNS = [];
+
+async function loadMcp(){
+  const r = await call('GET', '/v1/mcp');
+  const box = $('mcp-list');
+  if(!box) return;
+  MCP_CONNS = Array.isArray(r.obj) ? r.obj : [];
+  if(!MCP_CONNS.length){
+    box.innerHTML = '<span class="muted" style="font-size:12px">（暂无连接，先添加一个）</span>';
+    return;
+  }
+  box.innerHTML = '<div class="table-wrap"><table><thead><tr><th>Name</th><th>URL</th><th>Token</th><th></th></tr></thead><tbody>' +
+    MCP_CONNS.map((c, i) => '<tr><td>' + esc(c.name) + '</td><td class="muted">' + esc(c.url) + '</td><td>' + (c.has_token ? '已设置' : '—') + '</td>' +
+      '<td><button class="sec sm danger" onclick="mcpDelete(' + i + ')">Delete</button></td></tr>').join('') +
+    '</tbody></table></div>';
+}
+
+function mcpAdd(){
+  const name = $('mcp-name').value.trim();
+  const url = $('mcp-url').value.trim();
+  const token = $('mcp-token').value.trim();
+  const st = $('mcp-stat');
+  if(!name || !url){ if(st) st.textContent = '需要 name 和 url'; return; }
+  const body = {name, url};
+  if(token) body.token = token;
+  call('POST', '/v1/mcp', body).then(r => {
+    if(st) st.textContent = (r.status < 300) ? '✔ 已添加' : ((r.obj && r.obj.error) ? 'error: ' + r.obj.error : 'error ' + r.status);
+    if(r.status < 300){ $('mcp-name').value = ''; $('mcp-url').value = ''; $('mcp-token').value = ''; loadMcp(); }
+  });
+}
+
+function mcpDelete(i){
+  const c = MCP_CONNS[i]; if(!c) return;
+  call('DELETE', '/v1/mcp/' + encodeURIComponent(c.name)).then(() => loadMcp());
 }
 
 async function loadDashboard(){

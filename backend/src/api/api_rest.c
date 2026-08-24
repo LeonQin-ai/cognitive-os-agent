@@ -214,6 +214,60 @@ static int h_agents(const ca_http_request *req, ca_http_response *resp, void *ud
     return 0;
 }
 
+static int h_agent_add(const ca_http_request *req, ca_http_response *resp, void *ud) {
+    cagent_ctx *ctx = (cagent_ctx *)ud;
+    if (!authz_ok(ctx, req, resp)) return 0;
+    char *b = body_str(req);
+    cJSON *root = b ? cJSON_Parse(b) : NULL;
+    free(b);
+    const char *name = NULL, *role = NULL;
+    if (root && cJSON_IsObject(root)) {
+        cJSON *n = cJSON_GetObjectItemCaseSensitive(root, "name");
+        cJSON *r = cJSON_GetObjectItemCaseSensitive(root, "role");
+        if (n && cJSON_IsString(n)) name = n->valuestring;
+        if (r && cJSON_IsString(r)) role = r->valuestring;
+    }
+    if (root) cJSON_Delete(root);
+    if (!name || !*name) {
+        resp->status = 400;
+        ca_http_resp_json(resp, "{\"error\":\"need 'name' string\"}");
+        return 0;
+    }
+    int idx = ctx->agents ? ca_agent_pool_add(ctx->agents, name, role ? role : "") : -1;
+    if (idx < 0) { resp->status = 400; ca_http_resp_json(resp, "{\"error\":\"add agent failed (duplicate?)\"}"); return 0; }
+    ca_http_resp_appendf(resp, "{\"ok\":true,\"index\":%d}", idx);
+    return 0;
+}
+
+static int h_agent_post(const ca_http_request *req, ca_http_response *resp, void *ud) {
+    cagent_ctx *ctx = (cagent_ctx *)ud;
+    if (!authz_ok(ctx, req, resp)) return 0;
+    const char *rest = req->path + strlen("/v1/agents/");
+    char name[128];
+    snprintf(name, sizeof(name), "%s", rest);
+    char *slash = strstr(name, "/post");
+    if (slash) *slash = '\0';
+    char *b = body_str(req);
+    cJSON *root = b ? cJSON_Parse(b) : NULL;
+    free(b);
+    const char *key = NULL, *val = NULL;
+    if (root && cJSON_IsObject(root)) {
+        cJSON *k = cJSON_GetObjectItemCaseSensitive(root, "key");
+        cJSON *v = cJSON_GetObjectItemCaseSensitive(root, "value");
+        if (k && cJSON_IsString(k)) key = k->valuestring;
+        if (v && cJSON_IsString(v)) val = v->valuestring;
+    }
+    if (root) cJSON_Delete(root);
+    if (!key || !*key || !val) {
+        resp->status = 400;
+        ca_http_resp_json(resp, "{\"error\":\"need 'key' and 'value' strings\"}");
+        return 0;
+    }
+    int rc = ctx->agents ? ca_agent_post(ctx->agents, name, key, val) : -1;
+    ca_http_resp_appendf(resp, "{\"ok\":%s}", rc == 0 ? "true" : "false");
+    return 0;
+}
+
 static int h_metrics(const ca_http_request *req, ca_http_response *resp, void *ud) {
     (void)req;
     cagent_ctx *ctx = (cagent_ctx *)ud;
@@ -453,6 +507,44 @@ static int h_mcp(const ca_http_request *req, ca_http_response *resp, void *ud) {
     return 0;
 }
 
+static int h_mcp_add(const ca_http_request *req, ca_http_response *resp, void *ud) {
+    cagent_ctx *ctx = (cagent_ctx *)ud;
+    if (!authz_ok(ctx, req, resp)) return 0;
+    char *b = body_str(req);
+    cJSON *root = b ? cJSON_Parse(b) : NULL;
+    free(b);
+    const char *name = NULL, *url = NULL, *token = NULL;
+    if (root && cJSON_IsObject(root)) {
+        cJSON *n = cJSON_GetObjectItemCaseSensitive(root, "name");
+        cJSON *u = cJSON_GetObjectItemCaseSensitive(root, "url");
+        cJSON *t = cJSON_GetObjectItemCaseSensitive(root, "token");
+        if (n && cJSON_IsString(n)) name = n->valuestring;
+        if (u && cJSON_IsString(u)) url = u->valuestring;
+        if (t && cJSON_IsString(t)) token = t->valuestring;
+    }
+    if (root) cJSON_Delete(root);
+    if (!name || !*name || !url || !*url) {
+        resp->status = 400;
+        ca_http_resp_json(resp, "{\"error\":\"need 'name' and 'url' strings\"}");
+        return 0;
+    }
+    int rc = ctx->mcp ? ca_mcp_manager_add(ctx->mcp, name, url, token) : -1;
+    if (rc != 0) { resp->status = 400; ca_http_resp_json(resp, "{\"error\":\"add failed\"}"); return 0; }
+    char *s = ctx->mcp ? ca_mcp_manager_json(ctx->mcp) : ca_strdup("[]");
+    ca_http_resp_json(resp, s ? s : "[]");
+    free(s);
+    return 0;
+}
+
+static int h_mcp_delete(const ca_http_request *req, ca_http_response *resp, void *ud) {
+    cagent_ctx *ctx = (cagent_ctx *)ud;
+    if (!authz_ok(ctx, req, resp)) return 0;
+    const char *name = req->path + strlen("/v1/mcp/");
+    int rc = ctx->mcp ? ca_mcp_manager_remove(ctx->mcp, name) : -1;
+    ca_http_resp_appendf(resp, "{\"removed\":%s}", rc == 0 ? "true" : "false");
+    return 0;
+}
+
 static int h_cluster(const ca_http_request *req, ca_http_response *resp, void *ud) {
     cagent_ctx *ctx = (cagent_ctx *)ud;
     if (!authz_ok(ctx, req, resp)) return 0;
@@ -654,6 +746,8 @@ int cagent_api_attach(cagent_ctx *ctx) {
     ca_http_server_route(ctx->http, "GET", "/v1/blackboard", h_blackboard, ctx);
     ca_http_server_route(ctx->http, "POST", "/v1/blackboard", h_blackboard_put, ctx);
     ca_http_server_route(ctx->http, "GET", "/v1/agents", h_agents, ctx);
+    ca_http_server_route(ctx->http, "POST", "/v1/agents", h_agent_add, ctx);
+    ca_http_server_route(ctx->http, "POST", "/v1/agents/", h_agent_post, ctx);
     ca_http_server_route(ctx->http, "GET", "/v1/snapshots", h_snapshots, ctx);
     ca_http_server_route(ctx->http, "POST", "/v1/snapshots/rollback", h_snapshot_rollback, ctx);
     ca_http_server_route(ctx->http, "GET", "/v1/trace", h_trace, ctx);
@@ -668,6 +762,8 @@ int cagent_api_attach(cagent_ctx *ctx) {
     ca_http_server_route(ctx->http, "GET", "/v1/skills", h_skills, ctx);
     ca_http_server_route(ctx->http, "POST", "/v1/skills/run", h_skill_run, ctx);
     ca_http_server_route(ctx->http, "GET", "/v1/mcp", h_mcp, ctx);
+    ca_http_server_route(ctx->http, "POST", "/v1/mcp", h_mcp_add, ctx);
+    ca_http_server_route(ctx->http, "DELETE", "/v1/mcp/", h_mcp_delete, ctx);
     ca_http_server_route(ctx->http, "GET", "/v1/cluster", h_cluster, ctx);
     ca_http_server_route(ctx->http, "GET", "/v1/im/sessions", h_im_sessions, ctx);
     ca_http_server_route(ctx->http, "POST", "/v1/im/sessions", h_im_session_create, ctx);
