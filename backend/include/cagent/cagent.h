@@ -57,6 +57,7 @@
 #include "cagent/llm/router.h"
 #include "cagent/llm/usage.h"
 #include "cagent/im/im.h"
+#include "cagent/im/channel.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -91,6 +92,9 @@ typedef struct cagent_ctx {
     ca_cluster *cluster;        /* cluster node registry */
     ca_attention *attention;    /* salience scoring / focus */
     ca_im *im;                  /* instant messaging store (sessions/messages) */
+    ca_im_channels *channels;   /* external messaging channel adapters (IM bridge) */
+    struct ca_thread *channels_poller; /* telegram inbound poller thread */
+    volatile int channels_stop; /* poller stop flag */
     ca_mutex run_lock;          /* serializes reasoning runs */
     char *state_root;
     char *workspace;

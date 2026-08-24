@@ -39,9 +39,11 @@ void ca_im_channels_free(ca_im_channels *cs);
 /* Register (overwrite same name). Copies all fields. Returns 0 ok, -1 error. */
 int ca_im_channel_register(ca_im_channels *cs, const ca_im_channel *ch);
 int ca_im_channel_remove(ca_im_channels *cs, const char *name);
-const ca_im_channel *ca_im_channel_find(ca_im_channels *cs, const char *name);
+/* Borrowed lookup (valid until next mutation); callers may read, and the
+ * telegram poller writes the internal last_update_id watermark. */
+ca_im_channel *ca_im_channel_find(ca_im_channels *cs, const char *name);
 int ca_im_channel_count(ca_im_channels *cs);
-const ca_im_channel *ca_im_channel_get(ca_im_channels *cs, size_t i);
+ca_im_channel *ca_im_channel_get(ca_im_channels *cs, size_t i);
 
 /* Send `text` through a channel. Returns malloc'd JSON:
  *   {"ok":true,"channel":name,"response":"..."} | {"ok":false,"error":"..."} */

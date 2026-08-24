@@ -240,6 +240,15 @@
   .spin{display:inline-block; width:12px; height:12px; border:2px solid var(--border); border-top-color:var(--accent); border-radius:50%; animation:rot .8s linear infinite; vertical-align:-2px}
   @keyframes rot{to{transform:rotate(360deg)}}
 
+  /* ---------- plaza (MCP 广场 / 免费模型广场) ---------- */
+  .plaza{display:grid; grid-template-columns:repeat(auto-fill,minmax(250px,1fr)); gap:10px}
+  .plaza .item{border:1px solid var(--border); border-radius:var(--radius-sm); padding:12px; background:var(--bg)}
+  .plaza .item h3{margin:0 0 4px; font-size:13px; font-weight:650}
+  .plaza .item p{margin:0 0 8px; font-size:12px; color:var(--muted); min-height:30px; line-height:1.5}
+  .plaza .item .url{font-family:var(--mono); font-size:11px; color:var(--muted); word-break:break-all; margin-bottom:8px}
+  .plaza .item .hint{font-size:11px; color:var(--warn); margin-bottom:8px; line-height:1.5}
+  .plaza .item .row{margin:0}
+
   @media (max-width:899px){
     #navToggle{display:grid}
     aside{position:fixed; left:0; top:0; bottom:0; transform:translateX(-100%)}
@@ -516,6 +525,11 @@ panels.agents = `
 
 panels.mcp = `
   <div class="card">
+    <h2>MCP 广场</h2>
+    <div class="hint">精选 MCP 服务器，一键添加连接。标"需本地运行"的条目要先启动对应服务（见提示）。</div>
+    <div id="mcp-plaza" class="plaza">加载中…</div>
+  </div>
+  <div class="card">
     <h2>Add MCP connection</h2>
     <div class="hint">注册一个 JSON-RPC 2.0 MCP 服务器连接（例如本地 mock：http://127.0.0.1:9000）。注册后 agent 可调用其工具。</div>
     <div class="row">
@@ -619,7 +633,10 @@ panels.im = `
         <label class="toggle-row" style="display:flex;align-items:center;gap:6px;margin:0 0 6px;font-size:12px;color:var(--muted)">
           <input type="checkbox" id="im-group" style="width:16px;height:16px;accent-color:var(--accent)"> 群聊
         </label>
-        <input id="im-members" type="text" placeholder="群成员（逗号分隔，如 alice,bob）" style="margin-bottom:10px" hidden>
+        <input id="im-members" type="text" placeholder="群成员（逗号分隔，如 alice,bob）" style="margin-bottom:6px" hidden>
+        <select id="im-channel" style="margin-bottom:10px;font-size:12.5px">
+          <option value="">关联外部渠道（选填）</option>
+        </select>
         <div class="im-sessions" id="im-sessions"></div>
       </div>
       <div>
@@ -637,9 +654,39 @@ panels.im = `
         </div>
       </div>
     </div>
+    <div class="card" style="margin-top:10px">
+      <h2 style="font-size:14px;margin:0 0 6px">外部消息渠道（IM Bridge）</h2>
+      <div class="hint">把会话关联到一个渠道：创建会话时选择渠道即可。收到的消息会自动同步到会话；会话消息会转发到渠道。</div>
+      <div style="margin:6px 0">
+        <button class="sm" onclick="renderChannels()">刷新</button>
+        <span id="channels-stat" class="muted"></span>
+      </div>
+      <div id="channels-list" class="im-sessions"></div>
+      <div class="row" style="margin-top:8px">
+        <input id="c-name" type="text" placeholder="名称" style="flex:1;min-width:90px">
+        <select id="c-type" style="flex:0 0 auto">
+          <option value="telegram">telegram</option>
+          <option value="generic">generic (webhook)</option>
+          <option value="feishu">feishu</option>
+          <option value="wecom">wecom</option>
+        </select>
+        <input id="c-endpoint" type="text" placeholder="endpoint" style="flex:1;min-width:140px">
+        <input id="c-token" type="text" placeholder="token/chat_id" style="flex:1;min-width:90px">
+      </div>
+      <div class="row" style="margin-top:4px">
+        <input id="c-target" type="text" placeholder="target（telegram chat_id）" style="flex:1">
+        <label style="display:flex;align-items:center;gap:4px;font-size:12px"><input type="checkbox" id="c-enabled" checked> 启用</label>
+        <button onclick="channelAdd()">Add / 更新</button>
+      </div>
+    </div>
   </div>`;
 
 panels.models = `
+  <div class="card">
+    <h2>免费模型广场</h2>
+    <div class="hint">市面上免费/低价模型一键配置。<b>配置</b> 填入表单后 Add route；<b>配置并设为当前</b> 直接切换（需要 key 的模型请先到对应平台申请）。</div>
+    <div id="model-plaza" class="plaza">加载中…</div>
+  </div>
   <div class="card">
     <h2>Model routes</h2>
     <div class="hint">管理 LLM 路由：点 <b>Set active</b> 把某条路由设为当前活跃模型（实时切换并持久化到 state/cagent.json）；<b>Delete</b> 移除一条路由。</div>
@@ -766,12 +813,36 @@ async function loadMcp(){
   MCP_CONNS = Array.isArray(r.obj) ? r.obj : [];
   if(!MCP_CONNS.length){
     box.innerHTML = '<span class="muted" style="font-size:12px">（暂无连接，先添加一个）</span>';
-    return;
+  } else {
+    box.innerHTML = '<div class="table-wrap"><table><thead><tr><th>Name</th><th>URL</th><th>Token</th><th></th></tr></thead><tbody>' +
+      MCP_CONNS.map((c, i) => '<tr><td>' + esc(c.name) + '</td><td class="muted">' + esc(c.url) + '</td><td>' + (c.has_token ? '已设置' : '—') + '</td>' +
+        '<td><button class="sec sm danger" onclick="mcpDelete(' + i + ')">Delete</button></td></tr>').join('') +
+      '</tbody></table></div>';
   }
-  box.innerHTML = '<div class="table-wrap"><table><thead><tr><th>Name</th><th>URL</th><th>Token</th><th></th></tr></thead><tbody>' +
-    MCP_CONNS.map((c, i) => '<tr><td>' + esc(c.name) + '</td><td class="muted">' + esc(c.url) + '</td><td>' + (c.has_token ? '已设置' : '—') + '</td>' +
-      '<td><button class="sec sm danger" onclick="mcpDelete(' + i + ')">Delete</button></td></tr>').join('') +
-    '</tbody></table></div>';
+  loadMcpPlaza();
+}
+
+let MCP_PLAZA = [];
+
+async function loadMcpPlaza(){
+  const box = $('mcp-plaza');
+  if(!box) return;
+  const r = await call('GET', '/v1/catalog/mcp');
+  MCP_PLAZA = Array.isArray(r.obj) ? r.obj : [];
+  if(!MCP_PLAZA.length){ box.innerHTML = '<span class="muted" style="font-size:12px">（目录为空）</span>'; return; }
+  box.innerHTML = MCP_PLAZA.map((m, i) =>
+    '<div class="item"><h3>' + esc(m.name) + '</h3><p>' + esc(m.description) + '</p>' +
+    '<div class="url">' + esc(m.url) + '</div>' +
+    '<div class="hint">' + (m.needs_local ? '需本地运行 · ' : '') + esc(m.key_hint || '') + '</div>' +
+    '<button class="sec sm" onclick="mcpPlazaUse(' + i + ')">添加连接</button></div>'
+  ).join('');
+}
+
+function mcpPlazaUse(i){
+  const m = MCP_PLAZA[i]; if(!m) return;
+  $('mcp-name').value = m.id;
+  $('mcp-url').value = m.url;
+  mcpAdd();
 }
 
 function mcpAdd(){
@@ -856,6 +927,7 @@ async function pluginGenerate(){
 
 let IM_ACTIVE = null;
 let WS = null;
+let IM_CHANNELS = [];
 
 function imCreate(){
   const name = $('im-new').value.trim() || '新会话';
@@ -863,6 +935,8 @@ function imCreate(){
   const members = $('im-members').value.split(',').map(s => s.trim()).filter(Boolean);
   const body = {name: name, kind: isGroup ? 'group' : 'direct'};
   if(members.length) body.members = members;
+  const sel = $('im-channel');
+  if(sel && sel.value){ body.channel = sel.value; }
   call('POST', '/v1/im/sessions', body).then(() => {
     $('im-new').value = ''; $('im-members').value = '';
     renderIm();
@@ -874,6 +948,74 @@ function imDelete(id){
     if(IM_ACTIVE === id) IM_ACTIVE = null;
     renderIm();
   });
+}
+
+async function loadChannels(){
+  const r = await call('GET', '/v1/im/channels');
+  IM_CHANNELS = (r.obj && Array.isArray(r.obj.channels)) ? r.obj.channels : [];
+  const st = $('channels-stat');
+  if(st) st.textContent = IM_CHANNELS.length + ' 个渠道';
+  return IM_CHANNELS;
+}
+
+async function renderChannels(){
+  await loadChannels();
+  const box = $('channels-list');
+  if(!box) return;
+  if(!IM_CHANNELS.length){
+    box.innerHTML = '<span class="muted" style="font-size:12px">暂无渠道</span>';
+    return;
+  }
+  box.innerHTML = '';
+  IM_CHANNELS.forEach(ch => {
+    const div = document.createElement('div');
+    div.className = 'im-session';
+    div.style.justifyContent = 'space-between';
+    const left = document.createElement('span');
+    left.style.cssText = 'display:flex;align-items:center;gap:6px;min-width:0;flex:1';
+    const t = document.createElement('span'); t.className = 'badge badge-warn'; t.textContent = ch.type;
+    const nm = document.createElement('span'); nm.className = 'name'; nm.textContent = ch.name;
+    nm.title = ch.endpoint || '';
+    if(!ch.enabled) nm.style.opacity = '0.5';
+    left.appendChild(t); left.appendChild(nm); div.appendChild(left);
+    const ops = document.createElement('span'); ops.style.cssText='display:flex;gap:4px';
+    const send = document.createElement('button'); send.textContent = '发'; send.title='发送测试消息到此渠道';
+    send.onclick = (e)=>{ e.stopPropagation(); channelSendTest(ch.name); };
+    const del = document.createElement('button'); del.textContent = '✕'; del.title='删除渠道'; del.className='del';
+    del.onclick = (e)=>{ e.stopPropagation(); channelRemove(ch.name); };
+    ops.appendChild(send); ops.appendChild(del); div.appendChild(ops);
+    box.appendChild(div);
+  });
+}
+
+function channelAdd(){
+  const name = $('c-name').value.trim();
+  const type = $('c-type').value;
+  const endpoint = $('c-endpoint').value.trim();
+  const token = $('c-token').value.trim();
+  const target = $('c-target').value.trim();
+  const enabled = !!$('c-enabled').checked;
+  if(!name || !endpoint) return;
+  const body = {name, type, endpoint, enabled};
+  if(token) body.token = token;
+  if(target) body.target = target;
+  call('POST', '/v1/im/channels', body).then(r => {
+    if(r.obj && (r.obj.ok || r.obj.error === undefined)){
+      $('c-name').value=''; $('c-endpoint').value=''; $('c-token').value=''; $('c-target').value='';
+      renderIm(); renderChannels();
+    }
+  });
+}
+
+function channelRemove(name){
+  call('DELETE', '/v1/im/channels/' + encodeURIComponent(name)).then(() => {
+    renderIm(); renderChannels();
+  });
+}
+
+function channelSendTest(name){
+  call('POST', '/v1/im/channels/' + encodeURIComponent(name) + '/send', {text: '测试消息 来自 c-agent 控制台'})
+    .then(() => toast('✉️ 已发送测试消息到 ' + name));
 }
 
 function imSelect(id){
@@ -918,6 +1060,15 @@ async function renderImThread(){
 async function renderIm(){
   const list = $('im-sessions');
   if(!list) return;
+  await loadChannels();
+  const sel = $('im-channel');
+  if(sel){
+    sel.innerHTML = '<option value="">无关联渠道</option>';
+    IM_CHANNELS.forEach(c => {
+      const o = document.createElement('option'); o.value = c.name; o.textContent = c.name + ' (' + c.type + ')';
+      sel.appendChild(o);
+    });
+  }
   const g = $('im-group');
   if(g && !g.dataset.bound){
     g.dataset.bound = '1';
@@ -943,6 +1094,13 @@ async function renderIm(){
     const badge = document.createElement('span');
     badge.className = 'badge ' + (isGroup ? 'badge-ok' : 'badge-warn');
     badge.textContent = isGroup ? '群' : '单';
+    if(s.channel){
+      const ch = document.createElement('span');
+      ch.className = 'badge badge-accent';
+      ch.textContent = '渠道:' + s.channel;
+      ch.title = '关联外部渠道';
+      name.appendChild(ch);
+    }
     const del = document.createElement('button');
     del.className = 'del';
     del.textContent = '✕';
@@ -956,6 +1114,7 @@ async function renderIm(){
     div.appendChild(del);
     list.appendChild(div);
   });
+  renderChannels();
   renderImThread();
 }
 
@@ -1093,11 +1252,49 @@ function presetProvider(){
 let ROUTES = [];
 let ACTIVE = {provider:'', model:'', api_key_set:false};
 
+let MODEL_PLAZA = [];
+
+async function loadModelPlaza(){
+  const box = $('model-plaza');
+  if(!box) return;
+  const r = await call('GET', '/v1/catalog/models');
+  MODEL_PLAZA = Array.isArray(r.obj) ? r.obj : [];
+  if(!MODEL_PLAZA.length){ box.innerHTML = '<span class="muted" style="font-size:12px">（目录为空）</span>'; return; }
+  box.innerHTML = MODEL_PLAZA.map((m, i) =>
+    '<div class="item"><h3>' + esc(m.name) + '</h3><p>' + esc(m.note || '') + '</p>' +
+    '<div class="url">' + esc(m.base_url) + ' · ' + esc(m.model || '任意模型') + '</div>' +
+    '<div class="hint">' + (m.key_hint ? ('key: ' + esc(m.key_hint)) : '无需 key') + '</div>' +
+    '<div class="row"><button class="sec sm" onclick="modelPlazaUse(' + i + ')">配置</button>' +
+    '<button class="sm" onclick="modelPlazaSet(' + i + ')">配置并设为当前</button></div></div>'
+  ).join('');
+}
+
+function modelPlazaFill(i){
+  const m = MODEL_PLAZA[i]; if(!m) return;
+  $('r-name').value = m.id;
+  $('r-base').value = m.base_url;
+  $('r-model').value = m.model;
+}
+
+function modelPlazaUse(i){
+  modelPlazaFill(i);
+  toast('已填入表单，填好 key（如需）后点 Add route');
+}
+
+async function modelPlazaSet(i){
+  const m = MODEL_PLAZA[i]; if(!m) return;
+  modelPlazaFill(i);
+  const r = await call('POST', '/v1/config/llm', {provider: m.provider, base_url: m.base_url, model: m.model, api_key: ''});
+  toast((r.obj && r.obj.ok) ? '已切换为 ' + (m.model || m.name) : '切换失败: ' + ((r.obj && r.obj.error) || r.status));
+  loadModels();
+}
+
 async function loadModels(){
   const r   = await call('GET', '/v1/routes');
   const cfg = await call('GET', '/v1/config/llm');
   ROUTES = Array.isArray(r.obj) ? r.obj : [];
   ACTIVE = (cfg.obj && typeof cfg.obj === 'object') ? cfg.obj : ACTIVE;
+  loadModelPlaza();
   const rp = $('r-provider');
   if(rp && !rp.dataset.bound){
     rp.dataset.bound = '1';

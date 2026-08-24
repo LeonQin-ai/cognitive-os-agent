@@ -5,6 +5,7 @@
 #include "cagent/api/api_rest.h"
 #include "cagent/os/os_socket.h"
 #include "cagent/os/os_fs.h"
+#include "cagent/os/os_time.h"
 #include "cagent/infra/util.h"
 #include "cagent/infra/logging.h"
 #include "cagent/retrieval/embedding.h"
@@ -34,6 +35,58 @@ static void cagent_task_runner(ca_task *t, ca_scheduler *s, void *ud) {
     ca_mutex_unlock(&ctx->run_lock);
     t->output = answer ? answer : ca_strdup("(no output)");
     if (rc != 0) t->status = CA_TS_FAILED;
+}
+
+/* Ingest a message received from an external messaging channel into the IM
+ * session linked to that channel, then push it to WebSocket clients. */
+static void channel_ingest(const char *channel_name, const char *sender,
+                           const char *text, void *ud) {
+    cagent_ctx *ctx = (cagent_ctx *)ud;
+    if (!ctx || !ctx->im || !text) return;
+    int64_t sid = ca_im_session_by_channel(ctx->im, channel_name);
+    if (sid < 0) return;
+    int64_t id = ca_im_send_ex(ctx->im, sid, "user", text, sender);
+    if (id < 0) return;
+
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddStringToObject(o, "type", "im.message");
+    cJSON_AddNumberToObject(o, "session_id", (double)sid);
+    cJSON_AddNumberToObject(o, "id", (double)id);
+    cJSON_AddStringToObject(o, "role", "user");
+    if (sender) cJSON_AddStringToObject(o, "sender", sender);
+    cJSON_AddStringToObject(o, "content", text);
+    cJSON_AddNumberToObject(o, "ts_ms", (double)ca_time_now_ms());
+    char *js = cJSON_PrintUnformatted(o);
+    cJSON_Delete(o);
+    if (js) {
+        if (ctx->http) ca_http_server_ws_broadcast(ctx->http, js);
+        free(js);
+    }
+    if (ctx->memory) {
+        char buf[384];
+        snprintf(buf, sizeof(buf), "im channel %s (%s)",
+                 channel_name, sender ? sender : "phone");
+        ca_memory_record_experience(ctx->memory, buf, text);
+    }
+}
+
+/* Poll every telegram channel for inbound messages (~5s tick, checks the stop
+ * flag every 100ms so shutdown joins quickly). */
+static void channel_poller_loop(void *arg) {
+    cagent_ctx *ctx = (cagent_ctx *)arg;
+    while (!ctx->channels_stop) {
+        if (ctx->channels && ctx->im) {
+            int n = ca_im_channel_count(ctx->channels);
+            for (int i = 0; i < n && !ctx->channels_stop; i++) {
+                ca_im_channel *ch = ca_im_channel_get(ctx->channels, (size_t)i);
+                if (ch && strcmp(ch->type, "telegram") == 0)
+                    ca_im_channel_poll_telegram(ctx->channels, ch->name,
+                                                channel_ingest, ctx);
+            }
+        }
+        for (int i = 0; i < 50 && !ctx->channels_stop; i++)
+            ca_time_sleep_ms(100);
+    }
 }
 
 int cagent_init(cagent_ctx *ctx, const cagent_config *cfg) {
@@ -141,9 +194,14 @@ int cagent_init(cagent_ctx *ctx, const cagent_config *cfg) {
     ctx->cluster = ca_cluster_new();
     ctx->attention = ca_attention_new();
     ctx->im = ca_im_new(ctx->state_root);
+    ctx->channels = ca_im_channels_new(ctx->state_root);
 
     /* register the wasm3-backed sandbox Wasm runner */
     if (ca_wasm3_available()) ca_sandbox_set_wasm_runner(ca_wasm3_run);
+
+    /* telegram inbound poller (joins fast when no telegram channels exist) */
+    ctx->channels_stop = 0;
+    ctx->channels_poller = ca_thread_create(channel_poller_loop, ctx);
 
     /* seed the route table with the configured provider so the Models UI is
      * populated even before explicit routes are added */
@@ -237,6 +295,10 @@ void cagent_shutdown(cagent_ctx *ctx) {
     ctx->metrics = NULL;
     if (ctx->attention) { ca_attention_free(ctx->attention); ctx->attention = NULL; }
     if (ctx->im) { ca_im_free(ctx->im); ctx->im = NULL; }
+    /* stop and join the channel poller before freeing the channel registry */
+    ctx->channels_stop = 1;
+    if (ctx->channels_poller) { ca_thread_join(ctx->channels_poller); ctx->channels_poller = NULL; }
+    if (ctx->channels) { ca_im_channels_free(ctx->channels); ctx->channels = NULL; }
     if (ctx->cluster) { ca_cluster_free(ctx->cluster); ctx->cluster = NULL; }
     if (ctx->mcp) { ca_mcp_manager_free(ctx->mcp); ctx->mcp = NULL; }
     if (ctx->skills) { ca_skill_registry_free(ctx->skills); ctx->skills = NULL; }

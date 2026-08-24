@@ -1249,6 +1249,77 @@ static void test_im_search(void) {
     ca_fs_remove(root);
 }
 
+/* ---------- IM channel bridge (registry + session linkage, no network) ---------- */
+static void test_im_bridge(void) {
+    section("im_bridge");
+    const char *root = "state-im-bridge-test";
+    /* ca_fs_remove only deletes single files (not dirs), so purge both
+     * persisted store files explicitly for a deterministic run. */
+    char sf[700], cf[700];
+    snprintf(sf, sizeof(sf), "%s/im/sessions.json", root);
+    snprintf(cf, sizeof(cf), "%s/im/channels.json", root);
+    ca_fs_remove(sf);
+    ca_fs_remove(cf);
+    ca_im *im = ca_im_new(root);
+    CHECK(im != NULL);
+    if (!im) return;
+    int64_t s1 = ca_im_create_session(im, "手机会话");
+    int64_t s2 = ca_im_create_session(im, "普通会话");
+    CHECK(s1 > 0 && s2 > 0);
+
+    ca_im_channels *cs = ca_im_channels_new(root);
+    CHECK(cs != NULL);
+    if (cs) {
+        ca_im_channel ch;
+        memset(&ch, 0, sizeof(ch));
+        ch.name = "phone";
+        ch.type = "telegram";
+        ch.endpoint = "https://api.telegram.org";
+        ch.token = "SECRET";
+        ch.target = "999";
+        ch.enabled = 1;
+        CHECK(ca_im_channel_register(cs, &ch) == 0);
+        ch.name = "webhook";
+        ch.type = "generic";
+        ch.endpoint = "http://127.0.0.1:9000/hook";
+        ch.token = NULL;
+        ch.target = NULL;
+        CHECK(ca_im_channel_register(cs, &ch) == 0);
+
+        CHECK(ca_im_channel_count(cs) == 2);
+        ca_im_channel *f = ca_im_channel_find(cs, "phone");
+        CHECK(f != NULL && strcmp(f->type, "telegram") == 0);
+        CHECK(strcmp(f->token, "SECRET") == 0);
+
+        /* linkage: session -> channel */
+        CHECK(ca_im_session_set_channel(im, s1, "phone") == 0);
+        CHECK(ca_im_session_set_channel(im, s2, NULL) == 0);
+        const char *chn = ca_im_session_channel(im, s1);
+        CHECK(chn && strcmp(chn, "phone") == 0);
+        CHECK(ca_im_session_channel(im, s2) == NULL);
+        CHECK(ca_im_session_by_channel(im, "phone") == s1);
+        CHECK(ca_im_session_by_channel(im, "webhook") < 0);
+        CHECK(ca_im_session_by_channel(im, "nope") < 0);
+
+        char *json = ca_im_channels_json(cs);
+        CHECK(json && strstr(json, "\"phone\"") != NULL && strstr(json, "\"telegram\"") != NULL);
+        free(json);
+
+        /* removal drops the channel (session unlink is performed by the API
+         * layer, which holds both the channel registry and the IM store) */
+        CHECK(ca_im_channel_remove(cs, "phone") == 0);
+        CHECK(ca_im_channel_count(cs) == 1);
+
+        /* persistence: reload keeps the remaining channel */
+        ca_im_channels *cs2 = ca_im_channels_new(root);
+        CHECK(cs2 && ca_im_channel_count(cs2) == 1);
+        ca_im_channels_free(cs2);
+        ca_im_channels_free(cs);
+    }
+    ca_im_free(im);
+    ca_fs_remove(root);
+}
+
 /* ---------- plugin intelligence: AI plugin generation (mock mode) ---------- */
 static void test_plugin_generate(void) {
     section("plugin_generate");
@@ -1390,6 +1461,7 @@ int main(void) {
     test_sandbox_wasm();
     test_im();
     test_im_search();
+    test_im_bridge();
     test_plugin_generate();
     test_task();
     printf("\n%d passed, %d failed\n", g_pass, g_fail);

@@ -18,6 +18,7 @@ typedef struct ca_im_session {
     char *kind;           /* "direct" (default) | "group" */
     char **members;       /* member names for group sessions */
     size_t n_members;
+    char *channel;        /* linked external messaging channel (NULL = none) */
     int64_t created_ms;
 } ca_im_session;
 
@@ -60,6 +61,14 @@ int64_t ca_im_send_ex(ca_im *im, int64_t session_id, const char *role,
 
 /* Total messages across all sessions (dashboard metric). */
 size_t ca_im_total_messages(ca_im *im);
+
+/* --- external channel linkage --- */
+/* Borrowed channel name linked to a session, or NULL. */
+const char *ca_im_session_channel(ca_im *im, int64_t session_id);
+/* Link (or clear with NULL) an external channel to a session. Returns 0 ok. */
+int ca_im_session_set_channel(ca_im *im, int64_t session_id, const char *channel);
+/* First session linked to a channel, or -1. Used by the inbound poller. */
+int64_t ca_im_session_by_channel(ca_im *im, const char *channel);
 
 /* JSON snapshot {"sessions":[{id,name,kind,members,messages,...}]} (malloc'd). */
 char *ca_im_sessions_json(ca_im *im);

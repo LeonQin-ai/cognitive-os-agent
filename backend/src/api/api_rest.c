@@ -8,6 +8,7 @@
 #include "cagent/snapshot/snapshot.h"
 #include "cagent/infra/metrics.h"
 #include "cagent/infra/util.h"
+#include "cagent/infra/catalog.h"
 #include "cagent/os/os_time.h"
 
 #include <stdlib.h>
@@ -554,6 +555,26 @@ static int h_cluster(const ca_http_request *req, ca_http_response *resp, void *u
     return 0;
 }
 
+/* ================= catalogs (MCP plaza + free models) ================= */
+
+static int h_catalog_mcp(const ca_http_request *req, ca_http_response *resp, void *ud) {
+    (void)req;
+    (void)ud;
+    char *s = ca_catalog_mcp_json();
+    ca_http_resp_json(resp, s ? s : "[]");
+    free(s);
+    return 0;
+}
+
+static int h_catalog_models(const ca_http_request *req, ca_http_response *resp, void *ud) {
+    (void)req;
+    (void)ud;
+    char *s = ca_catalog_models_json();
+    ca_http_resp_json(resp, s ? s : "[]");
+    free(s);
+    return 0;
+}
+
 /* ================= IM (instant messaging) ================= */
 
 /* Push a new IM message to every WebSocket client + record an experience. */
@@ -583,6 +604,19 @@ static void im_push(cagent_ctx *ctx, int64_t session_id, int64_t msg_id,
     }
 }
 
+/* Fire-and-forget forward a console-originated message to its linked external
+ * channel (best-effort: drops the response). Inbound channel messages are
+ * injected directly via channel_ingest and never reach here, so there is no
+ * echo. */
+static void im_forward_to_channel(cagent_ctx *ctx, int64_t session_id,
+                                  const char *content) {
+    if (!ctx || !ctx->channels || !ctx->im || !content) return;
+    const char *chn = ca_im_session_channel(ctx->im, session_id);
+    if (!chn || !*chn) return;
+    char *r = ca_im_channel_send(ctx->channels, chn, content);
+    if (r) free(r);
+}
+
 /* Inbound WebSocket text protocol:
  *   {"type":"im.send","session_id":N,"content":"...","sender":"..."} -> IM message
  *   {"type":"im.ping"}                                  -> server replies pong
@@ -602,7 +636,10 @@ static void on_ws_msg(const char *text, void *ud) {
             const char *snd = (sender && cJSON_IsString(sender)) ? sender->valuestring : NULL;
             int64_t id = ca_im_send_ex(ctx->im, (int64_t)sid->valuedouble, "user",
                                        content->valuestring, snd);
-            if (id > 0) im_push(ctx, (int64_t)sid->valuedouble, id, "user", snd, content->valuestring);
+            if (id > 0) {
+                im_push(ctx, (int64_t)sid->valuedouble, id, "user", snd, content->valuestring);
+                im_forward_to_channel(ctx, (int64_t)sid->valuedouble, content->valuestring);
+            }
         }
     } else if (strcmp(t, "im.ping") == 0) {
         if (ctx->http) ca_http_server_ws_broadcast(ctx->http, "{\"type\":\"pong\"}");
@@ -625,15 +662,17 @@ static int h_im_session_create(const ca_http_request *req, ca_http_response *res
     char *b = body_str(req);
     cJSON *root = b ? cJSON_Parse(b) : NULL;
     free(b);
-    const char *name = NULL, *kind = NULL;
+    const char *name = NULL, *kind = NULL, *channel = NULL;
     const char *members[64];
     size_t n_members = 0;
     if (root && cJSON_IsObject(root)) {
         cJSON *n = cJSON_GetObjectItemCaseSensitive(root, "name");
         cJSON *k = cJSON_GetObjectItemCaseSensitive(root, "kind");
         cJSON *m = cJSON_GetObjectItemCaseSensitive(root, "members");
+        cJSON *c = cJSON_GetObjectItemCaseSensitive(root, "channel");
         if (n && cJSON_IsString(n)) name = n->valuestring;
         if (k && cJSON_IsString(k)) kind = k->valuestring;
+        if (c && cJSON_IsString(c)) channel = c->valuestring;
         if (m && cJSON_IsArray(m)) {
             int mn = cJSON_GetArraySize(m);
             for (int i = 0; i < mn && n_members < 64; i++) {
@@ -645,9 +684,108 @@ static int h_im_session_create(const ca_http_request *req, ca_http_response *res
     if (!ctx->im) { if (root) cJSON_Delete(root); resp->status = 500; ca_http_resp_json(resp, "{\"error\":\"im disabled\"}"); return 0; }
     int64_t id = ca_im_create_session_ex(ctx->im, name ? name : "",
                                          kind ? kind : "direct", members, n_members);
-    if (root) cJSON_Delete(root);
+    cJSON_Delete(root);
     if (id < 0) { resp->status = 500; ca_http_resp_json(resp, "{\"error\":\"create failed\"}"); return 0; }
+    if (id > 0 && ctx->channels && channel && *channel)
+        ca_im_session_set_channel(ctx->im, id, channel);
     ca_http_resp_appendf(resp, "{\"id\":%lld}", (long long)id);
+    return 0;
+}
+
+/* Channel bridge: external messaging channels (feishu/wecom/generic/telegram). */
+static int h_im_channels(const ca_http_request *req, ca_http_response *resp, void *ud) {
+    cagent_ctx *ctx = (cagent_ctx *)ud;
+    if (!authz_ok(ctx, req, resp)) return 0;
+    if (!ctx->channels) { resp->status = 500; ca_http_resp_json(resp, "{\"error\":\"channels disabled\"}"); return 0; }
+    char *s = ca_im_channels_json(ctx->channels);
+    ca_http_resp_json(resp, s ? s : "{\"channels\":[]}");
+    free(s);
+    return 0;
+}
+
+static int h_im_channel_add(const ca_http_request *req, ca_http_response *resp, void *ud) {
+    cagent_ctx *ctx = (cagent_ctx *)ud;
+    if (!authz_ok(ctx, req, resp)) return 0;
+    if (!ctx->channels) { resp->status = 500; ca_http_resp_json(resp, "{\"error\":\"channels disabled\"}"); return 0; }
+    char *b = body_str(req);
+    cJSON *root = b ? cJSON_Parse(b) : NULL;
+    free(b);
+    const char *name = NULL, *type = NULL, *endpoint = NULL, *token = NULL, *target = NULL;
+    int enabled = 1;
+    if (root && cJSON_IsObject(root)) {
+        cJSON *o;
+        o = cJSON_GetObjectItemCaseSensitive(root, "name"); if (o && cJSON_IsString(o)) name = o->valuestring;
+        o = cJSON_GetObjectItemCaseSensitive(root, "type"); if (o && cJSON_IsString(o)) type = o->valuestring;
+        o = cJSON_GetObjectItemCaseSensitive(root, "endpoint"); if (o && cJSON_IsString(o)) endpoint = o->valuestring;
+        o = cJSON_GetObjectItemCaseSensitive(root, "token"); if (o && cJSON_IsString(o)) token = o->valuestring;
+        o = cJSON_GetObjectItemCaseSensitive(root, "target"); if (o && cJSON_IsString(o)) target = o->valuestring;
+        o = cJSON_GetObjectItemCaseSensitive(root, "enabled"); if (o && cJSON_IsBool(o)) enabled = cJSON_IsTrue(o);
+    }
+    int rc = -1;
+    if (name && *name && type && *type) {
+        ca_im_channel ch;
+        memset(&ch, 0, sizeof(ch));
+        ch.name = (char *)name;
+        ch.type = (char *)type;
+        ch.endpoint = endpoint && *endpoint ? (char *)endpoint : NULL;
+        ch.token = token && *token ? (char *)token : NULL;
+        ch.target = target && *target ? (char *)target : NULL;
+        ch.enabled = enabled;
+        rc = ca_im_channel_register(ctx->channels, &ch);
+    }
+    if (root) cJSON_Delete(root);
+    if (rc != 0) { resp->status = 400; ca_http_resp_json(resp, "{\"error\":\"need 'name' and 'type' (feishu|wecom|generic|telegram)\"}"); return 0; }
+    ca_http_resp_json(resp, "{\"ok\":true}");
+    return 0;
+}
+
+static int h_im_channel_remove(const ca_http_request *req, ca_http_response *resp, void *ud) {
+    cagent_ctx *ctx = (cagent_ctx *)ud;
+    if (!authz_ok(ctx, req, resp)) return 0;
+    if (!ctx->channels) { resp->status = 500; ca_http_resp_json(resp, "{\"error\":\"channels disabled\"}"); return 0; }
+    const char *name = req->path + strlen("/v1/im/channels/");
+    int rc = ca_im_channel_remove(ctx->channels, name);
+    if (rc == 0) {
+        /* unbind any session that pointed at this channel */
+        if (ctx->im) {
+            size_t n = 0; ca_im_session *ss = ca_im_list_sessions(ctx->im, &n);
+            for (size_t i = 0; i < n; i++)
+                if (ss[i].channel && strcmp(ss[i].channel, name) == 0)
+                    ca_im_session_set_channel(ctx->im, ss[i].id, NULL);
+            ca_im_sessions_free(ss, n);
+        }
+    }
+    ca_http_resp_appendf(resp, "{\"removed\":%s}", rc == 0 ? "true" : "false");
+    return 0;
+}
+
+static int h_im_channel_send(const ca_http_request *req, ca_http_response *resp, void *ud) {
+    cagent_ctx *ctx = (cagent_ctx *)ud;
+    if (!authz_ok(ctx, req, resp)) return 0;
+    if (!ctx->channels) { resp->status = 500; ca_http_resp_json(resp, "{\"error\":\"channels disabled\"}"); return 0; }
+    const char *base = req->path + strlen("/v1/im/channels/");
+    size_t blen = strlen(base);
+    const char *send = "/send";
+    if (blen > strlen(send) && strcmp(base + blen - strlen(send), send) == 0)
+        blen -= strlen(send);
+    char name[128];
+    if (blen >= sizeof(name)) blen = sizeof(name) - 1;
+    memcpy(name, base, blen);
+    name[blen] = '\0';
+    if (!*name) { resp->status = 404; ca_http_resp_json(resp, "{\"error\":\"missing channel name\"}"); return 0; }
+    char *b = body_str(req);
+    cJSON *root = b ? cJSON_Parse(b) : NULL;
+    free(b);
+    const char *text = NULL;
+    if (root && cJSON_IsObject(root)) {
+        cJSON *t = cJSON_GetObjectItemCaseSensitive(root, "text");
+        if (t && cJSON_IsString(t)) text = t->valuestring;
+    }
+    if (root) cJSON_Delete(root);
+    if (!text || !*text) { resp->status = 400; ca_http_resp_json(resp, "{\"error\":\"need 'text' string\"}"); return 0; }
+    char *r = ca_im_channel_send(ctx->channels, name, text);
+    ca_http_resp_json(resp, r ? r : "{\"ok\":false,\"error\":\"channel not found\"}");
+    free(r);
     return 0;
 }
 
@@ -696,6 +834,7 @@ static int h_im_session_route(const ca_http_request *req, ca_http_response *resp
         int64_t id = ca_im_send_ex(ctx->im, session_id, role, content, sender);
         if (id < 0) { resp->status = 404; ca_http_resp_json(resp, "{\"error\":\"session not found\"}"); return 0; }
         im_push(ctx, session_id, id, role, sender, content);
+        im_forward_to_channel(ctx, session_id, content);
         ca_http_resp_appendf(resp, "{\"id\":%lld,\"ok\":true}", (long long)id);
         return 0;
     }
@@ -768,11 +907,17 @@ int cagent_api_attach(cagent_ctx *ctx) {
     ca_http_server_route(ctx->http, "GET", "/v1/im/sessions", h_im_sessions, ctx);
     ca_http_server_route(ctx->http, "POST", "/v1/im/sessions", h_im_session_create, ctx);
     ca_http_server_route(ctx->http, "GET", "/v1/im/search", h_im_search, ctx);
+    ca_http_server_route(ctx->http, "GET", "/v1/im/channels", h_im_channels, ctx);
+    ca_http_server_route(ctx->http, "POST", "/v1/im/channels", h_im_channel_add, ctx);
+    ca_http_server_route(ctx->http, "DELETE", "/v1/im/channels/", h_im_channel_remove, ctx);
+    ca_http_server_route(ctx->http, "POST", "/v1/im/channels/", h_im_channel_send, ctx);
     ca_http_server_route(ctx->http, "GET", "/v1/im/sessions/", h_im_session_route, ctx);
     ca_http_server_route(ctx->http, "POST", "/v1/im/sessions/", h_im_session_route, ctx);
     ca_http_server_route(ctx->http, "DELETE", "/v1/im/sessions/", h_im_session_route, ctx);
     ca_http_server_ws_route(ctx->http, "/ws", on_ws_msg, ctx);
     ca_http_server_route(ctx->http, "GET", "/metrics", h_metrics, ctx);
+    ca_http_server_route(ctx->http, "GET", "/v1/catalog/mcp", h_catalog_mcp, ctx);
+    ca_http_server_route(ctx->http, "GET", "/v1/catalog/models", h_catalog_models, ctx);
     ca_http_server_route(ctx->http, "GET", "/", h_index, ctx);
     ca_http_server_route(ctx->http, "GET", "/favicon.ico", h_favicon, ctx);
     return 0;

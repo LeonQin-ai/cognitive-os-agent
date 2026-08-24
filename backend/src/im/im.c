@@ -28,6 +28,7 @@ typedef struct im_sess {
     char *kind;
     char **members;
     size_t n_members;
+    char *channel;
     int64_t created_ms;
     im_msg *msgs;
     size_t count, cap;
@@ -73,6 +74,7 @@ static void sess_free(im_sess *s) {
     free(s->msgs);
     free(s->name);
     free(s->kind);
+    free(s->channel);
     for (size_t i = 0; i < s->n_members; i++) free(s->members[i]);
     free(s->members);
 }
@@ -90,6 +92,7 @@ static void im_persist(ca_im *im) {
         cJSON *mem = cJSON_AddArrayToObject(o, "members");
         for (size_t j = 0; j < s->n_members; j++)
             cJSON_AddItemToArray(mem, cJSON_CreateString(s->members[j]));
+        if (s->channel) cJSON_AddStringToObject(o, "channel", s->channel);
         cJSON_AddNumberToObject(o, "created_ms", (double)s->created_ms);
         cJSON *ma = cJSON_AddArrayToObject(o, "messages");
         for (size_t j = 0; j < s->count; j++) {
@@ -149,6 +152,8 @@ static void im_load(ca_im *im) {
             }
             cJSON *cr = cJSON_GetObjectItemCaseSensitive(it, "created_ms");
             s.created_ms = (cr && cJSON_IsNumber(cr)) ? (int64_t)cr->valuedouble : 0;
+            cJSON *chn = cJSON_GetObjectItemCaseSensitive(it, "channel");
+            s.channel = (chn && cJSON_IsString(chn)) ? ca_strdup(chn->valuestring) : NULL;
             cJSON *ms = cJSON_GetObjectItemCaseSensitive(it, "messages");
             if (ms && cJSON_IsArray(ms)) {
                 cJSON *m;
@@ -274,6 +279,7 @@ ca_im_session *ca_im_list_sessions(ca_im *im, size_t *count) {
                 out[i].id = im->sessions[i].id;
                 out[i].name = ca_strdup(im->sessions[i].name);
                 out[i].kind = ca_strdup(im->sessions[i].kind ? im->sessions[i].kind : "direct");
+                out[i].channel = im->sessions[i].channel ? ca_strdup(im->sessions[i].channel) : NULL;
                 out[i].created_ms = im->sessions[i].created_ms;
                 if (im->sessions[i].n_members) {
                     out[i].members = calloc(im->sessions[i].n_members, sizeof(char *));
@@ -295,6 +301,7 @@ void ca_im_sessions_free(ca_im_session *s, size_t count) {
     for (size_t i = 0; i < count; i++) {
         free(s[i].name);
         free(s[i].kind);
+        free(s[i].channel);
         for (size_t j = 0; j < s[i].n_members; j++) free(s[i].members[j]);
         free(s[i].members);
     }
@@ -376,6 +383,7 @@ char *ca_im_sessions_json(ca_im *im) {
         cJSON *mem = cJSON_AddArrayToObject(o, "members");
         for (size_t j = 0; j < s->n_members; j++)
             cJSON_AddItemToArray(mem, cJSON_CreateString(s->members[j]));
+        if (s->channel) cJSON_AddStringToObject(o, "channel", s->channel);
         cJSON_AddNumberToObject(o, "created_ms", (double)s->created_ms);
         cJSON_AddNumberToObject(o, "messages", (double)s->count);
         cJSON_AddItemToArray(arr, o);
@@ -433,4 +441,39 @@ char *ca_im_search(ca_im *im, const char *query, int limit) {
     cJSON_Delete(arr);
     ca_mutex_unlock(&im->mtx);
     return js ? js : ca_strdup("[]");
+}
+
+const char *ca_im_session_channel(ca_im *im, int64_t session_id) {
+    if (!im) return NULL;
+    ca_mutex_lock(&im->mtx);
+    im_sess *s = find_sess(im, session_id);
+    const char *ch = s ? s->channel : NULL;
+    ca_mutex_unlock(&im->mtx);
+    return ch;
+}
+
+int ca_im_session_set_channel(ca_im *im, int64_t session_id, const char *channel) {
+    if (!im) return -1;
+    ca_mutex_lock(&im->mtx);
+    im_sess *s = find_sess(im, session_id);
+    if (!s) { ca_mutex_unlock(&im->mtx); return -1; }
+    char *old = s->channel;
+    s->channel = (channel && *channel) ? ca_strdup(channel) : NULL;
+    free(old);
+    im_persist(im);
+    ca_mutex_unlock(&im->mtx);
+    return 0;
+}
+
+int64_t ca_im_session_by_channel(ca_im *im, const char *channel) {
+    if (!im || !channel || !*channel) return -1;
+    ca_mutex_lock(&im->mtx);
+    int64_t found = -1;
+    for (size_t i = 0; i < im->count; i++)
+        if (im->sessions[i].channel && strcmp(im->sessions[i].channel, channel) == 0) {
+            found = im->sessions[i].id;
+            break;
+        }
+    ca_mutex_unlock(&im->mtx);
+    return found;
 }
