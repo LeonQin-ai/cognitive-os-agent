@@ -8,6 +8,7 @@
 #include "cagent/snapshot/snapshot.h"
 #include "cagent/infra/metrics.h"
 #include "cagent/infra/util.h"
+#include "cagent/os/os_time.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -378,6 +379,29 @@ static int h_plugins(const ca_http_request *req, ca_http_response *resp, void *u
     return 0;
 }
 
+static int h_plugin_generate(const ca_http_request *req, ca_http_response *resp, void *ud) {
+    cagent_ctx *ctx = (cagent_ctx *)ud;
+    if (!authz_ok(ctx, req, resp)) return 0;
+    char *b = body_str(req);
+    cJSON *root = b ? cJSON_Parse(b) : NULL;
+    free(b);
+    const char *description = NULL;
+    if (root && cJSON_IsObject(root)) {
+        cJSON *d = cJSON_GetObjectItemCaseSensitive(root, "description");
+        if (d && cJSON_IsString(d)) description = d->valuestring;
+    }
+    if (root) cJSON_Delete(root);
+    if (!description || !*description) {
+        resp->status = 400;
+        ca_http_resp_json(resp, "{\"ok\":false,\"error\":\"need 'description' string\"}");
+        return 0;
+    }
+    char *s = ca_plugin_generate(ctx, description);
+    ca_http_resp_json(resp, s ? s : "{\"ok\":false,\"error\":\"pipeline failed\"}");
+    free(s);
+    return 0;
+}
+
 static int h_skills(const ca_http_request *req, ca_http_response *resp, void *ud) {
     cagent_ctx *ctx = (cagent_ctx *)ud;
     if (!authz_ok(ctx, req, resp)) return 0;
@@ -438,6 +462,151 @@ static int h_cluster(const ca_http_request *req, ca_http_response *resp, void *u
     return 0;
 }
 
+/* ================= IM (instant messaging) ================= */
+
+/* Push a new IM message to every WebSocket client + record an experience. */
+static void im_push(cagent_ctx *ctx, int64_t session_id, int64_t msg_id,
+                    const char *role, const char *content) {
+    if (!ctx || !content) return;
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddStringToObject(o, "type", "im.message");
+    cJSON_AddNumberToObject(o, "session_id", (double)session_id);
+    cJSON_AddNumberToObject(o, "id", (double)msg_id);
+    cJSON_AddStringToObject(o, "role", role ? role : "user");
+    cJSON_AddStringToObject(o, "content", content);
+    cJSON_AddNumberToObject(o, "ts_ms", (double)ca_time_now_ms());
+    char *js = cJSON_PrintUnformatted(o);
+    cJSON_Delete(o);
+    if (js) {
+        if (ctx->http) ca_http_server_ws_broadcast(ctx->http, js);
+        free(js);
+    }
+    if (ctx->memory) {
+        char buf[384];
+        snprintf(buf, sizeof(buf), "im session %lld (%s)", (long long)session_id, role ? role : "user");
+        ca_memory_record_experience(ctx->memory, buf, content);
+    }
+}
+
+/* Inbound WebSocket text protocol:
+ *   {"type":"im.send","session_id":N,"content":"..."}  -> send an IM message
+ *   {"type":"im.ping"}                                  -> server replies pong
+ */
+static void on_ws_msg(const char *text, void *ud) {
+    cagent_ctx *ctx = (cagent_ctx *)ud;
+    if (!ctx || !text) return;
+    cJSON *root = cJSON_Parse(text);
+    if (!root) return;
+    cJSON *type = cJSON_GetObjectItemCaseSensitive(root, "type");
+    const char *t = type && cJSON_IsString(type) ? type->valuestring : "";
+    if (strcmp(t, "im.send") == 0) {
+        cJSON *sid = cJSON_GetObjectItemCaseSensitive(root, "session_id");
+        cJSON *content = cJSON_GetObjectItemCaseSensitive(root, "content");
+        if (sid && cJSON_IsNumber(sid) && content && cJSON_IsString(content) && ctx->im) {
+            int64_t id = ca_im_send(ctx->im, (int64_t)sid->valuedouble, "user",
+                                    content->valuestring);
+            if (id > 0) im_push(ctx, (int64_t)sid->valuedouble, id, "user", content->valuestring);
+        }
+    } else if (strcmp(t, "im.ping") == 0) {
+        if (ctx->http) ca_http_server_ws_broadcast(ctx->http, "{\"type\":\"pong\"}");
+    }
+    cJSON_Delete(root);
+}
+
+static int h_im_sessions(const ca_http_request *req, ca_http_response *resp, void *ud) {
+    cagent_ctx *ctx = (cagent_ctx *)ud;
+    if (!authz_ok(ctx, req, resp)) return 0;
+    char *s = ctx->im ? ca_im_sessions_json(ctx->im) : ca_strdup("{}");
+    ca_http_resp_json(resp, s ? s : "{}");
+    free(s);
+    return 0;
+}
+
+static int h_im_session_create(const ca_http_request *req, ca_http_response *resp, void *ud) {
+    cagent_ctx *ctx = (cagent_ctx *)ud;
+    if (!authz_ok(ctx, req, resp)) return 0;
+    char *b = body_str(req);
+    cJSON *root = b ? cJSON_Parse(b) : NULL;
+    free(b);
+    const char *name = NULL;
+    if (root && cJSON_IsObject(root)) {
+        cJSON *n = cJSON_GetObjectItemCaseSensitive(root, "name");
+        if (n && cJSON_IsString(n)) name = n->valuestring;
+    }
+    if (!ctx->im) { if (root) cJSON_Delete(root); resp->status = 500; ca_http_resp_json(resp, "{\"error\":\"im disabled\"}"); return 0; }
+    int64_t id = ca_im_create_session(ctx->im, name ? name : "");
+    if (root) cJSON_Delete(root);
+    if (id < 0) { resp->status = 500; ca_http_resp_json(resp, "{\"error\":\"create failed\"}"); return 0; }
+    ca_http_resp_appendf(resp, "{\"id\":%lld}", (long long)id);
+    return 0;
+}
+
+/* Handles GET/POST/DELETE on /v1/im/sessions/{id} and /v1/im/sessions/{id}/messages */
+static int h_im_session_route(const ca_http_request *req, ca_http_response *resp, void *ud) {
+    cagent_ctx *ctx = (cagent_ctx *)ud;
+    if (!authz_ok(ctx, req, resp)) return 0;
+    if (!ctx->im) { resp->status = 500; ca_http_resp_json(resp, "{\"error\":\"im disabled\"}"); return 0; }
+    const char *rest = req->path + strlen("/v1/im/sessions/");
+    int is_messages = 0;
+    size_t rest_len = strlen(rest);
+    if (rest_len > strlen("/messages") &&
+        strcmp(rest + rest_len - strlen("/messages"), "/messages") == 0) {
+        is_messages = 1;
+        rest_len -= strlen("/messages");
+    }
+    char idbuf[64];
+    if (rest_len >= sizeof(idbuf)) rest_len = sizeof(idbuf) - 1;
+    memcpy(idbuf, rest, rest_len);
+    idbuf[rest_len] = '\0';
+    if (!idbuf[0]) { resp->status = 404; ca_http_resp_json(resp, "{\"error\":\"missing session id\"}"); return 0; }
+    int64_t session_id = atoll(idbuf);
+
+    if (strcmp(req->method, "DELETE") == 0) {
+        int ok = ca_im_delete_session(ctx->im, session_id);
+        ca_http_resp_appendf(resp, "{\"deleted\":%s}", ok ? "true" : "false");
+        return 0;
+    }
+    if (strcmp(req->method, "POST") == 0) {
+        if (!is_messages) { resp->status = 404; ca_http_resp_json(resp, "{\"error\":\"POST expects .../messages\"}"); return 0; }
+        char *b = body_str(req);
+        cJSON *root = b ? cJSON_Parse(b) : NULL;
+        free(b);
+        const char *role = NULL, *content = NULL;
+        if (root && cJSON_IsObject(root)) {
+            cJSON *r = cJSON_GetObjectItemCaseSensitive(root, "role");
+            cJSON *c = cJSON_GetObjectItemCaseSensitive(root, "content");
+            if (r && cJSON_IsString(r)) role = r->valuestring;
+            if (c && cJSON_IsString(c)) content = c->valuestring;
+        }
+        if (root) cJSON_Delete(root);
+        if (!content || !*content) { resp->status = 400; ca_http_resp_json(resp, "{\"error\":\"need 'content' string\"}"); return 0; }
+        if (!role || !*role) role = "user";
+        int64_t id = ca_im_send(ctx->im, session_id, role, content);
+        if (id < 0) { resp->status = 404; ca_http_resp_json(resp, "{\"error\":\"session not found\"}"); return 0; }
+        im_push(ctx, session_id, id, role, content);
+        ca_http_resp_appendf(resp, "{\"id\":%lld,\"ok\":true}", (long long)id);
+        return 0;
+    }
+    /* GET */
+    size_t n = 0;
+    ca_im_message *msgs = ca_im_messages(ctx->im, session_id, &n);
+    cJSON *arr = cJSON_CreateArray();
+    for (size_t i = 0; i < n; i++) {
+        cJSON *o = cJSON_CreateObject();
+        cJSON_AddNumberToObject(o, "id", (double)msgs[i].id);
+        cJSON_AddStringToObject(o, "role", msgs[i].role);
+        cJSON_AddStringToObject(o, "content", msgs[i].content);
+        cJSON_AddNumberToObject(o, "ts_ms", (double)msgs[i].ts_ms);
+        cJSON_AddItemToArray(arr, o);
+    }
+    ca_im_messages_free(msgs, n);
+    char *s = cJSON_PrintUnformatted(arr);
+    cJSON_Delete(arr);
+    ca_http_resp_json(resp, s ? s : "[]");
+    free(s);
+    return 0;
+}
+
 int cagent_api_attach(cagent_ctx *ctx) {
     if (!ctx || ctx->http_port == 0) return 0;
     if (!ctx->http) {
@@ -461,10 +630,17 @@ int cagent_api_attach(cagent_ctx *ctx) {
     ca_http_server_route(ctx->http, "POST", "/v1/config/llm", h_config_llm, ctx);
     ca_http_server_route(ctx->http, "GET", "/v1/usage", h_usage, ctx);
     ca_http_server_route(ctx->http, "GET", "/v1/plugins", h_plugins, ctx);
+    ca_http_server_route(ctx->http, "POST", "/v1/plugins/generate", h_plugin_generate, ctx);
     ca_http_server_route(ctx->http, "GET", "/v1/skills", h_skills, ctx);
     ca_http_server_route(ctx->http, "POST", "/v1/skills/run", h_skill_run, ctx);
     ca_http_server_route(ctx->http, "GET", "/v1/mcp", h_mcp, ctx);
     ca_http_server_route(ctx->http, "GET", "/v1/cluster", h_cluster, ctx);
+    ca_http_server_route(ctx->http, "GET", "/v1/im/sessions", h_im_sessions, ctx);
+    ca_http_server_route(ctx->http, "POST", "/v1/im/sessions", h_im_session_create, ctx);
+    ca_http_server_route(ctx->http, "GET", "/v1/im/sessions/", h_im_session_route, ctx);
+    ca_http_server_route(ctx->http, "POST", "/v1/im/sessions/", h_im_session_route, ctx);
+    ca_http_server_route(ctx->http, "DELETE", "/v1/im/sessions/", h_im_session_route, ctx);
+    ca_http_server_ws_route(ctx->http, "/ws", on_ws_msg, ctx);
     ca_http_server_route(ctx->http, "GET", "/metrics", h_metrics, ctx);
     ca_http_server_route(ctx->http, "GET", "/", h_index, ctx);
     ca_http_server_route(ctx->http, "GET", "/favicon.ico", h_favicon, ctx);

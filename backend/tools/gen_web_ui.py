@@ -14,7 +14,7 @@ with open(SRC, "r", encoding="utf-8") as f:
     text = f.read()
 
 lines = []
-lines.append("/* web_ui.h — GENERATED from apps/web/index.html by tools/gen_web_ui.py.")
+lines.append("/* web_ui.h - GENERATED from apps/web/index.html by tools/gen_web_ui.py.")
 lines.append(" * Do not edit by hand; re-run the generator after changing the HTML. */")
 lines.append("#pragma once")
 lines.append("static const char ca_web_index_html[] =")

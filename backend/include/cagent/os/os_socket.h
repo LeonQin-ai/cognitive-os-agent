@@ -25,6 +25,12 @@ int ca_sock_recv(ca_socket *s, void *buf, size_t cap);
 /* Receive until any byte in delim is seen or cap reached. Returns bytes or -1. */
 int ca_sock_recv_until(ca_socket *s, char *buf, size_t cap, const char *delim);
 
+/* Toggle blocking mode on a connected socket. Returns 0 ok, -1 error. */
+int ca_sock_set_blocking(ca_socket *s, int blocking);
+/* Wait up to timeout_ms for the socket to become readable.
+ * Returns 1 readable, 0 timeout, -1 error. */
+int ca_sock_wait_readable(ca_socket *s, int timeout_ms);
+
 /* Listen on a specific IPv4 address (host, e.g. "127.0.0.1"); NULL host = any
  * interface. NULL on failure. */
 ca_listener *ca_listen_addr(const char *host, uint16_t port);

@@ -44,10 +44,18 @@
 #include "cagent/llm/router.h"
 #include "cagent/llm/usage.h"
 #include "cagent/runtime/task.h"
+#include "cagent/infra/ringbuf.h"
+#include "cagent/retrieval/embedding.h"
+#include "cagent/im/im.h"
+#include "cagent/plugin_intelligence/generator.h"
+#include "cagent/plugin_runtime/wasm_runner.h"
+#include "cagent/cagent.h"
+#include "cagent/os/os_time.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdatomic.h>
 #include "cJSON.h"
 
 static int g_pass = 0, g_fail = 0;
@@ -1024,13 +1032,239 @@ static void test_attention(void) {
     ca_attention_free(a);
 }
 
-/* ---------- sandbox wasm seam ---------- */
+/* ---------- infra: lock-free ring buffer ---------- */
+static void test_ringbuf(void) {
+    section("ringbuf");
+    ca_ringbuf *r = ca_ringbuf_new(8);
+    CHECK(r != NULL);
+    if (!r) return;
+    /* basic FIFO */
+    void *out = NULL;
+    CHECK(ca_ringbuf_pop(r, &out) == 0);            /* empty */
+    for (int i = 1; i <= 8; i++) CHECK(ca_ringbuf_push(r, (void *)(intptr_t)(size_t)i) == 1);
+    CHECK(ca_ringbuf_push(r, (void *)(intptr_t)9) == 0);  /* full */
+    for (int i = 1; i <= 8; i++) {
+        CHECK(ca_ringbuf_pop(r, &out) == 1);
+        CHECK((intptr_t)(size_t)out == i);
+    }
+    CHECK(ca_ringbuf_pop(r, &out) == 0);
+    /* wrap-around */
+    for (int i = 1; i <= 4; i++) CHECK(ca_ringbuf_push(r, (void *)(intptr_t)(size_t)i) == 1);
+    for (int i = 1; i <= 4; i++) CHECK(ca_ringbuf_pop(r, &out) == 1);
+    for (int i = 5; i <= 12; i++) CHECK(ca_ringbuf_push(r, (void *)(intptr_t)(size_t)i) == 1);
+    for (int i = 5; i <= 12; i++) {
+        CHECK(ca_ringbuf_pop(r, &out) == 1);
+        CHECK((intptr_t)(size_t)out == i);
+    }
+    ca_ringbuf_free(r);
+}
+
+#define RB_NPROD 4
+#define RB_PER   2000
+#define RB_TOTAL (RB_NPROD * RB_PER)
+static _Atomic int rb_seen[RB_TOTAL];
+static _Atomic int rb_dup;
+static _Atomic int rb_err;
+static ca_ringbuf *rb_shared;
+
+static void rb_producer(void *arg) {
+    int id = (int)(intptr_t)arg;
+    for (int k = 0; k < RB_PER; k++) {
+        int v = id * RB_PER + k + 1;
+        int i = 0;
+        while (ca_ringbuf_push(rb_shared, (void *)(intptr_t)(size_t)v) != 1 && i < 100000) { i++; ca_time_sleep_ms(1); }
+        if (i >= 100000) atomic_fetch_add(&rb_err, 1);
+    }
+}
+static void rb_consumer(void *arg) {
+    ca_ringbuf *r = (ca_ringbuf *)arg;
+    int seen = 0;
+    int64_t deadline = ca_time_now_ms() + 8000;
+    while (seen < RB_TOTAL && ca_time_now_ms() < deadline) {
+        void *out = NULL;
+        if (ca_ringbuf_pop(r, &out) == 1) {
+            int v = (int)(intptr_t)(size_t)out;
+            if (v < 1 || v > RB_TOTAL) { atomic_fetch_add(&rb_err, 1); continue; }
+            int prev = atomic_fetch_add(&rb_seen[v - 1], 1);
+            if (prev != 0) atomic_fetch_add(&rb_dup, 1);
+            seen++;
+        } else {
+            ca_time_sleep_ms(1);
+        }
+    }
+    atomic_fetch_add(&rb_err, RB_TOTAL - seen);
+}
+
+static void test_ringbuf_mpmc(void) {
+    section("ringbuf_mpmc");
+    ca_ringbuf *r = ca_ringbuf_new(64);
+    CHECK(r != NULL);
+    if (!r) return;
+    rb_shared = r;
+    ca_thread *prods[RB_NPROD];
+    for (int i = 0; i < RB_NPROD; i++)
+        prods[i] = ca_thread_create(rb_producer, (void *)(intptr_t)i);
+    ca_thread *cons = ca_thread_create(rb_consumer, r);
+    for (int i = 0; i < RB_NPROD; i++) ca_thread_join(prods[i]);
+    ca_thread_join(cons);
+    ca_ringbuf_free(r);
+    rb_shared = NULL;
+    CHECK(atomic_load(&rb_dup) == 0);
+    CHECK(atomic_load(&rb_err) == 0);
+    int distinct = 0;
+    for (int i = 0; i < RB_TOTAL; i++)
+        if (atomic_load(&rb_seen[i]) == 1) distinct++;
+    CHECK(distinct == RB_TOTAL);
+}
+
+/* ---------- retrieval: embedding + rerank ---------- */
+static void test_embedding(void) {
+    section("embedding");
+    ca_embedding_use_local();
+    CHECK_STR(ca_embedding_provider_name(), "local");
+    float a[CA_EMBED_DIM], b[CA_EMBED_DIM], c[CA_EMBED_DIM];
+    ca_embed_text("hello world foo bar", a);
+    ca_embed_text("hello world foo bar", b);
+    ca_embed_text("completely different text here", c);
+    CHECK(ca_embed_cosine(a, b, CA_EMBED_DIM) > 0.99f);
+    CHECK(ca_embed_cosine(a, c, CA_EMBED_DIM) < ca_embed_cosine(a, b, CA_EMBED_DIM));
+    /* rerank: relevant doc scores higher than unrelated doc */
+    const char *docs[2] = {
+        "how to create a file with hello content",
+        "quantum entanglement of distant stars"
+    };
+    float scores[2];
+    CHECK(ca_embed_rerank("create file hello", docs, 2, scores) == 0);
+    CHECK(scores[0] > scores[1]);
+}
+
+/* ---------- im: instant messaging store ---------- */
+static void test_im(void) {
+    section("im");
+    const char *root = "state-im-test";
+    char store[600];
+    snprintf(store, sizeof(store), "%s/im/sessions.json", root);
+    ca_fs_remove(store);   /* remove stale store from a previous run */
+    ca_fs_remove(root);    /* best-effort (fails on non-empty dir) */
+    ca_im *im = ca_im_new(root);
+    CHECK(im != NULL);
+    if (!im) return;
+    int64_t s1 = ca_im_create_session(im, "测试会话");
+    CHECK(s1 > 0);
+    int64_t s2 = ca_im_create_session(im, "general");
+    CHECK(s2 > 0 && s2 != s1);
+    CHECK(ca_im_send(im, s1, "user", "你好") > 0);
+    CHECK(ca_im_send(im, s1, "assistant", "你好！") > 0);
+    CHECK(ca_im_send(im, 9999, "user", "x") < 0);   /* unknown session */
+    size_t n = 0;
+    ca_im_message *msgs = ca_im_messages(im, s1, &n);
+    CHECK(msgs != NULL && n == 2);
+    if (msgs) {
+        CHECK_STR(msgs[0].role, "user");
+        CHECK_STR(msgs[0].content, "你好");
+        CHECK_STR(msgs[1].role, "assistant");
+    }
+    ca_im_messages_free(msgs, n);
+    CHECK(ca_im_total_messages(im) == 2);
+    CHECK(ca_im_delete_session(im, s2) == 1);
+    CHECK(ca_im_delete_session(im, 9999) == 0);
+    ca_im_free(im);
+    /* reload from disk */
+    ca_im *im2 = ca_im_new(root);
+    CHECK(im2 != NULL);
+    if (im2) {
+        size_t ns = 0;
+        ca_im_session *sess = ca_im_list_sessions(im2, &ns);
+        CHECK(sess != NULL && ns == 1);
+        if (sess) {
+            CHECK(sess[0].id == s1);
+            CHECK_STR(sess[0].name, "测试会话");
+        }
+        ca_im_sessions_free(sess, ns);
+        char *j = ca_im_sessions_json(im2);
+        CHECK(j && strstr(j, "测试会话") != NULL);
+        free(j);
+        ca_im_free(im2);
+    }
+    ca_fs_remove(store);
+    ca_fs_remove(root);
+}
+
+/* ---------- plugin intelligence: AI plugin generation (mock mode) ---------- */
+static void test_plugin_generate(void) {
+    section("plugin_generate");
+    const char *root = "state-plugin-test";
+    ca_fs_remove(root);
+    cagent_config cfg;
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.state_root = root;
+    cfg.workspace = ".";
+    cfg.provider = "mock";
+    cfg.http_port = 0;
+    cagent_ctx ctx;
+    if (cagent_init(&ctx, &cfg) != 0) { CHECK(0); return; }
+    char *res = ca_plugin_generate(&ctx, "创建读取配置文件 config.json 的插件");
+    CHECK(res != NULL);
+    if (res) {
+        cJSON *j = cJSON_Parse(res);
+        CHECK(j != NULL);
+        if (j) {
+            cJSON *ok = cJSON_GetObjectItemCaseSensitive(j, "ok");
+            CHECK(ok && cJSON_IsTrue(ok));
+            cJSON *plugin = cJSON_GetObjectItemCaseSensitive(j, "plugin");
+            cJSON *name = plugin ? cJSON_GetObjectItemCaseSensitive(plugin, "name") : NULL;
+            cJSON *script = cJSON_GetObjectItemCaseSensitive(j, "script");
+            CHECK(name && cJSON_IsString(name) && strlen(name->valuestring) > 0);
+            CHECK(script && cJSON_IsString(script));
+        }
+        free(res);
+    }
+    /* registered in the plugin registry */
+    CHECK(ca_plugin_registry_count(ctx.registry) >= 1);
+    /* and runnable as a skill */
+    CHECK(ca_skill_count(ctx.skills) >= 1);
+    ca_skill_result *sr = NULL;
+    for (size_t i = 0; i < (size_t)ca_skill_count(ctx.skills); i++) {
+        const ca_skill *sk = ca_skill_get(ctx.skills, i);
+        if (sk && (strncmp(sk->name, "cap", 3) == 0 || strstr(sk->name, "config") != NULL)) {
+            sr = ca_skill_execute(ctx.skills, sk->name, NULL, ".", 10000);
+            break;
+        }
+    }
+    CHECK(sr != NULL && sr->ok);
+    if (sr) ca_skill_result_free(sr);
+    cagent_shutdown(&ctx);
+    ca_fs_remove(root);
+}
+
+/* ---------- sandbox: wasm3 runner ---------- */
+static const unsigned char WASM_ADD[] = {
+    0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x07, 0x01, 0x60, 0x02, 0x7f, 0x7f, 0x01,
+    0x7f, 0x03, 0x02, 0x01, 0x00, 0x07, 0x07, 0x01, 0x03, 0x61, 0x64, 0x64, 0x00, 0x00, 0x0a, 0x09,
+    0x01, 0x07, 0x00, 0x20, 0x00, 0x20, 0x01, 0x6a, 0x0b
+};
+
 static void test_sandbox_wasm(void) {
     section("sandbox_wasm");
+    /* before registering a runner the seam reports "unsupported" */
     CHECK(ca_sandbox_wasm_supported() == 0);
     char *we = ca_sandbox_run_wasm("\0asm", 4, "add", "{}");
     CHECK(we != NULL && strstr(we, "not registered") != NULL);
     free(we);
+
+    /* register the wasm3-backed runner */
+    ca_sandbox_set_wasm_runner(ca_wasm3_run);
+    CHECK(ca_sandbox_wasm_supported() == 1);
+    char *r = ca_sandbox_run_wasm(WASM_ADD, sizeof(WASM_ADD), "add", "[2,40]");
+    CHECK(r != NULL && strstr(r, "\"result\":42") != NULL);
+    free(r);
+    r = ca_sandbox_run_wasm(WASM_ADD, sizeof(WASM_ADD), "add", "{\"a\":10,\"b\":32}");
+    CHECK(r != NULL && strstr(r, "\"result\":42") != NULL);
+    free(r);
+    /* missing function -> error json */
+    r = ca_sandbox_run_wasm(WASM_ADD, sizeof(WASM_ADD), "nope", "[]");
+    CHECK(r != NULL && strstr(r, "ok\":false") != NULL);
+    free(r);
 }
 
 /* ---------- runtime: task lifecycle ---------- */
@@ -1057,6 +1291,9 @@ int main(void) {
     printf("c-agent unit tests\n");
     test_util();
     test_event_bus();
+    test_ringbuf();
+    test_ringbuf_mpmc();
+    test_embedding();
     test_scheduler();
     test_coro();
     test_scheduler_mn();
@@ -1092,6 +1329,8 @@ int main(void) {
     test_cluster();
     test_attention();
     test_sandbox_wasm();
+    test_im();
+    test_plugin_generate();
     test_task();
     printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail == 0 ? 0 : 1;

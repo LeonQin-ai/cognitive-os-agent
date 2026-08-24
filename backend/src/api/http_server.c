@@ -1,5 +1,6 @@
 /* http_server.c — minimal HTTP/1.1 server implementation. */
 #include "cagent/api/http_server.h"
+#include "cagent/api/ws_server.h"
 #include "cagent/os/os_socket.h"
 #include "cagent/os/os_thread.h"
 #include "cagent/infra/logging.h"
@@ -24,6 +25,10 @@ struct ca_http_server {
     ca_listener *listener;
     route *routes;
     size_t n_routes, cap_routes;
+    ca_ws_server *ws;            /* WebSocket hub (created on first ws route) */
+    char ws_path[256];
+    ca_ws_handler ws_on_msg;
+    void *ws_ud;
     volatile int stop_flag;
     ca_mutex mtx;
 };
@@ -51,6 +56,7 @@ ca_http_server *ca_http_server_new_bind(const char *host, uint16_t port) {
 void ca_http_server_free(ca_http_server *s) {
     if (!s) return;
     if (s->listener) ca_listener_close(s->listener);
+    if (s->ws) ca_ws_server_free(s->ws);
     free(s->routes);
     ca_mutex_destroy(&s->mtx);
     free(s);
@@ -71,6 +77,20 @@ void ca_http_server_route(ca_http_server *s, const char *method, const char *pat
     snprintf(r->prefix, sizeof(r->prefix), "%s", path_prefix ? path_prefix : "/");
     r->fn = fn;
     r->ud = ud;
+}
+
+void ca_http_server_ws_route(ca_http_server *s, const char *path,
+                             ca_ws_handler on_msg, void *ud) {
+    if (!s || !path) return;
+    snprintf(s->ws_path, sizeof(s->ws_path), "%s", path);
+    s->ws_on_msg = on_msg;
+    s->ws_ud = ud;
+    if (!s->ws) s->ws = ca_ws_server_new();
+    if (s->ws) ca_ws_server_on_message(s->ws, on_msg, ud);
+}
+
+void ca_http_server_ws_broadcast(ca_http_server *s, const char *json_text) {
+    if (s && s->ws) ca_ws_server_broadcast(s->ws, json_text);
 }
 
 void ca_http_server_stop(ca_http_server *s) {
@@ -151,10 +171,12 @@ static int read_request(ca_socket *sock, char *buf, size_t cap, size_t *head_len
     return 0;
 }
 
-static void handle_conn(ca_http_server *s, ca_socket *sock) {
+/* Handle one accepted connection. Returns 1 if the socket was handed off to a
+ * WebSocket client thread (caller must not close it), 0 otherwise. */
+static int handle_conn(ca_http_server *s, ca_socket *sock) {
     char buf[MAX_HEADER_BYTES + MAX_BODY_BYTES];
     size_t hlen = 0, blen = 0;
-    if (read_request(sock, buf, sizeof(buf), &hlen, &blen) != 0) return;
+    if (read_request(sock, buf, sizeof(buf), &hlen, &blen) != 0) return 0;
 
     /* parse request line */
     char method[16], path[1024], query[512];
@@ -167,7 +189,7 @@ static void handle_conn(ca_http_server *s, ca_socket *sock) {
         linelen++;
     }
     line[linelen] = '\0';
-    if (sscanf(line, "%15s %1023s", method, path) != 2) return;
+    if (sscanf(line, "%15s %1023s", method, path) != 2) return 0;
     char *qm = strchr(path, '?');
     if (qm) {
         snprintf(query, sizeof(query), "%s", qm + 1);
@@ -179,6 +201,29 @@ static void handle_conn(ca_http_server *s, ca_socket *sock) {
     snprintf(req.method, sizeof(req.method), "%s", method);
     snprintf(req.path, sizeof(req.path), "%s", path);
     snprintf(req.query, sizeof(req.query), "%s", query);
+
+    /* WebSocket upgrade? */
+    if (s->ws && s->ws_path[0] && startswith(path, s->ws_path)) {
+        char ws_key[160] = "";
+        for (size_t k = 0; k + 24 < hlen; k++) {
+            if (buf[k] == '\r' && buf[k + 1] == '\n' &&
+                startswith_icase(buf + k + 2, "Sec-WebSocket-Key:")) {
+                const char *v = buf + k + 2 + 18;
+                while (*v == ' ' || *v == '\t') v++;
+                size_t vlen = 0;
+                while (v[vlen] && v[vlen] != '\r' && v[vlen] != '\n' &&
+                       vlen + 1 < sizeof(ws_key)) vlen++;
+                memcpy(ws_key, v, vlen);
+                ws_key[vlen] = '\0';
+                break;
+            }
+        }
+        if (ws_key[0]) {
+            ca_ws_server_accept(s->ws, sock, ws_key);
+            return 1; /* socket owned by the ws client thread */
+        }
+    }
+
     /* capture Authorization header (case-insensitive) if present */
     for (size_t k = 0; k + 15 < hlen; k++) {
         if (buf[k] == '\n' &&
@@ -237,6 +282,7 @@ static void handle_conn(ca_http_server *s, ca_socket *sock) {
     if (n > 0) ca_sock_send(sock, head, (size_t)n);
     if (resp.body.len > 0) ca_sock_send(sock, resp.body.buf, resp.body.len);
     ca_strbuf_free(&resp.body);
+    return 0;
 }
 
 int ca_http_server_serve(ca_http_server *s) {
@@ -247,8 +293,8 @@ int ca_http_server_serve(ca_http_server *s) {
             if (s->stop_flag) break;
             continue;
         }
-        handle_conn(s, c);
-        ca_sock_close(c);
+        if (handle_conn(s, c) == 0)
+            ca_sock_close(c);
     }
     return 0;
 }

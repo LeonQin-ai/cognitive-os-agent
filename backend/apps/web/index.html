@@ -1,79 +1,346 @@
 <!DOCTYPE html>
-<html lang="zh">
+<html lang="zh-CN">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
 <title>c-agent — Cognitive OS Console</title>
 <style>
-  :root{--bg:#0f1115;--card:#171a21;--border:#262b36;--fg:#e6e6e6;--muted:#8a93a3;--accent:#2f6feb;--ok:#4ade80;--warn:#ffd166;--sidebar:#0b0d11;--nav-hover:#14171d;--nav-on:#1a1f2b;--input:#2c3340}
-  body[data-theme=light]{--bg:#f4f6fa;--card:#fff;--border:#d9dfe8;--fg:#1c2333;--muted:#5a6478;--accent:#2563eb;--ok:#15803d;--warn:#b45309;--sidebar:#e9edf3;--nav-hover:#dfe5ee;--nav-on:#fff;--input:#cbd5e1}
-  body[data-theme=ocean]{--bg:#0a1420;--card:#0f1d2e;--border:#1e3550;--fg:#d7e7ff;--muted:#7fa3c9;--accent:#38bdf8;--ok:#34d399;--warn:#fbbf24;--sidebar:#08111b;--nav-hover:#102236;--nav-on:#123049;--input:#1e3550}
-  body[data-theme=forest]{--bg:#0d1410;--card:#13201a;--border:#22382d;--fg:#d9f2e4;--muted:#8fb8a0;--accent:#34d399;--ok:#4ade80;--warn:#fbbf24;--sidebar:#0a100c;--nav-hover:#16261e;--nav-on:#1c3a2b;--input:#22382d}
-  body[data-theme=sunset]{--bg:#171019;--card:#221a24;--border:#3a2c40;--fg:#f0e2ee;--muted:#b39bb0;--accent:#e879f9;--ok:#4ade80;--warn:#fbbf24;--sidebar:#120c14;--nav-hover:#2a1f2d;--nav-on:#3a2c40;--input:#3a2c40}
+  /* ---------- design tokens ---------- */
+  :root{
+    --radius:10px; --radius-sm:7px; --radius-xs:5px;
+    --tr-dur:150ms;
+    --mono:ui-monospace,"Cascadia Code",Consolas,"JetBrains Mono",monospace;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,"Microsoft YaHei","PingFang SC",sans-serif;
+    --side-w:232px;
+  }
+  /* base = dark theme */
+  body{
+    margin:0; font-family:var(--sans); font-size:13px; line-height:1.5;
+    color-scheme:dark;
+    background:#0b0e14; color:#e7ecf3;
+    --bg:#0b0e14; --card:#141821; --border:#232a37;
+    --fg:#e7ecf3; --muted:#8b94a7;
+    --accent:#3b82f6; --ok:#34d399; --warn:#fbbf24; --danger:#f87171;
+    --sidebar:#080b10; --nav-hover:#11141b; --nav-on:#151b28; --input:#232b3a;
+    --code-num:#c084fc;
+    --accent-soft:color-mix(in srgb, var(--accent) 13%, transparent);
+    --accent-ring:color-mix(in srgb, var(--accent) 42%, transparent);
+    --card-hover:color-mix(in srgb, var(--fg) 4%, var(--card));
+    --shadow:0 1px 2px rgba(0,0,0,.28), 0 12px 32px rgba(0,0,0,.24);
+    --shadow-sm:0 1px 2px rgba(0,0,0,.2);
+    display:flex; height:100vh; overflow:hidden;
+  }
+  body[data-theme=light]{
+    color-scheme:light;
+    background:#f3f5f9; color:#1b2233;
+    --bg:#f3f5f9; --card:#ffffff; --border:#dfe4ee;
+    --fg:#1b2233; --muted:#5b6478;
+    --accent:#2563eb; --ok:#059669; --warn:#b45309; --danger:#dc2626;
+    --sidebar:#e9edf4; --nav-hover:#dfe5ef; --nav-on:#ffffff; --input:#d3dbe8;
+    --code-num:#7c3aed;
+    --shadow:0 1px 3px rgba(23,34,58,.08), 0 12px 32px rgba(23,34,58,.12);
+    --shadow-sm:0 1px 2px rgba(23,34,58,.06);
+  }
+  body[data-theme=ocean]{
+    color-scheme:dark;
+    background:#081120; color:#d8e9ff;
+    --bg:#081120; --card:#0d1a2d; --border:#1c3350;
+    --fg:#d8e9ff; --muted:#7fa3c9;
+    --accent:#38bdf8; --ok:#34d399; --warn:#fbbf24; --danger:#fb7185;
+    --sidebar:#060d18; --nav-hover:#0e2138; --nav-on:#113052; --input:#1c3350;
+    --code-num:#a5b4fc;
+  }
+  body[data-theme=forest]{
+    color-scheme:dark;
+    background:#0c1310; color:#d9f2e4;
+    --bg:#0c1310; --card:#132019; --border:#21372c;
+    --fg:#d9f2e4; --muted:#8fb8a0;
+    --accent:#34d399; --ok:#4ade80; --warn:#fbbf24; --danger:#f87171;
+    --sidebar:#0a100c; --nav-hover:#15241c; --nav-on:#1a3a2a; --input:#21372c;
+    --code-num:#86efac;
+  }
+  body[data-theme=sunset]{
+    color-scheme:dark;
+    background:#160f1a; color:#f1e3f0;
+    --bg:#160f1a; --card:#221a26; --border:#392b41;
+    --fg:#f1e3f0; --muted:#b19ab3;
+    --accent:#e879f9; --ok:#4ade80; --warn:#fbbf24; --danger:#fb7185;
+    --sidebar:#110c15; --nav-hover:#291e2e; --nav-on:#392b41; --input:#392b41;
+    --code-num:#f0abfc;
+  }
+
   *{box-sizing:border-box}
-  body{font-family:system-ui,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--fg);margin:0;display:flex;height:100vh;overflow:hidden}
-  aside{width:210px;background:var(--sidebar);border-right:1px solid var(--border);padding:16px 0;display:flex;flex-direction:column;flex-shrink:0}
-  aside h1{font-size:15px;margin:0 16px 4px}
-  aside .sub{color:var(--muted);font-size:11px;margin:0 16px 16px}
-  nav{flex:1;overflow-y:auto}
-  nav button{display:block;width:100%;text-align:left;background:none;border:0;color:var(--fg);padding:9px 16px;font-size:13px;cursor:pointer}
-  nav button:hover{background:var(--nav-hover)}
-  nav button.on{background:var(--nav-on);border-left:3px solid var(--accent);color:var(--fg)}
-  main{flex:1;display:flex;flex-direction:column;min-width:0}
-  .top{display:flex;align-items:center;justify-content:space-between;padding:14px 20px;border-bottom:1px solid var(--border)}
-  .top .title{font-size:14px;font-weight:600}
-  .top .flow{color:var(--muted);font-size:11px;letter-spacing:.5px}
-  .content{flex:1;padding:20px;overflow-y:auto}
-  .card{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:14px}
-  .card h2{font-size:13px;margin:0 0 10px;color:var(--fg)}
-  .hint{color:var(--muted);font-size:12px;margin:4px 0 10px}
-  textarea,input[type=text],select{width:100%;background:var(--bg);color:var(--fg);border:1px solid var(--input);border-radius:6px;padding:8px;font-family:ui-monospace,Consolas,monospace;font-size:13px}
-  select{height:36px;cursor:pointer}
-  textarea{height:64px}
-  .topright{display:flex;align-items:center;gap:14px}
-  #theme{width:auto;min-width:90px}
-  button.sm{padding:4px 8px;font-size:12px}
-  button.danger{background:transparent;color:#f87171;border:1px solid #f87171}
-  button.danger:hover{background:#f871711a}
-  .row{display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap}
-  button{background:var(--accent);color:#fff;border:0;border-radius:6px;padding:8px 14px;font-size:13px;cursor:pointer}
-  button.sec{background:var(--card);border:1px solid var(--border);color:var(--fg)}
-  button:disabled{opacity:.5;cursor:not-allowed}
-  pre{background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:10px;font-size:12px;overflow:auto;white-space:pre-wrap;word-break:break-word;max-height:50vh;min-height:60px;margin:0}
-  .badge-ok{color:var(--ok)} .badge-warn{color:var(--warn)}
-  table{width:100%;border-collapse:collapse;font-size:12px}
-  th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--border)}
-  th{color:var(--muted);font-weight:600}
+  ::selection{background:var(--accent-ring)}
+  ::-webkit-scrollbar{width:10px;height:10px}
+  ::-webkit-scrollbar-thumb{background:var(--border);border-radius:6px;border:2px solid transparent;background-clip:content-box}
+  ::-webkit-scrollbar-thumb:hover{background:var(--muted);background-clip:content-box}
+  ::-webkit-scrollbar-track{background:transparent}
+
+  aside{
+    width:var(--side-w); flex-shrink:0; height:100vh;
+    background:var(--sidebar); border-right:1px solid var(--border);
+    display:flex; flex-direction:column; z-index:30; transition:transform var(--tr-dur) ease;
+  }
+  .brand{display:flex; align-items:center; gap:10px; padding:16px 14px 14px; border-bottom:1px solid var(--border)}
+  .logo{
+    width:34px; height:34px; border-radius:9px; flex-shrink:0; display:grid; place-items:center;
+    background:linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 62%, #000 0%));
+    color:#fff; font-size:17px; font-weight:800; letter-spacing:-1px; user-select:none;
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.18), 0 2px 6px color-mix(in srgb, var(--accent) 35%, transparent);
+  }
+  .brand h1{margin:0; font-size:15px; font-weight:700; letter-spacing:.2px}
+  .brand .sub{color:var(--muted); font-size:11px; margin-top:1px}
+  nav{flex:1; overflow-y:auto; padding:8px 0}
+  nav button{
+    display:flex; align-items:center; gap:10px; width:100%;
+    background:none; border:0; border-left:3px solid transparent;
+    color:var(--muted); padding:8px 13px; font-size:13px; cursor:pointer; text-align:left;
+    transition:color var(--tr-dur), background var(--tr-dur);
+  }
+  nav button svg{flex-shrink:0; opacity:.9}
+  nav button:hover{background:var(--nav-hover); color:var(--fg)}
+  nav button:focus-visible{outline:2px solid var(--accent-ring); outline-offset:-2px}
+  nav button.on, nav button[aria-current="true"]{
+    background:var(--nav-on); border-left-color:var(--accent); color:var(--fg); font-weight:600;
+  }
+  .side-foot{padding:12px 14px; border-top:1px solid var(--border)}
+  .conn{display:flex; align-items:center; gap:8px; font-size:12px; color:var(--muted)}
+  .dot{width:8px; height:8px; border-radius:50%; display:inline-block; flex-shrink:0}
+  .dot.ok{background:var(--ok)}
+  .dot.warn{background:var(--warn)}
+  .dot.err{background:var(--danger)}
+  .dot.pulse{animation:blink 1.6s ease-in-out infinite}
+  @keyframes blink{0%,100%{opacity:1}50%{opacity:.35}}
+
+  main{flex:1; display:flex; flex-direction:column; min-width:0; height:100vh}
+  .top{
+    display:flex; align-items:center; justify-content:space-between; gap:12px;
+    padding:11px 18px; border-bottom:1px solid var(--border); background:var(--card); flex-shrink:0;
+  }
+  .top-left{display:flex; align-items:center; gap:10px; min-width:0}
+  .title{font-size:14px; font-weight:650; letter-spacing:.2px; outline:none}
+  .flow{color:var(--muted); font-size:11px; letter-spacing:.45px; white-space:nowrap; user-select:none}
+  .topright{display:flex; align-items:center; gap:10px}
+  .icon-btn{
+    width:32px; height:32px; display:grid; place-items:center;
+    background:none; border:1px solid transparent; border-radius:var(--radius-sm);
+    color:var(--muted); cursor:pointer; padding:0;
+    transition:color var(--tr-dur), background var(--tr-dur), border-color var(--tr-dur);
+  }
+  .icon-btn:hover{color:var(--fg); background:var(--accent-soft); border-color:color-mix(in srgb, var(--accent) 30%, transparent)}
+  .icon-btn:focus-visible{outline:2px solid var(--accent-ring); outline-offset:2px}
+  #navToggle{display:none}
+  .content{flex:1; padding:20px; overflow-y:auto; scrollbar-gutter:stable}
+
+  .card{background:var(--card); border:1px solid var(--border); border-radius:var(--radius); padding:16px; margin-bottom:14px; box-shadow:var(--shadow-sm)}
+  .card h2{margin:0 0 4px; font-size:13px; font-weight:650}
+  .card-head{display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:8px}
+  .card-head h2{margin:0}
+  .card-head .row{margin:0; gap:6px}
+  .hint{color:var(--muted); font-size:12px; margin:0 0 10px; line-height:1.65}
   .muted{color:var(--muted)}
-  tr.active-row td{background:var(--nav-on)}
+
+  textarea,input[type=text],input[type=number],select{
+    width:100%; background:var(--bg); color:var(--fg);
+    border:1px solid var(--border); border-radius:var(--radius-sm);
+    padding:8px 10px; font-size:12.5px;
+    transition:border-color var(--tr-dur), box-shadow var(--tr-dur);
+  }
+  textarea,input[type=text],input[type=number]{font-family:var(--mono)}
+  textarea:focus,input[type=text]:focus,input[type=number]:focus,select:focus{
+    outline:none; border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-ring);
+  }
+  textarea{height:76px; resize:vertical; line-height:1.55}
+  select{height:34px; width:auto; min-width:96px; cursor:pointer; font-family:var(--sans); font-size:12.5px; padding:0 26px 0 10px}
+  ::placeholder{color:var(--muted); opacity:.75}
+
+  button{
+    background:var(--accent); color:#fff; border:0; border-radius:var(--radius-sm);
+    padding:8px 14px; font-size:12.5px; font-weight:600; cursor:pointer; font-family:var(--sans);
+    transition:filter var(--tr-dur), transform var(--tr-dur), background var(--tr-dur), border-color var(--tr-dur), color var(--tr-dur);
+  }
+  button:hover{filter:brightness(1.08)}
+  button:active{transform:translateY(1px)}
+  button:focus-visible{outline:2px solid var(--accent-ring); outline-offset:2px}
+  button:disabled{opacity:.5; cursor:not-allowed; filter:none; transform:none}
+  button.sec{background:var(--card); border:1px solid var(--border); color:var(--fg)}
+  button.sec:hover{background:var(--card-hover)}
+  button.danger{background:transparent; color:var(--danger); border:1px solid var(--danger)}
+  button.danger:hover{background:color-mix(in srgb, var(--danger) 12%, transparent)}
+  button.sm{padding:4px 9px; font-size:11.5px; font-weight:600}
+  .row{display:flex; gap:8px; align-items:center; margin-top:10px; flex-wrap:wrap}
+
+  pre{
+    background:var(--bg); border:1px solid var(--border); border-radius:var(--radius-sm);
+    padding:12px; font-size:12px; line-height:1.55; margin:0;
+    overflow:auto; white-space:pre-wrap; word-break:break-word;
+    max-height:55vh; min-height:56px; font-family:var(--mono);
+  }
+  .json .k{color:var(--accent); font-weight:600}
+  .json .s{color:var(--ok)}
+  .json .b{color:var(--warn)}
+  .json .num{color:var(--code-num)}
+  .json .n{color:var(--danger)}
+  .json .p{color:var(--muted)}
+  .json .empty{color:var(--muted); font-style:italic}
+
+  .table-wrap{overflow:auto; border:1px solid var(--border); border-radius:var(--radius-sm); margin-top:8px}
+  table{width:100%; border-collapse:collapse; font-size:12.5px}
+  thead th{position:sticky; top:0; z-index:1; background:var(--card); text-align:left; padding:9px 12px; border-bottom:1px solid var(--border); color:var(--muted); font-weight:600; white-space:nowrap}
+  td{padding:8px 12px; border-bottom:1px solid var(--border); vertical-align:top}
+  tbody tr{transition:background var(--tr-dur)}
+  tbody tr:hover{background:var(--card-hover)}
+  tr.active-row td{background:var(--accent-soft)}
   tr.active-row td:first-child{box-shadow:inset 3px 0 0 var(--accent)}
+
+  .badge{display:inline-block; padding:1px 7px; border-radius:999px; font-size:11px; font-weight:600; white-space:nowrap}
+  .badge-ok{background:color-mix(in srgb, var(--ok) 16%, transparent); color:var(--ok)}
+  .badge-warn{background:color-mix(in srgb, var(--warn) 16%, transparent); color:var(--warn)}
+  .badge-err{background:color-mix(in srgb, var(--danger) 16%, transparent); color:var(--danger)}
+  .chips{display:flex; flex-wrap:wrap; gap:6px}
+  .chip{
+    display:inline-flex; align-items:center; gap:6px; max-width:100%;
+    padding:4px 10px; background:var(--bg); border:1px solid var(--border);
+    border-radius:999px; font-size:12px; cursor:pointer; color:var(--fg);
+    transition:border-color var(--tr-dur), color var(--tr-dur);
+  }
+  .chip b{color:var(--muted); font-weight:700; flex-shrink:0}
+  .chip span{overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+  .chip:hover{border-color:var(--accent); color:var(--accent)}
+
+  .toast{position:fixed; bottom:24px; left:50%; transform:translate(-50%, 12px); background:var(--fg); color:var(--bg); padding:8px 16px; border-radius:8px; font-size:12.5px; font-weight:600; opacity:0; pointer-events:none; z-index:99; box-shadow:var(--shadow); transition:opacity var(--tr-dur), transform var(--tr-dur)}
+  .toast.show{opacity:1; transform:translate(-50%, 0)}
+  .backdrop{position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:20; display:none; backdrop-filter:blur(2px)}
+
+  /* ---------- dashboard stats ---------- */
+  .stat-grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:12px}
+  .stat{padding:14px 16px; border:1px solid var(--border); border-radius:var(--radius); background:var(--card)}
+  .stat .num{font-size:22px; font-weight:700}
+  .stat .lbl{font-size:11.5px; color:var(--muted); margin-top:2px}
+
+  /* ---------- IM ---------- */
+  .im-layout{display:grid; grid-template-columns:250px 1fr; gap:14px; align-items:start}
+  .im-sessions{display:flex; flex-direction:column; gap:6px; max-height:calc(100vh - 260px); overflow-y:auto; padding-right:2px}
+  .im-session{padding:9px 12px; border:1px solid var(--border); border-radius:var(--radius-sm); cursor:pointer; font-size:12.5px; background:var(--bg); transition:all var(--tr-dur); display:flex; justify-content:space-between; align-items:center; gap:6px}
+  .im-session:hover{border-color:var(--accent)}
+  .im-session.on{background:var(--accent-soft); border-color:var(--accent)}
+  .im-session .del{color:var(--muted); background:none; border:0; padding:0 2px; font-size:12px; cursor:pointer}
+  .im-session .del:hover{color:var(--danger)}
+  .im-session .name{overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+  .im-thread{display:flex; flex-direction:column; gap:8px; max-height:calc(100vh - 340px); min-height:180px; overflow-y:auto; padding:4px}
+  .im-msg{max-width:80%; padding:9px 12px; border-radius:12px; font-size:13px; line-height:1.55; white-space:pre-wrap; word-break:break-word}
+  .im-msg.user{align-self:flex-end; background:var(--accent); color:#fff; border-bottom-right-radius:3px}
+  .im-msg.assistant{align-self:flex-start; background:var(--bg); border:1px solid var(--border); border-bottom-left-radius:3px}
+  .im-msg .meta{font-size:10.5px; opacity:.75; margin-top:3px}
+  .im-input-row{display:flex; gap:8px; margin-top:10px}
+  .im-input-row input{flex:1}
+  @media (max-width:760px){.im-layout{grid-template-columns:1fr}}
+
+  .spin{display:inline-block; width:12px; height:12px; border:2px solid var(--border); border-top-color:var(--accent); border-radius:50%; animation:rot .8s linear infinite; vertical-align:-2px}
+  @keyframes rot{to{transform:rotate(360deg)}}
+
+  @media (max-width:899px){
+    #navToggle{display:grid}
+    aside{position:fixed; left:0; top:0; bottom:0; transform:translateX(-100%)}
+    aside.open{transform:translateX(0); box-shadow:var(--shadow)}
+    .backdrop.on{display:block}
+    .flow{display:none}
+  }
+  @media (max-width:600px){
+    .content{padding:14px}
+    .card{padding:14px}
+    .top{padding:10px 12px}
+  }
+  @media (prefers-reduced-motion:reduce){
+    *{transition:none !important; animation:none !important}
+  }
 </style>
 </head>
 <body>
-<aside>
-  <h1>c-agent</h1>
-  <div class="sub">Cognitive OS Runtime</div>
-  <nav id="nav">
-    <button data-p="tasks" class="on">Tasks</button>
-    <button data-p="tools">Tools</button>
-    <button data-p="memory">Memory</button>
-    <button data-p="snapshots">Snapshots</button>
-    <button data-p="trace">Trace</button>
-    <button data-p="models">Models</button>
-    <button data-p="usage">Usage</button>
-    <button data-p="plugins">Plugins</button>
-    <button data-p="skills">Skills</button>
-    <button data-p="mcp">MCP</button>
-    <button data-p="cluster">Cluster</button>
-    <button data-p="metrics">Metrics</button>
+<aside id="sidebar">
+  <div class="brand">
+    <div class="logo" aria-hidden="true">c</div>
+    <div>
+      <h1>c-agent</h1>
+      <div class="sub">Cognitive OS Runtime</div>
+    </div>
+  </div>
+  <nav id="nav" aria-label="控制台分区">
+    <button data-p="dashboard" class="on" aria-current="true">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+      Dashboard
+    </button>
+    <button data-p="tasks">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="14" height="16" rx="2"/><path d="m7.5 11 3 3 5-6"/></svg>
+      Tasks
+    </button>
+    <button data-p="agents">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+      Agents
+    </button>
+    <button data-p="models">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M1 9h3M1 15h3M20 9h3M20 15h3"/></svg>
+      Models
+    </button>
+    <button data-p="mcp">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+      MCP
+    </button>
+    <button data-p="skills">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+      Skills
+    </button>
+    <button data-p="plugins">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a7 7 0 1 1-7-7"/><path d="M21 4v5h-5"/></svg>
+      Plugins
+    </button>
+    <button data-p="im">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+      IM
+    </button>
+    <button data-p="memory">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.66 3.58 3 8 3s8-1.34 8-3V5"/><path d="M4 12c0 1.66 3.58 3 8 3s8-1.34 8-3"/></svg>
+      Memory
+    </button>
+    <button data-p="snapshots">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+      Execution
+    </button>
+    <button data-p="trace">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+      Monitor
+    </button>
+    <button data-p="cluster">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="2" width="6" height="6"/><rect x="2" y="16" width="6" height="6"/><rect x="16" y="16" width="6" height="6"/><path d="M12 8v5M8 16v-3a4 4 0 0 1 8 0v3"/></svg>
+      Cluster
+    </button>
+    <button data-p="metrics">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>
+      Metrics
+    </button>
   </nav>
+  <div class="side-foot">
+    <div class="conn" role="status" aria-live="polite">
+      <span class="dot warn pulse" id="connDot"></span>
+      <span id="connText">连接中…</span>
+    </div>
+  </div>
 </aside>
-
+<div class="backdrop" id="backdrop"></div>
 <main>
   <div class="top">
-    <div class="title">Console</div>
+    <div class="top-left">
+      <button class="icon-btn" id="navToggle" aria-label="显示或隐藏菜单" aria-expanded="false">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/></svg>
+      </button>
+      <div class="title" id="pageTitle" tabindex="-1">Dashboard</div>
+    </div>
     <div class="topright">
-      <div class="flow">RECEIVE → UNDERSTAND → REASON → PLAN → ACT → VERIFY → LEARN</div>
+      <span class="flow">RECEIVE → UNDERSTAND → REASON → PLAN → ACT → VERIFY → LEARN</span>
+      <button class="icon-btn" id="btnRefresh" title="刷新当前页" aria-label="刷新当前页">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+      </button>
       <select id="theme" title="主题">
         <option value="dark">Dark</option>
         <option value="light">Light</option>
@@ -85,9 +352,13 @@
   </div>
   <div class="content" id="content"></div>
 </main>
+<div class="toast" id="toast" role="status"></div>
 
 <script>
+'use strict';
 const $ = id => document.getElementById(id);
+
+/* ================= 基础工具 ================= */
 
 async function call(method, path, body) {
   try {
@@ -102,92 +373,267 @@ async function call(method, path, body) {
 
 function esc(s){ return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 
-function renderPre(obj){
-  return '<div class="card"><h2>Output</h2><pre>' + esc(JSON.stringify(obj, null, 2)) + '</pre></div>';
+function renderPre(obj){ return jsonHighlight(obj); }
+
+function toast(msg){
+  const el = $('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => el.classList.remove('show'), 1600);
 }
 
-/* ---- panels ---- */
+function copyText(t){
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(t).then(() => toast('已复制'), () => fallbackCopy(t));
+  } else fallbackCopy(t);
+}
+function fallbackCopy(t){
+  const ta = document.createElement('textarea');
+  ta.value = t; ta.style.position = 'fixed'; ta.style.opacity = '0';
+  document.body.appendChild(ta); ta.select();
+  try { document.execCommand('copy'); toast('已复制'); } catch(e) { toast('复制失败'); }
+  ta.remove();
+}
+function copyPre(id){ const el = $(id); if(el) copyText(el.textContent); }
+
+/* ================= JSON 语法高亮 ================= */
+
+const JSON_RX = /("(?:\\u[a-fA-F0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(?:true|false|null)\b|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)/g;
+
+function jsonHighlight(obj){
+  const s = JSON.stringify(obj, null, 2);
+  let out = '', last = 0, m;
+  JSON_RX.lastIndex = 0;
+  while ((m = JSON_RX.exec(s))) {
+    out += esc(s.slice(last, m.index));
+    const tok = m[0];
+    if (/:$/.test(tok)) {
+      out += '<span class="k">' + esc(tok.slice(0, -1)) + '</span><span class="p">:</span>';
+    } else if (tok[0] === '"') {
+      out += '<span class="s">' + esc(tok) + '</span>';
+    } else if (tok === 'true' || tok === 'false') {
+      out += '<span class="b">' + tok + '</span>';
+    } else if (tok === 'null') {
+      out += '<span class="n">null</span>';
+    } else {
+      out += '<span class="num">' + tok + '</span>';
+    }
+    last = JSON_RX.lastIndex;
+  }
+  out += esc(s.slice(last));
+  return '<div class="json">' + out + '</div>';
+}
+
+function renderJSON(obj, el){
+  if(!el) return;
+  const empty = obj == null ||
+    (Array.isArray(obj) && !obj.length) ||
+    (typeof obj === 'object' && !Array.isArray(obj) && !Object.keys(obj).length);
+  el.innerHTML = empty
+    ? '<div class="json"><span class="empty">（暂无数据）</span></div>'
+    : jsonHighlight(obj);
+}
+
+function outPanel(title, outId, pname){
+  return '<div class="card"><div class="card-head"><h2>' + esc(title) + '</h2>' +
+    '<div class="row"><button class="sec sm" onclick="load(\'' + pname + '\')">Refresh</button>' +
+    '<button class="sec sm" onclick="copyPre(\'' + outId + '\')">Copy</button></div></div>' +
+    '<pre id="' + outId + '">加载中…</pre></div>';
+}
+
+/* ================= 面板定义 ================= */
+
 const panels = {};
+
+panels.dashboard = `
+  <div class="stat-grid" id="dashStats">
+    <div class="stat"><div class="num">…</div><div class="lbl">Version</div></div>
+    <div class="stat"><div class="num">…</div><div class="lbl">Provider</div></div>
+    <div class="stat"><div class="num">…</div><div class="lbl">Agents</div></div>
+    <div class="stat"><div class="num">…</div><div class="lbl">Working memory</div></div>
+    <div class="stat"><div class="num">…</div><div class="lbl">Plugins</div></div>
+    <div class="stat"><div class="num">…</div><div class="lbl">IM messages</div></div>
+  </div>
+  <div class="card">
+    <div class="card-head">
+      <h2>Runtime status</h2>
+      <button class="sec sm" onclick="loadDashboard()">Refresh</button>
+    </div>
+    <pre id="dash-out">加载中…</pre>
+  </div>`;
 
 panels.tasks = `
   <div class="card">
     <h2>Run a task</h2>
-    <div class="hint">提交一个自然语言任务，走完整 RECEIVE→…→LEARN 链路。</div>
+    <div class="hint">提交一个自然语言任务，走完整 RECEIVE→UNDERSTAND→REASON→PLAN→ACT→VERIFY→LEARN 链路。</div>
     <textarea id="prompt" placeholder="例如：在 test/ 建文件 a.txt 并写入 hello"></textarea>
     <div class="row">
       <button onclick="runTask()">Run</button>
       <span id="taskstat" class="muted"></span>
     </div>
   </div>
-  <div class="card"><h2>Result</h2><pre id="out">等待输入…</pre></div>`;
-
-async function runTask(){
-  const prompt = $('prompt').value.trim();
-  if(!prompt) return;
-  $('taskstat').textContent = 'submitting…';
-  const c = await call('POST','/v1/tasks',{prompt});
-  const id = c.obj && c.obj.id;
-  if(id === undefined){ $('out').textContent = JSON.stringify(c.obj,null,2); $('taskstat').textContent=''; return; }
-  for(let i=0;i<120;i++){
-    const r = await call('GET','/v1/tasks/'+id);
-    $('out').textContent = JSON.stringify(r.obj,null,2);
-    const st = r.obj.status;
-    $('taskstat').textContent = st || '';
-    if(st==='DONE'||st==='FAILED'||st==='CANCELLED'||st==='TIMEOUT') return;
-    await new Promise(res=>setTimeout(res,300));
-  }
-}
-
-panels.tools = '<div class="card"><h2>Tools</h2><pre id="tools-out">加载中…</pre></div>';
-panels.memory = '<div class="card"><h2>Memory</h2><pre id="memory-out">加载中…</pre></div>';
-panels.snapshots = `
-  <div class="card"><h2>Snapshots</h2>
-    <div class="row"><button onclick="load('snapshots')">Refresh</button>
-    <button class="sec" onclick="rollback()">Rollback latest</button></div>
-  </div>
-  <div class="card"><pre id="snapshots-out">加载中…</pre></div>`;
-panels.trace = '<div class="card"><h2>Trace (spans)</h2><pre id="trace-out">加载中…</pre></div>';
-panels.models = `
   <div class="card">
-    <h2>Model routes</h2>
-    <div class="hint">管理 LLM 路由：点 <b>Set active</b> 把某条路由设为当前活跃模型（实时切换并持久化到 state/cagent.json）；<b>Delete</b> 移除一条路由。</div>
-    <div class="row"><button onclick="loadModels()">Refresh</button><span id="models-stat" class="muted"></span></div>
-    <div style="overflow:auto">
-    <table>
-      <thead><tr><th>Name</th><th>Provider</th><th>Model</th><th>Base URL</th><th>W</th><th>Calls</th><th></th></tr></thead>
-      <tbody id="routes-body"><tr><td colspan="7" class="muted">加载中…</td></tr></tbody>
-    </table>
+    <div class="card-head"><h2>Recent tasks</h2></div>
+    <div class="chips" id="histList"></div>
+  </div>
+  <div class="card">
+    <div class="card-head">
+      <h2>Result</h2>
+      <button class="sec sm" onclick="copyPre('out')">Copy</button>
     </div>
-  </div>
-  <div class="card">
-    <h2>Add / update route</h2>
-    <div class="hint">新增或覆盖一条命名路由（相同 name 即覆盖）。保存后点 <b>Set active</b> 使其生效。</div>
-    <div class="row"><input id="r-name" placeholder="name (如 gpt4)" style="flex:1;min-width:140px"><select id="r-provider"><option value="mock">mock</option><option value="openai">openai</option><option value="anthropic">anthropic</option></select></div>
-    <div class="row"><input id="r-model" placeholder="model (如 gpt-4o)" style="flex:2;min-width:180px"><input id="r-base" placeholder="base_url (如 https://api.openai.com/v1)" style="flex:3;min-width:220px"></div>
-    <div class="row"><input id="r-key" type="text" placeholder="api_key" style="flex:2;min-width:180px"><input id="r-weight" placeholder="weight (默认 1)" value="1" style="flex:1;min-width:80px"></div>
-    <div class="row"><button onclick="addRoute()">Add route</button><span id="routes-msg" class="muted"></span></div>
+    <pre id="out">等待输入…</pre>
   </div>`;
-panels.usage = '<div class="card"><h2>Token usage</h2><pre id="usage-out">加载中…</pre></div>';
-panels.plugins = '<div class="card"><h2>Plugin registry</h2><pre id="plugins-out">加载中…</pre></div>';
+
+panels.agents    = outPanel('Agent pool', 'agents-out', 'agents');
+panels.mcp       = outPanel('MCP connections', 'mcp-out', 'mcp');
+panels.memory    = outPanel('Memory (working / long-term)', 'memory-out', 'memory');
+panels.cluster   = outPanel('Cluster nodes', 'cluster-out', 'cluster');
+panels.metrics   = outPanel('Metrics (Prometheus)', 'metrics-out', 'metrics');
+
 panels.skills = `
-  <div class="card"><h2>Skills</h2>
-    <div class="hint">静态 Shell/Python 技能。</div>
+  <div class="card">
+    <h2>Skills</h2>
+    <div class="hint">静态 Shell/Python 技能，输入技能名即可运行。</div>
     <div class="row">
       <input type="text" id="skillname" placeholder="技能名，例如 echo_hello" style="flex:1;min-width:180px">
       <button onclick="runSkill()">Run</button>
     </div>
   </div>
-  <div class="card"><pre id="skills-out">加载中…</pre></div>`;
-panels.mcp = '<div class="card"><h2>MCP connections</h2><pre id="mcp-out">加载中…</pre></div>';
-panels.cluster = '<div class="card"><h2>Cluster nodes</h2><pre id="cluster-out">加载中…</pre></div>';
-panels.metrics = '<div class="card"><h2>Metrics</h2><pre id="metrics-out">加载中…</pre></div>';
+  <div class="card">
+    <div class="card-head">
+      <h2>已注册技能</h2>
+      <button class="sec sm" onclick="copyPre('skills-out')">Copy</button>
+    </div>
+    <pre id="skills-out">加载中…</pre>
+  </div>`;
+
+panels.plugins = `
+  <div class="card">
+    <h2>⭐ Create plugin (AI 自生成)</h2>
+    <div class="hint">描述一个能力需求，系统将走 需求分析→架构→代码生成→安全审计→注册→技能注入 的自进化闭环（真实 LLM 或离线模板）。</div>
+    <textarea id="plugin-desc" placeholder="例如：增加自动分析 QEMU crash 日志的能力"></textarea>
+    <div class="row">
+      <button onclick="pluginGenerate()">Generate</button>
+      <span id="plugin-stat" class="muted"></span>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-head">
+      <h2>Installed plugins</h2>
+      <button class="sec sm" onclick="load('plugins')">Refresh</button>
+    </div>
+    <pre id="plugins-out">加载中…</pre>
+  </div>
+  <div class="card">
+    <div class="card-head">
+      <h2>生成结果</h2>
+      <button class="sec sm" onclick="copyPre('plugin-result')">Copy</button>
+    </div>
+    <pre id="plugin-result">（生成后显示脚本）</pre>
+  </div>`;
+
+panels.snapshots = `
+  <div class="card">
+    <h2>Execution snapshots</h2>
+    <div class="hint">事务 + COW 快照：任务执行前记录文件状态，失败自动回滚。</div>
+    <div class="row">
+      <button onclick="load('snapshots')">Refresh</button>
+      <button class="sec danger" onclick="rollback()">Rollback latest</button>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-head">
+      <h2>快照列表</h2>
+      <button class="sec sm" onclick="copyPre('snapshots-out')">Copy</button>
+    </div>
+    <pre id="snapshots-out">加载中…</pre>
+  </div>`;
+
+panels.trace = `
+  <div class="card">
+    <div class="card-head">
+      <h2>Trace (spans) · Monitor</h2>
+      <button class="sec sm" onclick="load('trace')">Refresh</button>
+    </div>
+    <pre id="trace-out">加载中…</pre>
+  </div>`;
+
+panels.im = `
+  <div class="card">
+    <div class="im-layout">
+      <div>
+        <div class="row" style="margin:0 0 10px">
+          <input id="im-new" type="text" placeholder="新会话名称" style="flex:1">
+          <button onclick="imCreate()">＋</button>
+        </div>
+        <div class="im-sessions" id="im-sessions"></div>
+      </div>
+      <div>
+        <div class="im-thread" id="im-thread">
+          <span class="muted" style="font-size:12px">选择一个会话开始聊天</span>
+        </div>
+        <div class="im-input-row">
+          <input id="im-input" type="text" placeholder="输入消息，Enter 发送">
+          <button onclick="imSend()">Send</button>
+        </div>
+      </div>
+    </div>
+  </div>`;
+
+panels.models = `
+  <div class="card">
+    <h2>Model routes</h2>
+    <div class="hint">管理 LLM 路由：点 <b>Set active</b> 把某条路由设为当前活跃模型（实时切换并持久化到 state/cagent.json）；<b>Delete</b> 移除一条路由。</div>
+    <div class="row" style="margin-top:6px">
+      <button onclick="loadModels()">Refresh</button>
+      <span id="models-stat" class="muted"></span>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Name</th><th>Provider</th><th>Model</th><th>Base URL</th><th>W</th><th>Calls</th><th></th></tr></thead>
+        <tbody id="routes-body"><tr><td colspan="7" class="muted">加载中…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+  <div class="card">
+    <h2>Add / update route</h2>
+    <div class="hint">选择预设（DeepSeek / Ollama / Gemini / Groq / vLLM …）自动填充 base_url 与 model，也可手动填写任意 OpenAI 兼容端点。</div>
+    <div class="row">
+      <input id="r-name" type="text" placeholder="name (如 deepseek)" style="flex:1;min-width:140px">
+      <select id="r-provider" style="flex:0 0 auto">
+        <option value="openai">OpenAI</option>
+        <option value="anthropic">Anthropic Claude</option>
+        <option value="deepseek">DeepSeek（OpenAI 兼容）</option>
+        <option value="deepseek_a">DeepSeek（Anthropic 端点）</option>
+        <option value="ollama">Ollama（本地）</option>
+        <option value="gemini">Gemini（OpenAI 兼容）</option>
+        <option value="groq">Groq</option>
+        <option value="together">Together AI</option>
+        <option value="vllm">vLLM / llama.cpp（本地）</option>
+        <option value="mock">mock（离线）</option>
+      </select>
+    </div>
+    <div class="row">
+      <input id="r-model" type="text" placeholder="model (如 deepseek-chat)" style="flex:2;min-width:180px">
+      <input id="r-base" type="text" placeholder="base_url (如 https://api.deepseek.com/v1)" style="flex:3;min-width:220px">
+    </div>
+    <div class="row">
+      <input id="r-key" type="text" placeholder="api_key" style="flex:2;min-width:180px">
+      <input id="r-weight" type="text" placeholder="weight (默认 1)" value="1" style="flex:1;min-width:80px">
+    </div>
+    <div class="row">
+      <button onclick="addRoute()">Add route</button>
+      <span id="routes-msg" class="muted"></span>
+    </div>
+  </div>`;
 
 const fetchers = {
+  agents:    {path:'/v1/agents',    out:'agents-out'},
   tools:     {path:'/v1/tools',     out:'tools-out'},
   memory:    {path:'/v1/memory',    out:'memory-out'},
   snapshots: {path:'/v1/snapshots', out:'snapshots-out'},
   trace:     {path:'/v1/trace',     out:'trace-out'},
-  models:    {path:'/v1/routes',    out:'models-out'},
   usage:     {path:'/v1/usage',     out:'usage-out'},
   plugins:   {path:'/v1/plugins',   out:'plugins-out'},
   skills:    {path:'/v1/skills',    out:'skills-out'},
@@ -196,68 +642,320 @@ const fetchers = {
   metrics:   {path:'/metrics',      out:'metrics-out'},
 };
 
+/* ================= 数据加载 ================= */
+
 async function load(panel){
   if(panel === 'models') return loadModels();
+  if(panel === 'dashboard') return loadDashboard();
+  if(panel === 'im') return renderIm();
   if(panel === 'metrics'){
-    const r = await call('GET','/metrics');
+    const r = await call('GET', '/metrics');
     const el = $('metrics-out'); if(el) el.textContent = r.text;
     return;
   }
   const f = fetchers[panel];
   if(!f) return;
   const r = await call('GET', f.path);
-  const el = $(f.out); if(el) el.textContent = JSON.stringify(r.obj, null, 2);
+  const el = $(f.out); if(el) renderJSON(r.obj, el);
+}
+
+async function loadDashboard(){
+  const [ag, mem, plg, im] = await Promise.all([
+    call('GET', '/v1/agents'),
+    call('GET', '/v1/memory'),
+    call('GET', '/v1/plugins'),
+    call('GET', '/v1/im/sessions'),
+  ]);
+  const st = $('dashStats');
+  if(st){
+    const agents  = Array.isArray(ag.obj) ? ag.obj.length : (ag.obj && ag.obj.agents ? ag.obj.agents.length : 0);
+    const wmem    = (mem.obj && Array.isArray(mem.obj.working)) ? mem.obj.working.length : 0;
+    const plugins = (plg.obj && plg.obj.plugins && Array.isArray(plg.obj.plugins)) ? plg.obj.plugins.length
+                  : (Array.isArray(plg.obj) ? plg.obj.length : 0);
+    const ims     = (im.obj && im.obj.total_messages) ? im.obj.total_messages : 0;
+    const cells = st.querySelectorAll('.stat .num');
+    if(cells.length >= 6){
+      cells[0].textContent = '0.1.0';
+      cells[1].textContent = 'mock';
+      cells[2].textContent = agents;
+      cells[3].textContent = wmem;
+      cells[4].textContent = plugins;
+      cells[5].textContent = ims;
+    }
+  }
+  const el = $('dash-out');
+  if(el){
+    const payload = {
+      agents: ag.obj, memory: mem.obj, plugins: plg.obj, im: im.obj
+    };
+    renderJSON(payload, el);
+  }
 }
 
 async function rollback(){
-  const r = await call('POST','/v1/snapshots/rollback');
-  $('snapshots-out').textContent = JSON.stringify(r.obj, null, 2);
+  const r = await call('POST', '/v1/snapshots/rollback');
+  renderJSON(r.obj, $('snapshots-out'));
   load('snapshots');
 }
 
 async function runSkill(){
   const name = $('skillname').value.trim();
   if(!name) return;
-  const r = await call('POST','/v1/skills/run',{name});
-  $('skills-out').textContent = JSON.stringify(r.obj, null, 2);
+  const r = await call('POST', '/v1/skills/run', {name});
+  renderJSON(r.obj, $('skills-out'));
 }
 
-/* ---- models config ---- */
+/* ================= 插件自生成 ================= */
+
+async function pluginGenerate(){
+  const desc = $('plugin-desc').value.trim();
+  const st = $('plugin-stat');
+  if(!desc){ if(st) st.textContent = '请输入能力描述'; return; }
+  if(st) st.textContent = '生成中…（分析→架构→生成→安全审计→注册）';
+  const r = await call('POST', '/v1/plugins/generate', {description: desc});
+  if(st) st.textContent = (r.obj && r.obj.ok) ? '✔ 已生成并注册' : ((r.obj && r.obj.error) ? 'error: ' + r.obj.error : 'error ' + r.status);
+  renderJSON(r.obj, $('plugin-result'));
+  if(r.obj && r.obj.ok) load('plugins');
+}
+
+/* ================= IM ================= */
+
+let IM_ACTIVE = null;
+let WS = null;
+
+function imCreate(){
+  const name = $('im-new').value.trim();
+  call('POST', '/v1/im/sessions', {name: name || '新会话'}).then(() => { $('im-new').value = ''; renderIm(); });
+}
+
+function imDelete(id){
+  call('DELETE', '/v1/im/sessions/' + id).then(() => {
+    if(IM_ACTIVE === id) IM_ACTIVE = null;
+    renderIm();
+  });
+}
+
+function imSelect(id){
+  IM_ACTIVE = id;
+  document.querySelectorAll('.im-session').forEach(s => s.classList.toggle('on', s.dataset.id === String(id)));
+  renderImThread();
+}
+
+function appendImMessage(m){
+  const t = $('im-thread');
+  if(!t) return;
+  const d = new Date(m.ts_ms || Date.now());
+  const time = d.getHours() + ':' + String(d.getMinutes()).padStart(2, '0');
+  const div = document.createElement('div');
+  div.className = 'im-msg ' + ((m.role === 'user') ? 'user' : 'assistant');
+  div.textContent = m.content || '';
+  const meta = document.createElement('div');
+  meta.className = 'meta';
+  meta.textContent = (m.role === 'user' ? 'user' : 'assistant') + ' · ' + time;
+  div.appendChild(meta);
+  t.appendChild(div);
+  t.scrollTop = t.scrollHeight;
+}
+
+async function renderImThread(){
+  const t = $('im-thread');
+  if(!t) return;
+  if(IM_ACTIVE === null){
+    t.innerHTML = '<span class="muted" style="font-size:12px">选择一个会话开始聊天</span>';
+    return;
+  }
+  t.innerHTML = '<span class="muted"><span class="spin"></span> 加载中…</span>';
+  const r = await call('GET', '/v1/im/sessions/' + IM_ACTIVE + '/messages');
+  t.innerHTML = '';
+  if(Array.isArray(r.obj)){
+    r.obj.forEach(m => appendImMessage(m));
+  }
+}
+
+async function renderIm(){
+  const list = $('im-sessions');
+  if(!list) return;
+  const r = await call('GET', '/v1/im/sessions');
+  const sessions = (r.obj && Array.isArray(r.obj.sessions)) ? r.obj.sessions : [];
+  list.innerHTML = '';
+  if(!sessions.length){
+    list.innerHTML = '<span class="muted" style="font-size:12px">暂无会话，创建第一个吧</span>';
+    return;
+  }
+  sessions.forEach(s => {
+    const div = document.createElement('div');
+    div.className = 'im-session' + (s.id === IM_ACTIVE ? ' on' : '');
+    div.dataset.id = s.id;
+    div.onclick = () => imSelect(s.id);
+    const name = document.createElement('span');
+    name.className = 'name';
+    name.textContent = (s.name || ('#' + s.id)) + ' · ' + (s.messages || 0);
+    const del = document.createElement('button');
+    del.className = 'del';
+    del.textContent = '✕';
+    del.title = '删除会话';
+    del.onclick = (e) => { e.stopPropagation(); imDelete(s.id); };
+    div.appendChild(name);
+    div.appendChild(del);
+    list.appendChild(div);
+  });
+  renderImThread();
+}
+
+function imSend(){
+  const input = $('im-input');
+  const content = input.value.trim();
+  if(!content || IM_ACTIVE === null) return;
+  input.value = '';
+  if(WS && WS.readyState === WebSocket.OPEN){
+    WS.send(JSON.stringify({type:'im.send', session_id: IM_ACTIVE, content}));
+  } else {
+    call('POST', '/v1/im/sessions/' + IM_ACTIVE + '/messages', {role:'user', content}).then(r => {
+      if(r.obj && r.obj.ok) renderImThread();
+    });
+  }
+}
+
+/* ================= WebSocket 实时推送 ================= */
+
+function wsConnect(){
+  try {
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    WS = new WebSocket(proto + '://' + location.host + '/ws');
+    WS.onmessage = (e) => {
+      try {
+        const m = JSON.parse(e.data);
+        if(m.type === 'im.message'){
+          if(current === 'im' && IM_ACTIVE === m.session_id){
+            appendImMessage(m);
+          } else {
+            toast('📩 新消息: ' + ((m.role === 'user') ? '用户' : '助手'));
+          }
+        }
+      } catch(err) { /* ignore non-JSON */ }
+    };
+    WS.onclose = () => { setTimeout(wsConnect, 3000); };
+    WS.onerror = () => { try { WS.close(); } catch(e) {} };
+  } catch(e) { /* ws unsupported */ }
+}
+
+/* ================= 任务 ================= */
+
+let TASK_HIST = [];
+try { TASK_HIST = JSON.parse(localStorage.getItem('cagent-task-hist') || '[]'); } catch(e) { TASK_HIST = []; }
+
+function addHist(id, prompt){
+  TASK_HIST.unshift({id, prompt: String(prompt).slice(0, 60), t: Date.now()});
+  TASK_HIST = TASK_HIST.slice(0, 12);
+  try { localStorage.setItem('cagent-task-hist', JSON.stringify(TASK_HIST)); } catch(e) {}
+  renderHist();
+}
+
+function renderHist(){
+  const el = $('histList'); if(!el) return;
+  if(!TASK_HIST.length){
+    el.innerHTML = '<span class="muted" style="font-size:12px">暂无历史任务</span>';
+    return;
+  }
+  el.innerHTML = TASK_HIST.map(h =>
+    '<button class="chip" onclick="viewHist(' + h.id + ')" title="' + esc(h.prompt) + '">' +
+    '<b>#' + h.id + '</b><span>' + esc(h.prompt) + '</span></button>'
+  ).join('');
+}
+
+async function viewHist(id){
+  const st = $('taskstat'); if(st) st.textContent = 'loading #' + id + '…';
+  const r = await call('GET', '/v1/tasks/' + id);
+  renderJSON(r.obj, $('out'));
+  if(st) st.textContent = (r.obj && r.obj.status) || '';
+}
+
+async function runTask(){
+  const prompt = $('prompt').value.trim();
+  if(!prompt) return;
+  const st = $('taskstat'); if(st) st.textContent = 'submitting…';
+  const c = await call('POST', '/v1/tasks', {prompt});
+  const id = c.obj && c.obj.id;
+  if(id === undefined){
+    renderJSON(c.obj, $('out'));
+    if(st) st.textContent = '';
+    return;
+  }
+  addHist(id, prompt);
+  for(let i = 0; i < 120; i++){
+    const r = await call('GET', '/v1/tasks/' + id);
+    renderJSON(r.obj, $('out'));
+    const taskStatus = r.obj.status;
+    if(st) st.textContent = taskStatus || '';
+    if(taskStatus === 'DONE' || taskStatus === 'FAILED' || taskStatus === 'CANCELLED' || taskStatus === 'TIMEOUT') return;
+    await new Promise(res => setTimeout(res, 300));
+  }
+}
+
+/* ================= 模型路由 ================= */
+
+const PROVIDER_PRESETS = {
+  mock:      {provider:'mock',      base:'',                                                                 model:''},
+  openai:    {provider:'openai',    base:'https://api.openai.com/v1',                                        model:'gpt-4o'},
+  anthropic: {provider:'anthropic', base:'https://api.anthropic.com',                                        model:'claude-sonnet-4-6'},
+  deepseek:  {provider:'openai',    base:'https://api.deepseek.com/v1',                                      model:'deepseek-chat'},
+  deepseek_a:{provider:'anthropic', base:'https://api.deepseek.com/anthropic',                               model:'deepseek-v4-pro'},
+  ollama:    {provider:'openai',    base:'http://localhost:11434/v1',                                        model:'llama3'},
+  gemini:    {provider:'openai',    base:'https://generativelanguage.googleapis.com/v1beta/openai',          model:'gemini-2.0-flash'},
+  groq:      {provider:'openai',    base:'https://api.groq.com/openai/v1',                                   model:'llama-3.3-70b-versatile'},
+  together:  {provider:'openai',    base:'https://api.together.xyz/v1',                                      model:'meta-llama/Llama-3.3-70B-Instruct-Turbo'},
+  vllm:      {provider:'openai',    base:'http://localhost:8080/v1',                                         model:''},
+};
+
+function presetProvider(){
+  return (PROVIDER_PRESETS[$('r-provider').value] || PROVIDER_PRESETS.openai).provider;
+}
+
 let ROUTES = [];
 let ACTIVE = {provider:'', model:'', api_key_set:false};
 
 async function loadModels(){
-  const r  = await call('GET','/v1/routes');
-  const cfg = await call('GET','/v1/config/llm');
+  const r   = await call('GET', '/v1/routes');
+  const cfg = await call('GET', '/v1/config/llm');
   ROUTES = Array.isArray(r.obj) ? r.obj : [];
   ACTIVE = (cfg.obj && typeof cfg.obj === 'object') ? cfg.obj : ACTIVE;
+  const rp = $('r-provider');
+  if(rp && !rp.dataset.bound){
+    rp.dataset.bound = '1';
+    rp.addEventListener('change', () => {
+      const p = PROVIDER_PRESETS[$('r-provider').value] || PROVIDER_PRESETS.openai;
+      const rb = $('r-base'), rm = $('r-model');
+      if(rb) rb.value = p.base;
+      if(rm){ rm.placeholder = p.model || 'model (可选)'; if(!rm.value) rm.value = p.model; }
+    });
+  }
   const st = $('models-stat');
   if(st) st.textContent = 'active: ' + (ACTIVE.provider || '?')
       + (ACTIVE.model ? ' / ' + ACTIVE.model : '')
-      + (ACTIVE.api_key_set ? '' : ' (未配置 api_key)');
+      + (ACTIVE.api_key_set ? '' : '（未配置 api_key）');
   const t = $('routes-body');
   if(!t) return;
-  if(!ROUTES.length){ t.innerHTML = '<tr><td colspan="7" class="muted">(empty)</td></tr>'; return; }
+  if(!ROUTES.length){ t.innerHTML = '<tr><td colspan="7" class="muted">（暂无路由）</td></tr>'; return; }
   const ap = ACTIVE.provider || '';
-  t.innerHTML = ROUTES.map((x,i) => {
-    const isActive = x.name === ap;  /* set_llm keys the active route by provider */
-    return '<tr class="'+(isActive?'active-row':'')+'">'
-      +'<td>'+esc(x.name||'')+(isActive?' <span class="badge-ok">● active</span>':'')+'</td>'
-      +'<td>'+esc(x.provider||'')+'</td>'
-      +'<td>'+esc(x.model||'')+'</td>'
-      +'<td class="muted">'+esc(x.base_url||'')+'</td>'
-      +'<td>'+(x.weight!=null?x.weight:1)+'</td>'
-      +'<td>'+(x.calls!=null?x.calls:0)+'</td>'
-      +'<td><button onclick="setActive('+i+')" class="sec sm"'+(isActive?' disabled':'')+'>Set active</button> '
-      +'<button onclick="deleteRoute('+i+')" class="sec sm danger">Delete</button></td></tr>';
+  t.innerHTML = ROUTES.map((x, i) => {
+    const isActive = x.name === ap;
+    return '<tr class="' + (isActive ? 'active-row' : '') + '">'
+      + '<td>' + esc(x.name || '') + (isActive ? ' <span class="badge badge-ok">active</span>' : '') + '</td>'
+      + '<td>' + esc(x.provider || '') + '</td>'
+      + '<td>' + esc(x.model || '') + '</td>'
+      + '<td class="muted">' + esc(x.base_url || '') + '</td>'
+      + '<td>' + (x.weight != null ? x.weight : 1) + '</td>'
+      + '<td>' + (x.calls != null ? x.calls : 0) + '</td>'
+      + '<td><button onclick="setActive(' + i + ')" class="sec sm"' + (isActive ? ' disabled' : '') + '>Set active</button> '
+      + '<button onclick="deleteRoute(' + i + ')" class="sec sm danger">Delete</button></td></tr>';
   }).join('');
 }
 
 async function setActive(i){
   const x = ROUTES[i]; if(!x) return;
   const st = $('models-stat'); if(st) st.textContent = 'switching…';
-  const r = await call('POST','/v1/config/llm',{
-    provider: x.provider, base_url: x.base_url||'', model: x.model||'', api_key: x.api_key||''
+  const r = await call('POST', '/v1/config/llm', {
+    provider: x.provider, base_url: x.base_url || '', model: x.model || '', api_key: x.api_key || ''
   });
   if(st) st.textContent = (r.obj && r.obj.ok)
       ? 'switched to ' + (x.model || x.provider)
@@ -267,13 +965,13 @@ async function setActive(i){
 
 async function deleteRoute(i){
   const x = ROUTES[i]; if(!x) return;
-  const r = await call('DELETE','/v1/routes/'+encodeURIComponent(x.name));
+  await call('DELETE', '/v1/routes/' + encodeURIComponent(x.name));
   loadModels();
 }
 
 async function addRoute(){
   const name = $('r-name').value.trim();
-  const provider = $('r-provider').value;
+  const provider = presetProvider();
   const msg = $('routes-msg');
   if(!name){ if(msg) msg.textContent = 'need name'; return; }
   const body = {
@@ -284,43 +982,88 @@ async function addRoute(){
   };
   const w = parseFloat($('r-weight').value);
   if(!isNaN(w)) body.weight = w;
-  const r = await call('POST','/v1/routes',body);
+  const r = await call('POST', '/v1/routes', body);
   if(msg) msg.textContent = (r.status < 300) ? 'route saved'
       : (r.obj && r.obj.error) ? 'error: ' + r.obj.error : 'error ' + r.status;
   if(r.status < 300){
-    $('r-name').value=''; $('r-base').value=''; $('r-key').value=''; $('r-model').value='';
+    $('r-name').value = ''; $('r-base').value = ''; $('r-key').value = ''; $('r-model').value = '';
   }
   loadModels();
 }
 
-/* ---- navigation ---- */
-let current = 'tasks';
+/* ================= 导航 ================= */
+
+const TITLES = {dashboard:'Dashboard', tasks:'Tasks', agents:'Agents', models:'Models', mcp:'MCP', skills:'Skills', plugins:'Plugins', im:'IM', memory:'Memory', snapshots:'Execution', trace:'Monitor', cluster:'Cluster', metrics:'Metrics'};
+let current = 'dashboard';
+
 function switchPanel(p){
   current = p;
-  document.querySelectorAll('#nav button').forEach(b => b.classList.toggle('on', b.dataset.p === p));
+  document.querySelectorAll('#nav button').forEach(b => {
+    const on = b.dataset.p === p;
+    b.classList.toggle('on', on);
+    if(on) b.setAttribute('aria-current', 'true'); else b.removeAttribute('aria-current');
+  });
+  const t = $('pageTitle'); if(t) t.textContent = TITLES[p] || p;
   $('content').innerHTML = panels[p];
-  if(p === 'tasks') return;
+  if(p === 'tasks'){ renderHist(); return; }
   load(p);
+  if(window.innerWidth < 900) toggleSidebar(false);
 }
 
 document.querySelectorAll('#nav button').forEach(b => {
   b.addEventListener('click', () => switchPanel(b.dataset.p));
 });
 
-/* ---- theme ---- */
-const THEMES = ['dark','light','ocean','forest','sunset'];
+function toggleSidebar(force){
+  const open = typeof force === 'boolean' ? force : !$('sidebar').classList.contains('open');
+  $('sidebar').classList.toggle('open', open);
+  $('navToggle').setAttribute('aria-expanded', open ? 'true' : 'false');
+  $('backdrop').classList.toggle('on', open && window.innerWidth < 900);
+}
+$('navToggle').addEventListener('click', () => toggleSidebar());
+$('backdrop').addEventListener('click', () => toggleSidebar(false));
+
+$('btnRefresh').addEventListener('click', () => {
+  if(current === 'tasks'){ toast('已在 Tasks 页'); return; }
+  if(current === 'models') loadModels(); else load(current);
+  toast('已刷新');
+});
+
+/* ================= 主题 ================= */
+
+const THEMES = ['dark', 'light', 'ocean', 'forest', 'sunset'];
 function applyTheme(t){
   if(!THEMES.includes(t)) t = 'dark';
   document.body.dataset.theme = t;
-  localStorage.setItem('cagent-theme', t);
+  try { localStorage.setItem('cagent-theme', t); } catch(e) {}
   const sel = $('theme'); if(sel) sel.value = t;
 }
 $('theme').addEventListener('change', e => applyTheme(e.target.value));
 applyTheme(localStorage.getItem('cagent-theme') || 'dark');
 
-/* init */
-$('content').innerHTML = panels.tasks;
-$('prompt').addEventListener('keydown', e => { if(e.key==='Enter' && (e.ctrlKey||e.metaKey)) runTask(); });
+/* ================= 连接状态 ================= */
+
+async function pingServer(){
+  const r = await call('GET', '/v1/config/llm');
+  const ok = r.status !== 0;
+  const dot = $('connDot'), txt = $('connText');
+  if(dot){ dot.className = 'dot ' + (ok ? 'ok' : 'err'); }
+  if(txt) txt.textContent = ok ? '已连接' : '离线';
+}
+setInterval(pingServer, 8000);
+
+/* ================= 初始化 ================= */
+
+$('content').innerHTML = panels.dashboard;
+$('prompt').addEventListener('keydown', e => {
+  if(e.key === 'Enter' && (e.ctrlKey || e.metaKey)) runTask();
+});
+const imInput = $('im-input');
+if(imInput) imInput.addEventListener('keydown', e => { if(e.key === 'Enter') imSend(); });
+renderHist();
+pingServer();
+wsConnect();
+loadDashboard();
 </script>
 </body>
 </html>

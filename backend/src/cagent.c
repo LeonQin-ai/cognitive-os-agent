@@ -7,6 +7,9 @@
 #include "cagent/os/os_fs.h"
 #include "cagent/infra/util.h"
 #include "cagent/infra/logging.h"
+#include "cagent/retrieval/embedding.h"
+#include "cagent/im/im.h"
+#include "cagent/plugin_runtime/wasm_runner.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -78,6 +81,25 @@ int cagent_init(cagent_ctx *ctx, const cagent_config *cfg) {
     ctx->provider  = ca_strdup(provider);
     ctx->http_bind = ca_strdup(ca_config_get_str(ctx->config, "http.bind", "127.0.0.1"));
 
+    /* embedding provider: embedding.provider = local (default) | remote */
+    {
+        const char *emb_provider = ca_config_get_str(ctx->config, "embedding.provider", "local");
+        if (emb_provider && strcmp(emb_provider, "remote") == 0) {
+            const char *emb_base = ca_config_get_str(ctx->config, "embedding.base_url", NULL);
+            if (emb_base && *emb_base) {
+                int rc = ca_embedding_use_remote(emb_base,
+                            ca_config_get_str(ctx->config, "embedding.api_key", NULL),
+                            ca_config_get_str(ctx->config, "embedding.model", NULL));
+                ca_log_info("embedding provider=remote base=%s rc=%d", emb_base, rc);
+            } else {
+                ca_log_warn("embedding.provider=remote but embedding.base_url unset; using local");
+                ca_embedding_use_local();
+            }
+        } else {
+            ca_embedding_use_local();
+        }
+    }
+
     /* components */
     ctx->metrics = ca_metrics_new();
     ctx->bus = ca_event_bus_new();
@@ -118,6 +140,10 @@ int cagent_init(cagent_ctx *ctx, const cagent_config *cfg) {
     ctx->mcp = ca_mcp_manager_new();
     ctx->cluster = ca_cluster_new();
     ctx->attention = ca_attention_new();
+    ctx->im = ca_im_new(ctx->state_root);
+
+    /* register the wasm3-backed sandbox Wasm runner */
+    if (ca_wasm3_available()) ca_sandbox_set_wasm_runner(ca_wasm3_run);
 
     /* seed the route table with the configured provider so the Models UI is
      * populated even before explicit routes are added */
@@ -210,6 +236,7 @@ void cagent_shutdown(cagent_ctx *ctx) {
     if (ctx->metrics) ca_metrics_free(ctx->metrics);
     ctx->metrics = NULL;
     if (ctx->attention) { ca_attention_free(ctx->attention); ctx->attention = NULL; }
+    if (ctx->im) { ca_im_free(ctx->im); ctx->im = NULL; }
     if (ctx->cluster) { ca_cluster_free(ctx->cluster); ctx->cluster = NULL; }
     if (ctx->mcp) { ca_mcp_manager_free(ctx->mcp); ctx->mcp = NULL; }
     if (ctx->skills) { ca_skill_registry_free(ctx->skills); ctx->skills = NULL; }

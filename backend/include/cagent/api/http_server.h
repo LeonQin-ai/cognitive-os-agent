@@ -31,6 +31,9 @@ typedef struct ca_http_response {
 /* Handler signature. Fills resp; returns 0 ok, -1 -> 500. */
 typedef int (*ca_http_handler)(const ca_http_request *req, ca_http_response *resp, void *ud);
 
+/* Inbound WebSocket text message callback (NUL-terminated, borrowed). */
+typedef void (*ca_ws_handler)(const char *text, void *ud);
+
 ca_http_server *ca_http_server_new(uint16_t port);
 ca_http_server *ca_http_server_new_bind(const char *host, uint16_t port);
 void ca_http_server_free(ca_http_server *s);
@@ -38,6 +41,12 @@ void ca_http_server_free(ca_http_server *s);
 /* Register a route. First matching (method, prefix) wins; method "*" matches all. */
 void ca_http_server_route(ca_http_server *s, const char *method, const char *path_prefix,
                           ca_http_handler fn, void *ud);
+
+/* Register a WebSocket upgrade path (e.g. "/ws"). Inbound text messages are
+ * forwarded to on_msg. Broadcast pushes events to every connected client. */
+void ca_http_server_ws_route(ca_http_server *s, const char *path,
+                             ca_ws_handler on_msg, void *ud);
+void ca_http_server_ws_broadcast(ca_http_server *s, const char *json_text);
 
 /* Accept and serve until ca_http_server_stop. Returns 0 on clean stop, -1 on error. */
 int ca_http_server_serve(ca_http_server *s);

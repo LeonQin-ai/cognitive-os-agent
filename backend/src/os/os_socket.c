@@ -217,6 +217,36 @@ int ca_sock_recv_until(ca_socket *s, char *buf, size_t cap, const char *delim) {
     return (int)n;
 }
 
+int ca_sock_set_blocking(ca_socket *s, int blocking) {
+    if (!s) return -1;
+    set_nonblock(s->fd, blocking ? 0 : 1);
+    return 0;
+}
+
+int ca_sock_wait_readable(ca_socket *s, int timeout_ms) {
+    if (!s || s->fd < 0) return -1;
+    fd_set rset;
+    FD_ZERO(&rset);
+#if defined(_WIN32)
+    FD_SET((SOCKET)s->fd, &rset);
+#else
+    FD_SET(s->fd, &rset);
+#endif
+    struct timeval tv;
+    if (timeout_ms < 0) timeout_ms = 0;
+    tv.tv_sec = timeout_ms / 1000;
+    tv.tv_usec = (timeout_ms % 1000) * 1000;
+    int r = select(s->fd + 1, &rset, NULL, NULL, &tv);
+    if (r < 0) return -1;
+    if (r == 0) return 0;
+#if defined(_WIN32)
+    if (FD_ISSET((SOCKET)s->fd, &rset)) return 1;
+#else
+    if (FD_ISSET(s->fd, &rset)) return 1;
+#endif
+    return 0;
+}
+
 ca_listener *ca_listen_addr(const char *host, uint16_t port) {
 #if defined(_WIN32)
     if (wsa_start() != 0) return NULL;

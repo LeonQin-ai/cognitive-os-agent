@@ -27,7 +27,7 @@ case "$OS" in
   *)                    LIBS="-lpthread -ldl -lm" ;;
 esac
 
-SRCS="$(find src third_party/cJSON -name '*.c' | sort)"
+SRCS="$(find src third_party/cJSON -name '*.c' | sort) third_party/wasm3/wasm3_all.c"
 mkdir -p build
 
 TARGET="${1:-all}"

@@ -48,6 +48,7 @@
 #include "cagent/plugin_intelligence/codegen.h"
 #include "cagent/plugin_intelligence/testing.h"
 #include "cagent/plugin_intelligence/security.h"
+#include "cagent/plugin_intelligence/generator.h"
 #include "cagent/action/skill.h"
 #include "cagent/action/mcp_conn.h"
 #include "cagent/cluster/node.h"
@@ -55,6 +56,7 @@
 #include "cagent/infra/trace.h"
 #include "cagent/llm/router.h"
 #include "cagent/llm/usage.h"
+#include "cagent/im/im.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -88,6 +90,7 @@ typedef struct cagent_ctx {
     ca_mcp_manager *mcp;        /* named MCP server connections */
     ca_cluster *cluster;        /* cluster node registry */
     ca_attention *attention;    /* salience scoring / focus */
+    ca_im *im;                  /* instant messaging store (sessions/messages) */
     ca_mutex run_lock;          /* serializes reasoning runs */
     char *state_root;
     char *workspace;

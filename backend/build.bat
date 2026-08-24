@@ -21,6 +21,7 @@ if not exist build mkdir build
 set "SRCS="
 for /r src %%f in (*.c) do call set "SRCS=%%SRCS%% %%f"
 for /r third_party\cJSON %%f in (*.c) do call set "SRCS=%%SRCS%% %%f"
+set "SRCS=%SRCS% third_party\wasm3\wasm3_all.c"
 
 echo [build] cagent
 %CC% %CFLAGS% -o build\cagent.exe %SRCS% cli\main.c %LIBS%
