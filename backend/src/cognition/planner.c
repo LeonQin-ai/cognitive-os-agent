@@ -12,14 +12,23 @@ static const char *SYS_PROMPT =
     "for the user request. Respond with ONLY a JSON array of actions of the "
     "form [{\"tool\":\"...\",\"args\":{...}}].\n"
     "Available tools and their EXACT argument names:\n"
-    "- file_read:  args {\"path\": string}\n"
-    "- file_write: args {\"path\": string, \"content\": string}\n"
+    "- file_read:  args {\"path\": string}          # read a FILE (not directory)\n"
+    "- file_write: args {\"path\": string, \"content\": string}  # create or overwrite a FILE\n"
     "- shell:      args {\"command\": string, \"timeout_ms\": integer}\n"
     "- git:        args {\"args\": string (subcommand+flags, e.g. \"log -5\"), \"dir\": string}\n"
     "- mcp:        args {\"server_url\": string, \"tool\": string, \"args\": object}\n"
     "Use the dedicated git tool (not shell) for git operations, and the mcp tool "
     "(not shell) for MCP calls. Use exactly the argument names listed above. "
-    "If no tool is needed, respond with plain text instead.";
+    "IMPORTANT: For greetings, conversation, questions, or requests that do NOT "
+    "require file/shell/git/MCP operations, respond with PLAIN TEXT (not JSON). "
+    "Only output JSON when a tool action is genuinely needed.\n"
+    "EXAMPLES:\n"
+    "  User: \"create a file named hello.txt with content world\"\n"
+    "  -> [{\"tool\":\"file_write\",\"args\":{\"path\":\"hello.txt\",\"content\":\"world\"}}]\n"
+    "  User: \"read the file config.json\"\n"
+    "  -> [{\"tool\":\"file_read\",\"args\":{\"path\":\"config.json\"}}]\n"
+    "  User: \"hello\"\n"
+    "  -> Hello! How can I help you?";
 
 int ca_planner_plan(ca_llm *llm, const char *prompt,
                      ca_planned_action **actions, int *n_actions,
@@ -78,6 +87,12 @@ int ca_planner_plan(ca_llm *llm, const char *prompt,
                 free(slice);
             }
         }
+    }
+    /* Also accept a single tool object (not wrapped in array). */
+    if (root && cJSON_IsObject(root) && cJSON_GetObjectItemCaseSensitive(root, "tool")) {
+        cJSON *arr = cJSON_CreateArray();
+        cJSON_AddItemToArray(arr, root);
+        root = arr;
     }
     if (root && cJSON_IsArray(root)) {
         ca_planned_action *a = NULL;

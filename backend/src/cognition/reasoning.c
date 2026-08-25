@@ -250,7 +250,10 @@ static int h_act(ca_state_machine *sm, void *ud, const char *input, char **out) 
 static int h_verify(ca_state_machine *sm, void *ud, const char *input, char **out) {
     ca_reasoning *r = ud;
     (void)sm;
-    if (!ca_evaluator_verify(r->eval, r->all_actions_ok, r->n_actions)) return -1;
+    if (!ca_evaluator_verify(r->eval, r->all_actions_ok, r->n_actions)) {
+        *out = ca_strdup("verification failed: action execution error");
+        return -1;
+    }
     *out = ca_strdup(input);
     return 0;
 }
