@@ -1,10 +1,10 @@
 # c-agent Makefile — used on Linux (gcc) and optionally on Windows with make+gcc.
 # Also works with the bundled zig via:  make CC="tools/zig/zig cc"
 CC      ?= cc
-CFLAGS  ?= -std=c11 -Wall -Wextra -O1 -g -Iinclude -Ithird_party/cJSON
+CFLAGS  ?= -std=c11 -Wall -Wextra -O1 -g -Iinclude -Ithird_party/cJSON -Ithird_party/wasm3
 LDLIBS  := $(shell uname | grep -qi 'mingw\|msys\|cygwin' && echo '-lws2_32 -lm' || echo '-lpthread -ldl -lm')
 
-SRCS := $(shell find src third_party/cJSON -name '*.c' | sort)
+SRCS := $(shell find src third_party/cJSON -name '*.c' | sort) third_party/wasm3/wasm3_all.c
 
 all: build/cagent build/cagent-test build/mock-llm-server build/test-adapters build/cagent-e2e build/cagent-bench
 

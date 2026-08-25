@@ -7,6 +7,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 #include "cJSON.h"
 
 struct ca_skill_registry {
@@ -161,4 +162,92 @@ char *ca_skill_list_json(ca_skill_registry *r) {
     char *s = cJSON_PrintUnformatted(arr);
     cJSON_Delete(arr);
     return s;
+}
+
+static char *slurp_file(const char *path) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return NULL;
+    fseek(f, 0, SEEK_END);
+    long n = ftell(f);
+    if (n < 0) { fclose(f); return NULL; }
+    fseek(f, 0, SEEK_SET);
+    char *buf = (char *)malloc((size_t)n + 1);
+    if (!buf) { fclose(f); return NULL; }
+    size_t rd = fread(buf, 1, (size_t)n, f);
+    buf[rd] = '\0';
+    fclose(f);
+    return buf;
+}
+
+static int dump_file(const char *path, const char *text) {
+    FILE *f = fopen(path, "wb");
+    if (!f) return -1;
+    fwrite(text, 1, strlen(text), f);
+    fclose(f);
+    return 0;
+}
+
+int ca_skill_unregister(ca_skill_registry *r, const char *name) {
+    if (!r || !name) return -1;
+    ca_mutex_lock(&r->mtx);
+    int idx = find_skill(r, name);
+    if (idx < 0) { ca_mutex_unlock(&r->mtx); return -1; }
+    skill_free(&r->items[idx]);
+    if ((size_t)idx + 1 < r->count)
+        memmove(&r->items[idx], &r->items[idx + 1], (r->count - (size_t)idx - 1) * sizeof(ca_skill));
+    r->count--;
+    ca_mutex_unlock(&r->mtx);
+    return 0;
+}
+
+int ca_skill_registry_persist(ca_skill_registry *r, const char *state_root) {
+    if (!r || !state_root) return -1;
+    char path[1024];
+    ca_path_join(path, sizeof(path), state_root, "skills.json");
+    cJSON *arr = cJSON_CreateArray();
+    ca_mutex_lock(&r->mtx);
+    for (size_t i = 0; i < r->count; i++) {
+        ca_skill *e = &r->items[i];
+        cJSON *o = cJSON_CreateObject();
+        cJSON_AddStringToObject(o, "name", e->name);
+        cJSON_AddStringToObject(o, "description", e->description);
+        cJSON_AddStringToObject(o, "kind", e->kind);
+        cJSON_AddStringToObject(o, "body", e->body);
+        cJSON_AddItemToArray(arr, o);
+    }
+    ca_mutex_unlock(&r->mtx);
+    char *s = cJSON_PrintUnformatted(arr);
+    cJSON_Delete(arr);
+    int rc = dump_file(path, s ? s : "[]");
+    free(s);
+    return rc;
+}
+
+int ca_skill_registry_load(ca_skill_registry *r, const char *state_root) {
+    if (!r || !state_root) return -1;
+    char path[1024];
+    ca_path_join(path, sizeof(path), state_root, "skills.json");
+    char *txt = slurp_file(path);
+    if (!txt) return 0;
+    cJSON *arr = cJSON_Parse(txt);
+    free(txt);
+    if (!arr || !cJSON_IsArray(arr)) { if (arr) cJSON_Delete(arr); return 0; }
+    for (int i = 0; i < cJSON_GetArraySize(arr); i++) {
+        cJSON *o = cJSON_GetArrayItem(arr, i);
+        if (!cJSON_IsObject(o)) continue;
+        cJSON *n = cJSON_GetObjectItemCaseSensitive(o, "name");
+        cJSON *d = cJSON_GetObjectItemCaseSensitive(o, "description");
+        cJSON *k = cJSON_GetObjectItemCaseSensitive(o, "kind");
+        cJSON *b = cJSON_GetObjectItemCaseSensitive(o, "body");
+        if (!n || !cJSON_IsString(n)) continue;
+        ca_skill sk = {
+            n->valuestring,
+            (d && cJSON_IsString(d)) ? d->valuestring : "",
+            (k && cJSON_IsString(k)) ? k->valuestring : "shell",
+            (b && cJSON_IsString(b)) ? b->valuestring : ""
+        };
+        ca_skill_register(r, &sk); /* skips duplicate names */
+    }
+    cJSON_Delete(arr);
+    return 0;
 }

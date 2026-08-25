@@ -569,6 +569,19 @@ panels.skills = `
       <button class="sec sm" onclick="copyPre('skills-out')">Copy</button>
     </div>
     <pre id="skills-out">加载中…</pre>
+  </div>
+  <div class="card">
+    <h2>⭐ 技能市场 / 发布</h2>
+    <div class="hint">从市场模板一键安装，或发布你自己创建的标准化技能（持久化到 state/skills.json，重启不丢）。</div>
+    <div id="skill-market">加载中…</div>
+    <h3>发布我的技能</h3>
+    <div class="row">
+      <input id="sk-name" placeholder="name" style="flex:1;min-width:120px">
+      <input id="sk-desc" placeholder="description" style="flex:2;min-width:160px">
+      <select id="sk-kind"><option value="shell">shell</option><option value="python">python</option></select>
+    </div>
+    <textarea id="sk-body" placeholder="技能主体：shell 命令 或 python 源码"></textarea>
+    <div class="row"><button onclick="publishSkill()">发布</button><span id="sk-stat" class="muted"></span></div>
   </div>`;
 
 panels.plugins = `
@@ -594,6 +607,23 @@ panels.plugins = `
       <button class="sec sm" onclick="copyPre('plugin-result')">Copy</button>
     </div>
     <pre id="plugin-result">（生成后显示脚本）</pre>
+  </div>
+  <div class="card">
+    <h2>⭐ 插件市场 / 发布</h2>
+    <div class="hint">浏览已发布插件，或把你创建的标准化插件发布到市场（注册进 Registry 并注入为可运行技能，持久化到 state/plugins.json）。</div>
+    <div id="plugin-market">加载中…</div>
+    <h3>发布我的插件</h3>
+    <div class="row">
+      <input id="pl-name" placeholder="name" style="flex:1;min-width:120px">
+      <input id="pl-desc" placeholder="description" style="flex:2;min-width:160px">
+      <select id="pl-kind"><option value="shell">shell</option><option value="python">python</option></select>
+    </div>
+    <textarea id="pl-body" placeholder="插件主体：shell 命令 或 python 源码"></textarea>
+    <div class="row">
+      <input id="pl-caps" placeholder="capabilities（逗号分隔，可选）" style="flex:2;min-width:200px">
+      <button onclick="publishPlugin()">发布</button>
+      <span id="pl-stat" class="muted"></span>
+    </div>
   </div>`;
 
 panels.snapshots = `
@@ -729,6 +759,7 @@ panels.models = `
     </div>
     <div class="row">
       <button onclick="addRoute()">Add route</button>
+      <button class="sec sm" onclick="testForm()">测试连接</button>
       <span id="routes-msg" class="muted"></span>
     </div>
   </div>`;
@@ -752,6 +783,8 @@ async function load(panel){
   if(panel === 'im') return renderIm();
   if(panel === 'agents') return loadAgents();
   if(panel === 'mcp') return loadMcp();
+  if(panel === 'skills') return loadSkillsMarket();
+  if(panel === 'plugins') return loadPluginMarket();
   if(panel === 'metrics'){
     const r = await call('GET', '/metrics');
     const el = $('metrics-out'); if(el) el.textContent = r.text;
@@ -908,6 +941,88 @@ async function runSkill(){
   if(!name) return;
   const r = await call('POST', '/v1/skills/run', {name});
   renderJSON(r.obj, $('skills-out'));
+}
+
+/* ================= Skills 市场 / 发布 ================= */
+let SKILL_MARKET = {templates:[], installed:[]};
+
+async function loadSkillsMarket(){
+  const r = await call('GET', '/v1/skills');
+  if($('skills-out')) renderJSON(r.obj, $('skills-out'));
+  const m = await call('GET', '/v1/skills/market');
+  SKILL_MARKET = (m.obj && typeof m.obj === 'object') ? m.obj : {templates:[], installed:[]};
+  const box = $('skill-market'); if(!box) return;
+  const t = SKILL_MARKET.templates || [], inst = SKILL_MARKET.installed || [];
+  let html = '<div class="sub">市场模板（点击安装）</div>' +
+    (t.length ? t.map((x,i) =>
+      '<div class="item"><b>' + esc(x.name) + '</b> <span class="muted">' + esc(x.kind) + '</span>' +
+      '<div class="hint">' + esc(x.description || '') + '</div>' +
+      '<button class="sec sm" onclick="installSkill(' + i + ')">安装</button></div>').join('')
+      : '<span class="muted">（空）</span>');
+  html += '<div class="sub">已安装（可删除）</div>' +
+    (inst.length ? inst.map(x =>
+      '<div class="item"><b>' + esc(x.name) + '</b> <span class="muted">' + esc(x.kind) + '</span> ' +
+      '<button class="sec sm danger" onclick="deleteSkill(\'' + x.name + '\')">删除</button></div>').join('')
+      : '<span class="muted">（空）</span>');
+  box.innerHTML = html;
+}
+
+async function installSkill(i){
+  const t = (SKILL_MARKET.templates || [])[i]; if(!t) return;
+  const r = await call('POST', '/v1/skills/publish',
+    {name:t.name, description:t.description, kind:t.kind, body:t.body});
+  toast((r.obj && r.obj.ok) ? '已安装 ' + t.name : '安装失败');
+  loadSkillsMarket();
+}
+
+async function deleteSkill(n){
+  await call('DELETE', '/v1/skills/' + encodeURIComponent(n));
+  loadSkillsMarket();
+}
+
+async function publishSkill(){
+  const name = $('sk-name').value.trim(), body = $('sk-body').value;
+  if(!name || !body){ if($('sk-stat')) $('sk-stat').textContent = '需要 name 和 body'; return; }
+  const r = await call('POST', '/v1/skills/publish',
+    {name, description:$('sk-desc').value, kind:$('sk-kind').value, body});
+  if($('sk-stat')) $('sk-stat').textContent = (r.obj && r.obj.ok) ? '已发布' : ('失败 ' + ((r.obj && r.obj.error) || r.status));
+  if(r.obj && r.obj.ok){ $('sk-name').value=''; $('sk-desc').value=''; $('sk-body').value=''; }
+  loadSkillsMarket();
+}
+
+/* ================= Plugins 市场 / 发布 ================= */
+async function loadPluginMarket(){
+  const m = await call('GET', '/v1/plugins/market');
+  const box = $('plugin-market'); if(!box) return;
+  const t = (m.obj && m.obj.templates) || [];
+  const reg = await call('GET', '/v1/plugins');
+  const inst = reg.obj ? Object.keys(reg.obj) : [];
+  let html = '<div class="sub">示例模板</div>' +
+    (t.length ? t.map(x =>
+      '<div class="item"><b>' + esc(x.name) + '</b><div class="hint">' + esc(x.description || '') + '</div></div>').join('')
+      : '<span class="muted">（空）</span>');
+  html += '<div class="sub">已发布插件（可下架）</div>' +
+    (inst.length ? inst.map(n =>
+      '<div class="item"><b>' + esc(n) + '</b> ' +
+      '<button class="sec sm danger" onclick="unpublishPlugin(\'' + n + '\')">下架</button></div>').join('')
+      : '<span class="muted">（空）</span>');
+  box.innerHTML = html;
+}
+
+async function publishPlugin(){
+  const name = $('pl-name').value.trim(), body = $('pl-body').value;
+  if(!name || !body){ if($('pl-stat')) $('pl-stat').textContent = '需要 name 和 body'; return; }
+  const caps = ($('pl-caps').value || '').split(',').map(s=>s.trim()).filter(Boolean);
+  const r = await call('POST', '/v1/plugins/publish',
+    {name, description:$('pl-desc').value, kind:$('pl-kind').value, body, capabilities:caps});
+  if($('pl-stat')) $('pl-stat').textContent = (r.obj && r.obj.ok) ? '已发布' : ('失败 ' + ((r.obj && r.obj.error) || r.status));
+  if(r.obj && r.obj.ok){ $('pl-name').value=''; $('pl-desc').value=''; $('pl-body').value=''; $('pl-caps').value=''; }
+  loadPluginMarket();
+}
+
+async function unpublishPlugin(n){
+  await call('DELETE', '/v1/plugins/market/' + encodeURIComponent(n));
+  loadPluginMarket();
 }
 
 /* ================= 插件自生成 ================= */
@@ -1265,6 +1380,7 @@ async function loadModelPlaza(){
     '<div class="url">' + esc(m.base_url) + ' · ' + esc(m.model || '任意模型') + '</div>' +
     '<div class="hint">' + (m.key_hint ? ('key: ' + esc(m.key_hint)) : '无需 key') + '</div>' +
     '<div class="row"><button class="sec sm" onclick="modelPlazaUse(' + i + ')">配置</button>' +
+    '<button class="sec sm" onclick="modelPlazaTest(' + i + ')">测试</button>' +
     '<button class="sm" onclick="modelPlazaSet(' + i + ')">配置并设为当前</button></div></div>'
   ).join('');
 }
@@ -1284,9 +1400,17 @@ function modelPlazaUse(i){
 async function modelPlazaSet(i){
   const m = MODEL_PLAZA[i]; if(!m) return;
   modelPlazaFill(i);
-  const r = await call('POST', '/v1/config/llm', {provider: m.provider, base_url: m.base_url, model: m.model, api_key: ''});
+  const key = ($('r-key') && $('r-key').value.trim()) || '';
+  const r = await call('POST', '/v1/config/llm', {provider: m.provider, base_url: m.base_url, model: m.model, api_key: key});
   toast((r.obj && r.obj.ok) ? '已切换为 ' + (m.model || m.name) : '切换失败: ' + ((r.obj && r.obj.error) || r.status));
   loadModels();
+}
+
+async function modelPlazaTest(i){
+  const m = MODEL_PLAZA[i]; if(!m) return;
+  const key = ($('r-key') && $('r-key').value.trim()) || '';
+  await testLlm({provider: m.provider, base_url: m.base_url, model: m.model, api_key: key},
+                (m.model || m.name) + ' ');
 }
 
 async function loadModels(){
@@ -1322,7 +1446,8 @@ async function loadModels(){
       + '<td class="muted">' + esc(x.base_url || '') + '</td>'
       + '<td>' + (x.weight != null ? x.weight : 1) + '</td>'
       + '<td>' + (x.calls != null ? x.calls : 0) + '</td>'
-      + '<td><button onclick="setActive(' + i + ')" class="sec sm"' + (isActive ? ' disabled' : '') + '>Set active</button> '
+      + '<td><button onclick="testRoute(' + i + ')" class="sec sm">Test</button> '
+      + '<button onclick="setActive(' + i + ')" class="sec sm"' + (isActive ? ' disabled' : '') + '>Set active</button> '
       + '<button onclick="deleteRoute(' + i + ')" class="sec sm danger">Delete</button></td></tr>';
   }).join('');
 }
@@ -1365,6 +1490,33 @@ async function addRoute(){
     $('r-name').value = ''; $('r-base').value = ''; $('r-key').value = ''; $('r-model').value = '';
   }
   loadModels();
+}
+
+/* Test an arbitrary LLM config against the live provider (no switch, no persist). */
+async function testLlm(body, prefix){
+  prefix = prefix || '';
+  const st = $('models-stat'); if(st) st.textContent = '测试 ' + prefix + '请求中…';
+  const r = await call('POST', '/v1/config/llm/test', body);
+  const ok = r.obj && r.obj.ok;
+  const detail = (r.obj && (r.obj.reply || r.obj.error)) || ('HTTP ' + r.status);
+  if(st) st.textContent = (ok ? '✅ 测试通过 ' : '❌ 测试失败 ') + prefix + detail;
+  toast((ok ? '✅ ' : '❌ ') + prefix + detail);
+}
+
+async function testRoute(i){
+  const x = ROUTES[i]; if(!x) return;
+  await testLlm({provider: x.provider, base_url: x.base_url || '', model: x.model || '', api_key: x.api_key || ''},
+                '路由 ' + x.name + ' ');
+}
+
+async function testForm(){
+  const provider = presetProvider();
+  await testLlm({
+    provider,
+    base_url: $('r-base').value.trim(),
+    model: $('r-model').value.trim(),
+    api_key: ($('r-key') && $('r-key').value.trim()) || ''
+  }, '表单配置 ');
 }
 
 /* ================= 导航 ================= */

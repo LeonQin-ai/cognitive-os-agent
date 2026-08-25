@@ -45,6 +45,13 @@ void ca_skill_result_free(ca_skill_result *res);
 /* JSON array of skills {name,description,kind} (malloc'd; caller frees). */
 char *ca_skill_list_json(ca_skill_registry *r);
 
+/* Remove a registered skill by name. 0 ok, -1 not found. */
+int ca_skill_unregister(ca_skill_registry *r, const char *name);
+/* Persist all skills to <state_root>/skills.json and reload on startup.
+ * Load skips duplicates (e.g. the built-in echo_hello seeded at init). */
+int ca_skill_registry_persist(ca_skill_registry *r, const char *state_root);
+int ca_skill_registry_load(ca_skill_registry *r, const char *state_root);
+
 #ifdef __cplusplus
 }
 #endif

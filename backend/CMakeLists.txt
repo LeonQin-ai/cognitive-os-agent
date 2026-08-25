@@ -33,6 +33,7 @@ set(CAGENT_SOURCES
   src/plugin_runtime/sandbox.c
   src/plugin_runtime/capability.c
   src/plugin_runtime/registry.c
+  src/plugin_runtime/wasm_runner.c
   src/plugin_intelligence/analyzer.c
   src/plugin_intelligence/architect.c
   src/plugin_intelligence/codegen.c
@@ -75,9 +76,10 @@ set(CAGENT_SOURCES
   src/api/auth.c
   src/api/websocket.c
   third_party/cJSON/cJSON.c
+  third_party/wasm3/wasm3_all.c
 )
 
-include_directories(include third_party/cJSON)
+include_directories(include third_party/cJSON third_party/wasm3)
 
 if(WIN32)
   set(PLATFORM_LIBS ws2_32)

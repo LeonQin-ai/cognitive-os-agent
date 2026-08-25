@@ -5,6 +5,9 @@
 #include "cagent/cognition/reasoning.h"
 #include "cagent/cognition/planner.h"
 #include "cagent/cognition/evaluator.h"
+#include "cagent/cognition/attention.h"
+#include "cagent/retrieval/context_builder.h"
+#include "cagent/llm/router.h"
 #include "cagent/runtime/state_machine.h"
 #include "cagent/runtime/event_bus.h"
 #include "cagent/runtime/scheduler.h"
@@ -34,6 +37,14 @@ struct ca_reasoning {
     char *workspace;
     int use_transaction;
 
+    ca_router *router;       /* optional multi-provider routing (NULL = single LLM) */
+    ca_attention *attention; /* salience ranking over retrieved context */
+
+    /* multi-turn conversation history (bounded ring of recent turns) */
+    char **hist_q;
+    char **hist_a;
+    size_t hist_n, hist_cap;
+
     ca_state_machine *sm;
 
     /* transient per-run state */
@@ -54,15 +65,87 @@ static void clear_actions(ca_reasoning *r) {
     r->n_actions = 0;
 }
 
+/* Build an augmented prompt for the planner: recent multi-turn history, then
+ * retrieved RAG context (ranked by attention), then the current request.
+ * Caller frees the returned string. */
+static char *build_context(ca_reasoning *r, const char *prompt) {
+    ca_strbuf b;
+    ca_strbuf_init(&b);
+
+    /* multi-turn history (bounded, most-recent-last) */
+    if (r->hist_n > 0) {
+        ca_strbuf_append(&b, "## Conversation history\n");
+        size_t start = r->hist_n > 6 ? r->hist_n - 6 : 0;
+        for (size_t i = start; i < r->hist_n; i++) {
+            if (r->hist_q[i]) ca_strbuf_appendf(&b, "User: %s\n", r->hist_q[i]);
+            if (r->hist_a[i]) ca_strbuf_appendf(&b, "Assistant: %s\n", r->hist_a[i]);
+        }
+        ca_strbuf_append(&b, "\n");
+    }
+
+    /* RAG: retrieval + attention ranking over the retrieved items */
+    if (r->mem && r->attention) {
+        char *ctx_json = ca_context_build(r->mem, prompt, 12);
+        if (ctx_json) {
+            cJSON *arr = cJSON_Parse(ctx_json);
+            if (arr && cJSON_IsArray(arr) && cJSON_GetArraySize(arr) > 0) {
+                int n = cJSON_GetArraySize(arr);
+                ca_attention_candidate *cands = calloc((size_t)n, sizeof(*cands));
+                for (int i = 0; i < n; i++) {
+                    cJSON *it = cJSON_GetArrayItem(arr, i);
+                    cJSON *t = cJSON_GetObjectItem(it, "text");
+                    cJSON *res = cJSON_GetObjectItem(it, "result");
+                    const char *txt = (t && t->valuestring) ? t->valuestring
+                        : (res && res->valuestring) ? res->valuestring : "";
+                    cands[i].text = txt;
+                    cands[i].tags = "";
+                    cands[i].boost = 0.0;
+                }
+                ca_attention_result ress[6];
+                int k = ca_attention_select(r->attention, prompt, cands, (size_t)n, ress, 6);
+                char *rendered = NULL;
+                if (k > 0) {
+                    cJSON *sel = cJSON_CreateArray();
+                    for (int i = 0; i < k; i++) {
+                        cJSON *it = cJSON_GetArrayItem(arr, ress[i].index);
+                        if (it) cJSON_AddItemToArray(sel, cJSON_Duplicate(it, 1));
+                    }
+                    char *sel_json = cJSON_PrintUnformatted(sel);
+                    rendered = ca_context_render_text(sel_json);
+                    free(sel_json);
+                    cJSON_Delete(sel);
+                } else {
+                    rendered = ca_context_render_text(ctx_json);
+                }
+                free(cands);
+                if (rendered) {
+                    ca_strbuf_append(&b, "## Retrieved context\n");
+                    ca_strbuf_append(&b, rendered);
+                    ca_strbuf_append(&b, "\n\n");
+                    free(rendered);
+                }
+            }
+            if (arr) cJSON_Delete(arr);
+            free(ctx_json);
+        }
+    }
+
+    ca_strbuf_append(&b, "## Current request\n");
+    ca_strbuf_append(&b, prompt);
+    return ca_strbuf_detach(&b);
+}
+
 /* REASON: ask the LLM for a plan (JSON array of actions, or plain text). */
 static int h_reason(ca_state_machine *sm, void *ud, const char *input, char **out) {
     ca_reasoning *r = ud;
     (void)sm;
     clear_actions(r);
     r->ok_actions = 0;
-    if (!r->llm) { *out = ca_strdup("(no LLM provider configured)"); return 0; }
+    char *aug = build_context(r, input);
+    if (!r->llm) { free(aug); *out = ca_strdup("(no LLM provider configured)"); return 0; }
     char *raw = NULL;
-    int rc = ca_planner_plan(r->llm, input, &r->actions, &r->n_actions, &raw);
+    int rc = ca_planner_plan(r->llm, aug ? aug : input, &r->actions, &r->n_actions, &raw);
+    free(aug);
     if (rc != 0 || !raw) {
         free(raw);
         ca_log_error("reasoning: LLM returned no plan");
@@ -204,6 +287,7 @@ ca_reasoning *ca_reasoning_new(const ca_reasoning_config *cfg) {
     r->use_transaction = cfg->use_transaction;
     r->txm = ca_tx_manager_new();
     r->eval = ca_evaluator_new();
+    r->attention = ca_attention_new();
     r->sm = ca_state_machine_new();
 
     ca_state_machine_set_handler(r->sm, CA_ST_REASON, h_reason, r);
@@ -219,6 +303,13 @@ void ca_reasoning_free(ca_reasoning *r) {
     clear_actions(r);
     free(r->last_prompt);
     free(r->workspace);
+    for (size_t i = 0; i < r->hist_n; i++) {
+        free(r->hist_q[i]);
+        free(r->hist_a[i]);
+    }
+    free(r->hist_q);
+    free(r->hist_a);
+    ca_attention_free(r->attention);
     ca_state_machine_free(r->sm);
     ca_evaluator_free(r->eval);
     ca_tx_manager_free(r->txm);
@@ -232,8 +323,47 @@ void ca_reasoning_set_llm(ca_reasoning *r, ca_llm *llm) {
     r->llm = llm;
 }
 
+/* Optional: route each run through the multi-provider router (weighted
+ * round-robin). Pass NULL to revert to the single configured LLM. */
+void ca_reasoning_set_router(ca_reasoning *r, ca_router *router) {
+    if (!r) return;
+    r->router = router;
+}
+
+/* Append a completed turn to the bounded multi-turn history. */
+static void record_turn(ca_reasoning *r, const char *q, const char *a) {
+    if (!r || !q || !a) return;
+    if (r->hist_cap == 0) {
+        r->hist_cap = 16;
+        r->hist_q = calloc(r->hist_cap, sizeof(char *));
+        r->hist_a = calloc(r->hist_cap, sizeof(char *));
+    }
+    if (r->hist_n >= r->hist_cap) {
+        free(r->hist_q[0]);
+        free(r->hist_a[0]);
+        memmove(r->hist_q, r->hist_q + 1, (r->hist_cap - 1) * sizeof(char *));
+        memmove(r->hist_a, r->hist_a + 1, (r->hist_cap - 1) * sizeof(char *));
+        r->hist_n--;
+    }
+    r->hist_q[r->hist_n] = ca_strdup(q);
+    r->hist_a[r->hist_n] = ca_strdup(a);
+    r->hist_n++;
+}
+
 int ca_reasoning_run(ca_reasoning *r, const char *prompt, char **answer) {
     if (!r || !prompt) return -1;
+
+    /* Router: pick a provider for this run (weighted round-robin). */
+    ca_llm *picked = NULL;
+    ca_llm *saved = NULL;
+    if (r->router) {
+        const ca_route *rt = ca_router_pick(r->router);
+        if (rt) {
+            picked = ca_llm_create(rt->provider, rt->base_url, rt->api_key, rt->model);
+            if (picked) { saved = r->llm; r->llm = picked; }
+        }
+    }
+
     free(r->last_prompt);
     r->last_prompt = ca_strdup(prompt);
     if (r->mem) ca_memory_working_push(r->mem, prompt);
@@ -242,12 +372,19 @@ int ca_reasoning_run(ca_reasoning *r, const char *prompt, char **answer) {
     ca_state st = ca_state_machine_run(r->sm, prompt, &result);
     if (r->metrics) ca_metrics_inc(r->metrics, st == CA_ST_DONE ? "tasks.done" : "tasks.failed");
 
-    if (st != CA_ST_DONE) {
+    int ret = -1;
+    if (st == CA_ST_DONE) {
+        if (r->mem) ca_memory_working_push(r->mem, result);
+        record_turn(r, prompt, result);
+        if (answer) *answer = result;
+        else free(result);
+        ret = 0;
+    } else {
         if (answer) *answer = result ? result : ca_strdup("(pipeline failed)");
         else free(result);
-        return -1;
+        ret = -1;
     }
-    if (answer) *answer = result;
-    else free(result);
-    return 0;
+
+    if (picked) { r->llm = saved; ca_llm_destroy(picked); }
+    return ret;
 }

@@ -189,6 +189,7 @@ int cagent_init(cagent_ctx *ctx, const cagent_config *cfg) {
     ctx->router = ca_router_new();
     ctx->usage = ca_usage_new();
     ctx->registry = ca_plugin_registry_new();
+    ca_plugin_registry_load(ctx->registry, ctx->state_root);
     ctx->skills = ca_skill_registry_new();
     ctx->mcp = ca_mcp_manager_new();
     ctx->cluster = ca_cluster_new();
@@ -213,6 +214,7 @@ int cagent_init(cagent_ctx *ctx, const cagent_config *cfg) {
         const ca_skill demo = { "echo_hello", "Reply with a fixed greeting.",
                                 "shell", "echo hello from c-agent" };
         ca_skill_register(ctx->skills, &demo);
+        ca_skill_registry_load(ctx->skills, ctx->state_root);
     }
 
     /* register the local node in the cluster */
@@ -233,6 +235,9 @@ int cagent_init(cagent_ctx *ctx, const cagent_config *cfg) {
         rc.workspace = ctx->workspace;
         rc.use_transaction = ctx->use_transaction;
         ctx->reasoning = ca_reasoning_new(&rc);
+        /* wire the multi-provider router into the reasoning loop */
+        if (ctx->reasoning && ctx->router)
+            ca_reasoning_set_router(ctx->reasoning, ctx->router);
     }
     if (!ctx->reasoning) {
         ca_log_error("cagent_init: reasoning engine failed to initialize");

@@ -45,6 +45,11 @@ int ca_plugin_registry_deps_met(ca_plugin_registry *r, const char *name);
 /* JSON grouped by plugin name with a "versions" array (caller frees). */
 char *ca_plugin_registry_json(ca_plugin_registry *r);
 
+/* Persist all registered plugins to <state_root>/plugins.json and reload on
+ * startup. Load skips exact (name+version) duplicates. */
+int ca_plugin_registry_persist(ca_plugin_registry *r, const char *state_root);
+int ca_plugin_registry_load(ca_plugin_registry *r, const char *state_root);
+
 #ifdef __cplusplus
 }
 #endif

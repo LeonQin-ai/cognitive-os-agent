@@ -9,11 +9,14 @@
 #include "cagent/infra/metrics.h"
 #include "cagent/infra/util.h"
 #include "cagent/infra/catalog.h"
+#include "cagent/llm/llm.h"
 #include "cagent/os/os_time.h"
 
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdint.h>
+#include <time.h>
 #include "cJSON.h"
 
 /* Copy the (not null-terminated) request body into a C string. */
@@ -416,6 +419,64 @@ static int h_config_llm(const ca_http_request *req, ca_http_response *resp, void
     return 0;
 }
 
+/* Validate that a given provider/base_url/model/api_key actually answers a chat
+ * request. Creates a throwaway LLM instance (never persisted, never made active)
+ * and returns {ok, reply|error}. Lets the UI prove a config works before saving. */
+static int h_config_llm_test(const ca_http_request *req, ca_http_response *resp, void *ud) {
+    cagent_ctx *ctx = (cagent_ctx *)ud;
+    if (!authz_ok(ctx, req, resp)) return 0;
+    char *b = body_str(req);
+    cJSON *root = b ? cJSON_Parse(b) : NULL;
+    free(b);
+    if (!root || !cJSON_IsObject(root)) {
+        if (root) cJSON_Delete(root);
+        resp->status = 400;
+        ca_http_resp_json(resp, "{\"error\":\"body must be a JSON object\"}");
+        return 0;
+    }
+    const char *provider = json_str(root, "provider");
+    if (!provider || !*provider) {
+        cJSON_Delete(root);
+        resp->status = 400;
+        ca_http_resp_json(resp, "{\"error\":\"need 'provider' string\"}");
+        return 0;
+    }
+    ca_llm *nl = ca_llm_create(provider, json_str(root, "base_url"),
+                               json_str(root, "api_key"), json_str(root, "model"));
+    if (!nl) {
+        cJSON_Delete(root);
+        resp->status = 400;
+        ca_http_resp_json(resp, "{\"ok\":false,\"error\":\"unknown provider (mock|openai|anthropic)\"}");
+        return 0;
+    }
+    ca_llm_message msgs[2] = {
+        {"system", "You are a concise assistant. Reply in at most a few words."},
+        {"user",   "Reply with exactly the word: ok"}
+    };
+    ca_llm_request lreq = {0};
+    lreq.messages = msgs;
+    lreq.num_messages = 2;
+    lreq.temperature = 0.2;
+    lreq.max_tokens = 64;
+    ca_llm_response lr = {0};
+    int rc = ca_llm_chat(nl, &lreq, &lr);
+    cJSON *o = cJSON_CreateObject();
+    int ok = (rc == 0 && lr.content && *lr.content);
+    cJSON_AddBoolToObject(o, "ok", ok);
+    if (lr.content) cJSON_AddStringToObject(o, "reply", lr.content);
+    else if (lr.error) cJSON_AddStringToObject(o, "error", lr.error);
+    else cJSON_AddStringToObject(o, "error", "no response from provider (check base_url / model / api_key / network)");
+    char *s = cJSON_PrintUnformatted(o);
+    ca_http_resp_json(resp, s ? s : "{\"ok\":false}");
+    free(s);
+    cJSON_Delete(o);
+    free(lr.content);
+    free(lr.error);
+    ca_llm_destroy(nl);
+    cJSON_Delete(root);
+    return 0;
+}
+
 static int h_usage(const ca_http_request *req, ca_http_response *resp, void *ud) {
     cagent_ctx *ctx = (cagent_ctx *)ud;
     if (!authz_ok(ctx, req, resp)) return 0;
@@ -496,6 +557,215 @@ static int h_skill_run(const ca_http_request *req, ca_http_response *resp, void 
     if (r) ca_skill_result_free(r);
     ca_http_resp_json(resp, s ? s : "{}");
     free(s);
+    return 0;
+}
+
+/* FNV-1a 64-bit digest rendered as 16 hex chars (plugin artifact signature). */
+static void fnv1a_hex(const char *s, char out[17]) {
+    uint64_t h = 1469598103934665603ULL;
+    for (const unsigned char *p = (const unsigned char *)s; p && *p; p++) {
+        h ^= *p; h *= 1099511628211ULL;
+    }
+    snprintf(out, 17, "%016llx", (unsigned long long)h);
+}
+
+/* ---- Skills marketplace ---- */
+
+typedef struct { const char *name, *description, *kind, *body; } skill_tmpl;
+static const skill_tmpl SKILL_TMPLS[] = {
+    {"hello_world", "打印问候语",                    "shell",   "echo hello from c-agent"},
+    {"list_dir",    "列出当前目录文件",              "shell",   "ls -la"},
+    {"sys_info",    "显示内核/系统信息",             "shell",   "uname -a"},
+    {"disk_usage",  "显示磁盘占用",                  "shell",   "df -h"},
+    {"py_now",      "Python 打印当前时间",           "python",  "import datetime; print(datetime.datetime.now())"},
+};
+#define N_SKILL_TMPLS (int)(sizeof(SKILL_TMPLS)/sizeof(SKILL_TMPLS[0]))
+
+static int h_skills_market(const ca_http_request *req, ca_http_response *resp, void *ud) {
+    cagent_ctx *ctx = (cagent_ctx *)ud;
+    if (!authz_ok(ctx, req, resp)) return 0;
+    cJSON *root = cJSON_CreateObject();
+    cJSON *tmpl = cJSON_CreateArray();
+    for (int i = 0; i < N_SKILL_TMPLS; i++) {
+        const skill_tmpl *t = &SKILL_TMPLS[i];
+        cJSON *o = cJSON_CreateObject();
+        cJSON_AddStringToObject(o, "name", t->name);
+        cJSON_AddStringToObject(o, "description", t->description);
+        cJSON_AddStringToObject(o, "kind", t->kind);
+        cJSON_AddStringToObject(o, "body", t->body);
+        cJSON_AddBoolToObject(o, "installed",
+            ctx->skills && ca_skill_find(ctx->skills, t->name) != NULL);
+        cJSON_AddItemToArray(tmpl, o);
+    }
+    cJSON_AddItemToObject(root, "templates", tmpl);
+    char *mine = ctx->skills ? ca_skill_list_json(ctx->skills) : NULL;
+    cJSON *inst = mine ? cJSON_Parse(mine) : NULL;
+    free(mine);
+    cJSON_AddItemToObject(root, "installed", inst ? inst : cJSON_CreateArray());
+    char *s = cJSON_PrintUnformatted(root);
+    ca_http_resp_json(resp, s ? s : "{}");
+    free(s);
+    cJSON_Delete(root);
+    return 0;
+}
+
+static int h_skills_publish(const ca_http_request *req, ca_http_response *resp, void *ud) {
+    cagent_ctx *ctx = (cagent_ctx *)ud;
+    if (!authz_ok(ctx, req, resp)) return 0;
+    char *b = body_str(req);
+    cJSON *root = b ? cJSON_Parse(b) : NULL;
+    free(b);
+    const char *name = json_str(root, "name");
+    const char *kind = json_str(root, "kind");
+    if (!name || !*name) {
+        if (root) cJSON_Delete(root);
+        resp->status = 400;
+        ca_http_resp_json(resp, "{\"error\":\"need 'name' string\"}");
+        return 0;
+    }
+    ca_skill sk; memset(&sk, 0, sizeof(sk));
+    sk.name = name;
+    sk.description = json_str(root, "description") ? json_str(root, "description") : "";
+    sk.kind = (kind && *kind) ? kind : "shell";
+    sk.body = json_str(root, "body") ? json_str(root, "body") : "";
+    int rc = ctx->skills ? ca_skill_register(ctx->skills, &sk) : -1;
+    if (rc != 0) {
+        cJSON_Delete(root);
+        resp->status = 400;
+        ca_http_resp_json(resp, "{\"error\":\"register failed (duplicate name or invalid kind)\"}");
+        return 0;
+    }
+    if (ctx->state_root) ca_skill_registry_persist(ctx->skills, ctx->state_root);
+    char *s = ctx->skills ? ca_skill_list_json(ctx->skills) : ca_strdup("[]");
+    ca_http_resp_appendf(resp, "{\"ok\":true,\"skills\":");
+    ca_http_resp_append(resp, s ? s : "[]");
+    ca_http_resp_append(resp, "}");
+    free(s);
+    cJSON_Delete(root);
+    return 0;
+}
+
+static int h_skill_delete(const ca_http_request *req, ca_http_response *resp, void *ud) {
+    cagent_ctx *ctx = (cagent_ctx *)ud;
+    if (!authz_ok(ctx, req, resp)) return 0;
+    const char *name = req->path + strlen("/v1/skills/");
+    int rc = ctx->skills ? ca_skill_unregister(ctx->skills, name) : -1;
+    if (rc != 0) {
+        resp->status = 404;
+        ca_http_resp_json(resp, "{\"error\":\"skill not found\"}");
+        return 0;
+    }
+    if (ctx->state_root) ca_skill_registry_persist(ctx->skills, ctx->state_root);
+    ca_http_resp_json(resp, "{\"ok\":true}");
+    return 0;
+}
+
+/* ---- Plugin marketplace (publish user-built standardized plugins) ---- */
+
+static int h_plugins_market(const ca_http_request *req, ca_http_response *resp, void *ud) {
+    cagent_ctx *ctx = (cagent_ctx *)ud;
+    if (!authz_ok(ctx, req, resp)) return 0;
+    char *reg = ctx->registry ? ca_plugin_registry_json(ctx->registry) : ca_strdup("{}");
+    cJSON *root = cJSON_Parse(reg ? reg : "{}");
+    free(reg);
+    if (!root) root = cJSON_CreateObject();
+    cJSON *tmpl = cJSON_CreateArray();
+    static const char *tp[] = {"text-summarizer", "log-analyzer",
+                               "qemu-crash-analyzer", "web-fetcher"};
+    for (int i = 0; i < 4; i++) {
+        cJSON *o = cJSON_CreateObject();
+        cJSON_AddStringToObject(o, "name", tp[i]);
+        cJSON_AddStringToObject(o, "description", "示例插件模板（AI 生成后可发布到市场）");
+        cJSON_AddItemToArray(tmpl, o);
+    }
+    cJSON_AddItemToObject(root, "templates", tmpl);
+    char *s = cJSON_PrintUnformatted(root);
+    ca_http_resp_json(resp, s ? s : "{}");
+    free(s);
+    cJSON_Delete(root);
+    return 0;
+}
+
+static int h_plugins_publish(const ca_http_request *req, ca_http_response *resp, void *ud) {
+    cagent_ctx *ctx = (cagent_ctx *)ud;
+    if (!authz_ok(ctx, req, resp)) return 0;
+    char *b = body_str(req);
+    cJSON *root = b ? cJSON_Parse(b) : NULL;
+    free(b);
+    const char *name = json_str(root, "name");
+    const char *kind = json_str(root, "kind");
+    const char *body = json_str(root, "body");
+    if (!name || !*name || !body || !*body) {
+        if (root) cJSON_Delete(root);
+        resp->status = 400;
+        ca_http_resp_json(resp, "{\"ok\":false,\"error\":\"need 'name' and 'body'\"}");
+        return 0;
+    }
+    /* make it runnable as a skill */
+    ca_skill sk; memset(&sk, 0, sizeof(sk));
+    sk.name = name;
+    sk.description = json_str(root, "description") ? json_str(root, "description") : "";
+    sk.kind = (kind && *kind) ? kind : "shell";
+    sk.body = body;
+    ca_skill_register(ctx->skills, &sk); /* best-effort; skip if duplicate */
+
+    char sig[17]; fnv1a_hex(body, sig);
+    ca_plugin_meta m; memset(&m, 0, sizeof(m));
+    m.name = name;
+    m.version = "1.0.0";
+    m.signature = sig;
+    m.description = json_str(root, "description") ? json_str(root, "description") : "";
+    m.enabled = 1;
+    m.built_ms = (int64_t)time(NULL) * 1000LL;
+    cJSON *caps = cJSON_GetObjectItemCaseSensitive(root, "capabilities");
+    if (caps && cJSON_IsArray(caps)) {
+        m.n_caps = (size_t)cJSON_GetArraySize(caps);
+        m.caps = (char **)calloc(m.n_caps ? m.n_caps : 1, sizeof(char *));
+        for (size_t i = 0; i < m.n_caps; i++) {
+            cJSON *ci = cJSON_GetArrayItem(caps, i);
+            m.caps[i] = (ci && cJSON_IsString(ci)) ? ca_strdup(ci->valuestring) : ca_strdup("");
+        }
+    }
+    int rc = ctx->registry ? ca_plugin_registry_register(ctx->registry, &m) : -1;
+    for (size_t i = 0; i < m.n_caps; i++) free(m.caps[i]);
+    free(m.caps);
+    if (rc != 0) {
+        cJSON_Delete(root);
+        resp->status = 400;
+        ca_http_resp_json(resp, "{\"ok\":false,\"error\":\"publish failed (duplicate version?)\"}");
+        return 0;
+    }
+    if (ctx->state_root) {
+        ca_plugin_registry_persist(ctx->registry, ctx->state_root);
+        ca_skill_registry_persist(ctx->skills, ctx->state_root);
+    }
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddBoolToObject(o, "ok", 1);
+    cJSON_AddStringToObject(o, "name", name);
+    char *s = cJSON_PrintUnformatted(o);
+    ca_http_resp_json(resp, s ? s : "{\"ok\":true}");
+    free(s);
+    cJSON_Delete(o);
+    cJSON_Delete(root);
+    return 0;
+}
+
+static int h_plugin_market_delete(const ca_http_request *req, ca_http_response *resp, void *ud) {
+    cagent_ctx *ctx = (cagent_ctx *)ud;
+    if (!authz_ok(ctx, req, resp)) return 0;
+    const char *name = req->path + strlen("/v1/plugins/market/");
+    int rc = ctx->registry ? ca_plugin_registry_unregister(ctx->registry, name) : -1;
+    if (rc != 0) {
+        resp->status = 404;
+        ca_http_resp_json(resp, "{\"error\":\"plugin not found\"}");
+        return 0;
+    }
+    if (ctx->skills) ca_skill_unregister(ctx->skills, name);
+    if (ctx->state_root) {
+        ca_plugin_registry_persist(ctx->registry, ctx->state_root);
+        ca_skill_registry_persist(ctx->skills, ctx->state_root);
+    }
+    ca_http_resp_json(resp, "{\"ok\":true}");
     return 0;
 }
 
@@ -895,11 +1165,18 @@ int cagent_api_attach(cagent_ctx *ctx) {
     ca_http_server_route(ctx->http, "DELETE", "/v1/routes/", h_route_delete, ctx);
     ca_http_server_route(ctx->http, "GET", "/v1/config/llm", h_config_llm_get, ctx);
     ca_http_server_route(ctx->http, "POST", "/v1/config/llm", h_config_llm, ctx);
+    ca_http_server_route(ctx->http, "POST", "/v1/config/llm/test", h_config_llm_test, ctx);
     ca_http_server_route(ctx->http, "GET", "/v1/usage", h_usage, ctx);
     ca_http_server_route(ctx->http, "GET", "/v1/plugins", h_plugins, ctx);
     ca_http_server_route(ctx->http, "POST", "/v1/plugins/generate", h_plugin_generate, ctx);
+    ca_http_server_route(ctx->http, "GET", "/v1/plugins/market", h_plugins_market, ctx);
+    ca_http_server_route(ctx->http, "POST", "/v1/plugins/publish", h_plugins_publish, ctx);
+    ca_http_server_route(ctx->http, "DELETE", "/v1/plugins/market/", h_plugin_market_delete, ctx);
     ca_http_server_route(ctx->http, "GET", "/v1/skills", h_skills, ctx);
     ca_http_server_route(ctx->http, "POST", "/v1/skills/run", h_skill_run, ctx);
+    ca_http_server_route(ctx->http, "GET", "/v1/skills/market", h_skills_market, ctx);
+    ca_http_server_route(ctx->http, "POST", "/v1/skills/publish", h_skills_publish, ctx);
+    ca_http_server_route(ctx->http, "DELETE", "/v1/skills/", h_skill_delete, ctx);
     ca_http_server_route(ctx->http, "GET", "/v1/mcp", h_mcp, ctx);
     ca_http_server_route(ctx->http, "POST", "/v1/mcp", h_mcp_add, ctx);
     ca_http_server_route(ctx->http, "DELETE", "/v1/mcp/", h_mcp_delete, ctx);

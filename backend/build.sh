@@ -20,7 +20,7 @@ else
 fi
 
 CC="$ZIG cc"
-CFLAGS="-std=c11 -Wall -Wextra -O1 -g -Iinclude -Ithird_party/cJSON"
+CFLAGS="-std=c11 -Wall -Wextra -O1 -g -Iinclude -Ithird_party/cJSON -Ithird_party/wasm3"
 LIBS=""
 case "$OS" in
   MINGW*|MSYS*|CYGWIN*) LIBS="-lws2_32 -lm" ;;

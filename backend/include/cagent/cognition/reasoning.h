@@ -46,6 +46,10 @@ ca_state_machine *ca_reasoning_sm(ca_reasoning *r);
  * the old instance stays owned by the caller to destroy after the swap. */
 void ca_reasoning_set_llm(ca_reasoning *r, ca_llm *llm);
 
+/* Route each run through `router` (weighted round-robin). Pass NULL to revert
+ * to the single configured LLM. The router is borrowed (owned by the caller). */
+void ca_reasoning_set_router(ca_reasoning *r, ca_router *router);
+
 #ifdef __cplusplus
 }
 #endif
