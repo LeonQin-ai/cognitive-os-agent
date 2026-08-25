@@ -22,14 +22,40 @@ static const char *SYS_PROMPT =
     "If no tool is needed, respond with plain text instead.";
 
 int ca_planner_plan(ca_llm *llm, const char *prompt,
-                    ca_planned_action **actions, int *n_actions, char **raw_out) {
+                     ca_planned_action **actions, int *n_actions,
+                     char **raw_out, char **err_out) {
     if (actions) *actions = NULL;
     if (n_actions) *n_actions = 0;
     if (raw_out) *raw_out = NULL;
-    if (!llm || !prompt) return -1;
+    if (err_out) *err_out = NULL;
+    if (!llm || !prompt) {
+        if (err_out) *err_out = ca_strdup("no LLM configured");
+        return -1;
+    }
 
-    char *plan = ca_llm_chat_simple(llm, SYS_PROMPT, prompt);
-    if (!plan) return -1;
+    ca_llm_message msgs[2] = {
+        {"system", SYS_PROMPT},
+        {"user", prompt},
+    };
+    ca_llm_request req = {0};
+    req.messages = msgs;
+    req.num_messages = 2;
+    req.temperature = 0.2;
+    req.max_tokens = 1024;
+    ca_llm_response resp = {0};
+    if (ca_llm_chat(llm, &req, &resp) != 0) {
+        if (err_out) *err_out = ca_strdup(resp.error ? resp.error : "LLM call failed");
+        free(resp.content);
+        free(resp.error);
+        return -1;
+    }
+    char *plan = resp.content;
+    resp.content = NULL;
+    free(resp.error);
+    if (!plan) {
+        if (err_out) *err_out = ca_strdup("LLM returned an empty response");
+        return -1;
+    }
     if (raw_out) *raw_out = plan;
     else free(plan);
 

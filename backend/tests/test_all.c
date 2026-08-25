@@ -753,7 +753,7 @@ static void test_planner(void) {
     ca_planned_action *actions = NULL;
     int n = -1;
     char *raw = NULL;
-    CHECK(ca_planner_plan(llm, "创建 test/note.txt 写入内容为 hello", &actions, &n, &raw) == 0);
+    CHECK(ca_planner_plan(llm, "创建 test/note.txt 写入内容为 hello", &actions, &n, &raw, NULL) == 0);
     CHECK(n >= 1);
     CHECK(actions != NULL);
     if (n >= 1 && actions) CHECK_STR(actions[0].tool, "file_write");

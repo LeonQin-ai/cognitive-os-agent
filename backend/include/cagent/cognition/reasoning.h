@@ -5,6 +5,7 @@
  * The LLM is a planner (cognitive accelerator), not the control center. */
 #pragma once
 #include <stddef.h>
+#include "cagent/llm/router.h"
 
 #ifdef __cplusplus
 extern "C" {

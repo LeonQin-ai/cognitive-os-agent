@@ -497,10 +497,12 @@ panels.tasks = `
 panels.agents = `
   <div class="card">
     <h2>Create agent</h2>
-    <div class="hint">多智能体协调器：注册命名 agent（带角色描述），通过共享黑板协同工作、可发布事实。</div>
+    <div class="hint">多智能体协调器：注册命名 agent（带角色描述），通过共享黑板协同工作、可发布事实。可指定该 agent 使用的模型，留空则使用当前激活模型。</div>
     <div class="row">
       <input id="agent-name" type="text" placeholder="name (如 writer)" style="flex:1;min-width:140px">
       <input id="agent-role" type="text" placeholder="role (如 负责写作)" style="flex:2;min-width:200px">
+      <input id="agent-provider" type="text" placeholder="provider (openai/anthropic/mock)" style="flex:1;min-width:140px">
+      <input id="agent-model" type="text" placeholder="model (留空=当前)" style="flex:1;min-width:140px">
       <button onclick="agentAdd()">Add</button>
       <span id="agent-stat" class="muted"></span>
     </div>
@@ -806,9 +808,12 @@ async function loadAgents(){
   if(!box) return;
   const obj = (r.obj && typeof r.obj === 'object') ? r.obj : {};
   AGENTS = Array.isArray(obj.agents) ? obj.agents : [];
-  let html = '<div class="table-wrap"><table><thead><tr><th>Agent</th><th>Role</th></tr></thead><tbody>';
-  if(!AGENTS.length) html += '<tr><td colspan="2" class="muted">（暂无 agent，先创建一个）</td></tr>';
-  AGENTS.forEach(a => { html += '<tr><td>' + esc(a.name || '') + '</td><td>' + esc(a.role || '') + '</td></tr>'; });
+  let html = '<div class="table-wrap"><table><thead><tr><th>Agent</th><th>Role</th><th>Model</th></tr></thead><tbody>';
+  if(!AGENTS.length) html += '<tr><td colspan="3" class="muted">（暂无 agent，先创建一个）</td></tr>';
+  AGENTS.forEach(a => {
+    const model = [a.provider, a.model].filter(Boolean).join(' / ') || '（当前激活）';
+    html += '<tr><td>' + esc(a.name || '') + '</td><td>' + esc(a.role || '') + '</td><td class="muted">' + esc(model) + '</td></tr>';
+  });
   html += '</tbody></table></div>';
   html += '<div class="hint" style="margin-top:8px">共享黑板 facts:</div><pre>' + esc(JSON.stringify(obj.facts || {}, null, 2)) + '</pre>';
   box.innerHTML = html;
@@ -817,11 +822,16 @@ async function loadAgents(){
 function agentAdd(){
   const name = $('agent-name').value.trim();
   const role = $('agent-role').value.trim();
+  const provider = $('agent-provider').value.trim();
+  const model = $('agent-model').value.trim();
   const st = $('agent-stat');
   if(!name){ if(st) st.textContent = '需要 name'; return; }
-  call('POST', '/v1/agents', {name, role}).then(r => {
+  const body = {name, role};
+  if(provider) body.provider = provider;
+  if(model) body.model = model;
+  call('POST', '/v1/agents', body).then(r => {
     if(st) st.textContent = (r.status < 300) ? '✔ 已创建' : ((r.obj && r.obj.error) ? 'error: ' + r.obj.error : 'error ' + r.status);
-    if(r.status < 300){ $('agent-name').value = ''; $('agent-role').value = ''; loadAgents(); }
+    if(r.status < 300){ $('agent-name').value = ''; $('agent-role').value = ''; $('agent-provider').value = ''; $('agent-model').value = ''; loadAgents(); }
   });
 }
 

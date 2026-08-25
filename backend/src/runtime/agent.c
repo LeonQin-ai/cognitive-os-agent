@@ -10,6 +10,8 @@
 typedef struct ca_agent_entry {
     char *name;
     char *role;
+    char *provider;
+    char *model;
 } ca_agent_entry;
 
 struct ca_agent_pool {
@@ -39,6 +41,8 @@ void ca_agent_pool_free(ca_agent_pool *p) {
     for (size_t i = 0; i < p->count; i++) {
         free(p->agents[i].name);
         free(p->agents[i].role);
+        free(p->agents[i].provider);
+        free(p->agents[i].model);
     }
     free(p->agents);
     p->agents = NULL;
@@ -57,6 +61,11 @@ static int find_agent(ca_agent_pool *p, const char *name) {
 }
 
 int ca_agent_pool_add(ca_agent_pool *p, const char *name, const char *role) {
+    return ca_agent_pool_add_model(p, name, role, NULL, NULL);
+}
+
+int ca_agent_pool_add_model(ca_agent_pool *p, const char *name, const char *role,
+                            const char *provider, const char *model) {
     if (!p || !name || !*name) return -1;
     ca_mutex_lock(&p->mtx);
     if (find_agent(p, name) >= 0) {
@@ -72,6 +81,8 @@ int ca_agent_pool_add(ca_agent_pool *p, const char *name, const char *role) {
     }
     p->agents[p->count].name = ca_strdup(name);
     p->agents[p->count].role = role ? ca_strdup(role) : ca_strdup("");
+    p->agents[p->count].provider = provider ? ca_strdup(provider) : NULL;
+    p->agents[p->count].model = model ? ca_strdup(model) : NULL;
     int idx = (int)p->count;
     p->count++;
     ca_mutex_unlock(&p->mtx);
@@ -111,6 +122,8 @@ char *ca_agent_pool_snapshot_json(ca_agent_pool *p) {
             cJSON *o = cJSON_CreateObject();
             cJSON_AddStringToObject(o, "name", p->agents[i].name ? p->agents[i].name : "");
             cJSON_AddStringToObject(o, "role", p->agents[i].role ? p->agents[i].role : "");
+            cJSON_AddStringToObject(o, "provider", p->agents[i].provider ? p->agents[i].provider : "");
+            cJSON_AddStringToObject(o, "model", p->agents[i].model ? p->agents[i].model : "");
             cJSON_AddItemToArray(arr, o);
         }
     }

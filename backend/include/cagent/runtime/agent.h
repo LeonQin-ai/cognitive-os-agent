@@ -16,6 +16,12 @@ void ca_agent_pool_free(ca_agent_pool *p);
 /* Register a named agent with an optional role description. Returns its index
  * (>= 0) or -1 on bad args. */
 int ca_agent_pool_add(ca_agent_pool *p, const char *name, const char *role);
+
+/* Like ca_agent_pool_add, but also records the model/provider this agent
+ * should use (stored for display and future per-agent execution). Either may
+ * be NULL (falls back to the global active model). */
+int ca_agent_pool_add_model(ca_agent_pool *p, const char *name, const char *role,
+                            const char *provider, const char *model);
 int ca_agent_pool_count(ca_agent_pool *p);
 
 /* Borrow the shared blackboard (owned by the pool; do not free). */

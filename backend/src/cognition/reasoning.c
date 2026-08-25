@@ -144,11 +144,17 @@ static int h_reason(ca_state_machine *sm, void *ud, const char *input, char **ou
     char *aug = build_context(r, input);
     if (!r->llm) { free(aug); *out = ca_strdup("(no LLM provider configured)"); return 0; }
     char *raw = NULL;
-    int rc = ca_planner_plan(r->llm, aug ? aug : input, &r->actions, &r->n_actions, &raw);
+    char *plan_err = NULL;
+    int rc = ca_planner_plan(r->llm, aug ? aug : input, &r->actions, &r->n_actions, &raw, &plan_err);
     free(aug);
     if (rc != 0 || !raw) {
         free(raw);
-        ca_log_error("reasoning: LLM returned no plan");
+        char *msg = plan_err
+            ? ca_strdup(plan_err)
+            : ca_strdup("(LLM 调用失败：请先用「测试」按钮验证模型配置 provider/key/base_url/model)");
+        free(plan_err);
+        ca_log_error("reasoning: LLM returned no plan: %s", msg);
+        *out = msg;           /* surfaced as the task result on FAILED */
         return -1; /* move to FAILED */
     }
     ca_log_info("reasoning: LLM plan: %s", raw);

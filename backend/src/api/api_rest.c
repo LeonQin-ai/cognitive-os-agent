@@ -224,12 +224,18 @@ static int h_agent_add(const ca_http_request *req, ca_http_response *resp, void 
     char *b = body_str(req);
     cJSON *root = b ? cJSON_Parse(b) : NULL;
     free(b);
-    const char *name = NULL, *role = NULL;
+    const char *name = NULL, *role = NULL, *provider = NULL, *model = NULL;
     if (root && cJSON_IsObject(root)) {
         cJSON *n = cJSON_GetObjectItemCaseSensitive(root, "name");
         cJSON *r = cJSON_GetObjectItemCaseSensitive(root, "role");
+        cJSON *prov = cJSON_GetObjectItemCaseSensitive(root, "provider");
+        cJSON *mod = cJSON_GetObjectItemCaseSensitive(root, "model");
         if (n && cJSON_IsString(n)) name = n->valuestring;
         if (r && cJSON_IsString(r)) role = r->valuestring;
+        provider = (prov && cJSON_IsString(prov)) ? prov->valuestring : NULL;
+        model = (mod && cJSON_IsString(mod)) ? mod->valuestring : NULL;
+        if (provider && !*provider) provider = NULL;
+        if (model && !*model) model = NULL;
     }
     if (root) cJSON_Delete(root);
     if (!name || !*name) {
@@ -237,7 +243,8 @@ static int h_agent_add(const ca_http_request *req, ca_http_response *resp, void 
         ca_http_resp_json(resp, "{\"error\":\"need 'name' string\"}");
         return 0;
     }
-    int idx = ctx->agents ? ca_agent_pool_add(ctx->agents, name, role ? role : "") : -1;
+    int idx = ctx->agents ? ca_agent_pool_add_model(ctx->agents, name, role ? role : "",
+                                                    provider, model) : -1;
     if (idx < 0) { resp->status = 400; ca_http_resp_json(resp, "{\"error\":\"add agent failed (duplicate?)\"}"); return 0; }
     ca_http_resp_appendf(resp, "{\"ok\":true,\"index\":%d}", idx);
     return 0;

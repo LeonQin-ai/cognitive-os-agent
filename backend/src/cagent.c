@@ -334,9 +334,10 @@ int cagent_set_llm(cagent_ctx *ctx, const char *provider, const char *base_url,
     ca_llm *old = ctx->llm;
     ctx->llm = nl;
     if (ctx->reasoning) ca_reasoning_set_llm(ctx->reasoning, nl);
-    /* keep the route table in sync so the Models UI reflects the active LLM */
+    /* keep the route table in sync: drop the previously-active route, then add
+     * the new active one so round-robin never falls back to a stale config. */
     if (ctx->router) {
-        ca_router_remove(ctx->router, provider);
+        if (ctx->provider) ca_router_remove(ctx->router, ctx->provider);
         ca_router_add(ctx->router, provider, provider, base_url, api_key, model, 1.0);
     }
     ca_mutex_unlock(&ctx->run_lock);
@@ -352,6 +353,8 @@ int cagent_set_llm(cagent_ctx *ctx, const char *provider, const char *base_url,
         if (ca_config_save_file(ctx->config, cfgfile) != 0)
             ca_log_warn("cagent_set_llm: could not persist config to %s", cfgfile);
     }
+    free(ctx->provider);
+    ctx->provider = ca_strdup(provider);
     ca_log_info("cagent: active LLM switched to provider=%s model=%s",
                 provider, model ? model : "(default)");
     return 0;

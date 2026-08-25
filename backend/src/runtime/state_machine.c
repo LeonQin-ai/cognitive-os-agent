@@ -53,7 +53,9 @@ ca_state ca_state_machine_run(ca_state_machine *sm, const char *input, char **re
             char *out = NULL;
             if (sg->fn(sm, sg->ud, value, &out) != 0) {
                 free(value);
-                if (result) *result = NULL;
+                /* surface the failed stage's diagnostic (may be NULL) */
+                if (result) *result = out;
+                else free(out);
                 sm->current = CA_ST_FAILED;
                 return CA_ST_FAILED;
             }

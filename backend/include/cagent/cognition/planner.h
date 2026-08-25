@@ -21,9 +21,11 @@ typedef struct ca_planned_action {
  *   - *actions / *n_actions hold the parsed plan (0 actions if the model
  *     answered in plain text with no tools). Caller frees via
  *     ca_planner_actions_free().
- *   - *raw_out holds the verbatim model output (caller frees; may be NULL). */
+ *   - *raw_out holds the verbatim model output (caller frees; may be NULL).
+ *   - *err_out (optional) holds a malloc'd diagnostic on failure; caller frees. */
 int ca_planner_plan(ca_llm *llm, const char *prompt,
-                    ca_planned_action **actions, int *n_actions, char **raw_out);
+                    ca_planned_action **actions, int *n_actions,
+                    char **raw_out, char **err_out);
 
 void ca_planner_actions_free(ca_planned_action *a, int n);
 
