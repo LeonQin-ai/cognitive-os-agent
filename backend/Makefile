@@ -2,7 +2,7 @@
 # Also works with the bundled zig via:  make CC="tools/zig/zig cc"
 CC      ?= cc
 CFLAGS  ?= -std=c11 -Wall -Wextra -O1 -g -Iinclude -Ithird_party/cJSON -Ithird_party/wasm3
-LDLIBS  := $(shell uname | grep -qi 'mingw\|msys\|cygwin' && echo '-lws2_32 -lm' || echo '-lpthread -ldl -lm')
+LDLIBS  := $(shell uname | grep -qi 'mingw\|msys\|cygwin' && echo '-lws2_32 -lwinhttp -lm' || echo '-lpthread -ldl -lm')
 
 SRCS := $(shell find src third_party/cJSON -name '*.c' | sort) third_party/wasm3/wasm3_all.c
 

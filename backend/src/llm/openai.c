@@ -52,13 +52,36 @@ static void set_error(ca_llm_response *resp, const char *msg) {
     resp->error = ca_strdup(msg);
 }
 
+static char *normalize_base(const char *base) {
+    /* The fixed OPENAI_PATH already starts with /v1; if the user supplied a
+     * base_url that already ends in /v1 (e.g. https://api.deepseek.com/v1),
+     * strip it to avoid a doubled /v1/v1/... path. */
+    size_t n = base ? strlen(base) : 0;
+    if (n >= 3 && strcmp(base + n - 3, "/v1") == 0) {
+        char *s = ca_strdup(base);
+        s[n - 3] = '\0';
+        return s;
+    }
+    return ca_strdup(base);
+}
+
 static int openai_chat(ca_llm *llm, const ca_llm_request *req, ca_llm_response *resp) {
     char *body = build_request_body(req, llm->model, 0);
     if (!body) { set_error(resp, "request build failed"); return -1; }
 
-    ca_http_response *r = ca_http_post(impl_of(llm)->base_url, OPENAI_PATH, body,
-                                       "application/json", NULL, 60000);
+    char *base = normalize_base(impl_of(llm)->base_url);
+    ca_strmap *hdrs = NULL;
+    if (llm->api_key) {
+        hdrs = (ca_strmap *)calloc(1, sizeof(ca_strmap));
+        char auth[2048];
+        snprintf(auth, sizeof(auth), "Bearer %s", llm->api_key);
+        ca_strmap_set(hdrs, "Authorization", auth);
+    }
+
+    ca_http_response *r = ca_http_post(base, OPENAI_PATH, body, "application/json", hdrs, 60000);
     free(body);
+    free(base);
+    if (hdrs) { ca_strmap_free(hdrs); free(hdrs); }
     if (!r) { set_error(resp, "http request failed"); return -1; }
 
     if (r->status != 200) {
@@ -94,9 +117,19 @@ static int openai_stream(ca_llm *llm, const ca_llm_request *req, ca_llm_stream_c
     char *body = build_request_body(req, llm->model, 1);
     if (!body) return -1;
 
-    ca_sse *s = ca_sse_start(impl_of(llm)->base_url, OPENAI_PATH, body,
-                             "application/json", NULL, 60000);
+    char *base = normalize_base(impl_of(llm)->base_url);
+    ca_strmap *hdrs = NULL;
+    if (llm->api_key) {
+        hdrs = (ca_strmap *)calloc(1, sizeof(ca_strmap));
+        char auth[2048];
+        snprintf(auth, sizeof(auth), "Bearer %s", llm->api_key);
+        ca_strmap_set(hdrs, "Authorization", auth);
+    }
+
+    ca_sse *s = ca_sse_start(base, OPENAI_PATH, body, "application/json", hdrs, 60000);
     free(body);
+    free(base);
+    if (hdrs) { ca_strmap_free(hdrs); free(hdrs); }
     if (!s) return -1;
     if (ca_sse_status(s) != 200) {
         ca_log_warn("openai stream: http status %d", ca_sse_status(s));

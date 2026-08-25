@@ -1,6 +1,10 @@
 #include "cagent/os/http.h"
 #include "cagent/os/os_socket.h"
 
+/* On Windows the HTTPS-capable backend lives in http_winhttp.c; this plaintext
+ * implementation is only used on non-Windows platforms. */
+#ifndef _WIN32
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -299,3 +303,5 @@ void ca_http_response_free(ca_http_response *r) {
     ca_strmap_free(&r->headers);
     free(r);
 }
+
+#endif /* _WIN32 */
