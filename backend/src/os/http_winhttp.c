@@ -94,6 +94,12 @@ static ca_http_response *do_request(const char *method, const char *base_url, co
                                   WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!hSess) { free(whost); free(wpath); free(wmethod); return NULL; }
 
+    /* Honor the caller's timeout for resolve/connect/send/receive. Without this,
+       WinHTTP's defaults (~30s+) mean a slow or dead peer blocks the caller —
+       fatal inside the single-threaded HTTP server where every request queues. */
+    DWORD to = (DWORD)(timeout_ms > 0 ? timeout_ms : 30000);
+    WinHttpSetTimeouts(hSess, to, to, to, to);
+
     HINTERNET hConn = WinHttpConnect(hSess, whost, (INTERNET_PORT)port, 0);
     if (!hConn) { WinHttpCloseHandle(hSess); free(whost); free(wpath); free(wmethod); return NULL; }
 
@@ -116,7 +122,7 @@ static ca_http_response *do_request(const char *method, const char *base_url, co
 
     BOOL ok = WinHttpSendRequest(hReq, hdr.len ? whdr : WINHTTP_NO_ADDITIONAL_HEADERS,
                                  hdr.len ? (DWORD)-1L : 0,
-                                 (LPVOID)(body ? body : ""),
+                                 body ? (LPVOID)body : WINHTTP_NO_REQUEST_DATA,
                                  body ? (DWORD)strlen(body) : 0,
                                  body ? (DWORD)strlen(body) : 0, 0);
     free(whdr);

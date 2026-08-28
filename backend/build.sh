@@ -30,6 +30,12 @@ esac
 SRCS="$(find src third_party/cJSON -name '*.c' | sort) third_party/wasm3/wasm3_all.c"
 mkdir -p build
 
+# Regenerate the embedded web UI (include/cagent/api/web_ui.h) from
+# apps/web/index.html whenever the source is newer.
+if [ -f apps/web/index.html ] && [ tools/gen_web_ui.py -nt include/cagent/api/web_ui.h ]; then
+  python tools/gen_web_ui.py
+fi
+
 TARGET="${1:-all}"
 case "$TARGET" in
   all)

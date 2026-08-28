@@ -5,6 +5,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 #include "cJSON.h"
 
 struct ca_router {
@@ -147,4 +148,56 @@ char *ca_router_json(ca_router *r) {
     char *js = cJSON_PrintUnformatted(arr);
     cJSON_Delete(arr);
     return js;
+}
+
+int ca_router_save_file(ca_router *r, const char *path) {
+    if (!r || !path) return -1;
+    char *js = ca_router_json(r);
+    if (!js) return -1;
+    FILE *f = fopen(path, "wb");
+    if (!f) { free(js); return -1; }
+    size_t n = strlen(js);
+    size_t w = fwrite(js, 1, n, f);
+    fclose(f);
+    free(js);
+    return (w == n) ? 0 : -1;
+}
+
+int ca_router_load_file(ca_router *r, const char *path) {
+    if (!r || !path) return -1;
+    FILE *f = fopen(path, "rb");
+    if (!f) return -1; /* no saved routes (first run) */
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (sz <= 0) { fclose(f); return 0; }
+    char *buf = (char *)malloc((size_t)sz + 1);
+    if (!buf) { fclose(f); return -1; }
+    size_t rd = fread(buf, 1, (size_t)sz, f);
+    fclose(f);
+    buf[rd] = '\0';
+    cJSON *arr = cJSON_Parse(buf);
+    free(buf);
+    if (!arr || !cJSON_IsArray(arr)) { if (arr) cJSON_Delete(arr); return -1; }
+    /* collect routes first, then add them *without* holding r->mtx (ca_router_add
+     * locks it internally — holding it here would deadlock on a non-recursive mutex) */
+    cJSON *it;
+    cJSON_ArrayForEach(it, arr) {
+        if (!cJSON_IsObject(it)) continue;
+        cJSON *name = cJSON_GetObjectItemCaseSensitive(it, "name");
+        cJSON *prov = cJSON_GetObjectItemCaseSensitive(it, "provider");
+        if (!name || !cJSON_IsString(name) || !prov || !cJSON_IsString(prov)) continue;
+        cJSON *b = cJSON_GetObjectItemCaseSensitive(it, "base_url");
+        cJSON *m = cJSON_GetObjectItemCaseSensitive(it, "model");
+        cJSON *k = cJSON_GetObjectItemCaseSensitive(it, "api_key");
+        const char *base = (b && cJSON_IsString(b)) ? b->valuestring : NULL;
+        const char *model = (m && cJSON_IsString(m)) ? m->valuestring : NULL;
+        const char *key = (k && cJSON_IsString(k)) ? k->valuestring : NULL;
+        double weight = 1.0;
+        cJSON *w = cJSON_GetObjectItemCaseSensitive(it, "weight");
+        if (w && cJSON_IsNumber(w)) weight = w->valuedouble;
+        ca_router_add(r, name->valuestring, prov->valuestring, base, key, model, weight);
+    }
+    cJSON_Delete(arr);
+    return 0;
 }

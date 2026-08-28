@@ -37,6 +37,7 @@ set(CAGENT_SOURCES
   src/plugin_intelligence/analyzer.c
   src/plugin_intelligence/architect.c
   src/plugin_intelligence/codegen.c
+  src/plugin_intelligence/generator.c
   src/plugin_intelligence/testing.c
   src/plugin_intelligence/security.c
   src/llm/llm.c
@@ -64,6 +65,7 @@ set(CAGENT_SOURCES
   src/os/os_proc.c
   src/os/os_time.c
   src/os/http.c
+  src/os/http_winhttp.c
   src/infra/logging.c
   src/infra/config.c
   src/infra/util.c
@@ -71,10 +73,16 @@ set(CAGENT_SOURCES
   src/infra/audit.c
   src/infra/persist.c
   src/infra/trace.c
+  src/infra/ringbuf.c
+  src/infra/catalog.c
   src/api/http_server.c
   src/api/api_rest.c
+  src/api/market_remote.c
   src/api/auth.c
   src/api/websocket.c
+  src/api/ws_server.c
+  src/im/channel.c
+  src/im/im.c
   third_party/cJSON/cJSON.c
   third_party/wasm3/wasm3_all.c
 )
@@ -82,9 +90,9 @@ set(CAGENT_SOURCES
 include_directories(include third_party/cJSON third_party/wasm3)
 
 if(WIN32)
-  set(PLATFORM_LIBS ws2_32)
+  set(PLATFORM_LIBS ws2_32 winhttp m)
 else()
-  set(PLATFORM_LIBS pthread dl)
+  set(PLATFORM_LIBS pthread dl m)
 endif()
 
 add_executable(cagent ${CAGENT_SOURCES} cli/main.c)

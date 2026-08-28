@@ -2,6 +2,7 @@
 #include "cagent/api/api_rest.h"
 #include "cagent/api/http_server.h"
 #include "cagent/api/web_ui.h"
+#include "cagent/api/market.h"
 #include "cagent/runtime/scheduler.h"
 #include "cagent/action/tools.h"
 #include "cagent/memory/memory.h"
@@ -11,6 +12,9 @@
 #include "cagent/infra/catalog.h"
 #include "cagent/llm/llm.h"
 #include "cagent/os/os_time.h"
+#include "cagent/os/os_proc.h"
+#include "cagent/os/os_fs.h"
+#include "cagent/os/os_socket.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -350,6 +354,12 @@ static int h_route_add(const ca_http_request *req, ca_http_response *resp, void 
     char *s = ctx->router ? ca_router_json(ctx->router) : ca_strdup("[]");
     ca_http_resp_json(resp, s ? s : "[]");
     free(s);
+    /* persist so configured routes survive restart */
+    if (ctx->router && ctx->state_root) {
+        char rpath[600];
+        ca_path_join(rpath, sizeof(rpath), ctx->state_root, "routes.json");
+        ca_router_save_file(ctx->router, rpath);
+    }
     return 0;
 }
 
@@ -363,6 +373,12 @@ static int h_route_delete(const ca_http_request *req, ca_http_response *resp, vo
     ca_http_resp_append(resp, s ? s : "[]");
     ca_http_resp_append(resp, "}");
     free(s);
+    /* persist so configured routes survive restart */
+    if (ctx->router && ctx->state_root) {
+        char rpath[600];
+        ca_path_join(rpath, sizeof(rpath), ctx->state_root, "routes.json");
+        ca_router_save_file(ctx->router, rpath);
+    }
     return 0;
 }
 
@@ -588,6 +604,41 @@ static const skill_tmpl SKILL_TMPLS[] = {
 };
 #define N_SKILL_TMPLS (int)(sizeof(SKILL_TMPLS)/sizeof(SKILL_TMPLS[0]))
 
+/* Append items from a remote market JSON array into `dest`, tagging each as
+ * source=remote so the UI can show where an entry came from. */
+static void market_merge_remote(cJSON *dest, cJSON *remote) {
+    if (!dest || !remote) return;
+    cJSON *it;
+    cJSON_ArrayForEach(it, remote) {
+        if (!cJSON_IsObject(it)) continue;
+        cJSON *o = cJSON_Duplicate(it, 1);
+        if (!o) continue;
+        cJSON *src = cJSON_GetObjectItemCaseSensitive(o, "source");
+        if (src) cJSON_DeleteItemFromObject(o, "source");
+        cJSON_AddStringToObject(o, "source", "remote");
+        cJSON_AddItemToArray(dest, o);
+    }
+}
+
+/* Fetch a remote market catalog for a path and return its parsed JSON root
+ * (or NULL when no market is configured or it is unreachable). */
+static cJSON *market_fetch_root(cagent_ctx *ctx, const char *path) {
+    if (!ctx->market_url || !*ctx->market_url) return NULL;
+    char *body = ca_market_fetch(ctx->market_url, path, 4000);
+    if (!body) return NULL;
+    cJSON *root = cJSON_Parse(body);
+    free(body);
+    return root;
+}
+
+/* Merge a remote market's array field into the local one. Returns 1 if online. */
+static int market_merge_field(cJSON *local, cJSON *remote_root, const char *field) {
+    cJSON *arr = remote_root ? cJSON_GetObjectItemCaseSensitive(remote_root, field) : NULL;
+    if (!arr || !cJSON_IsArray(arr)) return 0;
+    market_merge_remote(local, arr);
+    return 1;
+}
+
 static int h_skills_market(const ca_http_request *req, ca_http_response *resp, void *ud) {
     cagent_ctx *ctx = (cagent_ctx *)ud;
     if (!authz_ok(ctx, req, resp)) return 0;
@@ -605,6 +656,42 @@ static int h_skills_market(const ca_http_request *req, ca_http_response *resp, v
         cJSON_AddItemToArray(tmpl, o);
     }
     cJSON_AddItemToObject(root, "templates", tmpl);
+    /* GitHub 热门应用（可安装为 skill 的开源工具/仓库，附仓库链接） */
+    cJSON *gh = cJSON_CreateArray();
+    static const struct { const char *name, *desc, *repo, *kind; } GH_SKILLS[] = {
+        { "jq", "命令行 JSON 处理工具（解析/转换 JSON）", "https://github.com/jqlang/jq", "shell" },
+        { "ripgrep", "极速递归正则搜索（rg）", "https://github.com/BurntSushi/ripgrep", "shell" },
+        { "yt-dlp", "视频/音频下载器（支持大量站点）", "https://github.com/yt-dlp/yt-dlp", "shell" },
+        { "pandoc", "万能文档格式转换（markdown/HTML/PDF…）", "https://github.com/jgm/pandoc", "shell" },
+        { "ffmpeg", "音视频处理工具箱", "https://github.com/FFmpeg/FFmpeg", "shell" },
+        { "gh", "GitHub 官方命令行（Issue/PR/Release）", "https://github.com/cli/cli", "shell" },
+        { "fd", "更友好的 find 替代", "https://github.com/sharkdp/fd", "shell" },
+        { "bat", "带语法高亮的 cat 替代", "https://github.com/sharkdp/bat", "shell" },
+    };
+    for (size_t i = 0; i < sizeof(GH_SKILLS) / sizeof(GH_SKILLS[0]); i++) {
+        cJSON *o = cJSON_CreateObject();
+        cJSON_AddStringToObject(o, "name", GH_SKILLS[i].name);
+        cJSON_AddStringToObject(o, "description", GH_SKILLS[i].desc);
+        cJSON_AddStringToObject(o, "repo", GH_SKILLS[i].repo);
+        cJSON_AddStringToObject(o, "kind", GH_SKILLS[i].kind);
+        cJSON_AddItemToArray(gh, o);
+    }
+    cJSON_AddItemToObject(root, "github", gh);
+
+    /* networked marketplace: merge remote templates + github apps when reachable */
+    int market_online = 0;
+    if (ctx->market_url && *ctx->market_url) {
+        cJSON *remote = market_fetch_root(ctx, "/v1/skills/market");
+        if (remote) {
+            market_online = market_merge_field(tmpl, remote, "templates");
+            market_merge_field(gh, remote, "github");
+            cJSON_Delete(remote);
+        }
+    }
+    cJSON_AddBoolToObject(root, "market_online", market_online);
+    if (ctx->market_url && *ctx->market_url)
+        cJSON_AddStringToObject(root, "market_url", ctx->market_url);
+
     char *mine = ctx->skills ? ca_skill_list_json(ctx->skills) : NULL;
     cJSON *inst = mine ? cJSON_Parse(mine) : NULL;
     free(mine);
@@ -643,8 +730,18 @@ static int h_skills_publish(const ca_http_request *req, ca_http_response *resp, 
         return 0;
     }
     if (ctx->state_root) ca_skill_registry_persist(ctx->skills, ctx->state_root);
+    /* best-effort push to a networked marketplace */
+    int pushed = 0;
+    if (ctx->market_url && *ctx->market_url && root) {
+        char *payload = cJSON_PrintUnformatted(root);
+        if (payload) {
+            pushed = ca_market_publish(ctx->market_url, "/v1/skills/publish", payload, 4000) == 0;
+            free(payload);
+        }
+    }
     char *s = ctx->skills ? ca_skill_list_json(ctx->skills) : ca_strdup("[]");
-    ca_http_resp_appendf(resp, "{\"ok\":true,\"skills\":");
+    ca_http_resp_appendf(resp, "{\"ok\":true,\"pushed_to_market\":%s,\"skills\":",
+                         pushed ? "true" : "false");
     ca_http_resp_append(resp, s ? s : "[]");
     ca_http_resp_append(resp, "}");
     free(s);
@@ -686,6 +783,42 @@ static int h_plugins_market(const ca_http_request *req, ca_http_response *resp, 
         cJSON_AddItemToArray(tmpl, o);
     }
     cJSON_AddItemToObject(root, "templates", tmpl);
+    /* GitHub 热门应用（作为标准化插件来源的知名开源项目） */
+    cJSON *gh = cJSON_CreateArray();
+    static const struct { const char *name, *desc, *repo, *kind; } GH_PLUGINS[] = {
+        { "shellcheck", "shell 脚本静态检查（生成/发布前自动审计）", "https://github.com/koalaman/shellcheck", "linter" },
+        { "hadolint", "Dockerfile linter", "https://github.com/hadolint/hadolint", "linter" },
+        { "semgrep", "轻量静态分析/安全扫描", "https://github.com/semgrep/semgrep", "security" },
+        { "trufflehog", "密钥/敏感信息泄漏扫描", "https://github.com/trufflesecurity/trufflehog", "security" },
+        { "tokei", "代码行数统计", "https://github.com/XAMPPRocky/tokei", "utility" },
+        { "scc", "更快地统计代码量", "https://github.com/boyter/scc", "utility" },
+        { "gitleaks", "Git 仓库密钥泄漏检测", "https://github.com/gitleaks/gitleaks", "security" },
+        { "zstd", "Zstandard 压缩工具", "https://github.com/facebook/zstd", "utility" },
+    };
+    for (size_t i = 0; i < sizeof(GH_PLUGINS) / sizeof(GH_PLUGINS[0]); i++) {
+        cJSON *o = cJSON_CreateObject();
+        cJSON_AddStringToObject(o, "name", GH_PLUGINS[i].name);
+        cJSON_AddStringToObject(o, "description", GH_PLUGINS[i].desc);
+        cJSON_AddStringToObject(o, "repo", GH_PLUGINS[i].repo);
+        cJSON_AddStringToObject(o, "kind", GH_PLUGINS[i].kind);
+        cJSON_AddItemToArray(gh, o);
+    }
+    cJSON_AddItemToObject(root, "github", gh);
+
+    /* networked marketplace: merge remote templates + github apps when reachable */
+    int market_online = 0;
+    if (ctx->market_url && *ctx->market_url) {
+        cJSON *remote = market_fetch_root(ctx, "/v1/plugins/market");
+        if (remote) {
+            market_online = market_merge_field(tmpl, remote, "templates");
+            market_merge_field(gh, remote, "github");
+            cJSON_Delete(remote);
+        }
+    }
+    cJSON_AddBoolToObject(root, "market_online", market_online);
+    if (ctx->market_url && *ctx->market_url)
+        cJSON_AddStringToObject(root, "market_url", ctx->market_url);
+
     char *s = cJSON_PrintUnformatted(root);
     ca_http_resp_json(resp, s ? s : "{}");
     free(s);
@@ -718,10 +851,10 @@ static int h_plugins_publish(const ca_http_request *req, ca_http_response *resp,
 
     char sig[17]; fnv1a_hex(body, sig);
     ca_plugin_meta m; memset(&m, 0, sizeof(m));
-    m.name = name;
+    m.name = (char *)name;
     m.version = "1.0.0";
     m.signature = sig;
-    m.description = json_str(root, "description") ? json_str(root, "description") : "";
+    m.description = (char *)(json_str(root, "description") ? json_str(root, "description") : "");
     m.enabled = 1;
     m.built_ms = (int64_t)time(NULL) * 1000LL;
     cJSON *caps = cJSON_GetObjectItemCaseSensitive(root, "capabilities");
@@ -746,9 +879,19 @@ static int h_plugins_publish(const ca_http_request *req, ca_http_response *resp,
         ca_plugin_registry_persist(ctx->registry, ctx->state_root);
         ca_skill_registry_persist(ctx->skills, ctx->state_root);
     }
+    /* best-effort push to a networked marketplace */
+    int pushed = 0;
+    if (ctx->market_url && *ctx->market_url && root) {
+        char *payload = cJSON_PrintUnformatted(root);
+        if (payload) {
+            pushed = ca_market_publish(ctx->market_url, "/v1/plugins/publish", payload, 4000) == 0;
+            free(payload);
+        }
+    }
     cJSON *o = cJSON_CreateObject();
     cJSON_AddBoolToObject(o, "ok", 1);
     cJSON_AddStringToObject(o, "name", name);
+    cJSON_AddBoolToObject(o, "pushed_to_market", pushed);
     char *s = cJSON_PrintUnformatted(o);
     ca_http_resp_json(resp, s ? s : "{\"ok\":true}");
     free(s);
@@ -833,6 +976,208 @@ static int h_cluster(const ca_http_request *req, ca_http_response *resp, void *u
 }
 
 /* ================= catalogs (MCP plaza + free models) ================= */
+
+/* GET /v1/market/status — report networked marketplace configuration + reachability. */
+static int h_market_status(const ca_http_request *req, ca_http_response *resp, void *ud) {
+    cagent_ctx *ctx = (cagent_ctx *)ud;
+    if (!authz_ok(ctx, req, resp)) return 0;
+    int configured = (ctx->market_url && *ctx->market_url) ? 1 : 0;
+    int online = 0;
+    if (configured) {
+        char *body = ca_market_fetch(ctx->market_url, "/v1/market/ping", 3000);
+        online = body ? 1 : 0;
+        free(body);
+    }
+    ca_http_resp_appendf(resp,
+        "{\"configured\":%s,\"url\":\"%s\",\"online\":%s}",
+        configured ? "true" : "false",
+        ctx->market_url ? ctx->market_url : "",
+        online ? "true" : "false");
+    return 0;
+}
+
+/* ================= local model runtimes (free, no key) ================= */
+
+/* Probe an HTTP endpoint; returns 1 when a 2xx response is received.
+ * Deliberately uses the raw socket layer (nonblocking connect + select) rather
+ * than the WinHTTP client: the bundled HTTP server is single-threaded, so a
+ * probe must fail in a small, deterministic budget. WinHTTP's connect can
+ * silently retry and stretch well past its nominal timeout, and on some
+ * Windows installs the well-known Ollama/llama.cpp ports are dropped (not
+ * refused), so a hard socket deadline is what actually bounds the freeze. */
+static int local_probe(const char *base_url, const char *path) {
+    char host[64];
+    int port = 80;
+    if (sscanf(base_url, "http://%63[^:]:%d", host, &port) != 2)
+        return 0;
+    ca_socket *s = ca_sock_connect(host, (uint16_t)port, 300);
+    if (!s)
+        return 0;
+    char req[320];
+    snprintf(req, sizeof req,
+             "GET %s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n",
+             path, host);
+    int ok = 0;
+    if (ca_sock_send(s, req, (int)strlen(req)) > 0 &&
+        ca_sock_wait_readable(s, 300) > 0) {
+        char buf[256];
+        int n = ca_sock_recv(s, buf, (int)sizeof buf - 1);
+        if (n > 0) {
+            buf[n] = '\0';
+            if (strncmp(buf, "HTTP/", 5) == 0 && strstr(buf, " 200 "))
+                ok = 1;
+        }
+    }
+    ca_sock_close(s);
+    return ok;
+}
+
+/* Is `name` resolvable on PATH (via the platform shell)? */
+static int tool_exists(const char *name) {
+    char cmd[300];
+#if defined(_WIN32)
+    snprintf(cmd, sizeof cmd, "where %s >nul 2>nul", name);
+#else
+    snprintf(cmd, sizeof cmd, "command -v %s >/dev/null 2>&1", name);
+#endif
+    ca_proc_result *r = ca_proc_run(cmd, 4000);
+    int found = r && r->exit_code == 0;
+    ca_proc_result_free(r);
+    return found;
+}
+
+/* Build the `ollama serve` command, preferring PATH, else common install dirs. */
+static int ollama_start_cmd(char *out, size_t cap) {
+    if (tool_exists("ollama")) { snprintf(out, cap, "ollama serve"); return 1; }
+#if defined(_WIN32)
+    {
+        char p[600];
+        const char *la = getenv("LOCALAPPDATA");
+        if (la) {
+            snprintf(p, sizeof p, "%s\\Programs\\Ollama\\ollama.exe", la);
+            if (ca_fs_exists(p)) { snprintf(out, cap, "\"%s\" serve", p); return 1; }
+        }
+        const char *pf = getenv("ProgramFiles");
+        if (pf) {
+            snprintf(p, sizeof p, "%s\\Ollama\\ollama.exe", pf);
+            if (ca_fs_exists(p)) { snprintf(out, cap, "\"%s\" serve", p); return 1; }
+        }
+    }
+#endif
+    return 0;
+}
+
+/* Base URL of the llama.cpp server to probe. The default (8081) deliberately
+ * avoids port 8080 where this HTTP server itself listens: the bundled server is
+ * single-threaded, so probing our own port would wait on a request we can never
+ * serve — a self-deadlock that freezes every other API call. */
+static void llamacpp_probe_url(const ca_config *cfg, char *out, size_t cap) {
+    long port = (long)ca_config_get_int(cfg, "local.llamacpp_port", 8081);
+    snprintf(out, cap, "http://127.0.0.1:%ld", port);
+}
+
+/* GET /v1/local/status — report local free runtimes (Ollama / llama.cpp).
+ * Probing costs real I/O (and on some Windows boxes connecting to the
+ * Ollama/llama.cpp ports is silently dropped, costing the full timeout).
+ * Because the bundled HTTP server is single-threaded, we cache the result for
+ * a few seconds so page loads / UI polling don't re-pay it every request. */
+static char *g_local_status_cache = NULL;
+static int64_t g_local_status_at = 0;
+
+static int h_local_status(const ca_http_request *req, ca_http_response *resp, void *ud) {
+    cagent_ctx *ctx = (cagent_ctx *)ud;
+    if (!authz_ok(ctx, req, resp)) return 0;
+    int64_t now = ca_time_now_ms();
+    if (g_local_status_cache && now - g_local_status_at < 3000) {
+        ca_http_resp_append(resp, g_local_status_cache);
+        return 0;
+    }
+    int o_running = local_probe("http://127.0.0.1:11434", "/api/version");
+    char lp_url[128];
+    llamacpp_probe_url(ctx->config, lp_url, sizeof lp_url);
+    int l_running = local_probe(lp_url, "/v1/models");
+    char cmdbuf[512];
+    int o_installed = ollama_start_cmd(cmdbuf, sizeof cmdbuf);
+    ca_http_resp_appendf(resp,
+        "{\"ollama\":{\"running\":%s,\"installed\":%s},"
+        "\"llamacpp\":{\"running\":%s}}",
+        o_running ? "true" : "false", o_installed ? "true" : "false",
+        l_running ? "true" : "false");
+    if (resp->body.buf && resp->body.len > 0) {
+        free(g_local_status_cache);
+        g_local_status_cache = (char *)malloc(resp->body.len + 1);
+        if (g_local_status_cache) {
+            memcpy(g_local_status_cache, resp->body.buf, resp->body.len);
+            g_local_status_cache[resp->body.len] = '\0';
+            g_local_status_at = now;
+        }
+    }
+    return 0;
+}
+
+/* POST /v1/local/start — spawn a local runtime (non-blocking: returns right
+ * after launch; the UI polls /v1/local/status for readiness). */
+static int h_local_start(const ca_http_request *req, ca_http_response *resp, void *ud) {
+    cagent_ctx *ctx = (cagent_ctx *)ud;
+    if (!authz_ok(ctx, req, resp)) return 0;
+    char *b = body_str(req);
+    cJSON *root = b ? cJSON_Parse(b) : NULL;
+    free(b);
+    const char *engine = root ? json_str(root, "engine") : NULL;
+    if (!engine || !*engine) engine = "ollama";
+    if (root) cJSON_Delete(root);
+
+    if (strcmp(engine, "ollama") == 0) {
+        if (local_probe("http://127.0.0.1:11434", "/api/version")) {
+            ca_http_resp_json(resp, "{\"ok\":true,\"engine\":\"ollama\",\"already_running\":true}");
+            return 0;
+        }
+        char cmd[512];
+        if (!ollama_start_cmd(cmd, sizeof cmd)) {
+            ca_http_resp_json(resp,
+                "{\"ok\":false,\"engine\":\"ollama\",\"error\":\"未找到 ollama，请先到 ollama.com 安装并确保它在 PATH\"}");
+            return 0;
+        }
+        int rc = ca_proc_spawn_detached(cmd);
+        if (rc != 0) {
+            ca_http_resp_json(resp,
+                "{\"ok\":false,\"engine\":\"ollama\",\"error\":\"启动失败（无法创建进程）\"}");
+            return 0;
+        }
+        ca_http_resp_json(resp,
+            "{\"ok\":true,\"engine\":\"ollama\",\"spawned\":true,"
+            "\"note\":\"已启动 ollama serve，首次运行需拉取模型，请稍候刷新状态\"}");
+        return 0;
+    }
+    if (strcmp(engine, "llamacpp") == 0 || strcmp(engine, "llama") == 0) {
+        char lp_url[128];
+        llamacpp_probe_url(ctx->config, lp_url, sizeof lp_url);
+        if (local_probe(lp_url, "/v1/models")) {
+            ca_http_resp_json(resp, "{\"ok\":true,\"engine\":\"llamacpp\",\"already_running\":true}");
+            return 0;
+        }
+        const char *cmd = ca_config_get_str(ctx->config, "local.llamacpp_cmd", NULL);
+        if (!cmd || !*cmd) {
+            ca_http_resp_json(resp,
+                "{\"ok\":false,\"engine\":\"llamacpp\","
+                "\"error\":\"未配置启动命令，请在 config 中设置 local.llamacpp_cmd（如 server 可执行文件路径）\"}");
+            return 0;
+        }
+        int rc = ca_proc_spawn_detached(cmd);
+        if (rc != 0) {
+            ca_http_resp_json(resp,
+                "{\"ok\":false,\"engine\":\"llamacpp\",\"error\":\"启动失败（无法创建进程）\"}");
+            return 0;
+        }
+        ca_http_resp_json(resp,
+            "{\"ok\":true,\"engine\":\"llamacpp\",\"spawned\":true,"
+            "\"note\":\"已启动，请稍候刷新状态\"}");
+        return 0;
+    }
+    ca_http_resp_json(resp,
+        "{\"ok\":false,\"engine\":\"unknown\",\"error\":\"unknown engine (ollama|llamacpp)\"}");
+    return 0;
+}
 
 static int h_catalog_mcp(const ca_http_request *req, ca_http_response *resp, void *ud) {
     (void)req;
@@ -1167,6 +1512,9 @@ int cagent_api_attach(cagent_ctx *ctx) {
     ca_http_server_route(ctx->http, "GET", "/v1/snapshots", h_snapshots, ctx);
     ca_http_server_route(ctx->http, "POST", "/v1/snapshots/rollback", h_snapshot_rollback, ctx);
     ca_http_server_route(ctx->http, "GET", "/v1/trace", h_trace, ctx);
+    ca_http_server_route(ctx->http, "GET", "/v1/market/status", h_market_status, ctx);
+    ca_http_server_route(ctx->http, "GET", "/v1/local/status", h_local_status, ctx);
+    ca_http_server_route(ctx->http, "POST", "/v1/local/start", h_local_start, ctx);
     ca_http_server_route(ctx->http, "GET", "/v1/routes", h_routes, ctx);
     ca_http_server_route(ctx->http, "POST", "/v1/routes", h_route_add, ctx);
     ca_http_server_route(ctx->http, "DELETE", "/v1/routes/", h_route_delete, ctx);

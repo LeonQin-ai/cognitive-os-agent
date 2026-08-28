@@ -12,7 +12,7 @@ extern "C" {
 char *ca_catalog_models_json(void);
 
 /* JSON array of MCP server plaza entries:
- *   [{id,name,url,description,category,needs_local,key_hint}] */
+ *   [{id,name,url,description,category,needs_local,key_hint,repo}] */
 char *ca_catalog_mcp_json(void);
 
 #ifdef __cplusplus

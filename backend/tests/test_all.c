@@ -51,6 +51,12 @@
 #include "cagent/plugin_runtime/wasm_runner.h"
 #include "cagent/cagent.h"
 #include "cagent/os/os_time.h"
+#include "cagent/os/os_socket.h"
+#include "cagent/os/os_thread.h"
+#include "cagent/api/http_server.h"
+#include "cagent/infra/catalog.h"
+#include "cagent/infra/audit.h"
+#include "cagent/llm/sse.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -1349,6 +1355,20 @@ static void test_plugin_generate(void) {
         }
         free(res);
     }
+    /* edge cases: missing/empty description are rejected up front */
+    char *bad1 = ca_plugin_generate(&ctx, "");
+    CHECK(bad1 != NULL && strstr(bad1, "ok\":false") != NULL && strstr(bad1, "missing description") != NULL);
+    free(bad1);
+    char *bad2 = ca_plugin_generate(&ctx, NULL);
+    CHECK(bad2 != NULL && strstr(bad2, "ok\":false") != NULL);
+    free(bad2);
+
+    /* sandbox forbidden list guards the security gate (generator rejects these) */
+    CHECK(ca_sandbox_forbidden("rm -rf /") == 1);
+    CHECK(ca_sandbox_forbidden("rm -fr /tmp/x") == 1);
+    CHECK(ca_sandbox_forbidden("mkfs.ext4 /dev/sda") == 1);
+    CHECK(ca_sandbox_forbidden("echo hi") == 0);
+
     /* registered in the plugin registry */
     CHECK(ca_plugin_registry_count(ctx.registry) >= 1);
     /* and runnable as a skill */
@@ -1417,6 +1437,551 @@ static void test_task(void) {
     ca_task_free(t);
 }
 
+/* ---------- infra: model/MCP catalog JSON ---------- */
+static void test_catalog(void) {
+    section("catalog");
+    char *m = ca_catalog_models_json();
+    CHECK(m != NULL);
+    if (m) {
+        CHECK(strstr(m, "\"ollama\"") != NULL && strstr(m, "\"groq\"") != NULL &&
+              strstr(m, "\"deepseek\"") != NULL && strstr(m, "\"gemini\"") != NULL);
+        /* free-key signup links + local-runtime flag (#60) */
+        CHECK(strstr(m, "\"signup_url\":\"https://console.groq.com/keys\"") != NULL);
+        CHECK(strstr(m, "\"signup_url\":\"https://platform.deepseek.com/api_keys\"") != NULL);
+        CHECK(strstr(m, "\"ollama\"") != NULL && strstr(m, "\"local\":true") != NULL);
+        CHECK(strstr(m, "\"groq\"") != NULL && strstr(m, "\"local\":false") != NULL);
+        free(m);
+    }
+    char *mc = ca_catalog_mcp_json();
+    CHECK(mc != NULL);
+    if (mc) {
+        CHECK(strstr(mc, "\"mock-echo\"") != NULL && strstr(mc, "\"github\"") != NULL);
+        /* GitHub 热门 MCP 应用条目（含 repo 链接） */
+        CHECK(strstr(mc, "\"fetch\"") != NULL && strstr(mc, "\"memory\"") != NULL);
+        CHECK(strstr(mc, "\"sequential-thinking\"") != NULL && strstr(mc, "\"puppeteer\"") != NULL);
+        CHECK(strstr(mc, "github.com/modelcontextprotocol/servers") != NULL);
+        CHECK(strstr(mc, "\"repo\":\"https://github.com/github/github-mcp-server\"") != NULL);
+        free(mc);
+    }
+}
+
+/* ---------- infra: audit JSONL ---------- */
+static void test_audit(void) {
+    section("audit");
+    const char *path = "state-audit-test.jsonl";   /* flat file: ca_audit_open is fopen(path,"a") */
+    ca_fs_remove(path);   /* remove stale file from a previous run */
+    ca_audit *a = ca_audit_open(path);
+    CHECK(a != NULL);
+    if (!a) return;
+    ca_audit_log(a, "task.create", "task-1", "ok", "{\"prompt\":\"p\"}");
+    ca_audit_log(a, "tool.exec", "file_write", "ok", "a.txt");
+    ca_audit_close(a);
+    /* reopen and verify JSONL lines were written */
+    FILE *f = fopen(path, "r");
+    CHECK(f != NULL);
+    if (f) {
+        char buf[512];
+        int ok1 = fgets(buf, sizeof buf, f) != NULL && strstr(buf, "task.create") && strstr(buf, "task-1");
+        int ok2 = fgets(buf, sizeof buf, f) != NULL && strstr(buf, "tool.exec") && strstr(buf, "file_write");
+        CHECK(ok1 && ok2);
+        fclose(f);
+    }
+    ca_fs_remove(path);
+}
+
+/* ---------- LLM adapters against the bundled HTTP server (no external net) ---------- */
+static void th_serve_http(void *arg) { ca_http_server_serve((ca_http_server *)arg); }
+static void th_serve_ctx(void *arg)  { cagent_serve((cagent_ctx *)arg); }
+
+static int fake_openai_json(const ca_http_request *req, ca_http_response *resp, void *ud) {
+    (void)req; (void)ud;
+    ca_http_resp_json(resp, "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"hello from openai-fake\"}}]}");
+    return 0;
+}
+static int fake_anthropic_json(const ca_http_request *req, ca_http_response *resp, void *ud) {
+    (void)req; (void)ud;
+    ca_http_resp_json(resp, "{\"content\":[{\"type\":\"text\",\"text\":\"hello from anthropic-fake\"}]}");
+    return 0;
+}
+static int fake_openai_sse(const ca_http_request *req, ca_http_response *resp, void *ud) {
+    (void)req; (void)ud;
+    ca_http_resp_json(resp,
+        "data: {\"choices\":[{\"delta\":{\"content\":\"hel\"}}]}\n\n"
+        "data: {\"choices\":[{\"delta\":{\"content\":\"lo\"}}]}\n\n"
+        "data: [DONE]\n\n");
+    return 0;
+}
+static int fake_anthropic_sse(const ca_http_request *req, ca_http_response *resp, void *ud) {
+    (void)req; (void)ud;
+    ca_http_resp_json(resp,
+        "data: {\"type\":\"content_block_delta\",\"delta\":{\"text\":\"hi\"}}\n\n"
+        "data: {\"type\":\"content_block_delta\",\"delta\":{\"text\":\" there\"}}\n\n"
+        "data: [DONE]\n\n");
+    return 0;
+}
+static void stream_accum(const char *delta, void *ud) {
+    ca_strbuf *sb = (ca_strbuf *)ud;
+    ca_strbuf_append(sb, delta);
+}
+
+static void test_llm_adapters_http(void) {
+    section("llm_adapters_http");
+    ca_http_server *json_srv = ca_http_server_new_bind("127.0.0.1", 18212);
+    ca_http_server *sse_srv  = ca_http_server_new_bind("127.0.0.1", 18213);
+    CHECK(json_srv != NULL && sse_srv != NULL);
+    if (!json_srv || !sse_srv) return;
+    ca_http_server_route(json_srv, "POST", "/v1/chat/completions", fake_openai_json, NULL);
+    ca_http_server_route(json_srv, "POST", "/v1/messages", fake_anthropic_json, NULL);
+    ca_http_server_route(sse_srv, "POST", "/v1/chat/completions", fake_openai_sse, NULL);
+    ca_http_server_route(sse_srv, "POST", "/v1/messages", fake_anthropic_sse, NULL);
+    ca_thread *tj = ca_thread_create(th_serve_http, json_srv);
+    ca_thread *ts = ca_thread_create(th_serve_http, sse_srv);
+    ca_time_sleep_ms(300);
+
+    const ca_llm_message msgs[1] = { { "user", "hi" } };
+    ca_llm_request q;
+    memset(&q, 0, sizeof q);
+    q.messages = msgs; q.num_messages = 1; q.max_tokens = 32;
+
+    /* openai chat */
+    ca_llm *oai = ca_llm_create("openai", "http://127.0.0.1:18212", "test-key", "m");
+    CHECK(oai != NULL);
+    if (oai) {
+        ca_llm_response out; memset(&out, 0, sizeof out);
+        CHECK(ca_llm_chat(oai, &q, &out) == 0);
+        CHECK_STR(out.content, "hello from openai-fake");
+        free(out.content); free(out.error);
+        ca_llm_destroy(oai);
+    }
+    /* openai stream */
+    oai = ca_llm_create("openai", "http://127.0.0.1:18213", "test-key", "m");
+    CHECK(oai != NULL);
+    if (oai) {
+        ca_strbuf sb; ca_strbuf_init(&sb);
+        CHECK(ca_llm_stream(oai, &q, stream_accum, &sb) == 0);
+        CHECK_STR(sb.buf, "hello");
+        ca_strbuf_free(&sb);
+        ca_llm_destroy(oai);
+    }
+    /* anthropic chat */
+    ca_llm *ant = ca_llm_create("anthropic", "http://127.0.0.1:18212", "test-key", "m");
+    CHECK(ant != NULL);
+    if (ant) {
+        ca_llm_response out; memset(&out, 0, sizeof out);
+        CHECK(ca_llm_chat(ant, &q, &out) == 0);
+        CHECK_STR(out.content, "hello from anthropic-fake");
+        free(out.content); free(out.error);
+        ca_llm_destroy(ant);
+    }
+    /* anthropic stream */
+    ant = ca_llm_create("anthropic", "http://127.0.0.1:18213", "test-key", "m");
+    CHECK(ant != NULL);
+    if (ant) {
+        ca_strbuf sb; ca_strbuf_init(&sb);
+        CHECK(ca_llm_stream(ant, &q, stream_accum, &sb) == 0);
+        CHECK_STR(sb.buf, "hi there");
+        ca_strbuf_free(&sb);
+        ca_llm_destroy(ant);
+    }
+
+    ca_http_server_stop(json_srv); ca_http_server_stop(sse_srv);
+    ca_thread_join(tj); ca_thread_join(ts);
+    ca_http_server_free(json_srv); ca_http_server_free(sse_srv);
+}
+
+/* ---------- HTTP API over the live server (exercises http_server + api_rest + os_socket) ---------- */
+/* Minimal HTTP/1.1 client over the raw socket primitives (avoids pulling in the
+ * client-side http.h, whose ca_http_response clashes with http_server.h's). */
+typedef struct { int status; char body[65536]; size_t body_len; } raw_http;
+
+static int raw_http_request(uint16_t port, const char *method, const char *path,
+                            const char *body, raw_http *out) {
+    ca_socket *c = ca_sock_connect("127.0.0.1", port, 3000);
+    if (!c) return -1;
+    char req[8192];
+    int n = body
+        ? snprintf(req, sizeof req,
+                   "%s %s HTTP/1.1\r\nHost: 127.0.0.1:%u\r\nContent-Type: application/json\r\n"
+                   "Content-Length: %zu\r\nConnection: close\r\n\r\n%s",
+                   method, path, port, strlen(body), body)
+        : snprintf(req, sizeof req,
+                   "%s %s HTTP/1.1\r\nHost: 127.0.0.1:%u\r\nConnection: close\r\n\r\n",
+                   method, path, port);
+    int sent = 0;
+    while (sent < n) {
+        int w = ca_sock_send(c, req + sent, (size_t)(n - sent));
+        if (w <= 0) { ca_sock_close(c); return -1; }
+        sent += w;
+    }
+    char hdr[2048]; size_t hn = 0;
+    while (hn < sizeof hdr - 1) {
+        int rr = ca_sock_recv(c, hdr + hn, 1);
+        if (rr <= 0) break;
+        hn++; hdr[hn] = '\0';
+        if (hn >= 4 && memcmp(hdr + hn - 4, "\r\n\r\n", 4) == 0) break;
+    }
+    int status = 0;
+    sscanf(hdr, "HTTP/1.1 %d", &status);
+    size_t bl = 0;
+    while (bl < sizeof out->body - 1) {
+        int rr = ca_sock_recv(c, out->body + bl, sizeof out->body - 1 - bl);
+        if (rr <= 0) break;
+        bl += (size_t)rr;
+    }
+    out->body[bl] = '\0';
+    out->body_len = bl;
+    out->status = status;
+    ca_sock_close(c);
+    return 0;
+}
+
+static void test_http_api(void) {
+    section("http_api");
+    const char *root = "state-http-test";
+    ca_fs_remove(root);
+    cagent_config cfg;
+    memset(&cfg, 0, sizeof cfg);
+    cfg.state_root = root;
+    cfg.workspace = ".";
+    cfg.provider = "mock";
+    cfg.http_port = 18211;
+    cfg.workers = 2;
+    cagent_ctx ctx;
+    if (cagent_init(&ctx, &cfg) != 0) { CHECK(0); return; }
+    ca_thread *th = ca_thread_create(th_serve_ctx, &ctx);
+    ca_time_sleep_ms(400);
+
+    raw_http r;
+    CHECK(raw_http_request(18211, "GET", "/v1/tools", NULL, &r) == 0 && r.status == 200);
+    CHECK(strstr(r.body, "file_write") != NULL);
+
+    CHECK(raw_http_request(18211, "GET", "/v1/catalog/models", NULL, &r) == 0 && r.status == 200);
+    CHECK(strstr(r.body, "groq") != NULL);
+
+    CHECK(raw_http_request(18211, "GET", "/v1/catalog/mcp", NULL, &r) == 0 && r.status == 200);
+    CHECK(strstr(r.body, "github") != NULL);
+    CHECK(strstr(r.body, "github.com/modelcontextprotocol/servers") != NULL);
+
+    CHECK(raw_http_request(18211, "GET", "/v1/skills/market", NULL, &r) == 0 && r.status == 200);
+    CHECK(strstr(r.body, "templates") != NULL);
+    /* GitHub 热门应用 section */
+    CHECK(strstr(r.body, "\"github\"") != NULL);
+    CHECK(strstr(r.body, "https://github.com/jqlang/jq") != NULL);
+    CHECK(strstr(r.body, "https://github.com/yt-dlp/yt-dlp") != NULL);
+
+    CHECK(raw_http_request(18211, "GET", "/v1/plugins/market", NULL, &r) == 0 && r.status == 200);
+    CHECK(strstr(r.body, "templates") != NULL);
+    /* GitHub 热门插件 section */
+    CHECK(strstr(r.body, "\"github\"") != NULL);
+    CHECK(strstr(r.body, "https://github.com/koalaman/shellcheck") != NULL);
+    CHECK(strstr(r.body, "https://github.com/gitleaks/gitleaks") != NULL);
+
+    CHECK(raw_http_request(18211, "GET", "/v1/config/llm", NULL, &r) == 0 && r.status == 200);
+    CHECK(strstr(r.body, "mock") != NULL);
+
+    CHECK(raw_http_request(18211, "GET", "/v1/im/channels", NULL, &r) == 0 && r.status == 200);
+    CHECK(raw_http_request(18211, "GET", "/v1/memory", NULL, &r) == 0 && r.status == 200);
+    CHECK(raw_http_request(18211, "GET", "/v1/blackboard", NULL, &r) == 0 && r.status == 200);
+    CHECK(raw_http_request(18211, "GET", "/v1/agents", NULL, &r) == 0 && r.status == 200);
+    CHECK(raw_http_request(18211, "GET", "/v1/snapshots", NULL, &r) == 0 && r.status == 200);
+    CHECK(raw_http_request(18211, "GET", "/metrics", NULL, &r) == 0 && r.status == 200);
+    CHECK(raw_http_request(18211, "GET", "/v1/routes", NULL, &r) == 0 && r.status == 200);
+    CHECK(raw_http_request(18211, "GET", "/v1/usage", NULL, &r) == 0 && r.status == 200);
+
+    /* POST a task -> runs the full reasoning pipeline via the mock provider */
+    CHECK(raw_http_request(18211, "POST", "/v1/tasks",
+                           "{\"prompt\":\"创建 a.txt 写入内容为 hello\"}", &r) == 0 && r.status == 200);
+    CHECK(strstr(r.body, "\"id\"") != NULL);
+    {
+        cJSON *j = cJSON_Parse(r.body);
+        int64_t id = -1;
+        if (j) {
+            cJSON *idj = cJSON_GetObjectItemCaseSensitive(j, "id");
+            if (idj && cJSON_IsNumber(idj)) id = (int64_t)idj->valuedouble;
+            cJSON_Delete(j);
+        }
+        if (id >= 0) {
+            int finished = 0;
+            for (int i = 0; i < 60 && !finished; i++) {
+                char path[128];
+                snprintf(path, sizeof path, "/v1/tasks/%lld", (long long)id);
+                CHECK(raw_http_request(18211, "GET", path, NULL, &r) == 0 && r.status == 200);
+                cJSON *tj = cJSON_Parse(r.body);
+                const char *st = tj ? cJSON_GetObjectItemCaseSensitive(tj, "status")->valuestring : "?";
+                if (st && (strcmp(st, "DONE") == 0 || strcmp(st, "FAILED") == 0)) {
+                    CHECK_STR(st, "DONE");
+                    const char *out = tj ? cJSON_GetObjectItemCaseSensitive(tj, "output")->valuestring : NULL;
+                    CHECK(out != NULL && out[0]);
+                    finished = 1;
+                }
+                if (tj) cJSON_Delete(tj);
+                if (!finished) ca_time_sleep_ms(100);
+            }
+            /* mock pipeline should have created a.txt with the expected content */
+            FILE *af = fopen("a.txt", "r");
+            CHECK(af != NULL);
+            if (af) {
+                char b[64]; size_t bn = fread(b, 1, sizeof b - 1, af); b[bn] = '\0';
+                CHECK(strstr(b, "hello") != NULL);
+                fclose(af);
+            }
+        }
+    }
+
+    /* error paths */
+    CHECK(raw_http_request(18211, "POST", "/v1/tasks", "{}", &r) == 0 && r.status == 400);
+    CHECK(raw_http_request(18211, "GET", "/v1/nope", NULL, &r) == 0 && r.status == 404);
+
+    cagent_stop(&ctx);
+    ca_thread_join(th);
+    cagent_shutdown(&ctx);
+    ca_fs_remove("a.txt");
+    ca_fs_remove(root);
+}
+
+/* ---------- WebSocket server round-trip (ws_server hub) ---------- */
+static char g_ws_recv[256];
+static void ws_on_msg(const char *text, void *ud) {
+    (void)ud;
+    snprintf(g_ws_recv, sizeof g_ws_recv, "%s", text);
+}
+
+static void test_ws_roundtrip(void) {
+    section("ws_roundtrip");
+    ca_http_server *s = ca_http_server_new_bind("127.0.0.1", 18214);
+    CHECK(s != NULL);
+    if (!s) return;
+    ca_http_server_ws_route(s, "/ws", ws_on_msg, NULL);
+    ca_thread *ts = ca_thread_create(th_serve_http, s);
+    ca_time_sleep_ms(300);
+
+    g_ws_recv[0] = '\0';
+    ca_socket *c = ca_sock_connect("127.0.0.1", 18214, 3000);
+    CHECK(c != NULL);
+    if (c) {
+        /* handshake */
+        char hs[512];
+        int n = snprintf(hs, sizeof hs,
+            "GET /ws HTTP/1.1\r\nHost: 127.0.0.1:18214\r\n"
+            "Upgrade: websocket\r\nConnection: Upgrade\r\n"
+            "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+            "Sec-WebSocket-Version: 13\r\n\r\n");
+        CHECK(ca_sock_send(c, hs, (size_t)n) == n);
+        char resp[1024]; size_t rn = 0; int safe = 0;
+        while (rn < sizeof resp - 1 && safe++ < 8) {
+            if (ca_sock_wait_readable(c, 1000) <= 0) break;
+            int rr = ca_sock_recv(c, resp + rn, sizeof resp - 1 - rn);
+            if (rr <= 0) break;
+            rn += (size_t)rr; resp[rn] = '\0';
+            if (strstr(resp, "\r\n\r\n")) break;
+        }
+        CHECK(rn > 0);
+        if (rn > 0) {
+            CHECK(strstr(resp, "101") != NULL);
+            CHECK(strstr(resp, "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=") != NULL);
+        }
+        /* send a masked text frame */
+        size_t flen = 0;
+        char *f = ca_ws_build_frame(CA_WS_OP_TEXT, (const unsigned char *)"hello", 5, 1, &flen);
+        CHECK(f != NULL);
+        if (f) {
+            CHECK(ca_sock_send(c, f, flen) == (int)flen);
+            free(f);
+        }
+        for (int i = 0; i < 20 && g_ws_recv[0] == '\0'; i++) ca_time_sleep_ms(100);
+        CHECK_STR(g_ws_recv, "hello");
+
+        /* server broadcast -> client receives a text frame */
+        ca_http_server_ws_broadcast(s, "{\"x\":1}");
+        unsigned char buf[512]; int got = 0;
+        for (int i = 0; i < 30; i++) {
+            if (ca_sock_wait_readable(c, 200) > 0) {
+                int nn = ca_sock_recv(c, buf, sizeof buf);
+                if (nn > 0) { got = nn; break; }
+            }
+        }
+        CHECK(got > 0);
+        if (got > 0) {
+            unsigned char pay[256]; size_t plen = 0; int op = 0, fin = 0;
+            CHECK(ca_ws_parse_frame(buf, (size_t)got, pay, &plen, &op, &fin) == 0);
+            CHECK(fin == 1 && op == CA_WS_OP_TEXT && plen == 7);
+            CHECK(plen == 7 && memcmp(pay, "{\"x\":1}", 7) == 0);
+        }
+        ca_sock_close(c);
+    }
+    ca_http_server_stop(s);
+    ca_thread_join(ts);
+    ca_http_server_free(s);
+}
+
+/* ---------- networked marketplace (merge remote catalog + best-effort publish) ---------- */
+static int g_market_push = 0;
+static int fake_market_ping(const ca_http_request *req, ca_http_response *resp, void *ud) {
+    (void)req; (void)ud;
+    ca_http_resp_json(resp, "{\"ok\":true}");
+    return 0;
+}
+static int fake_market_skills(const ca_http_request *req, ca_http_response *resp, void *ud) {
+    (void)req; (void)ud;
+    ca_http_resp_json(resp,
+        "{\"templates\":[{\"name\":\"remote-skill-a\",\"description\":\"来自远端市场\","
+        "\"kind\":\"shell\",\"body\":\"echo remote\"}],"
+        "\"github\":[{\"name\":\"remote-gh-tool\",\"repo\":\"https://github.com/example/remote-tool\"}]}");
+    return 0;
+}
+static int fake_market_plugins(const ca_http_request *req, ca_http_response *resp, void *ud) {
+    (void)req; (void)ud;
+    ca_http_resp_json(resp,
+        "{\"templates\":[{\"name\":\"remote-plugin-a\",\"description\":\"来自远端插件市场\"}],\"github\":[]}");
+    return 0;
+}
+static int fake_market_skills_publish(const ca_http_request *req, ca_http_response *resp, void *ud) {
+    (void)req; (void)ud;
+    g_market_push++;
+    ca_http_resp_json(resp, "{\"ok\":true}");
+    return 0;
+}
+static int fake_market_plugins_publish(const ca_http_request *req, ca_http_response *resp, void *ud) {
+    (void)req; (void)ud;
+    g_market_push++;
+    ca_http_resp_json(resp, "{\"ok\":true}");
+    return 0;
+}
+
+static void test_market_remote(void) {
+    section("market_remote");
+    const char *root = "state-market-test";
+    {
+        char p[600];
+        snprintf(p, sizeof p, "%s/skills.json", root); ca_fs_remove(p);
+        snprintf(p, sizeof p, "%s/plugins.json", root); ca_fs_remove(p);
+        snprintf(p, sizeof p, "%s/cagent.json", root); ca_fs_remove(p);
+    }
+    ca_fs_remove(root);
+    ca_http_server *mkt = ca_http_server_new_bind("127.0.0.1", 18216);
+    CHECK(mkt != NULL);
+    if (!mkt) return;
+    ca_http_server_route(mkt, "GET", "/v1/market/ping", fake_market_ping, NULL);
+    ca_http_server_route(mkt, "GET", "/v1/skills/market", fake_market_skills, NULL);
+    ca_http_server_route(mkt, "GET", "/v1/plugins/market", fake_market_plugins, NULL);
+    ca_http_server_route(mkt, "POST", "/v1/skills/publish", fake_market_skills_publish, NULL);
+    ca_http_server_route(mkt, "POST", "/v1/plugins/publish", fake_market_plugins_publish, NULL);
+    ca_thread *tm = ca_thread_create(th_serve_http, mkt);
+    ca_time_sleep_ms(300);
+
+    cagent_config cfg;
+    memset(&cfg, 0, sizeof cfg);
+    cfg.state_root = root;
+    cfg.workspace = ".";
+    cfg.provider = "mock";
+    cfg.market_url = "http://127.0.0.1:18216";
+    cfg.http_port = 18217;
+    cfg.workers = 2;
+    cagent_ctx ctx;
+    if (cagent_init(&ctx, &cfg) != 0) {
+        CHECK(0);
+        ca_http_server_stop(mkt);
+        ca_thread_join(tm);
+        ca_http_server_free(mkt);
+        return;
+    }
+    ca_thread *th = ca_thread_create(th_serve_ctx, &ctx);
+    ca_time_sleep_ms(400);
+
+    raw_http r;
+    g_market_push = 0;
+
+    /* market/status reports configuration + reachability */
+    CHECK(raw_http_request(18217, "GET", "/v1/market/status", NULL, &r) == 0 && r.status == 200);
+    CHECK(strstr(r.body, "\"configured\":true") != NULL);
+    CHECK(strstr(r.body, "\"online\":true") != NULL);
+    CHECK(strstr(r.body, "18216") != NULL);
+
+    /* skills market merges the remote catalog, tagged source=remote */
+    CHECK(raw_http_request(18217, "GET", "/v1/skills/market", NULL, &r) == 0 && r.status == 200);
+    CHECK(strstr(r.body, "\"market_online\":true") != NULL);
+    CHECK(strstr(r.body, "remote-skill-a") != NULL);
+    CHECK(strstr(r.body, "\"source\":\"remote\"") != NULL);
+    CHECK(strstr(r.body, "remote-gh-tool") != NULL);
+
+    /* plugins market merges the remote catalog too */
+    CHECK(raw_http_request(18217, "GET", "/v1/plugins/market", NULL, &r) == 0 && r.status == 200);
+    CHECK(strstr(r.body, "\"market_online\":true") != NULL);
+    CHECK(strstr(r.body, "remote-plugin-a") != NULL);
+    CHECK(strstr(r.body, "\"source\":\"remote\"") != NULL);
+
+    /* publish pushes to the networked market (best-effort) */
+    CHECK(raw_http_request(18217, "POST", "/v1/skills/publish",
+        "{\"name\":\"pubskill-x\",\"kind\":\"shell\",\"description\":\"t\",\"body\":\"echo hi\"}",
+        &r) == 0 && r.status == 200);
+    CHECK(strstr(r.body, "\"pushed_to_market\":true") != NULL);
+    CHECK(g_market_push == 1);
+
+    CHECK(raw_http_request(18217, "POST", "/v1/plugins/publish",
+        "{\"name\":\"pubplugin-x\",\"kind\":\"shell\",\"description\":\"t\",\"body\":\"echo hi\"}",
+        &r) == 0 && r.status == 200);
+    CHECK(strstr(r.body, "\"pushed_to_market\":true") != NULL);
+    CHECK(g_market_push == 2);
+
+    cagent_stop(&ctx);
+    ca_thread_join(th);
+    cagent_shutdown(&ctx);
+    ca_http_server_stop(mkt);
+    ca_thread_join(tm);
+    ca_http_server_free(mkt);
+    /* ca_fs_remove only unlinks files on Windows; remove the persisted state
+     * files explicitly so a second run doesn't reload stale registry entries. */
+    {
+        char p[600];
+        snprintf(p, sizeof p, "%s/skills.json", root); ca_fs_remove(p);
+        snprintf(p, sizeof p, "%s/plugins.json", root); ca_fs_remove(p);
+        snprintf(p, sizeof p, "%s/cagent.json", root); ca_fs_remove(p);
+    }
+    ca_fs_remove(root);
+}
+
+/* ---------- local model runtimes (free, no key): status + start ---------- */
+static void test_local_model(void) {
+    section("local_model");
+    const char *root = "state-local-test";
+    ca_fs_remove(root);
+    cagent_config cfg;
+    memset(&cfg, 0, sizeof cfg);
+    cfg.state_root = root;
+    cfg.workspace = ".";
+    cfg.provider = "mock";
+    cfg.http_port = 18218;
+    cfg.workers = 2;
+    cagent_ctx ctx;
+    if (cagent_init(&ctx, &cfg) != 0) { CHECK(0); return; }
+    ca_thread *th = ca_thread_create(th_serve_ctx, &ctx);
+    ca_time_sleep_ms(400);
+
+    raw_http r;
+    /* status: probes both engines, no side effects */
+    CHECK(raw_http_request(18218, "GET", "/v1/local/status", NULL, &r) == 0 && r.status == 200);
+    CHECK(strstr(r.body, "\"ollama\"") != NULL);
+    CHECK(strstr(r.body, "\"llamacpp\"") != NULL);
+    CHECK(strstr(r.body, "\"running\"") != NULL);
+
+    /* unknown engine -> structured error, no spawn */
+    CHECK(raw_http_request(18218, "POST", "/v1/local/start",
+        "{\"engine\":\"nope\"}", &r) == 0 && r.status == 200);
+    CHECK(strstr(r.body, "\"ok\":false") != NULL);
+    CHECK(strstr(r.body, "unknown") != NULL);
+
+    /* llamacpp without a configured start command -> deterministic error */
+    CHECK(raw_http_request(18218, "POST", "/v1/local/start",
+        "{\"engine\":\"llamacpp\"}", &r) == 0 && r.status == 200);
+    CHECK(strstr(r.body, "\"ok\":false") != NULL);
+    CHECK(strstr(r.body, "llamacpp_cmd") != NULL);
+
+    cagent_stop(&ctx);
+    ca_thread_join(th);
+    cagent_shutdown(&ctx);
+    ca_fs_remove(root);
+}
+
 int main(void) {
     printf("c-agent unit tests\n");
     test_util();
@@ -1464,6 +2029,13 @@ int main(void) {
     test_im_bridge();
     test_plugin_generate();
     test_task();
+    test_catalog();
+    test_audit();
+    test_llm_adapters_http();
+    test_http_api();
+    test_ws_roundtrip();
+    test_market_remote();
+    test_local_model();
     printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail == 0 ? 0 : 1;
 }

@@ -243,17 +243,20 @@ static int handle_conn(ca_http_server *s, ca_socket *sock) {
 
     ca_http_response resp;
     memset(&resp, 0, sizeof(resp));
-    resp.status = 200;
+    resp.status = 0;   /* unknown: filled by the dispatcher unless the handler set it */
     snprintf(resp.content_type, sizeof(resp.content_type), "application/json");
     ca_strbuf_init(&resp.body);
 
     /* dispatch: among routes whose path prefix matches, prefer one whose
      * method matches the request, then the longest prefix (so "/v1/tasks/123"
      * matches "GET /v1/tasks/" and "POST /v1/routes" is not shadowed by
-     * "GET /v1/routes"). */
+     * "GET /v1/routes"). The bare "/" catch-all serves the web UI for non-API
+     * paths only; an unknown /v1/... endpoint is a genuine 404, not an SPA
+     * route. */
     route *best = NULL;
     for (size_t i = 0; i < s->n_routes; i++) {
         route *r = &s->routes[i];
+        if (r->prefix[0] == '/' && r->prefix[1] == '\0') continue; /* catch-all: last resort */
         if (!startswith(req.path, r->prefix)) continue;
         int meth = (r->method[0] == '*' || strcmp(r->method, req.method) == 0);
         if (!best) { best = r; continue; }
@@ -262,6 +265,14 @@ static int handle_conn(ca_http_server *s, ca_socket *sock) {
         else if (meth == bmeth && strlen(r->prefix) > strlen(best->prefix)) best = r;
     }
     int status = 200;
+    if (!best && strncmp(req.path, "/v1", 3) != 0) {
+        /* no specific API route matched: fall back to the "/" catch-all for
+         * non-API paths (web UI); an unknown /v1/... endpoint is a 404 */
+        for (size_t i = 0; i < s->n_routes && !best; i++) {
+            route *r = &s->routes[i];
+            if (r->prefix[0] == '/' && r->prefix[1] == '\0') best = r;
+        }
+    }
     if (!best) {
         status = 404;
         ca_http_resp_json(&resp, "{\"error\":\"not found\"}");
@@ -271,7 +282,9 @@ static int handle_conn(ca_http_server *s, ca_socket *sock) {
     } else if (best->fn(&req, &resp, best->ud) != 0) {
         status = 500;
     }
-    resp.status = status;
+    /* Respect a status the handler set itself (e.g. 400 on bad input);
+     * otherwise fall back to the dispatcher's status. */
+    if (resp.status == 0) resp.status = status;
 
     /* serialize response */
     char head[512];

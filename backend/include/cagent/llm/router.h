@@ -37,6 +37,11 @@ const ca_route *ca_router_get(ca_router *r, size_t i);
 /* JSON array of routes (caller frees). */
 char *ca_router_json(ca_router *r);
 
+/* Persistence: save/load the route table to a JSON file so configured models
+ * survive restarts. load_file only adds routes (does not clear existing). */
+int ca_router_save_file(ca_router *r, const char *path);
+int ca_router_load_file(ca_router *r, const char *path);
+
 #ifdef __cplusplus
 }
 #endif

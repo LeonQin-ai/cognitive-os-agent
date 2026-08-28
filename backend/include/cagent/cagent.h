@@ -100,6 +100,7 @@ typedef struct cagent_ctx {
     char *workspace;
     char *provider;
     char *http_bind;            /* bind address ("127.0.0.1" default) */
+    char *market_url;           /* networked marketplace base URL ("" = local only) */
     int workers;
     int use_transaction;
     uint16_t http_port;
@@ -112,6 +113,7 @@ typedef struct cagent_config {
     const char *model;
     const char *base_url;
     const char *api_key;
+    const char *market_url;     /* NULL = local-only marketplace */
     uint16_t http_port;         /* 0 = no HTTP API */
     int workers;                /* scheduler worker threads; 0 = default (2) */
     int use_transaction;        /* 1 = wrap tool actions in a snapshot tx */

@@ -107,7 +107,7 @@ int cagent_init(cagent_ctx *ctx, const cagent_config *cfg) {
     ca_config_apply_json(ctx->config,
         "{\"llm.provider\":\"mock\",\"llm.model\":\"mock\",\"llm.base_url\":\"\","
         "\"scheduler.workers\":2,\"tx.use_transaction\":true,\"http.port\":0,"
-        "\"workspace\":\".\"}");
+        "\"workspace\":\".\",\"market.url\":\"\"}");
     {
         char cfgfile[600];
         ca_path_join(cfgfile, sizeof(cfgfile), ctx->state_root, "cagent.json");
@@ -133,6 +133,9 @@ int cagent_init(cagent_ctx *ctx, const cagent_config *cfg) {
                   : (uint16_t)ca_config_get_int(ctx->config, "http.port", 0);
     ctx->provider  = ca_strdup(provider);
     ctx->http_bind = ca_strdup(ca_config_get_str(ctx->config, "http.bind", "127.0.0.1"));
+    ctx->market_url = ca_strdup(ca_config_get_str(ctx->config, "market.url", ""));
+    if ((cfg && cfg->market_url && *cfg->market_url))
+        ctx->market_url = ca_strdup(cfg->market_url);
 
     /* embedding provider: embedding.provider = local (default) | remote */
     {
@@ -206,8 +209,17 @@ int cagent_init(cagent_ctx *ctx, const cagent_config *cfg) {
 
     /* seed the route table with the configured provider so the Models UI is
      * populated even before explicit routes are added */
-    if (ctx->router)
-        ca_router_add(ctx->router, provider, provider, base_url, api_key, model, 1.0);
+    if (ctx->router) {
+        /* restore any routes saved in a previous session (survives restart) */
+        char rpath[600];
+        ca_path_join(rpath, sizeof(rpath), ctx->state_root, "routes.json");
+        ca_router_load_file(ctx->router, rpath);
+        /* if no persisted routes existed, seed with the configured provider */
+        if (ca_router_count(ctx->router) == 0)
+            ca_router_add(ctx->router, provider, provider, base_url, api_key, model, 1.0);
+        else
+            ca_router_save_file(ctx->router, rpath); /* normalise/ensure file exists */
+    }
 
     /* built-in demo skill (cross-platform: echo works in cmd.exe and sh) */
     if (ctx->skills) {
@@ -319,7 +331,9 @@ void cagent_shutdown(cagent_ctx *ctx) {
     free(ctx->workspace);
     free(ctx->provider);
     free(ctx->http_bind);
+    free(ctx->market_url);
     ctx->state_root = ctx->workspace = ctx->provider = ctx->http_bind = NULL;
+    ctx->market_url = NULL;
     ca_sock_cleanup();
     memset(ctx, 0, sizeof(*ctx));
 }
@@ -352,6 +366,10 @@ int cagent_set_llm(cagent_ctx *ctx, const char *provider, const char *base_url,
         ca_path_join(cfgfile, sizeof(cfgfile), ctx->state_root, "cagent.json");
         if (ca_config_save_file(ctx->config, cfgfile) != 0)
             ca_log_warn("cagent_set_llm: could not persist config to %s", cfgfile);
+        char rpath[600];
+        ca_path_join(rpath, sizeof(rpath), ctx->state_root, "routes.json");
+        if (ctx->router && ca_router_save_file(ctx->router, rpath) != 0)
+            ca_log_warn("cagent_set_llm: could not persist routes to %s", rpath);
     }
     free(ctx->provider);
     ctx->provider = ca_strdup(provider);

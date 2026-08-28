@@ -140,7 +140,11 @@ ca_socket *ca_sock_connect(const char *host, uint16_t port, int timeout_ms) {
 #endif
         int per = naddrs > 1 && timeout_ms > 0 ? timeout_ms / naddrs : timeout_ms;
         if (per > 5000) per = 5000;
-        if (per < 2000) per = 2000;
+        /* Respect an explicit small budget: never RAISE a caller's timeout
+         * above what they asked for. The 2s floor is only a default for
+         * callers that didn't specify one (health probes pass, e.g., 300ms
+         * and must fail fast rather than hang the single-threaded server). */
+        if (timeout_ms <= 0) per = 2000;
         struct timeval tv;
         tv.tv_sec = per / 1000;
         tv.tv_usec = (per % 1000) * 1000;
@@ -290,14 +294,28 @@ ca_listener *ca_listen(uint16_t port) {
 }
 
 ca_socket *ca_accept(ca_listener *l, int timeout_ms) {
-    struct sockaddr_in peer;
-    socklen_t plen = sizeof(peer);
+    if (l->fd < 0) return NULL;
+    /* Wait for an inbound connection with a real timeout. SO_RCVTIMEO does
+     * NOT unblock accept() on Windows/Winsock (it only affects recv), so the
+     * old code could hang a serving thread forever and ignore stop requests.
+     * select() before accept() gives a portable timeout: ca_http_server_stop()
+     * sets stop_flag and the serve loop wakes within timeout_ms. */
     if (timeout_ms > 0) {
+        fd_set rset;
+        FD_ZERO(&rset);
+#if defined(_WIN32)
+        FD_SET((SOCKET)l->fd, &rset);
+#else
+        FD_SET(l->fd, &rset);
+#endif
         struct timeval tv;
         tv.tv_sec = timeout_ms / 1000;
         tv.tv_usec = (timeout_ms % 1000) * 1000;
-        setsockopt(l->fd, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof(tv));
+        int r = select(l->fd + 1, &rset, NULL, NULL, &tv);
+        if (r <= 0) return NULL; /* timeout or error */
     }
+    struct sockaddr_in peer;
+    socklen_t plen = sizeof(peer);
     int fd = (int)accept(l->fd, (struct sockaddr *)&peer, &plen);
     if (fd < 0) {
         set_err("accept failed");

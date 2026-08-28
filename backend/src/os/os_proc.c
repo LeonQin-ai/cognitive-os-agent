@@ -162,6 +162,26 @@ ca_proc_result *ca_proc_run(const char *cmd, int timeout_ms) {
     return ca_proc_run_in(cmd, timeout_ms, NULL);
 }
 
+int ca_proc_spawn_detached(const char *cmd) {
+    if (!cmd || !*cmd) return -1;
+    char full[4096];
+    snprintf(full, sizeof(full), shell_fmt(), cmd);
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+    memset(&si, 0, sizeof(si));
+    memset(&pi, 0, sizeof(pi));
+    si.cb = sizeof(si);
+    si.dwFlags |= STARTF_USESHOWWINDOW;
+    si.wShowWindow = SW_HIDE;
+    BOOL ok = CreateProcessA(NULL, full, NULL, NULL, FALSE,
+                             CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP,
+                             NULL, NULL, &si, &pi);
+    if (!ok) return -1;
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+    return 0;
+}
+
 #else /* POSIX */
 
 #include <sys/types.h>
@@ -264,6 +284,25 @@ void ca_proc_result_free(ca_proc_result *r) {
 
 ca_proc_result *ca_proc_run(const char *cmd, int timeout_ms) {
     return ca_proc_run_in(cmd, timeout_ms, NULL);
+}
+
+int ca_proc_spawn_detached(const char *cmd) {
+    if (!cmd || !*cmd) return -1;
+    pid_t pid = fork();
+    if (pid < 0) return -1;
+    if (pid == 0) {
+        /* child: new session, no controlling tty, stdio to /dev/null */
+        setsid();
+        int devnull = open("/dev/null", O_RDWR);
+        if (devnull >= 0) {
+            dup2(devnull, STDIN_FILENO);
+            dup2(devnull, STDOUT_FILENO);
+            dup2(devnull, STDERR_FILENO);
+        }
+        execl("/bin/sh", "sh", "-c", cmd, (char *)NULL);
+        _exit(127);
+    }
+    return 0;
 }
 
 #endif
