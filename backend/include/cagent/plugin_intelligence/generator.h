@@ -19,6 +19,19 @@ extern "C" {
 #endif
 
 typedef struct cagent_ctx cagent_ctx;
+typedef struct ca_llm ca_llm;
+struct ca_plugin_registry;
+struct ca_skill_registry;
+
+/* Dependency bundle for the generation pipeline, so the loop can also be
+ * driven from inside the runtime (missing-capability auto-generation). */
+typedef struct ca_plugin_gen_deps {
+    ca_llm *llm;                        /* may be NULL -> mock fallback */
+    const char *provider;               /* "mock" forces the offline template */
+    struct ca_plugin_registry *registry; /* may be NULL (skip registration) */
+    struct ca_skill_registry *skills;    /* may be NULL (skip skill reg) */
+    const char *state_root;              /* may be NULL = "state" */
+} ca_plugin_gen_deps;
 
 /* Generate a plugin from a natural-language capability description.
  * Returns a malloc'd JSON object (caller frees):
@@ -27,6 +40,9 @@ typedef struct cagent_ctx cagent_ctx;
  *   failure: {"ok":false,"error":"..."}
  * Never returns NULL. */
 char *ca_plugin_generate(cagent_ctx *ctx, const char *description);
+
+/* Same pipeline, decoupled from cagent_ctx. Never returns NULL. */
+char *ca_plugin_generate_deps(const ca_plugin_gen_deps *deps, const char *description);
 
 #ifdef __cplusplus
 }

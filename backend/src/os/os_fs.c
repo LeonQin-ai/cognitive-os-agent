@@ -7,6 +7,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef _WIN32
+#include <sys/stat.h>
+#endif
 
 #if defined(_WIN32)
 
@@ -197,6 +200,20 @@ int ca_fs_list_dir(const char *path, ca_dir_list *out) {
 }
 
 #endif
+
+/* 64-bit file size (-1 if missing/stat error). Uses __stat64 on Windows:
+ * plain stat's 32-bit off_t overflows past 2 GB. */
+long long ca_fs_file_size(const char *path) {
+#ifdef _WIN32
+    struct __stat64 st;
+    if (_stat64(path, &st) != 0) return -1;
+    return (long long)st.st_size;
+#else
+    struct stat st;
+    if (stat(path, &st) != 0) return -1;
+    return (long long)st.st_size;
+#endif
+}
 
 void ca_fs_list_free(ca_dir_list *l) {
     for (size_t i = 0; i < l->count; i++) free(l->items[i].name);

@@ -34,6 +34,8 @@ char *ca_testing_plan(const char *spec_json) {
 
 char *ca_testing_run(const char *cmd, int timeout_ms) {
     ca_sandbox *sb = ca_sandbox_new(timeout_ms);
+    /* track file accesses of the tested command (cwd scan + cmd reads) */
+    ca_sandbox_set_workspace(sb, ".");
     ca_sandbox_result *r = ca_sandbox_run(sb, cmd);
     ca_sandbox_free(sb);
 
@@ -44,6 +46,11 @@ char *ca_testing_run(const char *cmd, int timeout_ms) {
             cJSON_AddNumberToObject(out, "exit_code", r->exit_code);
             cJSON_AddNumberToObject(out, "timed_out", r->timed_out);
             cJSON_AddStringToObject(out, "output", r->output ? r->output : "");
+            if (r->files_json) {
+                cJSON *fj = cJSON_Parse(r->files_json);
+                if (fj) cJSON_AddItemToObject(out, "files", fj);
+                else cJSON_AddStringToObject(out, "files", r->files_json);
+            }
         } else {
             cJSON_AddBoolToObject(out, "ok", 0);
             cJSON_AddNumberToObject(out, "exit_code", -1);

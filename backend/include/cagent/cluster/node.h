@@ -18,6 +18,7 @@ typedef struct ca_cluster_node {
     uint16_t port;
     char *role;         /* "coordinator" | "worker" | "observer" */
     char *status;       /* "up" | "down" | "suspect" */
+    char *caps;         /* comma-separated capability tags (e.g. "llm,tools") */
     int64_t last_seen_ms;
 } ca_cluster_node;
 
@@ -27,6 +28,9 @@ void ca_cluster_free(ca_cluster *c);
 /* Register a node or update its endpoint/role (keeps liveness). 0 ok, -1 invalid. */
 int ca_cluster_upsert(ca_cluster *c, const char *id, const char *host,
                       uint16_t port, const char *role);
+/* Same, with capability tags (comma-separated; NULL/"" = none). */
+int ca_cluster_upsert_ex(ca_cluster *c, const char *id, const char *host,
+                         uint16_t port, const char *role, const char *caps);
 int ca_cluster_remove(ca_cluster *c, const char *id);
 
 /* Record a heartbeat: last_seen_ms = now, status = "up". 0 ok, -1 unknown id. */
@@ -39,7 +43,7 @@ int ca_cluster_count(ca_cluster *c);
 const ca_cluster_node *ca_cluster_get(ca_cluster *c, size_t i);
 int ca_cluster_up_count(ca_cluster *c);
 
-/* JSON array of nodes {id,host,port,role,status,last_seen_ms} (caller frees). */
+/* JSON array of nodes {id,host,port,role,status,caps,last_seen_ms} (caller frees). */
 char *ca_cluster_json(ca_cluster *c);
 
 #ifdef __cplusplus

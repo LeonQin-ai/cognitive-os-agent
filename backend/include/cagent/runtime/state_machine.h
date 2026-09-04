@@ -22,6 +22,7 @@ typedef enum ca_state {
 } ca_state;
 
 typedef struct ca_state_machine ca_state_machine;
+typedef struct ca_hook_registry ca_hook_registry;
 
 /* A stage handler. `input` is the current working value; returns 0 for success
  * and stores a new value into *out (caller frees). Return -1 to move to FAILED. */
@@ -29,6 +30,10 @@ typedef int (*ca_state_handler)(ca_state_machine *sm, void *ud, const char *inpu
 
 ca_state_machine *ca_state_machine_new(void);
 void ca_state_machine_free(ca_state_machine *sm);
+
+/* Attach the runtime hook registry: every stage entry fires the
+ * "agent.on_state_change" hook with {"state": "<STAGE>"} (hook.h). Borrowed. */
+void ca_state_machine_set_hooks(ca_state_machine *sm, ca_hook_registry *hooks);
 
 /* Install a handler for a stage (or NULL to use the pass-through default). */
 void ca_state_machine_set_handler(ca_state_machine *sm, ca_state st, ca_state_handler fn, void *ud);

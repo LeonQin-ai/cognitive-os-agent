@@ -174,6 +174,12 @@ void ca_config_set_str(ca_config *c, const char *key, const char *value) {
     }
 }
 
+void ca_config_set_int(ca_config *c, const char *key, int64_t value) {
+    if (!c || !c->root || !key || !*key) return;
+    cJSON_DeleteItemFromObject(c->root, key);
+    cJSON_AddNumberToObject(c->root, key, (double)value);
+}
+
 int ca_config_save_file(ca_config *c, const char *path) {
     if (!c || !path) return -1;
     char *js = ca_config_to_json(c);

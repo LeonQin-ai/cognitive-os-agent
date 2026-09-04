@@ -1,7 +1,8 @@
 /* router.h — multi-provider model routing.
  * Holds named routes (provider + endpoint + model) with weights and picks the
- * next route in a weighted round-robin. A NULL router means "single provider"
- * (the existing ca_llm path); this adds dynamic routing on top. */
+ * next route per the configured policy: weighted round-robin (default),
+ * lowest cost_rank, lowest latency_ms, or capability-tag filtered round-robin.
+ * A NULL router means "single provider" (the existing ca_llm path). */
 #pragma once
 #include <stddef.h>
 
@@ -19,6 +20,9 @@ typedef struct ca_route {
     char *model;
     double weight;
     long long calls;  /* number of times picked */
+    int cost_rank;    /* 1 = cheapest; 0 = unknown (excluded from cost policy) */
+    int latency_ms;   /* nominal latency; 0 = unknown (excluded from latency policy) */
+    char *caps;       /* comma-separated capability tags ("tools,json,long_ctx") */
 } ca_route;
 
 ca_router *ca_router_new(void);
@@ -27,9 +31,25 @@ void ca_router_free(ca_router *r);
 int ca_router_add(ca_router *r, const char *name, const char *provider,
                   const char *base_url, const char *api_key,
                   const char *model, double weight);
+/* Full form: cost_rank (1=cheapest, 0 unknown), latency_ms (0 unknown),
+ * caps = comma-separated capability tags (may be NULL). */
+int ca_router_add_ex(ca_router *r, const char *name, const char *provider,
+                     const char *base_url, const char *api_key,
+                     const char *model, double weight,
+                     int cost_rank, int latency_ms, const char *caps);
 /* Remove a route by name (no-op if absent). Returns 1 if removed, 0 otherwise. */
 int ca_router_remove(ca_router *r, const char *name);
-/* Weighted round-robin: returns the next route (borrowed). NULL if empty. */
+
+/* Routing policy (persists on the router):
+ *   "round_robin" (default/NULL/"")  weighted round-robin
+ *   "cost"                           lowest cost_rank first, ties round-robin
+ *   "latency"                        lowest latency_ms first, ties round-robin
+ *   "capability:<tag>"               round-robin among routes carrying <tag>
+ * Unknown values fall back to round_robin. Returns 0 ok, -1 bad args. */
+int ca_router_set_policy(ca_router *r, const char *policy);
+const char *ca_router_policy(ca_router *r);
+
+/* Pick the next route per policy (borrowed). NULL if empty. */
 const ca_route *ca_router_pick(ca_router *r);
 
 int ca_router_count(ca_router *r);

@@ -45,7 +45,17 @@ struct ca_llm {
     char *api_key;
     char *model;
     void *impl;
+    volatile int cancel; /* set by ca_llm_cancel(); checked between stream deltas */
 };
+
+/* Provider capability summary (bridge-level; agents pick models by capability
+ * without knowing who the model is). max_ctx is approximate tokens,
+ * 0 = unknown. */
+typedef struct {
+    int stream;        /* supports SSE streaming */
+    int tools;         /* supports tool/function calling */
+    long long max_ctx; /* approximate context window in tokens */
+} ca_llm_caps;
 
 /* Create a provider instance. base_url may be NULL for defaults.
  * api_key may be NULL (required for anthropic). Returns NULL on bad provider. */
@@ -54,8 +64,17 @@ void ca_llm_destroy(ca_llm *llm);
 
 /* Non-streaming chat. resp->content is filled; caller frees. Returns 0 ok, -1 error. */
 int ca_llm_chat(ca_llm *llm, const ca_llm_request *req, ca_llm_response *resp);
-/* Streaming chat; cb is called with deltas. Returns 0 ok, -1 error. */
+/* Streaming chat; cb is called with deltas. Returns 0 ok, -1 error. A pending
+ * cancel aborts the stream between deltas (-1). */
 int ca_llm_stream(ca_llm *llm, const ca_llm_request *req, ca_llm_stream_cb cb, void *ud);
+
+/* Request cancellation of an in-flight stream (safe from another thread;
+ * takes effect between deltas, and also aborts a stream started afterwards).
+ * The flag is consumed when the stream returns. */
+void ca_llm_cancel(ca_llm *llm);
+
+/* Borrowed capability record for this provider (static, do not free). */
+const ca_llm_caps *ca_llm_capabilities(ca_llm *llm);
 
 /* Convenience one-shot chat. Returns malloc'd string (NULL on error). */
 char *ca_llm_chat_simple(ca_llm *llm, const char *system_prompt, const char *user_prompt);

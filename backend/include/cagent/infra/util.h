@@ -41,6 +41,15 @@ void ca_strmap_free(ca_strmap *m);
 
 /* ---------- misc ---------- */
 char *ca_strdup(const char *s);
+/* Returns 1 when `s` (up to n bytes, or NUL-terminated when n<0) is valid UTF-8. */
+int ca_str_utf8_valid_n(const char *s, long long n);
+/* Returns a malloc'd copy of `s` guaranteed to be valid UTF-8: any invalid
+ * byte sequence is replaced with '?'. Returns NULL only on OOM. Text coming
+ * from external processes (shell output on Chinese Windows is GBK) or from
+ * untrusted clients must pass through this before entering LLM prompts —
+ * providers reject invalid UTF-8 with a hard 400 that poisons every later
+ * turn in the session. */
+char *ca_str_utf8_sanitize(const char *s);
 /* Join two path segments with the platform separator into out[0..n). */
 void ca_path_join(char *out, size_t n, const char *a, const char *b);
 /* Resolve a (possibly relative) path against a workspace base dir into out[0..n).

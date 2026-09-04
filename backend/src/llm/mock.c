@@ -102,13 +102,17 @@ static char *extract_content(const char *msg) {
     return out;
 }
 
-/* Extract a shell command that follows a command marker. */
+/* Extract the argument that follows a command marker. Markers are checked in
+ * priority order (longer/specific first) and the FIRST marker present wins;
+ * a generic marker like "shell" must not win just because it appears later
+ * in the text (e.g. inside "echo scen-shell-ok"). */
 static char *extract_command(const char *msg) {
-    static const char *markers[] = {"执行命令", "运行命令", "执行 ", "运行 ", "命令", "command", "shell"};
+    static const char *markers[] = {"执行命令", "运行命令", "执行 ", "运行 ", "命令",
+                                    "搜索", "查找文件", "command", "shell"};
     const char *best = NULL;
     for (size_t i = 0; i < sizeof(markers) / sizeof(char *); i++) {
         const char *hit = strstr(msg, markers[i]);
-        if (hit && (!best || hit > best)) best = hit + strlen(markers[i]);
+        if (hit) { best = hit + strlen(markers[i]); break; }
     }
     if (!best) return NULL;
     while (*best == ' ' || *best == '\t') best++;
@@ -124,6 +128,71 @@ static char *extract_command(const char *msg) {
 static char *mock_respond(const char *msg) {
     if (!msg) return ca_strdup("[]");
 
+    /* multi-agent orchestration: the decompose prompt lists the roster under
+     * "可用 agent"; the merge prompt aggregates under "各 agent 结果" */
+    if (has_substr(msg, "可用 agent") || has_substr(msg, "可用agent")) {
+        return ca_strdup("[{\"agent\":\"alpha\","
+                         "\"task\":\"创建 orch.txt 写入内容为 orch-ok\"}]");
+    }
+    if (has_substr(msg, "各 agent 结果"))
+        return ca_strdup("综合完成：子任务已由各 agent 协作处理完毕。");
+
+    /* When driven through the full reasoning runtime the "message" is the
+     * whole augmented planner prompt (session notes, history, journal).
+     * Keyword decisions must be made on the CURRENT REQUEST only — the
+     * journal lines repeat earlier request texts and would otherwise
+     * hijack the plan. */
+    /* Agent-loop rounds: the augmented prompt carries results of previously
+     * executed rounds before "## Current request". Round >= 2 defaults to a
+     * plain-text answer (task complete) so single-action requests do not
+     * repeat their actions; a "修复" request that has not yet been fixed gets
+     * one file_edit round before finishing. */
+    int in_loop = strstr(msg, "## 之前轮次的动作结果") != NULL;
+    const char *full = msg; /* full augmented prompt (results live here) */
+    const char *cur = strstr(msg, "## Current request\n");
+    if (cur) msg = cur + strlen("## Current request\n");
+
+    if (in_loop) {
+        char *path = find_path(msg);
+        /* fix marker checked only inside this run's results section — the
+         * conversation history may carry old answers with the same text */
+        const char *fix_hit = strstr(full, "[file_edit] ok");
+        int fixed_this_run = fix_hit && cur && fix_hit < cur;
+        if (has_substr(msg, "修复") && !fixed_this_run) {
+            /* the previous round read/analyzed; now apply the fix */
+            cJSON *arr = cJSON_CreateArray();
+            cJSON *a = cJSON_CreateObject();
+            cJSON *args = cJSON_CreateObject();
+            cJSON_AddStringToObject(a, "tool", "file_edit");
+            cJSON_AddStringToObject(args, "path", path ? path : "a.txt");
+            cJSON_AddStringToObject(args, "old_string", "OLD");
+            cJSON_AddStringToObject(args, "new_string", "NEW");
+            cJSON_AddItemToObject(a, "args", args);
+            cJSON_AddItemToArray(arr, a);
+            char *out = cJSON_PrintUnformatted(arr);
+            cJSON_Delete(arr);
+            free(path);
+            return out ? out : ca_strdup("[]");
+        }
+        free(path);
+        return ca_strdup("任务完成。"); /* plain text = final answer */
+    }
+
+    /* auto-evolution drill: plan a tool that is NOT in the registry so the
+     * reasoning layer exercises the missing-capability generation loop */
+    if (has_substr(msg, "天气")) {
+        cJSON *arr = cJSON_CreateArray();
+        cJSON *a = cJSON_CreateObject();
+        cJSON *args = cJSON_CreateObject();
+        cJSON_AddStringToObject(a, "tool", "weather_lookup");
+        cJSON_AddStringToObject(args, "city", "北京");
+        cJSON_AddItemToObject(a, "args", args);
+        cJSON_AddItemToArray(arr, a);
+        char *out = cJSON_PrintUnformatted(arr);
+        cJSON_Delete(arr);
+        return out ? out : ca_strdup("[]");
+    }
+
     int want_write = has_substr(msg, "文件") || has_substr(msg, "file") ||
                      has_substr(msg, "写") || has_substr(msg, "创建") ||
                      has_substr(msg, "生成");
@@ -132,9 +201,81 @@ static char *mock_respond(const char *msg) {
                     has_substr(msg, "查看文件");
     int want_shell = has_substr(msg, "命令") || has_substr(msg, "command") ||
                      has_substr(msg, "shell");
+    /* an explicit "execute this command" request wins over generic keywords
+     * (e.g. "fsutil file createnew" contains "file" but is not a file op) */
+    int explicit_cmd = has_substr(msg, "执行命令") || has_substr(msg, "运行命令");
 
-    /* shell: run a command when no file operation is requested */
-    if (want_shell && !want_write && !want_read) {
+    /* analyze-first: an 分析 request starts the loop with a read so the fix
+     * is applied on a later round with the observation in context */
+    if (has_substr(msg, "分析")) {
+        char *path = find_path(msg);
+        cJSON *arr = cJSON_CreateArray();
+        cJSON *a = cJSON_CreateObject();
+        cJSON *args = cJSON_CreateObject();
+        cJSON_AddStringToObject(a, "tool", "file_read");
+        cJSON_AddStringToObject(args, "path", path ? path : ".");
+        cJSON_AddItemToObject(a, "args", args);
+        cJSON_AddItemToArray(arr, a);
+        char *out = cJSON_PrintUnformatted(arr);
+        cJSON_Delete(arr);
+        free(path);
+        return out ? out : ca_strdup("[]");
+    }
+
+    /* file_edit: replace OLD with NEW in a file (deterministic mock strings) */
+    if (has_substr(msg, "编辑") || has_substr(msg, "替换")) {
+        char *path = find_path(msg);
+        cJSON *arr = cJSON_CreateArray();
+        cJSON *a = cJSON_CreateObject();
+        cJSON *args = cJSON_CreateObject();
+        cJSON_AddStringToObject(a, "tool", "file_edit");
+        cJSON_AddStringToObject(args, "path", path ? path : "note.txt");
+        cJSON_AddStringToObject(args, "old_string", "OLD");
+        cJSON_AddStringToObject(args, "new_string", "NEW");
+        cJSON_AddItemToObject(a, "args", args);
+        cJSON_AddItemToArray(arr, a);
+        char *out = cJSON_PrintUnformatted(arr);
+        cJSON_Delete(arr);
+        free(path);
+        return out ? out : ca_strdup("[]");
+    }
+
+    /* grep: search file contents for the text after the marker */
+    if (has_substr(msg, "搜索")) {
+        char *pat = extract_command(msg);
+        cJSON *arr = cJSON_CreateArray();
+        cJSON *a = cJSON_CreateObject();
+        cJSON *args = cJSON_CreateObject();
+        cJSON_AddStringToObject(a, "tool", "grep");
+        cJSON_AddStringToObject(args, "pattern", pat && *pat ? pat : "hello");
+        cJSON_AddStringToObject(args, "output_mode", "content");
+        cJSON_AddItemToObject(a, "args", args);
+        cJSON_AddItemToArray(arr, a);
+        char *out = cJSON_PrintUnformatted(arr);
+        cJSON_Delete(arr);
+        free(pat);
+        return out ? out : ca_strdup("[]");
+    }
+
+    /* glob: find files matching the pattern after the marker */
+    if (has_substr(msg, "查找文件")) {
+        char *pat = extract_command(msg);
+        cJSON *arr = cJSON_CreateArray();
+        cJSON *a = cJSON_CreateObject();
+        cJSON *args = cJSON_CreateObject();
+        cJSON_AddStringToObject(a, "tool", "glob");
+        cJSON_AddStringToObject(args, "pattern", pat && *pat ? pat : "*.txt");
+        cJSON_AddItemToObject(a, "args", args);
+        cJSON_AddItemToArray(arr, a);
+        char *out = cJSON_PrintUnformatted(arr);
+        cJSON_Delete(arr);
+        free(pat);
+        return out ? out : ca_strdup("[]");
+    }
+
+    /* shell: run a command when no file operation is requested (an explicit
+     * 执行命令/运行命令 request always routes here) */
+    if (want_shell && (!want_write || explicit_cmd) && !want_read) {
         char *cmd = extract_command(msg);
         cJSON *arr = cJSON_CreateArray();
         cJSON *a = cJSON_CreateObject();
@@ -193,12 +334,14 @@ static int mock_chat(ca_llm *llm, const ca_llm_request *req, ca_llm_response *re
 }
 
 static int mock_stream(ca_llm *llm, const ca_llm_request *req, ca_llm_stream_cb cb, void *ud) {
-    (void)llm;
     const char *last = req->num_messages ? req->messages[req->num_messages - 1].content : "";
     char *text = mock_respond(last);
     if (!text) return -1;
     size_t len = strlen(text);
-    for (size_t i = 0; i < len; i += 16) cb(text + i, ud);
+    for (size_t i = 0; i < len; i += 16) {
+        if (llm->cancel) { free(text); return -1; }
+        cb(text + i, ud);
+    }
     free(text);
     return 0;
 }

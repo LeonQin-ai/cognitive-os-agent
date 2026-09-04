@@ -18,7 +18,10 @@
 
 /* Sub-layer public headers (all include-guarded). */
 #include "cagent/runtime/event_bus.h"
+#include "cagent/runtime/hook.h"
 #include "cagent/runtime/scheduler.h"
+#include "cagent/runtime/state_store.h"
+#include "cagent/memory/service.h"
 #include "cagent/runtime/task.h"
 #include "cagent/runtime/state_machine.h"
 #include "cagent/runtime/policy_engine.h"
@@ -90,11 +93,17 @@ typedef struct cagent_ctx {
     ca_skill_registry *skills;  /* static Shell/Python skills */
     ca_mcp_manager *mcp;        /* named MCP server connections */
     ca_cluster *cluster;        /* cluster node registry */
+    ca_hook_registry *hooks;    /* horizontal hook system (third-party extensions) */
+    ca_state_store *state;      /* Context layer: KV/Task/Agent state slots */
+    ca_memory_service *memsvc;  /* Memory Service interface (default backend) */
     ca_attention *attention;    /* salience scoring / focus */
+    struct ca_index *index;     /* code index over session-touched files */
     ca_im *im;                  /* instant messaging store (sessions/messages) */
     ca_im_channels *channels;   /* external messaging channel adapters (IM bridge) */
     struct ca_thread *channels_poller; /* telegram inbound poller thread */
     volatile int channels_stop; /* poller stop flag */
+    struct ca_thread *hb_poller;       /* cluster heartbeat thread */
+    volatile int hb_stop;              /* heartbeat stop flag */
     ca_mutex run_lock;          /* serializes reasoning runs */
     char *state_root;
     char *workspace;
@@ -129,6 +138,28 @@ void cagent_shutdown(cagent_ctx *ctx);
  * *answer receives malloc'd output (caller frees). Returns 0 ok, -1 failed. */
 int cagent_run(cagent_ctx *ctx, const char *prompt, char **answer);
 
+/* Run one task AS a named agent (must be registered via /v1/agents). Executes
+ * through the reasoning engine and publishes the result on the shared
+ * blackboard under the agent's name. Returns 0 ok, -1 bad args, -2 unknown. */
+int cagent_agent_run(cagent_ctx *ctx, const char *agent, const char *task,
+                     char **answer);
+
+/* Run a task through the multi-agent orchestration pipeline: LLM decomposes
+ * the task into subtasks compiled to a Flow DAG, ca_flow_run executes it (one
+ * isolated reasoning instance per node, parallel; results on the blackboard
+ * under "flow/"), and a final LLM call merges the results. *trace_json (if
+ * non-NULL) receives a malloc'd JSON array [{id,agent,task,status,result}].
+ * Degrades to a plain single-agent run when no agents are registered or the
+ * plan is unparseable. */
+int cagent_orchestrate(cagent_ctx *ctx, const char *task, char **answer,
+                       char **trace_json);
+
+/* Decompose a task into a Flow DAG without executing it: the LLM plan is
+ * compiled to {"nodes":[{id,agent,task}...],"edges":[]} (malloc'd, caller
+ * frees) so the caller can inspect/modify it before ca_flow_run. Returns 0
+ * ok, -1 when no agents are registered or no plan could be parsed. */
+int cagent_flow_decompose(cagent_ctx *ctx, const char *task, char **dag_json);
+
 /* Switch the active LLM at runtime (provider/base_url/model/api_key). Rebuilds
  * the LLM adapter, swaps it into the reasoning engine under the run-lock, keeps
  * the route table in sync, and persists llm.* to <state_root>/cagent.json so it
@@ -139,6 +170,13 @@ int cagent_set_llm(cagent_ctx *ctx, const char *provider, const char *base_url,
 /* Serve the HTTP API until cagent_stop. Returns 0 ok, -1 if no server. */
 int cagent_serve(cagent_ctx *ctx);
 void cagent_stop(cagent_ctx *ctx);
+
+/* Process/state snapshot: export the full runtime state (KV/Task/Agent state
+ * store, long-term memory facts, agent roster, llm config) as one JSON file;
+ * import applies a snapshot back (state store entries + facts are restored).
+ * Returns 0 ok, -1 bad args/unreadable file. */
+int ca_cagent_state_export(cagent_ctx *ctx, const char *path);
+int ca_cagent_state_import(cagent_ctx *ctx, const char *path);
 
 #ifdef __cplusplus
 }

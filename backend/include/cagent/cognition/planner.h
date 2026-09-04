@@ -10,6 +10,9 @@ extern "C" {
 #endif
 
 typedef struct ca_llm ca_llm;
+struct ca_tool_registry;   /* action/tools.h */
+struct ca_skill_registry;  /* action/skill.h */
+struct ca_policy_engine;   /* runtime/policy_engine.h */
 
 typedef struct ca_planned_action {
     char *tool;      /* tool name, e.g. "file_write" */
@@ -22,10 +25,24 @@ typedef struct ca_planned_action {
  *     answered in plain text with no tools). Caller frees via
  *     ca_planner_actions_free().
  *   - *raw_out holds the verbatim model output (caller frees; may be NULL).
- *   - *err_out (optional) holds a malloc'd diagnostic on failure; caller frees. */
+ *   - *err_out (optional) holds a malloc'd diagnostic on failure; caller frees.
+ * Uses a static built-in tool catalog (legacy/test entry point). */
 int ca_planner_plan(ca_llm *llm, const char *prompt,
                     ca_planned_action **actions, int *n_actions,
                     char **raw_out, char **err_out);
+
+/* Same as ca_planner_plan, but the system prompt is built dynamically from
+ * the ACTUAL registered tools and skills, so the model sees (and can invoke
+ * via the "skill" tool) everything the runtime has. NULL registries fall
+ * back to the static catalog. `policy` (may be NULL) hides denied tools from
+ * the catalog — deny rules both block calls and remove the tool from the
+ * pool the model can see. */
+int ca_planner_plan_ex(ca_llm *llm, const struct ca_tool_registry *tools,
+                       struct ca_skill_registry *skills,
+                       struct ca_policy_engine *policy,
+                       const char *prompt,
+                       ca_planned_action **actions, int *n_actions,
+                       char **raw_out, char **err_out);
 
 void ca_planner_actions_free(ca_planned_action *a, int n);
 

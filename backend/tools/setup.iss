@@ -34,7 +34,7 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 
 [Files]
-Source: "..\build\cagent";             DestDir: "{app}"; DestName: "cagent.exe";          Flags: ignoreversion
+Source: "..\build\cagent.exe";         DestDir: "{app}"; DestName: "cagent.exe";          Flags: ignoreversion
 Source: "..\build\c-agent-desktop.exe"; DestDir: "{app}";                                   Flags: ignoreversion
 Source: "..\dist\c-agent.ico";         DestDir: "{app}";                                   Flags: ignoreversion
 Source: "..\README.md";                DestDir: "{app}"; DestName: "README.txt";           Flags: ignoreversion

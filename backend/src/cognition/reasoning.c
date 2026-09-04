@@ -9,12 +9,19 @@
 #include "cagent/retrieval/context_builder.h"
 #include "cagent/llm/router.h"
 #include "cagent/runtime/state_machine.h"
+#include "cagent/runtime/policy_engine.h"
 #include "cagent/runtime/event_bus.h"
+#include "cagent/runtime/hook.h"
 #include "cagent/runtime/scheduler.h"
 #include "cagent/llm/llm.h"
 #include "cagent/action/tools.h"
+#include "cagent/plugin_intelligence/generator.h"
 #include "cagent/memory/memory.h"
+#include "cagent/retrieval/engine.h"
+#include "cagent/os/os_fs.h"
+#include "cagent/os/os_thread.h"
 #include "cagent/tx/tx.h"
+#include "cagent/execution/executor.h"
 #include "cagent/infra/util.h"
 #include "cagent/infra/logging.h"
 #include "cagent/infra/metrics.h"
@@ -37,15 +44,47 @@ struct ca_reasoning {
     char *workspace;
     int use_transaction;
 
+    /* Context MMU budgets (chars per prompt section, auto-degrading) */
+    int budget_hot, budget_warm, budget_cold;
+    int hyde;
+    const char *exec_backend; /* "local" | "wsl" | "remote" (NULL = local) */
+    const char *exec_host;    /* ssh target for "remote" */
+
     ca_router *router;       /* optional multi-provider routing (NULL = single LLM) */
     ca_attention *attention; /* salience ranking over retrieved context */
 
-    /* multi-turn conversation history (bounded ring of recent turns) */
+    /* multi-turn conversation history (bounded ring of recent turns).
+     * hist_mtx guards all hist_* accesses: the reasoning run itself is
+     * serialized by the ctx run-lock, but /v1/chat/history reads the ring
+     * from the HTTP thread while a run may be in flight. */
+    ca_mutex hist_mtx;
     char **hist_q;
     char **hist_a;
     size_t hist_n, hist_cap;
 
+    /* LLM-compacted summary of turns dropped from the ring (NULL = none) */
+    char *summary;
+    int compact_fails;    /* consecutive compaction LLM failures */
+    int compact_disabled; /* circuit breaker: stop trying after 3 failures */
+
+    /* session notes: fixed-section working notes injected into every prompt
+     * (Claude Code-style SessionMemory template, updated each run) */
+    char sn_state[256];    /* current state / progress */
+    char sn_task[256];     /* current task */
+    char sn_files[256];    /* files touched this session */
+    char sn_errors[256];   /* recent errors */
+    char sn_worklog[1024]; /* append-only per-action log (tail kept) */
+
+    /* code index: touched files are indexed for term -> file:line recall */
+    struct ca_index *index;
+
+    /* missing-capability auto-generation (self-evolution loop) */
+    struct ca_plugin_registry *plugin_registry;
+    char *state_root;
+    int gen_attempted;     /* one auto-generation attempt per run */
+
     ca_state_machine *sm;
+    ca_hook_registry *hooks; /* horizontal hook system (borrowed, may be NULL) */
 
     /* transient per-run state */
     ca_planned_action *actions;
@@ -53,6 +92,20 @@ struct ca_reasoning {
     char *last_prompt;
     int all_actions_ok;
     int ok_actions;
+    int denied_actions;  /* blocked by policy this run (not a failure) */
+    struct ca_skill_registry *skills;  /* advertised to planner + skill tool */
+    struct ca_mcp_manager *mcp;        /* handed to tool ctx for mcp tool calls */
+
+    /* agent loop: bounded plan->act->observe->replan rounds per run. Results of
+     * executed rounds are fed back into the next round's planner context; the
+     * loop ends when the LLM stops proposing actions (final text answer). */
+    int max_rounds;          /* from config (default AGENT_LOOP_MAX_ROUNDS) */
+    int round_idx;           /* 1-based round currently executing */
+    int had_plan;            /* last REASON produced tool actions (vs final text) */
+    char *last_plan_raw;     /* this round's raw plan (stall detection) */
+    char *prev_plan;         /* previous round's raw plan (stall detection) */
+    char *round_log;         /* accumulated action results of previous rounds */
+    size_t round_log_len, round_log_cap;
 };
 
 static void clear_actions(ca_reasoning *r) {
@@ -65,6 +118,91 @@ static void clear_actions(ca_reasoning *r) {
     r->n_actions = 0;
 }
 
+/* Copy at most `cap` bytes of s, cutting back to a UTF-8 boundary and adding
+ * an ellipsis when truncated. Caller frees. NULL only on OOM. */
+#define HIST_TURN_CAP 500     /* per-turn chars kept in history */
+#define HIST_BUDGET 8192      /* total chars of history injected per run */
+#define LEARN_RESULT_CAP 300  /* chars of a result kept as a memory episode */
+#define COMPACT_SUMMARY_CAP 2000 /* rolling compaction summary cap */
+#define AGENT_LOOP_MAX_ROUNDS 8  /* default rounds when config does not set it */
+#define ROUND_LOG_CAP 16384       /* tail-keep cap for accumulated round results */
+
+/* Append text to the round log, tail-keeping: once past ROUND_LOG_CAP the
+ * oldest half is dropped so recent action results always stay available. */
+static void round_log_append(ca_reasoning *r, const char *text) {
+    if (!text || !*text) return;
+    size_t add = strlen(text);
+    size_t need = r->round_log_len + add + 1;
+    if (need > r->round_log_cap) {
+        size_t ncap = r->round_log_cap ? r->round_log_cap * 2 : 2048;
+        while (ncap < need) ncap *= 2;
+        char *nb = (char *)realloc(r->round_log, ncap);
+        if (!nb) return;
+        r->round_log = nb;
+        r->round_log_cap = ncap;
+    }
+    memcpy(r->round_log + r->round_log_len, text, add + 1);
+    r->round_log_len += add;
+    if (r->round_log_len > ROUND_LOG_CAP) {
+        size_t half = r->round_log_len / 2;
+        memmove(r->round_log, r->round_log + half, r->round_log_len - half + 1);
+        r->round_log_len -= half;
+    }
+}
+
+static void round_log_reset(ca_reasoning *r) {
+    if (r->round_log) r->round_log[0] = '\0';
+    r->round_log_len = 0;
+}
+
+/* session notes: append "line\n" to a fixed-size buffer, keeping the TAIL
+ * (oldest lines are dropped from the front when the cap would be exceeded). */
+static void sn_append_line(char *dst, size_t cap, const char *line) {
+    if (!dst || !line || !*line) return;
+    size_t cur = strlen(dst);
+    size_t add = strlen(line) + 1; /* line chars + '\n' */
+    while (cur + add + 1 > cap) {
+        char *nl = strchr(dst, '\n');
+        if (!nl) { dst[0] = '\0'; cur = 0; break; }
+        size_t cut = (size_t)(nl - dst) + 1;
+        memmove(dst, dst + cut, cur - cut + 1);
+        cur -= cut;
+    }
+    size_t room = cap - 1 - cur;
+    if (room < 2) return;
+    if (add > room) add = room;
+    size_t keep = add - 1;
+    while (keep > 0 && ((unsigned char)line[keep] & 0xC0) == 0x80) keep--; /* utf-8 boundary */
+    memcpy(dst + cur, line, keep);
+    dst[cur + keep] = '\n';
+    dst[cur + keep + 1] = '\0';
+}
+
+/* Track a file touched by a file_* action (extract "path" from its args). */
+static void sn_note_file(ca_reasoning *r, const char *args_json) {
+    if (!args_json || !*args_json) return;
+    cJSON *o = cJSON_Parse(args_json);
+    if (!o) return;
+    cJSON *p = cJSON_GetObjectItemCaseSensitive(o, "path");
+    if (p && cJSON_IsString(p) && p->valuestring)
+        sn_append_line(r->sn_files, sizeof(r->sn_files), p->valuestring);
+    cJSON_Delete(o);
+}
+
+static char *str_head(const char *s, size_t cap) {
+    if (!s) return NULL;
+    size_t n = strlen(s);
+    int trunc = n > cap;
+    if (trunc) n = cap;
+    while (trunc && n > 0 && ((unsigned char)s[n] & 0xC0) == 0x80) n--; /* utf-8 boundary */
+    char *out = (char *)malloc(n + 4);
+    if (!out) return NULL;
+    memcpy(out, s, n);
+    out[n] = '\0';
+    if (trunc) memcpy(out + n, "…", 4);
+    return out;
+}
+
 /* Build an augmented prompt for the planner: recent multi-turn history, then
  * retrieved RAG context (ranked by attention), then the current request.
  * Caller frees the returned string. */
@@ -72,20 +210,94 @@ static char *build_context(ca_reasoning *r, const char *prompt) {
     ca_strbuf b;
     ca_strbuf_init(&b);
 
-    /* multi-turn history (bounded, most-recent-last) */
+    /* WARM tier: compaction summary + session notes under an explicit budget.
+     * Over budget the lowest-value sections shed first:
+     * worklog -> errors/files -> task/state only. */
+    size_t warm_used = 0;
+    if (r->summary && *r->summary) {
+        ca_strbuf_append(&b, "## Earlier conversation summary\n");
+        ca_strbuf_append(&b, r->summary);
+        ca_strbuf_append(&b, "\n\n");
+        warm_used += strlen(r->summary) + 34;
+    }
+    if (r->sn_task[0] || r->sn_state[0] || r->sn_files[0] ||
+        r->sn_errors[0] || r->sn_worklog[0]) {
+        size_t budget_left = (warm_used < (size_t)r->budget_warm)
+            ? (size_t)r->budget_warm - warm_used : 0;
+        for (int lv = 0; lv < 3; lv++) { /* 0=full 1=no worklog 2=minimal */
+            ca_strbuf nb;
+            ca_strbuf_init(&nb);
+            ca_strbuf_append(&nb, "## Session notes\n");
+            if (r->sn_task[0]) ca_strbuf_appendf(&nb, "- 任务: %s\n", r->sn_task);
+            if (r->sn_state[0]) ca_strbuf_appendf(&nb, "- 状态: %s\n", r->sn_state);
+            if (lv < 2 && r->sn_files[0])
+                ca_strbuf_appendf(&nb, "- 本会话涉及文件:\n%s", r->sn_files);
+            if (lv < 2 && r->sn_errors[0])
+                ca_strbuf_appendf(&nb, "- 近期错误:\n%s", r->sn_errors);
+            if (lv < 1 && r->sn_worklog[0])
+                ca_strbuf_appendf(&nb, "- 工作日志:\n%s", r->sn_worklog);
+            ca_strbuf_append(&nb, "\n");
+            if (nb.len <= budget_left || lv == 2) {
+                warm_used += nb.len;
+                ca_strbuf_append(&b, nb.buf ? nb.buf : "");
+                ca_strbuf_free(&nb);
+                break;
+            }
+            ca_strbuf_free(&nb);
+        }
+    }
+
+    /* HOT tier: multi-turn history (bounded, most-recent-last). Newest turns
+     * are kept whole; older turns beyond the hot budget degrade to one line. */
+    size_t hot_mark = b.len;
+    ca_mutex_lock(&r->hist_mtx);
     if (r->hist_n > 0) {
         ca_strbuf_append(&b, "## Conversation history\n");
         size_t start = r->hist_n > 6 ? r->hist_n - 6 : 0;
+        /* walk newest->oldest; the first turn that pushes the running total
+         * over budget (and everything before it) is degraded to one line */
+        size_t keep_from = start;
+        size_t total = 0;
+        int over = 0;
+        for (size_t i = r->hist_n; i-- > start; ) {
+            size_t cost = (r->hist_q[i] ? strlen(r->hist_q[i]) : 0) +
+                          (r->hist_a[i] ? strlen(r->hist_a[i]) : 0) + 24;
+            total += cost;
+            if (total > (size_t)r->budget_hot) { keep_from = i + 1; over = 1; break; }
+        }
         for (size_t i = start; i < r->hist_n; i++) {
+            if (over && i < keep_from) {
+                char *qh = str_head(r->hist_q[i], 120);
+                ca_strbuf_appendf(&b, "User: %s → Assistant: [earlier turn omitted]\n",
+                                  qh ? qh : "");
+                free(qh);
+                continue;
+            }
             if (r->hist_q[i]) ca_strbuf_appendf(&b, "User: %s\n", r->hist_q[i]);
             if (r->hist_a[i]) ca_strbuf_appendf(&b, "Assistant: %s\n", r->hist_a[i]);
         }
         ca_strbuf_append(&b, "\n");
     }
+    ca_mutex_unlock(&r->hist_mtx);
 
-    /* RAG: retrieval + attention ranking over the retrieved items */
+    /* COLD tier: retrieved long-term knowledge + code index, under budget.
+     * Degradation: fewer attention-selected items, then hard char cut.
+     * HyDE (optional): one LLM call rewrites the request as a hypothetical
+     * answer passage; passage-to-passage similarity beats question-to-passage
+     * for recall. */
+    size_t cold_mark = b.len;
     if (r->mem && r->attention) {
-        char *ctx_json = ca_context_build(r->mem, prompt, 12);
+        char hyde_query_buf[1024];
+        const char *retrieval_query = prompt;
+        if (r->hyde && r->llm) {
+            char *passage = ca_hyde_passage(r->llm, prompt);
+            if (passage) {
+                snprintf(hyde_query_buf, sizeof(hyde_query_buf), "%.1000s", passage);
+                free(passage);
+                retrieval_query = hyde_query_buf;
+            }
+        }
+        char *ctx_json = ca_context_build(r->mem, retrieval_query, 12);
         if (ctx_json) {
             cJSON *arr = cJSON_Parse(ctx_json);
             if (arr && cJSON_IsArray(arr) && cJSON_GetArraySize(arr) > 0) {
@@ -102,7 +314,10 @@ static char *build_context(ca_reasoning *r, const char *prompt) {
                     cands[i].boost = 0.0;
                 }
                 ca_attention_result ress[6];
-                int k = ca_attention_select(r->attention, prompt, cands, (size_t)n, ress, 6);
+                int kmax = r->budget_cold >= 2400 ? 6
+                         : (r->budget_cold >= 1000 ? 3 : 1);
+                int k = ca_attention_select(r->attention, prompt, cands, (size_t)n,
+                                            ress, kmax);
                 char *rendered = NULL;
                 if (k > 0) {
                     cJSON *sel = cJSON_CreateArray();
@@ -120,14 +335,74 @@ static char *build_context(ca_reasoning *r, const char *prompt) {
                 free(cands);
                 if (rendered) {
                     ca_strbuf_append(&b, "## Retrieved context\n");
-                    ca_strbuf_append(&b, rendered);
-                    ca_strbuf_append(&b, "\n\n");
+                    if (strlen(rendered) > (size_t)r->budget_cold) {
+                        char *cut = str_head(rendered, (size_t)r->budget_cold);
+                        ca_strbuf_append(&b, cut ? cut : "");
+                        free(cut);
+                        ca_strbuf_append(&b, "\n(超出 cold 预算，已截断)\n\n");
+                    } else {
+                        ca_strbuf_append(&b, rendered);
+                        ca_strbuf_append(&b, "\n\n");
+                    }
                     free(rendered);
                 }
             }
             if (arr) cJSON_Delete(arr);
             free(ctx_json);
         }
+    }
+
+    /* code index: where the request's terms live in workspace files */
+    if (r->index) {
+        char *hits = ca_index_search(r->index, prompt, 5);
+        if (hits && strcmp(hits, "[]") != 0) {
+            cJSON *hroot = cJSON_Parse(hits);
+            if (hroot && cJSON_IsArray(hroot)) {
+                ca_strbuf_append(&b, "## Code index\n");
+                cJSON *it;
+                cJSON_ArrayForEach(it, hroot) {
+                    cJSON *f = cJSON_GetObjectItemCaseSensitive(it, "file");
+                    cJSON *l = cJSON_GetObjectItemCaseSensitive(it, "line");
+                    cJSON *t = cJSON_GetObjectItemCaseSensitive(it, "term");
+                    if (f && cJSON_IsString(f))
+                        ca_strbuf_appendf(&b, "- %s:%d (term: %s)\n",
+                                          f->valuestring,
+                                          l && cJSON_IsNumber(l) ? (int)l->valuedouble : 0,
+                                          t && cJSON_IsString(t) ? t->valuestring : "");
+                }
+                ca_strbuf_append(&b, "\n");
+            }
+            if (hroot) cJSON_Delete(hroot);
+        }
+        free(hits);
+    }
+
+    /* agent-loop feedback: results of the rounds executed so far in this run,
+     * so the planner can decide "next actions" vs "task complete" */
+    if (r->round_log_len > 0) {
+        ca_strbuf_appendf(&b, "## 之前轮次的动作结果 (第 %d/%d 轮)\n", r->round_idx - 1, r->max_rounds);
+        ca_strbuf_append(&b, r->round_log);
+        ca_strbuf_append(&b,
+            "\n你是多轮 agent 循环：根据以上动作结果，(a) 任务已完成 → 直接用纯文本回答；"
+            "(b) 未完成 → 给出下一批 JSON 动作。不要重复已成功的动作。\n\n");
+    }
+
+    /* anti-pollution caution: history/notes/retrieved context are reference
+     * only — the current request must always be planned and executed fresh */
+    ca_strbuf_append(&b,
+        "## 重要约束\n"
+        "- 上面的会话摘要、Session notes、Conversation history、Retrieved context 都只是背景参考，"
+        "不代表当前请求已经完成。\n"
+        "- 即使历史记录里出现过相似的任务，也必须针对「Current request」重新规划并实际执行动作，"
+        "不允许凭历史记录直接回答\"已完成\"。\n"
+        "- 回答中声称对文件做过任何改动，必须以本轮实际出现的 [tool] 动作结果为依据；"
+        "没有实际执行过对应动作，就不得声称做过。\n\n");
+
+    /* Context MMU accounting: per-tier bytes of this prompt */
+    if (r->metrics) {
+        ca_metrics_set(r->metrics, "context.bytes_hot", (double)(b.len - hot_mark));
+        ca_metrics_set(r->metrics, "context.bytes_warm", (double)warm_used);
+        ca_metrics_set(r->metrics, "context.bytes_cold", (double)(b.len - cold_mark));
     }
 
     ca_strbuf_append(&b, "## Current request\n");
@@ -141,11 +416,14 @@ static int h_reason(ca_state_machine *sm, void *ud, const char *input, char **ou
     (void)sm;
     clear_actions(r);
     r->ok_actions = 0;
+    r->denied_actions = 0;
     char *aug = build_context(r, input);
     if (!r->llm) { free(aug); *out = ca_strdup("(no LLM provider configured)"); return 0; }
     char *raw = NULL;
     char *plan_err = NULL;
-    int rc = ca_planner_plan(r->llm, aug ? aug : input, &r->actions, &r->n_actions, &raw, &plan_err);
+    int rc = ca_planner_plan_ex(r->llm, r->tools, r->skills, r->policy,
+                                aug ? aug : input,
+                                &r->actions, &r->n_actions, &raw, &plan_err);
     free(aug);
     if (rc != 0 || !raw) {
         free(raw);
@@ -158,6 +436,12 @@ static int h_reason(ca_state_machine *sm, void *ud, const char *input, char **ou
         return -1; /* move to FAILED */
     }
     ca_log_info("reasoning: LLM plan: %s", raw);
+    r->had_plan = r->n_actions > 0;
+    /* remember this round's plan for stall detection (identical plan twice in
+     * a row means the loop is not making progress); copy — raw flows out */
+    free(r->prev_plan);
+    r->prev_plan = r->last_plan_raw;
+    r->last_plan_raw = ca_strdup(raw);
     if (r->bus) {
         cJSON *p = cJSON_CreateObject();
         cJSON_AddStringToObject(p, "plan", raw);
@@ -199,34 +483,172 @@ static int h_act(ca_state_machine *sm, void *ud, const char *input, char **out) 
     tctx.bus = r->bus;
     tctx.workspace = r->workspace;
     tctx.metrics = r->metrics;
+    tctx.skills = r->skills;
+    tctx.mcp = r->mcp;
 
     ca_tx *tx = NULL;
     if (r->use_transaction && r->snap) tx = ca_tx_begin(r->txm, r->snap, r->tools, &tctx);
 
+    /* Execution Runtime: all non-tx actions run behind the executor interface.
+     * exec_backend routes shell commands through WSL / ssh by wrapping the
+     * local executor (non-shell tools pass through unchanged). */
+    ca_executor *exec = tx ? NULL : ca_executor_new_local(r->tools, &tctx, r->snap);
+    if (exec && r->exec_backend && strcmp(r->exec_backend, "wsl") == 0) {
+        ca_executor *w = ca_executor_new_wsl(exec, r->exec_host);
+        if (w) exec = w;
+    } else if (exec && r->exec_backend && strcmp(r->exec_backend, "remote") == 0 &&
+               r->exec_host && *r->exec_host) {
+        ca_executor *w = ca_executor_new_remote(exec, r->exec_host);
+        if (w) exec = w;
+    }
+
     for (int i = 0; i < r->n_actions; i++) {
         ca_scheduler_yield(); /* cooperative checkpoint between tool actions */
+        /* policy hard-block: a denied action is intentionally NOT executed.
+         * Record the refusal and keep going — a policy refusal is a legitimate
+         * outcome, not an infrastructure failure, so it must not fail the
+         * pipeline (the planner sees the refusal in the next round). */
+        if (r->policy) {
+            const char *preason = NULL;
+            if (ca_policy_check(r->policy, r->actions[i].tool,
+                                r->actions[i].args_json, &preason) == CA_POLICY_DENY) {
+                r->denied_actions++;
+                ca_strbuf_appendf(&b, "[%s] denied by policy (%s)\n",
+                                  r->actions[i].tool, preason ? preason : "rule");
+                char el[128];
+                snprintf(el, sizeof(el), "%s 被策略拒绝", r->actions[i].tool);
+                sn_append_line(r->sn_errors, sizeof(r->sn_errors), el);
+                snprintf(el, sizeof(el), "[%s] DENIED", r->actions[i].tool);
+                sn_append_line(r->sn_worklog, sizeof(r->sn_worklog), el);
+                if (r->metrics) ca_metrics_inc(r->metrics, "tools.denied");
+                continue;
+            }
+        }
+        /* missing-capability self-evolution: the planner referenced a tool
+         * that does not exist — try generating a plugin for it (once per run)
+         * and bind the generated skill under the planned tool name. */
+        if (!r->gen_attempted && r->plugin_registry && r->llm && r->skills &&
+            !ca_tool_find(r->tools, r->actions[i].tool)) {
+            r->gen_attempted = 1;
+            char *desc = str_head(r->last_prompt ? r->last_prompt : r->actions[i].tool, 300);
+            ca_plugin_gen_deps gd;
+            memset(&gd, 0, sizeof(gd));
+            gd.llm = r->llm;
+            gd.registry = r->plugin_registry;
+            gd.skills = r->skills;
+            gd.state_root = r->state_root;
+            char *gjson = ca_plugin_generate_deps(&gd, desc ? desc : r->actions[i].tool);
+            free(desc);
+            if (gjson) {
+                cJSON *g = cJSON_Parse(gjson);
+                cJSON *okj = g ? cJSON_GetObjectItemCaseSensitive(g, "ok") : NULL;
+                cJSON *pj = g ? cJSON_GetObjectItemCaseSensitive(g, "plugin") : NULL;
+                cJSON *nj = pj ? cJSON_GetObjectItemCaseSensitive(pj, "name") : NULL;
+                if (okj && cJSON_IsTrue(okj) && nj && cJSON_IsString(nj) &&
+                    ca_tool_register_generated(r->tools, r->skills,
+                                               r->actions[i].tool, nj->valuestring) == 0) {
+                    ca_log_info("reasoning: auto-generated plugin '%s' bound as tool '%s'",
+                                nj->valuestring, r->actions[i].tool);
+                    /* persist the tool -> skill binding so the capability
+                     * re-binds at startup instead of regenerating */
+                    if (r->state_root)
+                        ca_tool_generated_save_mapping(r->state_root,
+                                                       r->actions[i].tool,
+                                                       nj->valuestring);
+                }
+                if (g) cJSON_Delete(g);
+                free(gjson);
+            }
+        }
+        /* execution hooks (horizontal): before_execute may block the action
+         * the same way policy does — recorded, not fatal. */
+        if (r->hooks) {
+            char *hp = NULL;
+            cJSON *wrap = cJSON_CreateObject();
+            if (wrap) {
+                cJSON_AddStringToObject(wrap, "tool", r->actions[i].tool);
+                cJSON *ho = r->actions[i].args_json
+                    ? cJSON_Parse(r->actions[i].args_json) : NULL;
+                if (ho) cJSON_AddItemToObject(wrap, "args", ho);
+                hp = cJSON_PrintUnformatted(wrap);
+                cJSON_Delete(wrap);
+            }
+            if (ca_hook_dispatch(r->hooks, "exec.before_execute", hp) == 1) {
+                free(hp);
+                r->denied_actions++;
+                ca_strbuf_appendf(&b, "[%s] blocked by hook\n", r->actions[i].tool);
+                char el[128];
+                snprintf(el, sizeof(el), "%s 被 hook 拦截", r->actions[i].tool);
+                sn_append_line(r->sn_errors, sizeof(r->sn_errors), el);
+                if (r->metrics) ca_metrics_inc(r->metrics, "tools.hook_blocked");
+                continue;
+            }
+            free(hp);
+        }
         int rc;
         if (tx) {
             rc = ca_tx_run(tx, r->actions[i].tool, r->actions[i].args_json);
-        } else {
-            ca_tool_result *res = ca_tool_execute(r->tools, r->actions[i].tool,
-                                                  r->actions[i].args_json, &tctx);
-            rc = (res && res->ok) ? 0 : -1;
-            if (res) {
+        } else if (exec) {
+            ca_executor_result *er = NULL;
+            int erc = ca_executor_execute(exec, r->actions[i].tool,
+                                          r->actions[i].args_json, &er);
+            rc = (erc == 0 && er && er->ok) ? 0 : -1;
+            if (er) {
+                /* executor output is already UTF-8 sanitized */
                 ca_strbuf_appendf(&b, "[%s] %s\n", r->actions[i].tool,
-                                 res->output ? res->output : "");
-                ca_tool_result_free(res);
+                                 er->output ? er->output : "");
+                ca_executor_result_free(er);
             }
+        } else {
+            rc = -1;
         }
         if (rc != 0) {
             r->all_actions_ok = 0;
             ca_strbuf_appendf(&b, "[%s] FAILED\n", r->actions[i].tool);
             ca_log_warn("reasoning: action '%s' failed", r->actions[i].tool);
+            if (r->hooks)
+                ca_hook_dispatch(r->hooks, "exec.on_failure", r->actions[i].tool);
         } else {
             r->ok_actions++;
             ca_strbuf_appendf(&b, "[%s] ok\n", r->actions[i].tool);
+            if (r->hooks)
+                ca_hook_dispatch(r->hooks, "exec.after_execute", r->actions[i].tool);
         }
+        /* session notes: files touched / errors / per-action worklog */
+        if (strncmp(r->actions[i].tool, "file_", 5) == 0) {
+            sn_note_file(r, r->actions[i].args_json);
+            /* keep the code index current with files the session touches */
+            if (rc == 0 && r->index && r->actions[i].args_json) {
+                cJSON *ao = cJSON_Parse(r->actions[i].args_json);
+                cJSON *pj = ao ? cJSON_GetObjectItemCaseSensitive(ao, "path") : NULL;
+                if (pj && cJSON_IsString(pj) && pj->valuestring) {
+                    char full[2048];
+                    ca_path_resolve(full, sizeof(full), r->workspace, pj->valuestring);
+                    char *content = ca_fs_read_file(full);
+                    if (content) {
+                        ca_index_add_file(r->index, full, content);
+                        free(content);
+                    }
+                }
+                if (ao) cJSON_Delete(ao);
+            }
+        }
+        if (rc != 0) {
+            char el[96];
+            snprintf(el, sizeof(el), "%s 执行失败", r->actions[i].tool);
+            sn_append_line(r->sn_errors, sizeof(r->sn_errors), el);
+        }
+        char wl[128];
+        snprintf(wl, sizeof(wl), "[%s] %s", r->actions[i].tool,
+                 rc == 0 ? "ok" : "FAILED");
+        sn_append_line(r->sn_worklog, sizeof(r->sn_worklog), wl);
     }
+    if (r->n_actions > 0) {
+        snprintf(r->sn_state, sizeof(r->sn_state), "%d/%d 个动作已执行%s",
+                 r->ok_actions, r->n_actions,
+                 r->all_actions_ok ? "" : "，部分失败");
+    }
+    ca_executor_free(exec);
 
     if (tx) {
         if (r->all_actions_ok && ca_tx_validate(tx)) {
@@ -237,7 +659,11 @@ static int h_act(ca_state_machine *sm, void *ud, const char *input, char **out) 
             ca_log_warn("reasoning: transaction rolled back");
         }
         const char *tout = ca_tx_output(tx);
-        if (tout && *tout) ca_strbuf_append(&b, tout);
+        if (tout && *tout) {
+            char *safe = ca_str_utf8_sanitize(tout);
+            ca_strbuf_append(&b, safe ? safe : tout);
+            free(safe);
+        }
         ca_tx_free(tx);
     }
     if (r->metrics) ca_metrics_add(r->metrics, "actions.executed", (double)r->n_actions);
@@ -246,25 +672,73 @@ static int h_act(ca_state_machine *sm, void *ud, const char *input, char **out) 
     return 0;
 }
 
-/* VERIFY: any action failure fails the whole pipeline. */
+/* VERIFY: any action failure fails the whole pipeline — but the surfaced
+ * result must carry the real per-action outputs (which tool failed and why),
+ * not an opaque message. Policy-denied actions are NOT failures: a plan whose
+ * actions were all legitimately refused is a correct outcome (the run
+ * completes with the refusal text). `input` is the ACT stage's report. */
 static int h_verify(ca_state_machine *sm, void *ud, const char *input, char **out) {
     ca_reasoning *r = ud;
     (void)sm;
-    if (!ca_evaluator_verify(r->eval, r->all_actions_ok, r->n_actions)) {
-        *out = ca_strdup("verification failed: action execution error");
+    int eff_total = r->n_actions - r->denied_actions;
+    if (!ca_evaluator_verify(r->eval, r->all_actions_ok, eff_total, r->ok_actions)) {
+        ca_strbuf b;
+        ca_strbuf_init(&b);
+        ca_strbuf_appendf(&b, "%d/%d 个动作执行失败，各动作结果：\n",
+                          eff_total - r->ok_actions, eff_total);
+        ca_strbuf_append(&b, (input && *input) ? input : "(无工具输出)");
+        *out = ca_strbuf_detach(&b);
         return -1;
     }
     *out = ca_strdup(input);
     return 0;
 }
 
-/* LEARN: record the episode into memory. */
+/* LEARN: record the episode into memory. The raw result (which can embed
+ * kilobytes of tool output) is distilled to its first ~300 chars first —
+ * storing everything verbatim permanently bloats retrieval. */
 static int h_learn(ca_state_machine *sm, void *ud, const char *input, char **out) {
     ca_reasoning *r = ud;
     (void)sm;
+    /* session notes: current task + end-of-run state */
+    if (r->last_prompt && *r->last_prompt) {
+        char *t = str_head(r->last_prompt, 200);
+        if (t) { snprintf(r->sn_task, sizeof(r->sn_task), "%s", t); free(t); }
+    }
+    snprintf(r->sn_state, sizeof(r->sn_state), "%s",
+             r->all_actions_ok ? "上一任务已完成" : "上一任务部分失败");
     if (r->mem) {
-        ca_memory_record_experience(r->mem,
-                                    r->last_prompt ? r->last_prompt : "(task)", input);
+        /* episode only on the final round: intermediate rounds would record
+         * raw tool output into episodic memory; KG edges stay per-round */
+        if (!r->had_plan || r->round_idx >= r->max_rounds) {
+            char *shaped = str_head(input, LEARN_RESULT_CAP);
+            ca_memory_record_experience(r->mem,
+                                        r->last_prompt ? r->last_prompt : "(task)",
+                                        shaped ? shaped : input);
+            free(shaped);
+            /* consolidation automation: threshold+interval gated pass over the
+             * episodes (semantic themes + procedural tool facts) */
+            if (ca_memory_maybe_consolidate(r->mem, 10, 60000) == 1 && r->metrics)
+                ca_metrics_inc(r->metrics, "memory.consolidations");
+        }
+        /* knowledge-graph edges: task -used-> tool -touched-> file */
+        if (r->last_prompt && r->n_actions > 0) {
+            char *th = str_head(r->last_prompt, 80);
+            for (int i = 0; i < r->n_actions; i++) {
+                ca_memory_record_edge(r->mem, th ? th : "(task)",
+                                      r->actions[i].tool, "used_tool");
+                if (strncmp(r->actions[i].tool, "file_", 5) == 0 &&
+                    r->actions[i].args_json) {
+                    cJSON *ao = cJSON_Parse(r->actions[i].args_json);
+                    cJSON *pj = ao ? cJSON_GetObjectItemCaseSensitive(ao, "path") : NULL;
+                    if (pj && cJSON_IsString(pj) && pj->valuestring)
+                        ca_memory_record_edge(r->mem, r->actions[i].tool,
+                                              pj->valuestring, "touched");
+                    cJSON_Delete(ao);
+                }
+            }
+            free(th);
+        }
         ca_memory_flush(r->mem);
     }
     if (r->metrics) {
@@ -285,6 +759,7 @@ ca_reasoning *ca_reasoning_new(const ca_reasoning_config *cfg) {
     if (!cfg || !cfg->llm || !cfg->tools) return NULL;
     ca_reasoning *r = calloc(1, sizeof(ca_reasoning));
     if (!r) return NULL;
+    ca_mutex_init(&r->hist_mtx);
     r->llm = cfg->llm;
     r->tools = cfg->tools;
     r->mem = cfg->memory;
@@ -294,6 +769,20 @@ ca_reasoning *ca_reasoning_new(const ca_reasoning_config *cfg) {
     r->metrics = cfg->metrics;
     r->workspace = cfg->workspace ? ca_strdup(cfg->workspace) : NULL;
     r->use_transaction = cfg->use_transaction;
+    r->budget_hot   = cfg->budget_hot   > 0 ? cfg->budget_hot   : HIST_BUDGET;
+    r->budget_warm  = cfg->budget_warm  > 0 ? cfg->budget_warm  : 3072;
+    r->budget_cold  = cfg->budget_cold  > 0 ? cfg->budget_cold  : 4096;
+    r->hyde = cfg->hyde ? 1 : 0;
+    r->exec_backend = (cfg->exec_backend && *cfg->exec_backend) ? cfg->exec_backend : NULL;
+    r->exec_host = (cfg->exec_host && *cfg->exec_host) ? cfg->exec_host : NULL;
+    r->skills = cfg->skills;
+    r->mcp = cfg->mcp;
+    r->index = cfg->index;
+    r->plugin_registry = cfg->plugin_registry;
+    r->state_root = cfg->state_root ? ca_strdup(cfg->state_root) : NULL;
+    r->max_rounds = cfg->max_rounds > 0 ? cfg->max_rounds : AGENT_LOOP_MAX_ROUNDS;
+    r->hooks = cfg->hooks;
+    if (r->hooks) ca_state_machine_set_hooks(r->sm, r->hooks);
     r->txm = ca_tx_manager_new();
     r->eval = ca_evaluator_new();
     r->attention = ca_attention_new();
@@ -312,12 +801,20 @@ void ca_reasoning_free(ca_reasoning *r) {
     clear_actions(r);
     free(r->last_prompt);
     free(r->workspace);
+    free(r->state_root);
+    ca_mutex_lock(&r->hist_mtx);
     for (size_t i = 0; i < r->hist_n; i++) {
         free(r->hist_q[i]);
         free(r->hist_a[i]);
     }
     free(r->hist_q);
     free(r->hist_a);
+    ca_mutex_unlock(&r->hist_mtx);
+    ca_mutex_destroy(&r->hist_mtx);
+    free(r->summary);
+    free(r->last_plan_raw);
+    free(r->prev_plan);
+    free(r->round_log);
     ca_attention_free(r->attention);
     ca_state_machine_free(r->sm);
     ca_evaluator_free(r->eval);
@@ -339,9 +836,72 @@ void ca_reasoning_set_router(ca_reasoning *r, ca_router *router) {
     r->router = router;
 }
 
-/* Append a completed turn to the bounded multi-turn history. */
+/* Threshold-triggered compaction: summarize the oldest `n_drop` turns with a
+ * structured 9-section LLM prompt (Claude Code-style), store the rolling
+ * summary, then drop those turns. On LLM failure the turns are kept and the
+ * attempt is retried next threshold; 3 consecutive failures trip the breaker. */
+static void compact_history(ca_reasoning *r, size_t n_drop) {
+    if (!r || r->hist_n == 0) return;
+    if (n_drop > r->hist_n) n_drop = r->hist_n;
+    if (n_drop == 0) return;
+
+    ca_strbuf tb;
+    ca_strbuf_init(&tb);
+    for (size_t i = 0; i < n_drop; i++) {
+        ca_strbuf_appendf(&tb, "User: %s\nAssistant: %s\n\n",
+                          r->hist_q[i] ? r->hist_q[i] : "",
+                          r->hist_a[i] ? r->hist_a[i] : "");
+    }
+    char *turns = ca_strbuf_detach(&tb);
+
+    ca_strbuf pb;
+    ca_strbuf_init(&pb);
+    ca_strbuf_append(&pb,
+        "将以下早期对话压缩为结构化纪要，严格按以下 9 个小节输出（Markdown，"
+        "每节 1-4 行，没有内容的写「无」）：\n"
+        "1. 用户核心意图\n2. 技术概念与术语\n3. 涉及文件与代码\n4. 错误与修复\n"
+        "5. 用户全部消息要点\n6. 已完成事项\n7. 未完成待办\n8. 当前工作状态\n"
+        "9. 下一步建议\n"
+        "总长度不超过 2000 字，只输出纪要本身，不要任何前言。\n\n## 待压缩对话\n");
+    ca_strbuf_append(&pb, turns ? turns : "");
+    free(turns);
+    char *user_prompt = ca_strbuf_detach(&pb);
+
+    char *sum = ca_llm_chat_simple(r->llm,
+                                   "你是会话压缩器。输出简体中文 Markdown 纪要。",
+                                   user_prompt);
+    free(user_prompt);
+    if (sum && *sum) {
+        free(r->summary);
+        r->summary = str_head(sum, COMPACT_SUMMARY_CAP);
+        if (!r->summary) r->summary = ca_strdup(sum);
+        r->compact_fails = 0;
+        ca_log_info("reasoning: compacted %zu turns into a %zu-char summary",
+                    n_drop, strlen(r->summary));
+    } else {
+        free(sum);
+        r->compact_fails++;
+        if (r->compact_fails >= 3) r->compact_disabled = 1; /* circuit breaker */
+        ca_log_warn("reasoning: compaction LLM call failed (%d consecutive)",
+                    r->compact_fails);
+        return; /* keep the turns; retry at the next threshold */
+    }
+    for (size_t i = 0; i < n_drop; i++) {
+        free(r->hist_q[i]);
+        free(r->hist_a[i]);
+    }
+    memmove(r->hist_q, r->hist_q + n_drop, (r->hist_n - n_drop) * sizeof(char *));
+    memmove(r->hist_a, r->hist_a + n_drop, (r->hist_n - n_drop) * sizeof(char *));
+    r->hist_n -= n_drop;
+}
+
+/* Append a completed turn to the bounded multi-turn history.
+ * Called from the run path; also read from the HTTP thread by
+ * ca_reasoning_history_json, hence the hist_mtx guard. compact_history is
+ * only ever invoked from here with the lock held (do not lock inside it). */
 static void record_turn(ca_reasoning *r, const char *q, const char *a) {
     if (!r || !q || !a) return;
+    ca_mutex_lock(&r->hist_mtx);
     if (r->hist_cap == 0) {
         r->hist_cap = 16;
         r->hist_q = calloc(r->hist_cap, sizeof(char *));
@@ -354,13 +914,42 @@ static void record_turn(ca_reasoning *r, const char *q, const char *a) {
         memmove(r->hist_a, r->hist_a + 1, (r->hist_cap - 1) * sizeof(char *));
         r->hist_n--;
     }
-    r->hist_q[r->hist_n] = ca_strdup(q);
-    r->hist_a[r->hist_n] = ca_strdup(a);
+    r->hist_q[r->hist_n] = str_head(q, HIST_TURN_CAP);
+    r->hist_a[r->hist_n] = str_head(a, HIST_TURN_CAP);
+    if (!r->hist_q[r->hist_n]) r->hist_q[r->hist_n] = ca_strdup(q);
+    if (!r->hist_a[r->hist_n]) r->hist_a[r->hist_n] = ca_strdup(a);
     r->hist_n++;
+    /* ring full → compact the oldest half via LLM instead of silent loss */
+    if (r->hist_n >= r->hist_cap && !r->compact_disabled && r->llm)
+        compact_history(r, r->hist_cap / 2);
+    ca_mutex_unlock(&r->hist_mtx);
+}
+
+char *ca_reasoning_history_json(ca_reasoning *r, int max_turns) {
+    if (!r) return ca_strdup("[]");
+    if (max_turns <= 0) max_turns = 20;
+    ca_mutex_lock(&r->hist_mtx);
+    size_t start = (r->hist_n > (size_t)max_turns) ? r->hist_n - (size_t)max_turns : 0;
+    cJSON *arr = cJSON_CreateArray();
+    for (size_t i = start; i < r->hist_n; i++) {
+        cJSON *t = cJSON_CreateObject();
+        cJSON_AddStringToObject(t, "q", r->hist_q[i] ? r->hist_q[i] : "");
+        cJSON_AddStringToObject(t, "a", r->hist_a[i] ? r->hist_a[i] : "");
+        cJSON_AddItemToArray(arr, t);
+    }
+    ca_mutex_unlock(&r->hist_mtx);
+    char *s = cJSON_PrintUnformatted(arr);
+    cJSON_Delete(arr);
+    return s ? s : ca_strdup("[]");
 }
 
 int ca_reasoning_run(ca_reasoning *r, const char *prompt, char **answer) {
     if (!r || !prompt) return -1;
+
+    /* Ingestion guard: a prompt with invalid UTF-8 (e.g. a non-UTF-8 API
+     * client) would poison memory/history and break every later LLM call. */
+    char *safe_prompt = ca_str_utf8_sanitize(prompt);
+    if (safe_prompt) prompt = safe_prompt;
 
     /* Router: pick a provider for this run (weighted round-robin). */
     ca_llm *picked = NULL;
@@ -375,25 +964,153 @@ int ca_reasoning_run(ca_reasoning *r, const char *prompt, char **answer) {
 
     free(r->last_prompt);
     r->last_prompt = ca_strdup(prompt);
+    r->gen_attempted = 0; /* one auto-generation attempt per run */
     if (r->mem) ca_memory_working_push(r->mem, prompt);
 
-    char *result = NULL;
-    ca_state st = ca_state_machine_run(r->sm, prompt, &result);
+    /* lifecycle hook: a blocking before_run skips the whole run (a legitimate
+     * refusal, like a policy denial — surfaced as the answer, not a failure) */
+    if (r->hooks) {
+        char *pj = NULL;
+        cJSON *o = cJSON_CreateObject();
+        if (o) {
+            cJSON_AddStringToObject(o, "prompt", prompt);
+            pj = cJSON_PrintUnformatted(o);
+            cJSON_Delete(o);
+        }
+        int hb = ca_hook_dispatch(r->hooks, "agent.before_run", pj);
+        free(pj);
+        if (hb == 1) {
+            if (r->metrics) ca_metrics_inc(r->metrics, "tasks.hook_blocked");
+            if (answer) *answer = ca_strdup("(run blocked by hook)");
+            free(safe_prompt);
+            return 0;
+        }
+    }
+
+    /* Bounded agent loop: each round runs the full state machine once. Round
+     * results are fed back into the next round's planner context; the loop
+     * ends when the LLM stops proposing actions (final text answer) or the
+     * round budget is exhausted. */
+    round_log_reset(r);
+    free(r->last_plan_raw); r->last_plan_raw = NULL;
+    free(r->prev_plan);     r->prev_plan = NULL;
+
+    char *final_text = NULL;   /* LLM's plain-text answer (had_plan == 0) */
+    char *result = NULL;       /* per-round pipeline output */
+    ca_state st = CA_ST_FAILED;
+    int stalled = 0;
+    for (r->round_idx = 1; r->round_idx <= r->max_rounds; r->round_idx++) {
+        free(result);
+        result = NULL;
+        st = ca_state_machine_run(r->sm, prompt, &result);
+        if (st != CA_ST_DONE) break;
+        if (!r->had_plan) { /* no actions planned → this is the final answer */
+            final_text = ca_strdup(result ? result : "");
+            break;
+        }
+        /* executed a planned round: keep the observation for the next round */
+        round_log_append(r, result ? result : "");
+        /* stall detection: the LLM proposed the exact same plan twice — no
+         * progress is possible, stop instead of burning the round budget */
+        if (r->prev_plan && r->last_plan_raw &&
+            strcmp(r->prev_plan, r->last_plan_raw) == 0) {
+            stalled = 1;
+            break;
+        }
+    }
+
+    /* compose the answer: everything that happened + the final reply */
+    ca_strbuf out;
+    ca_strbuf_init(&out);
+    if (r->round_log_len > 0) ca_strbuf_append(&out, r->round_log);
+    if (final_text && *final_text) {
+        if (r->round_log_len > 0) ca_strbuf_append(&out, "\n回答: ");
+        ca_strbuf_append(&out, final_text);
+    } else if (r->round_log_len > 0) {
+        if (stalled)
+            ca_strbuf_appendf(&out, "\n(连续两轮计划相同，已停止；任务可能未完全完成，第 %d/%d 轮)",
+                              r->round_idx, r->max_rounds);
+        else
+            ca_strbuf_appendf(&out, "\n(已达到最大轮数 %d，任务可能未完全完成)", r->max_rounds);
+    }
+    free(final_text);
+    free(result);
+    free(r->last_plan_raw); r->last_plan_raw = NULL;
+    free(r->prev_plan);     r->prev_plan = NULL;
+    char *combined = ca_strbuf_detach(&out);
+
     if (r->metrics) ca_metrics_inc(r->metrics, st == CA_ST_DONE ? "tasks.done" : "tasks.failed");
 
     int ret = -1;
     if (st == CA_ST_DONE) {
-        if (r->mem) ca_memory_working_push(r->mem, result);
-        record_turn(r, prompt, result);
-        if (answer) *answer = result;
-        else free(result);
+        if (r->mem) ca_memory_working_push(r->mem, combined);
+        record_turn(r, prompt, combined);
+        if (r->hooks) {
+            cJSON *o = cJSON_CreateObject();
+            if (o) {
+                cJSON_AddStringToObject(o, "prompt", prompt);
+                cJSON_AddStringToObject(o, "status", "done");
+                cJSON_AddStringToObject(o, "answer", combined ? combined : "");
+                char *pj = cJSON_PrintUnformatted(o);
+                ca_hook_dispatch(r->hooks, "agent.after_run", pj);
+                free(pj);
+                cJSON_Delete(o);
+            }
+        }
+        if (answer) *answer = combined;
+        else free(combined);
         ret = 0;
     } else {
-        if (answer) *answer = result ? result : ca_strdup("(pipeline failed)");
-        else free(result);
+        if (r->hooks) {
+            cJSON *o = cJSON_CreateObject();
+            if (o) {
+                cJSON_AddStringToObject(o, "prompt", prompt);
+                cJSON_AddStringToObject(o, "status", "failed");
+                char *pj = cJSON_PrintUnformatted(o);
+                ca_hook_dispatch(r->hooks, "agent.on_error", pj);
+                free(pj);
+                cJSON_Delete(o);
+            }
+        }
+        if (answer) *answer = combined ? combined : ca_strdup("(pipeline failed)");
+        else free(combined);
         ret = -1;
     }
 
     if (picked) { r->llm = saved; ca_llm_destroy(picked); }
+    free(safe_prompt);
     return ret;
+}
+
+/* Session-memory snapshot: fixed-section notes + compaction state (JSON). */
+char *ca_reasoning_session_json(ca_reasoning *r) {
+    if (!r) return ca_strdup("{}");
+    cJSON *o = cJSON_CreateObject();
+    if (!o) return ca_strdup("{}");
+    cJSON_AddStringToObject(o, "task", r->sn_task);
+    cJSON_AddStringToObject(o, "state", r->sn_state);
+    cJSON_AddStringToObject(o, "files", r->sn_files);
+    cJSON_AddStringToObject(o, "errors", r->sn_errors);
+    cJSON_AddStringToObject(o, "worklog", r->sn_worklog);
+    cJSON_AddStringToObject(o, "summary", r->summary ? r->summary : "");
+    cJSON_AddNumberToObject(o, "history_turns", (double)r->hist_n);
+    cJSON_AddBoolToObject(o, "compaction_disabled", r->compact_disabled ? 1 : 0);
+    char *s = cJSON_PrintUnformatted(o);
+    cJSON_Delete(o);
+    return s ? s : ca_strdup("{}");
+}
+
+/* HyDE primitive: LLM writes a hypothetical answer passage for `query`; the
+ * caller embeds passage-to-passage for retrieval (see reasoning.h). */
+char *ca_hyde_passage(ca_llm *llm, const char *query) {
+    if (!llm || !query || !*query) return NULL;
+    char prompt[1200];
+    snprintf(prompt, sizeof(prompt),
+             "Write a short passage (3-5 sentences) that directly answers the "
+             "question. Output only the passage, no preamble.\n\nQuestion: %.900s",
+             query);
+    return ca_llm_chat_simple(llm,
+                              "You generate concise hypothetical answer passages "
+                              "used for semantic retrieval.",
+                              prompt);
 }

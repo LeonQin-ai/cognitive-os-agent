@@ -75,6 +75,7 @@ uint64_t ca_thread_self_id(void) { return (uint64_t)GetCurrentThreadId(); }
 typedef struct { pthread_mutex_t m; } PosixMutex;
 typedef struct { pthread_cond_t c; } PosixCond;
 typedef struct { pthread_t t; ca_thread_fn fn; void *arg; } PosixThread;
+typedef struct { ca_thread_fn fn; void *arg; } PosixBoot;
 
 int ca_mutex_init(ca_mutex *m) {
     return pthread_mutex_init(&((PosixMutex *)m)->m, NULL) == 0 ? 0 : -1;
@@ -102,9 +103,15 @@ int ca_cond_timedwait_ms(ca_cond *c, ca_mutex *m, int ms) {
 void ca_cond_signal(ca_cond *c) { pthread_cond_signal(&((PosixCond *)c)->c); }
 void ca_cond_broadcast(ca_cond *c) { pthread_cond_broadcast(&((PosixCond *)c)->c); }
 
+/* The bootstrap struct is read once by the new thread and freed by that
+ * thread itself — ca_thread_detach may free the PosixThread handle at any
+ * moment, so the handle must never be touched from inside the thread. */
 static void *posix_thread_proc(void *arg) {
-    PosixThread *pt = (PosixThread *)arg;
-    pt->fn(pt->arg);
+    PosixBoot *b = (PosixBoot *)arg;
+    ca_thread_fn fn = b->fn;
+    void *a = b->arg;
+    free(b);
+    fn(a);
     return NULL;
 }
 
@@ -112,9 +119,11 @@ ca_thread *ca_thread_create(ca_thread_fn fn, void *arg) {
     ca_thread *t = (ca_thread *)malloc(sizeof(ca_thread));
     if (!t) return NULL;
     PosixThread *pt = (PosixThread *)t;
-    pt->fn = fn;
-    pt->arg = arg;
-    if (pthread_create(&pt->t, NULL, posix_thread_proc, pt) != 0) { free(t); return NULL; }
+    PosixBoot *b = (PosixBoot *)malloc(sizeof(*b));
+    if (!b) { free(t); return NULL; }
+    b->fn = fn;
+    b->arg = arg;
+    if (pthread_create(&pt->t, NULL, posix_thread_proc, b) != 0) { free(b); free(t); return NULL; }
     return t;
 }
 void ca_thread_join(ca_thread *t) {

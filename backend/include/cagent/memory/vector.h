@@ -21,6 +21,17 @@ int ca_vectorstore_count(ca_vectorstore *v);
  * Returns a JSON array of {id,text,meta,score} (malloc'd; caller frees). */
 char *ca_vectorstore_nearest(ca_vectorstore *v, const char *query, int k);
 
+/* Hybrid retrieval: score = w_vec*cosine + (1-w_vec)*keyword_overlap
+ * (rerank-style token+bigram blend). w_vec clamped to [0,1].
+ * Same JSON shape as ca_vectorstore_nearest. */
+char *ca_vectorstore_nearest_hybrid(ca_vectorstore *v, const char *query,
+                                    int k, float w_vec);
+
+/* Multi-query (MQE) merge: retrieve per query variant and merge per entry
+ * with the max score. Same JSON shape as ca_vectorstore_nearest. */
+char *ca_vectorstore_nearest_multi(ca_vectorstore *v, const char *const *queries,
+                                   int nq, int k);
+
 #ifdef __cplusplus
 }
 #endif

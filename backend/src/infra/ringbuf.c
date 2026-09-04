@@ -7,6 +7,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 #include <stdatomic.h>
 
 struct ca_ringbuf {

@@ -17,6 +17,13 @@
 
 /* ---------- local provider ---------- */
 
+static int utf8_char_len(unsigned char c) {
+    if ((c & 0xE0) == 0xC0) return 2;
+    if ((c & 0xF0) == 0xE0) return 3;
+    if ((c & 0xF8) == 0xF0) return 4;
+    return 1;
+}
+
 static void local_embed(const char *text, float *out) {
     memset(out, 0, CA_EMBED_DIM * sizeof(float));
     if (!text) return;
@@ -32,6 +39,20 @@ static void local_embed(const char *text, float *out) {
             int bucket = (int)(h % (uint64_t)CA_EMBED_DIM);
             out[bucket] += 1.0f;
         }
+    }
+    /* CJK fallback: non-ASCII text produces no alnum tokens (an all-zero
+     * vector), so hash overlapping UTF-8 character bigrams — Chinese queries
+     * then share buckets with documents containing the same words. */
+    const unsigned char *q = (const unsigned char *)text;
+    while (*q) {
+        if (*q < 0x80) { q++; continue; }
+        int cl = utf8_char_len(*q);
+        int nl = q[cl] ? utf8_char_len(q[cl]) : 0;
+        if (nl > 0 && cl + nl >= 2) {
+            uint64_t h = ca_hash64((const char *)q, (size_t)(cl + nl));
+            out[h % (uint64_t)CA_EMBED_DIM] += 1.0f;
+        }
+        q += (size_t)cl;
     }
     float norm = 0.0f;
     for (int i = 0; i < CA_EMBED_DIM; i++) norm += out[i] * out[i];
@@ -146,7 +167,44 @@ const char *ca_embedding_provider_name(void) {
     return g_remote ? "remote" : "local";
 }
 
-/* ---------- rerank (token overlap) ---------- */
+/* ---------- rerank (token overlap + char-bigram blend) ---------- */
+
+/* Jaccard similarity over character bigrams of the alphanumeric lowercased
+ * text. Catches morphological variants the exact token match misses
+ * ("connect"~"connects"). Result in [0,1]. */
+static float char_bigram_jaccard(const char *a, const char *b) {
+    /* bigram sets bounded to a fixed cap (256 each) — enough for rerank */
+    unsigned short A[256], B[256];
+    int na = 0, nb = 0;
+    const char *srcs[2] = {a, b};
+    unsigned short *dsts[2] = {A, B};
+    int *cnts[2] = {&na, &nb};
+    for (int s = 0; s < 2; s++) {
+        unsigned char prev = 0;
+        const char *p = srcs[s] ? srcs[s] : "";
+        while (*p) {
+            unsigned char c = (unsigned char)*p;
+            if (c >= 'A' && c <= 'Z') c = (unsigned char)(c + 32);
+            if (isalnum(c)) {
+                if (prev && *cnts[s] < 256)
+                    dsts[s][(*cnts[s])++] = (unsigned short)((prev << 8) | c);
+                prev = c;
+            } else {
+                prev = 0;
+            }
+            p++;
+        }
+    }
+    if (na == 0 || nb == 0) return 0.0f;
+    int inter = 0;
+    for (int i = 0; i < na; i++) {
+        for (int j = 0; j < nb; j++) {
+            if (A[i] == B[j]) { inter++; break; }
+        }
+    }
+    int uni = na + nb - inter;
+    return uni > 0 ? (float)inter / (float)uni : 0.0f;
+}
 
 static int count_tokens(const char *s) {
     int n = 0;
@@ -195,12 +253,18 @@ static int token_overlap(const char *q, const char *doc) {
     return hits;
 }
 
+int ca_embed_keyword_score(const char *query, const char *doc, float *score_out) {
+    if (!query || !doc || !score_out) return -1;
+    int qt = count_tokens(query);
+    float overlap = (qt > 0) ? (float)token_overlap(query, doc) / (float)qt : 0.0f;
+    float bigr = char_bigram_jaccard(query, doc);
+    *score_out = 0.6f * overlap + 0.4f * bigr;
+    return 0;
+}
+
 int ca_embed_rerank(const char *query, const char **docs, size_t n, float *scores_out) {
     if (!query || !docs || !scores_out) return -1;
-    int qt = count_tokens(query);
-    for (size_t i = 0; i < n; i++) {
-        float overlap = (float)token_overlap(query, docs[i]);
-        scores_out[i] = (qt > 0) ? overlap / (float)qt : 0.0f;
-    }
+    for (size_t i = 0; i < n; i++)
+        ca_embed_keyword_score(query, docs[i] ? docs[i] : "", &scores_out[i]);
     return 0;
 }

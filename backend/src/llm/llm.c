@@ -32,7 +32,25 @@ int ca_llm_chat(ca_llm *llm, const ca_llm_request *req, ca_llm_response *resp) {
 
 int ca_llm_stream(ca_llm *llm, const ca_llm_request *req, ca_llm_stream_cb cb, void *ud) {
     if (!llm || !llm->vt || !llm->vt->stream) return -1;
-    return llm->vt->stream(llm, req, cb, ud);
+    int rc = llm->vt->stream(llm, req, cb, ud);
+    llm->cancel = 0; /* consumed: the next stream starts uncancelled */
+    return rc;
+}
+
+void ca_llm_cancel(ca_llm *llm) {
+    if (llm) llm->cancel = 1;
+}
+
+const ca_llm_caps *ca_llm_capabilities(ca_llm *llm) {
+    static const ca_llm_caps openai_caps = {1, 1, 128000};
+    static const ca_llm_caps anthropic_caps = {1, 1, 200000};
+    static const ca_llm_caps mock_caps = {1, 0, 8192};
+    static const ca_llm_caps unknown_caps = {1, 1, 0};
+    if (!llm || !llm->provider) return &unknown_caps;
+    if (strcmp(llm->provider, "openai") == 0) return &openai_caps;
+    if (strcmp(llm->provider, "anthropic") == 0) return &anthropic_caps;
+    if (strcmp(llm->provider, "mock") == 0) return &mock_caps;
+    return &unknown_caps;
 }
 
 char *ca_llm_chat_simple(ca_llm *llm, const char *system_prompt, const char *user_prompt) {

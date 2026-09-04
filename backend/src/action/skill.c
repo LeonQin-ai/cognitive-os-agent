@@ -2,6 +2,7 @@
 #include "cagent/action/skill.h"
 #include "cagent/os/os_thread.h"
 #include "cagent/os/os_proc.h"
+#include "cagent/os/os_fs.h"
 #include "cagent/plugin_runtime/sandbox.h"
 #include "cagent/infra/util.h"
 
@@ -21,6 +22,7 @@ static void skill_free(ca_skill *s) {
     free((char *)s->description);
     free((char *)s->kind);
     free((char *)s->body);
+    free((char *)s->caps);
 }
 
 ca_skill_registry *ca_skill_registry_new(void) {
@@ -47,11 +49,30 @@ static int find_skill(ca_skill_registry *r, const char *name) {
 }
 
 int ca_skill_register(ca_skill_registry *r, const ca_skill *s) {
+    return ca_skill_register_ex(r, s, 0);
+}
+
+int ca_skill_register_ex(ca_skill_registry *r, const ca_skill *s, int replace) {
     if (!r || !s || !s->name || !*s->name) return -1;
     const char *kind = (s->kind && *s->kind) ? s->kind : "shell";
     if (strcmp(kind, "shell") != 0 && strcmp(kind, "python") != 0) return -1;
     ca_mutex_lock(&r->mtx);
-    if (find_skill(r, s->name) >= 0) { ca_mutex_unlock(&r->mtx); return -1; }
+    int i = find_skill(r, s->name);
+    if (i >= 0 && !replace) { ca_mutex_unlock(&r->mtx); return -1; }
+    if (i >= 0) {
+        /* upsert: overwrite in place */
+        ca_skill *e = &r->items[i];
+        free((void *)e->name); free((void *)e->description);
+        free((void *)e->kind); free((void *)e->body); free((void *)e->caps);
+        memset(e, 0, sizeof(*e));
+        e->name = ca_strdup(s->name);
+        e->description = ca_strdup(s->description ? s->description : "");
+        e->kind = ca_strdup(kind);
+        e->body = ca_strdup(s->body ? s->body : "");
+        e->caps = ca_strdup(s->caps ? s->caps : "");
+        ca_mutex_unlock(&r->mtx);
+        return 0;
+    }
     if (r->count == r->cap) {
         size_t ncap = r->cap ? r->cap * 2 : 8;
         ca_skill *ni = (ca_skill *)realloc(r->items, ncap * sizeof(*ni));
@@ -65,6 +86,7 @@ int ca_skill_register(ca_skill_registry *r, const ca_skill *s) {
     e->description = ca_strdup(s->description ? s->description : "");
     e->kind = ca_strdup(kind);
     e->body = ca_strdup(s->body ? s->body : "");
+    e->caps = ca_strdup(s->caps ? s->caps : "");
     ca_mutex_unlock(&r->mtx);
     return 0;
 }
@@ -95,41 +117,153 @@ const ca_skill *ca_skill_get(ca_skill_registry *r, size_t i) {
     return s;
 }
 
-/* Wrap python source into a `python -c "<escaped>"` command. */
-static char *py_command(const char *code) {
+/* Substitute {{key}} placeholders in body from args_json (a JSON object).
+ * Values are stringified; unknown placeholders are left as-is. Returns a
+ * malloc'd body (or a copy of body when args are absent/invalid). */
+static char *bind_args(const char *body, const char *args_json) {
+    cJSON *args = args_json && *args_json ? cJSON_Parse(args_json) : NULL;
+    if (!args || !cJSON_IsObject(args)) { cJSON_Delete(args); return ca_strdup(body); }
     ca_strbuf sb;
     ca_strbuf_init(&sb);
-    ca_strbuf_append(&sb, "python -c \"");
-    for (const char *p = code; *p; p++) {
-        if (*p == '\\' || *p == '"') ca_strbuf_append(&sb, "\\");
+    for (const char *p = body; *p;) {
+        if (p[0] == '{' && p[1] == '{') {
+            const char *end = strstr(p + 2, "}}");
+            if (end) {
+                size_t klen = (size_t)(end - (p + 2));
+                char key[128];
+                if (klen < sizeof(key)) {
+                    memcpy(key, p + 2, klen);
+                    key[klen] = '\0';
+                    char *ks = key;
+                    while (*ks == ' ') ks++;
+                    char *ke = ks + strlen(ks);
+                    while (ke > ks && ke[-1] == ' ') *--ke = '\0';
+                    cJSON *v = cJSON_GetObjectItemCaseSensitive(args, ks);
+                    if (v) {
+                        char *vs = NULL;
+                        if (cJSON_IsString(v) && v->valuestring) vs = ca_strdup(v->valuestring);
+                        else vs = cJSON_PrintUnformatted(v);
+                        ca_strbuf_append(&sb, vs ? vs : "");
+                        free(vs);
+                        p = end + 2;
+                        continue;
+                    }
+                }
+            }
+        }
         char tmp[2] = { *p, '\0' };
         ca_strbuf_append(&sb, tmp);
+        p++;
     }
-    ca_strbuf_append(&sb, "\"");
+    cJSON_Delete(args);
     return ca_strbuf_detach(&sb);
+}
+
+/* 1 if a granted token covers `need` ("fs.*" covers "fs.write", exact else). */
+static int cap_covers(const char *granted, const char *need) {
+    const char *star = strchr(granted, '*');
+    size_t plen = star ? (size_t)(star - granted) : strlen(granted);
+    if (plen > 0 && granted[plen - 1] == '.') plen--;
+    if (strlen(need) < plen) return 0;
+    return strncmp(granted, need, plen) == 0;
+}
+
+/* Capability gate for plugin skills: the command's operation classes must be
+ * covered by the granted csv. Legacy skills (caps == NULL) are unrestricted. */
+static int caps_allow(const char *caps_csv, const char *cmd, char *denied, size_t dcap) {
+    if (!caps_csv || !*caps_csv || !cmd) return 1;
+    const char *required[4];
+    int n_req = 0;
+    if (strstr(cmd, ">") || strstr(cmd, "rm ") || strstr(cmd, "mv ") || strstr(cmd, "tee "))
+        required[n_req++] = "fs.write";
+    if (strstr(cmd, "curl") || strstr(cmd, "wget") ||
+        strstr(cmd, "http://") || strstr(cmd, "https://"))
+        required[n_req++] = "net";
+    for (int i = 0; i < n_req; i++) {
+        int covered = 0;
+        const char *p = caps_csv;
+        while (*p) {
+            const char *e = strchr(p, ',');
+            size_t len = e ? (size_t)(e - p) : strlen(p);
+            char tok[64];
+            if (len < sizeof(tok)) {
+                memcpy(tok, p, len);
+                tok[len] = '\0';
+                char *t = tok;
+                while (*t == ' ') t++;
+                size_t tl = strlen(t);
+                while (tl && t[tl - 1] == ' ') t[--tl] = '\0';
+                if (*t && cap_covers(t, required[i])) { covered = 1; break; }
+            }
+            if (!e) break;
+            p = e + 1;
+        }
+        if (!covered) {
+            snprintf(denied, dcap, "%s", required[i]);
+            return 0;
+        }
+    }
+    return 1;
 }
 
 ca_skill_result *ca_skill_execute(ca_skill_registry *r, const char *name,
                                   const char *args_json, const char *workspace,
                                   int timeout_ms) {
     if (!r || !name) return NULL;
-    (void)args_json;
     const ca_skill *s = ca_skill_find(r, name);
     if (!s) return NULL;
 
+    char *bound = bind_args(s->body, args_json);
     char *cmd = NULL;
+    char pyfile[1024] = "";
     if (strcmp(s->kind, "python") == 0) {
-        cmd = py_command(s->body);
+        /* Write the substituted source to a temp file instead of a fragile
+         * `python -c "..."` quoting chain. */
+        if (workspace && *workspace) {
+            ca_path_join(pyfile, sizeof(pyfile), workspace, ".ca-skill.py");
+        } else {
+            snprintf(pyfile, sizeof(pyfile), ".ca-skill.py");
+        }
+        if (ca_fs_write_file(pyfile, bound, strlen(bound)) == 0) {
+            char cmdbuf[1120];
+            snprintf(cmdbuf, sizeof(cmdbuf), "python \"%s\"", pyfile);
+            cmd = ca_strdup(cmdbuf);
+        } else {
+            pyfile[0] = '\0';
+            cmd = ca_strdup(bound); /* fallback: run as shell anyway */
+        }
     } else {
-        cmd = ca_strdup(s->body);
+        cmd = ca_strdup(bound);
     }
+    free(bound);
 
+    if (!cmd) return NULL;
+    /* the workspace may not exist yet (first action of a fresh session);
+     * python skills also write their temp file there */
+    if (workspace && *workspace) ca_fs_mkdirs(workspace);
+    char denied[64] = "";
+    if (!caps_allow(s->caps, cmd, denied, sizeof(denied))) {
+        free(cmd);
+        if (pyfile[0]) ca_fs_remove(pyfile);
+        ca_skill_result *res = (ca_skill_result *)calloc(1, sizeof(*res));
+        if (res) {
+            res->ok = 0;
+            char msg[192];
+            snprintf(msg, sizeof(msg),
+                     "capability denied: skill '%s' requires '%s' (granted: %s)",
+                     name, denied, s->caps);
+            res->output = ca_strdup(msg);
+        }
+        return res;
+    }
     if (ca_sandbox_forbidden(cmd)) {
         free(cmd);
+        if (pyfile[0]) ca_fs_remove(pyfile);
         return NULL;
     }
     ca_proc_result *pr = ca_proc_run_in(cmd, timeout_ms, workspace);
     free(cmd);
+    if (pyfile[0]) ca_fs_remove(pyfile);
     if (!pr) return NULL;
 
     ca_skill_result *res = (ca_skill_result *)calloc(1, sizeof(ca_skill_result));
@@ -213,6 +347,7 @@ int ca_skill_registry_persist(ca_skill_registry *r, const char *state_root) {
         cJSON_AddStringToObject(o, "description", e->description);
         cJSON_AddStringToObject(o, "kind", e->kind);
         cJSON_AddStringToObject(o, "body", e->body);
+        if (e->caps && *e->caps) cJSON_AddStringToObject(o, "caps", e->caps);
         cJSON_AddItemToArray(arr, o);
     }
     ca_mutex_unlock(&r->mtx);
@@ -239,12 +374,14 @@ int ca_skill_registry_load(ca_skill_registry *r, const char *state_root) {
         cJSON *d = cJSON_GetObjectItemCaseSensitive(o, "description");
         cJSON *k = cJSON_GetObjectItemCaseSensitive(o, "kind");
         cJSON *b = cJSON_GetObjectItemCaseSensitive(o, "body");
+        cJSON *cp = cJSON_GetObjectItemCaseSensitive(o, "caps");
         if (!n || !cJSON_IsString(n)) continue;
         ca_skill sk = {
             n->valuestring,
             (d && cJSON_IsString(d)) ? d->valuestring : "",
             (k && cJSON_IsString(k)) ? k->valuestring : "shell",
-            (b && cJSON_IsString(b)) ? b->valuestring : ""
+            (b && cJSON_IsString(b)) ? b->valuestring : "",
+            (cp && cJSON_IsString(cp)) ? cp->valuestring : ""
         };
         ca_skill_register(r, &sk); /* skips duplicate names */
     }

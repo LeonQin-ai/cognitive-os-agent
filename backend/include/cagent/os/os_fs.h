@@ -18,6 +18,8 @@ int ca_fs_append_file(const char *path, const void *data, size_t len);
 
 int ca_fs_exists(const char *path);
 int ca_fs_is_dir(const char *path);
+/* 64-bit file size in bytes (-1 if the path does not exist / stat fails). */
+long long ca_fs_file_size(const char *path);
 /* Recursively create a directory path. 0 ok, -1 on error. */
 int ca_fs_mkdirs(const char *path);
 /* Remove a file. 0 ok, -1 if missing/error. */

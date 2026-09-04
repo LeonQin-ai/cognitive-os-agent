@@ -126,7 +126,10 @@ ca_im_channels *ca_im_channels_new(const char *state_root) {
     char dir[600];
     snprintf(dir, sizeof(dir), "%s/im", cs->path);
     ca_fs_mkdirs(dir);
-    snprintf(cs->path, sizeof(cs->path), "%s/im/channels.json", cs->path);
+    /* self-referential snprintf is UB — build into a scratch buffer */
+    char pbuf[600];
+    snprintf(pbuf, sizeof(pbuf), "%s/im/channels.json", cs->path);
+    snprintf(cs->path, sizeof(cs->path), "%s", pbuf);
     ca_mutex_init(&cs->mtx);
     channels_load(cs);
     return cs;

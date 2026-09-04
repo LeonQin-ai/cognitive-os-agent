@@ -2,6 +2,7 @@
 #include "cagent/action/tools.h"
 #include "cagent/snapshot/snapshot.h"
 #include "cagent/infra/util.h"
+#include "cagent/os/os_fs.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -19,10 +20,40 @@ struct ca_tx {
     int all_ok;
     int n_actions;
     int rolled_back;
+    int git_managed;     /* workspace lives inside a git repo -> no snapshots */
     char *output;        /* accumulated "[tool] output\n" lines */
     size_t output_len;
     size_t output_cap;
 };
+
+/* 1 if `dir` or any of its ancestors contains .git (a directory, or a file
+ * for git worktrees/submodules). Git already provides version control, so
+ * the snapshot engine stays out of the way for git-managed workspaces. */
+static int is_git_managed(const char *dir) {
+    if (!dir || !*dir) return 0;
+    char buf[2048];
+    snprintf(buf, sizeof(buf), "%s", dir);
+    for (int depth = 0; depth < 32; depth++) {
+        char gitp[2200];
+        ca_path_join(gitp, sizeof(gitp), buf, ".git");
+        if (ca_fs_exists(gitp)) return 1;
+        /* strip the last path component */
+        char *slash = strrchr(buf, '/');
+#if defined(_WIN32)
+        char *bslash = strrchr(buf, '\\');
+        if (bslash && (!slash || bslash > slash)) slash = bslash;
+#endif
+        if (!slash || slash == buf) break;
+        *slash = '\0';
+        /* drive root reached ("D:") — check the root itself, then stop */
+        size_t n = strlen(buf);
+        if (n == 2 && buf[1] == ':') {
+            snprintf(gitp, sizeof(gitp), "%s\\.git", buf);
+            return ca_fs_exists(gitp);
+        }
+    }
+    return 0;
+}
 
 ca_tx_manager *ca_tx_manager_new(void) {
     return calloc(1, sizeof(ca_tx_manager));
@@ -40,6 +71,7 @@ ca_tx *ca_tx_begin(ca_tx_manager *m, ca_snapshot *snap, ca_tool_registry *tools,
     tx->all_ok = 1;
     if (ctx) tx->ctx = *ctx;
     tx->ctx.tx = tx;
+    tx->git_managed = is_git_managed(tx->ctx.workspace);
     return tx;
 }
 
@@ -93,8 +125,11 @@ int ca_tx_run(ca_tx *tx, const char *tool_name, const char *args_json) {
     const ca_tool *tool = ca_tool_find(tx->tools, tool_name);
     if (!tool) return -1;
 
-    /* pre-capture write targets so rollback can restore them */
-    if (tx->snap && tool->is_write) {
+    /* pre-capture write targets so rollback can restore them. Skipped for
+     * git-managed workspaces: git is the version control, duplicating file
+     * content in the snapshot block store is wasted work (and cannot handle
+     * huge files anyway). */
+    if (tx->snap && tool->is_write && !tx->git_managed) {
         char *paths[16];
         int npaths = 0;
         extract_paths(args_json, tx->ctx.workspace, paths, &npaths);

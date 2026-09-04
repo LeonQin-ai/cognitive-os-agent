@@ -3,6 +3,8 @@
  * If an interactive ask callback is not installed, ASK degrades to DENY. */
 #pragma once
 
+#include <stddef.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -24,6 +26,20 @@ void ca_policy_engine_free(ca_policy_engine *pe);
 /* action is "allow", "deny", or "ask". tool_name "*" is a catch-all. */
 void ca_policy_add_rule(ca_policy_engine *pe, const char *tool_name, const char *action,
                         const char *reason);
+
+/* Rule management: exact-name rules always beat wildcard rules regardless of
+ * registration order; among rules of the same specificity the LAST one wins. */
+int ca_policy_rule_count(const ca_policy_engine *pe);
+/* Borrowed pointers, valid until the engine changes. Returns 0 ok, -1 range. */
+int ca_policy_rule_get(const ca_policy_engine *pe, size_t index, const char **tool,
+                       const char **action, const char **reason);
+/* Remove the rule at index (no-op if out of range). */
+void ca_policy_remove_rule(ca_policy_engine *pe, size_t index);
+
+/* Persist/load rules as a JSON array [{tool,action,reason}] at path.
+ * save returns 0 ok; load returns the number of rules loaded (-1 on error). */
+int ca_policy_save_file(const ca_policy_engine *pe, const char *path);
+int ca_policy_load_file(ca_policy_engine *pe, const char *path);
 
 /* Evaluate policy for a tool call. reason (if non-NULL) receives the decision
  * reason (static string, do not free). */

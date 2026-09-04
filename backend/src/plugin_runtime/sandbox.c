@@ -1,12 +1,17 @@
-/* sandbox.c — process execution sandbox. */
+/* sandbox.c — process execution sandbox with file-access tracking. */
 #include "cagent/plugin_runtime/sandbox.h"
+#include "cagent/plugin_runtime/filetracker.h"
 #include "cagent/os/os_proc.h"
 #include "cagent/infra/util.h"
 
 #include <stdlib.h>
 #include <string.h>
 
-struct ca_sandbox { int timeout_ms; };
+struct ca_sandbox {
+    int timeout_ms;
+    char *workspace;        /* dir scanned before/after each run (may be NULL) */
+    ca_filetracker *ft;     /* created lazily with workspace */
+};
 
 ca_sandbox *ca_sandbox_new(int timeout_ms) {
     ca_sandbox *sb = (ca_sandbox *)calloc(1, sizeof(ca_sandbox));
@@ -14,7 +19,23 @@ ca_sandbox *ca_sandbox_new(int timeout_ms) {
     return sb;
 }
 
-void ca_sandbox_free(ca_sandbox *sb) { free(sb); }
+void ca_sandbox_free(ca_sandbox *sb) {
+    if (!sb) return;
+    free(sb->workspace);
+    if (sb->ft) ca_filetracker_free(sb->ft);
+    free(sb);
+}
+
+void ca_sandbox_set_workspace(ca_sandbox *sb, const char *dir) {
+    if (!sb) return;
+    free(sb->workspace);
+    sb->workspace = (dir && *dir) ? ca_strdup(dir) : NULL;
+    if (sb->workspace && !sb->ft) sb->ft = ca_filetracker_new();
+}
+
+ca_filetracker *ca_sandbox_filetracker(ca_sandbox *sb) {
+    return sb ? sb->ft : NULL;
+}
 
 static const char *FORBIDDEN[] = {
     "rm -rf", "rm -fr", "mkfs", "format c:", "shutdown", "reboot",
@@ -49,21 +70,41 @@ int ca_sandbox_forbidden(const char *cmd) {
 
 ca_sandbox_result *ca_sandbox_run(ca_sandbox *sb, const char *cmd) {
     if (!cmd || ca_sandbox_forbidden(cmd)) return NULL;
+    /* file tracking: capture the workspace state + command reads before the
+     * run, diff after (see filetracker.h) */
+    ca_ft_snapshot *snap = NULL;
+    if (sb && sb->ft && sb->workspace) {
+        ca_filetracker_cmd_reads(sb->ft, cmd, sb->workspace);
+        snap = ca_filetracker_dir_snapshot(sb->workspace);
+    }
     ca_proc_result *pr = ca_proc_run(cmd, sb ? sb->timeout_ms : 0);
-    if (!pr) return NULL;
+    if (!pr) {
+        if (snap) ca_filetracker_snapshot_free(snap);
+        return NULL;
+    }
     ca_sandbox_result *r = (ca_sandbox_result *)calloc(1, sizeof(ca_sandbox_result));
-    if (!r) { ca_proc_result_free(pr); return NULL; }
+    if (!r) {
+        if (snap) ca_filetracker_snapshot_free(snap);
+        ca_proc_result_free(pr);
+        return NULL;
+    }
     r->exit_code = pr->exit_code;
     r->timed_out = pr->timed_out;
     r->ok = (pr->exit_code == 0 && !pr->timed_out) ? 1 : 0;
     r->output = pr->output ? ca_strdup(pr->output) : ca_strdup("");
     ca_proc_result_free(pr);
+    if (snap && sb->ft) {
+        ca_filetracker_dir_diff(sb->ft, snap, sb->workspace);
+        r->files_json = ca_filetracker_json(sb->ft);
+    }
+    if (snap) ca_filetracker_snapshot_free(snap);
     return r;
 }
 
 void ca_sandbox_result_free(ca_sandbox_result *r) {
     if (!r) return;
     free(r->output);
+    free(r->files_json);
     free(r);
 }
 

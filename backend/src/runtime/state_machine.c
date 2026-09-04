@@ -1,8 +1,10 @@
 #include "cagent/runtime/state_machine.h"
+#include "cagent/runtime/hook.h"
 #include "cagent/infra/util.h"
 
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
 typedef struct {
     ca_state_handler fn;
@@ -12,6 +14,7 @@ typedef struct {
 struct ca_state_machine {
     stage stages[CA_ST_COUNT];
     ca_state current;
+    ca_hook_registry *hooks; /* optional; fires agent.on_state_change */
 };
 
 static const char *state_names[CA_ST_COUNT] = {
@@ -26,6 +29,19 @@ ca_state_machine *ca_state_machine_new(void) {
 }
 
 void ca_state_machine_free(ca_state_machine *sm) { free(sm); }
+
+void ca_state_machine_set_hooks(ca_state_machine *sm, ca_hook_registry *hooks) {
+    if (!sm) return;
+    sm->hooks = hooks;
+}
+
+/* Fire the on_state_change hook for a stage entry (best effort, never blocks). */
+static void sm_notify(ca_state_machine *sm, ca_state st) {
+    if (!sm->hooks) return;
+    char payload[64];
+    snprintf(payload, sizeof(payload), "{\"state\":\"%s\"}", ca_state_name(st));
+    ca_hook_dispatch(sm->hooks, "agent.on_state_change", payload);
+}
 
 void ca_state_machine_set_handler(ca_state_machine *sm, ca_state st, ca_state_handler fn, void *ud) {
     if (st < CA_ST_RECEIVE || st >= CA_ST_DONE) return;
@@ -48,6 +64,7 @@ ca_state ca_state_machine_run(ca_state_machine *sm, const char *input, char **re
     for (size_t i = 0; i < sizeof(cognitive_order) / sizeof(ca_state); i++) {
         ca_state st = cognitive_order[i];
         sm->current = st;
+        sm_notify(sm, st);
         stage *sg = &sm->stages[st];
         if (sg->fn) {
             char *out = NULL;

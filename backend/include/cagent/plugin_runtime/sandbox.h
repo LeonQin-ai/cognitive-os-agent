@@ -1,7 +1,12 @@
 /* sandbox.h — process execution sandbox.
  * Runs commands with a timeout and a deny-list of dangerous operations. This is
  * the isolation primitive the plugin runtime uses before executing untrusted
- * plugin shell steps. */
+ * plugin shell steps.
+ *
+ * File tracking (filetracker.h): when a workspace directory is configured via
+ * ca_sandbox_set_workspace(), every run records which files the command read
+ * (command tokens that exist), wrote or deleted (before/after workspace scan)
+ * into the sandbox's tracker, exposed as result->files_json. */
 #pragma once
 #include <stddef.h>
 
@@ -10,12 +15,14 @@ extern "C" {
 #endif
 
 typedef struct ca_sandbox ca_sandbox;
+typedef struct ca_filetracker ca_filetracker;
 
 typedef struct ca_sandbox_result {
     int ok;            /* 1 = exit code 0 and not timed out */
     int exit_code;
     int timed_out;
     char *output;      /* combined stdout+stderr (malloc'd) */
+    char *files_json;  /* touched-file audit "[{path,ops}]" or NULL (malloc'd) */
 } ca_sandbox_result;
 
 ca_sandbox *ca_sandbox_new(int timeout_ms);   /* timeout_ms <= 0 = none */
@@ -29,6 +36,12 @@ int ca_sandbox_forbidden(const char *cmd);
  * ca_sandbox_result_free(). */
 ca_sandbox_result *ca_sandbox_run(ca_sandbox *sb, const char *cmd);
 void ca_sandbox_result_free(ca_sandbox_result *r);
+
+/* Enable file tracking: sandboxed runs scan `dir` before/after and record
+ * file accesses (see filetracker.h). NULL/"" disables tracking. */
+void ca_sandbox_set_workspace(ca_sandbox *sb, const char *dir);
+/* The sandbox's tracker (borrowed; valid until ca_sandbox_free). */
+ca_filetracker *ca_sandbox_filetracker(ca_sandbox *sb);
 
 /* --- Wasm seam ---
  * The native sandbox executes untrusted shell. Wasm is the upgrade path for

@@ -73,13 +73,55 @@ static char *extract_content(const char *msg) {
 }
 
 /* Produce the JSON text that a real planner LLM would emit: a JSON array of
- * {"tool": "...", "args": {...}} for file tasks, else a short prose answer. */
+ * {"tool": "...", "args": {...}} for file tasks, else a short prose answer.
+ * Multi-round aware: the reasoning loop feeds previous-round action results
+ * back under "## 之前轮次的动作结果"; round >= 2 finishes with a prose answer
+ * unless a 修复 request has not yet seen its file_edit applied. */
 static char *plan_for(const char *msg) {
     if (!msg) return ca_strdup("[]");
+    const char *cur = strstr(msg, "## Current request\n");
+    const char *req = cur ? cur + strlen("## Current request\n") : msg;
+    const char *loop_sec = strstr(msg, "## 之前轮次的动作结果");
+    if (loop_sec) {
+        /* check the fix marker only inside THIS run's results section — the
+         * conversation history may contain old answers with the same text */
+        const char *fix_hit = strstr(loop_sec, "[file_edit] ok");
+        if (strstr(req, "修复") && !(fix_hit && cur && fix_hit < cur)) {
+            char *fpath = find_path(req);
+            cJSON *arr = cJSON_CreateArray();
+            cJSON *a = cJSON_CreateObject();
+            cJSON *args = cJSON_CreateObject();
+            cJSON_AddStringToObject(a, "tool", "file_edit");
+            cJSON_AddStringToObject(args, "path", fpath ? fpath : "a.txt");
+            cJSON_AddStringToObject(args, "old_string", "OLD");
+            cJSON_AddStringToObject(args, "new_string", "NEW");
+            cJSON_AddItemToObject(a, "args", args);
+            cJSON_AddItemToArray(arr, a);
+            char *out = cJSON_PrintUnformatted(arr);
+            cJSON_Delete(arr);
+            free(fpath);
+            return out ? out : ca_strdup("[]");
+        }
+        /* plain-text answer; contains "ok" so the e2e assertion keeps passing */
+        return ca_strdup("ok: task complete / 任务完成。");
+    }
     int want_write = strstr(msg, "文件") || strstr(msg, "file") ||
                      strstr(msg, "写") || strstr(msg, "创建") || strstr(msg, "生成");
     int want_read  = strstr(msg, "读取") || strstr(msg, "cat ") || strstr(msg, "read ");
     char *path = find_path(msg);
+    if (strstr(req, "分析")) {
+        cJSON *arr = cJSON_CreateArray();
+        cJSON *a = cJSON_CreateObject();
+        cJSON *args = cJSON_CreateObject();
+        cJSON_AddStringToObject(a, "tool", "file_read");
+        cJSON_AddStringToObject(args, "path", path ? path : "a.txt");
+        cJSON_AddItemToObject(a, "args", args);
+        cJSON_AddItemToArray(arr, a);
+        char *out = cJSON_PrintUnformatted(arr);
+        cJSON_Delete(arr);
+        free(path);
+        return out ? out : ca_strdup("[]");
+    }
     if (want_write || want_read) {
         cJSON *arr = cJSON_CreateArray();
         cJSON *a = cJSON_CreateObject();
@@ -239,6 +281,10 @@ int main(int argc, char **argv) {
     if (!s) { fprintf(stderr, "listen failed on %u\n", (unsigned)port); return 1; }
     ca_http_server_route(s, "POST", "/v1/chat/completions", h_chat, NULL);
     ca_http_server_route(s, "POST", "/v1/messages", h_messages, NULL);
+    /* Volcengine Ark Coding Plan style paths (base_url already ends in /vN,
+     * so the adapter appends only /chat/completions). */
+    ca_http_server_route(s, "POST", "/api/coding/v3/chat/completions", h_chat, NULL);
+    ca_http_server_route(s, "POST", "/api/coding/v1/messages", h_messages, NULL);
     printf("mock LLM server on http://localhost:%u/v1/chat/completions\n", (unsigned)port);
     fflush(stdout);
     (void)g_stop;

@@ -161,3 +161,71 @@ void ca_hash_hex(char out[17], uint64_t h) {
     }
     out[16] = '\0';
 }
+
+/* ---------- UTF-8 validation / sanitization ---------- */
+/* Returns the number of bytes in the UTF-8 sequence starting at byte b,
+ * or 0 if b cannot start a valid sequence of the expected length. */
+static int utf8_seq_len(unsigned char b) {
+    if (b < 0x80) return 1;          /* ASCII */
+    if ((b & 0xE0) == 0xC0) return 2;
+    if ((b & 0xF0) == 0xE0) return 3;
+    if ((b & 0xF8) == 0xF0) return 4;
+    return 0;                        /* continuation byte or invalid lead */
+}
+
+int ca_str_utf8_valid_n(const char *s, long long n) {
+    if (!s) return 1;
+    size_t len = (n < 0) ? strlen(s) : (size_t)n;
+    size_t i = 0;
+    while (i < len) {
+        int l = utf8_seq_len((unsigned char)s[i]);
+        if (l == 0 || i + (size_t)l > len) return 0;
+        for (int k = 1; k < l; k++)
+            if (((unsigned char)s[i + k] & 0xC0) != 0x80) return 0;
+        /* reject overlong / surrogate / > U+10FFFF encodings */
+        unsigned int cp = 0;
+        if (l == 1) cp = (unsigned char)s[i];
+        else if (l == 2) cp = ((unsigned char)s[i] & 0x1F) << 6 | ((unsigned char)s[i+1] & 0x3F);
+        else if (l == 3) cp = ((unsigned char)s[i] & 0x0F) << 12 | ((unsigned char)s[i+1] & 0x3F) << 6 | ((unsigned char)s[i+2] & 0x3F);
+        else cp = ((unsigned char)s[i] & 0x07) << 18 | ((unsigned char)s[i+1] & 0x3F) << 12 | ((unsigned char)s[i+2] & 0x3F) << 6 | ((unsigned char)s[i+3] & 0x3F);
+        if ((l == 2 && cp < 0x80) || (l == 3 && cp < 0x800) || (l == 4 && cp < 0x10000) ||
+            (cp >= 0xD800 && cp <= 0xDFFF) || cp > 0x10FFFF) return 0;
+        i += (size_t)l;
+    }
+    return 1;
+}
+
+char *ca_str_utf8_sanitize(const char *s) {
+    if (!s) return NULL;
+    size_t len = strlen(s);
+    char *out = (char *)malloc(len + 1);
+    if (!out) return NULL;
+    size_t o = 0, i = 0;
+    while (i < len) {
+        int l = utf8_seq_len((unsigned char)s[i]);
+        int ok = (l > 0 && i + (size_t)l <= len);
+        if (ok) {
+            for (int k = 1; k < l; k++)
+                if (((unsigned char)s[i + k] & 0xC0) != 0x80) { ok = 0; break; }
+        }
+        if (ok) {
+            unsigned int cp = 0;
+            if (l == 1) cp = (unsigned char)s[i];
+            else if (l == 2) cp = ((unsigned char)s[i] & 0x1F) << 6 | ((unsigned char)s[i+1] & 0x3F);
+            else if (l == 3) cp = ((unsigned char)s[i] & 0x0F) << 12 | ((unsigned char)s[i+1] & 0x3F) << 6 | ((unsigned char)s[i+2] & 0x3F);
+            else cp = ((unsigned char)s[i] & 0x07) << 18 | ((unsigned char)s[i+1] & 0x3F) << 12 | ((unsigned char)s[i+2] & 0x3F) << 6 | ((unsigned char)s[i+3] & 0x3F);
+            if ((l == 2 && cp < 0x80) || (l == 3 && cp < 0x800) || (l == 4 && cp < 0x10000) ||
+                (cp >= 0xD800 && cp <= 0xDFFF) || cp > 0x10FFFF) ok = 0;
+        }
+        if (ok) {
+            memcpy(out + o, s + i, (size_t)l);
+            o += (size_t)l;
+            i += (size_t)l;
+        } else {
+            out[o++] = '?';
+            i += (l > 0) ? 1 : 1;   /* skip the bad lead byte; continuations get re-checked */
+        }
+    }
+    out[o] = '\0';
+    return out;
+}

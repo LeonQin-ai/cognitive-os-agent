@@ -37,9 +37,12 @@ const char *ca_embedding_provider_name(void);
 
 /* --- rerank --- */
 /* Score each doc for relevance to query (larger = more relevant). scores_out
- * receives n floats. Uses token-overlap for local; remote providers may
- * upgrade this later. Returns 0 ok. */
+ * receives n floats: 0.6*token-overlap + 0.4*char-bigram Jaccard. Returns 0 ok. */
 int ca_embed_rerank(const char *query, const char **docs, size_t n, float *scores_out);
+
+/* Keyword relevance of a single doc (the same scorer ca_embed_rerank applies
+ * per doc), for hybrid retrieval blending. Returns 0 ok. */
+int ca_embed_keyword_score(const char *query, const char *doc, float *score_out);
 
 #ifdef __cplusplus
 }

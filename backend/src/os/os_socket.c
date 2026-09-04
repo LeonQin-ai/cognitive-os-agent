@@ -324,6 +324,19 @@ ca_socket *ca_accept(ca_listener *l, int timeout_ms) {
     ca_socket *s = malloc(sizeof(ca_socket));
     if (!s) { CLOSEFD(fd); return NULL; }
     s->fd = fd;
+    /* SO_RCVTIMEO so a half-open connection (connected but never sends a
+     * complete request) cannot wedge the single-threaded HTTP server: recv()
+     * returns WSAETIMEDOUT and the connection is dropped instead of blocking
+     * the accept loop forever. NOTE: on Windows the timeout is a DWORD in
+     * milliseconds (NOT struct timeval); 30s is generous for the WebSocket
+     * client threads, which poll with ca_sock_wait_readable() before recv. */
+#ifdef _WIN32
+    DWORD rto = 30000;
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, (const char *)&rto, sizeof(rto));
+#else
+    struct timeval rto = { 30, 0 };
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, (const char *)&rto, sizeof(rto));
+#endif
     return s;
 }
 

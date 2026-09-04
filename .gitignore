@@ -4,8 +4,9 @@ backend/dist/
 backend/out/
 backend/data/
 backend/-p/
+backend/release/
 
-# --- runtime state (never commit) ---
+# --- runtime state (never commit: contains API keys and local data) ---
 backend/state/
 backend/state*/
 

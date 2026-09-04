@@ -285,13 +285,21 @@
       <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
       Dashboard
     </button>
-    <button data-p="tasks">
-      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="14" height="16" rx="2"/><path d="m7.5 11 3 3 5-6"/></svg>
-      Tasks
+    <button data-p="chat">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
+      对话
     </button>
     <button data-p="agents">
       <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>
       Agents
+    </button>
+    <button data-p="policy">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+      策略
+    </button>
+    <button data-p="flow">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="6" height="6" rx="1"/><rect x="15" y="15" width="6" height="6" rx="1"/><path d="M9 6h6a3 3 0 0 1 3 3v6"/></svg>
+      Flow
     </button>
     <button data-p="models">
       <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M1 9h3M1 15h3M20 9h3M20 15h3"/></svg>
@@ -477,26 +485,26 @@ panels.dashboard = `
     <pre id="dash-out">加载中…</pre>
   </div>`;
 
-panels.tasks = `
+panels.chat = `
   <div class="card">
-    <h2>Run a task</h2>
-    <div class="hint">提交一个自然语言任务，走完整 RECEIVE→UNDERSTAND→REASON→PLAN→ACT→VERIFY→LEARN 链路。</div>
-    <textarea id="prompt" placeholder="例如：在 test/ 建文件 a.txt 并写入 hello"></textarea>
-    <div class="row">
-      <button onclick="runTask()">Run</button>
-      <span id="taskstat" class="muted"></span>
+    <h2>对话</h2>
+    <div class="hint">连续多轮对话：同一会话上下文持续累积，像 opencode 一样在一个窗口里不断发消息。📎 可上传文本文件做 RAG，提问时自动召回相关内容。</div>
+    <div id="chat-box" style="display:flex;flex-direction:column;gap:8px;max-height:52vh;overflow-y:auto;padding:4px 2px"></div>
+    <div class="muted" id="chat-status" style="min-height:16px;font-size:12px"></div>
+    <div class="row" style="align-items:flex-end">
+      <textarea id="chat-input" placeholder="输入消息，Enter 发送（Shift+Enter 换行）" style="flex:1;min-height:44px"></textarea>
+      <button onclick="chatSend()">发送</button>
+      <button class="sec" onclick="$('chat-file').click()" title="上传文件（RAG）">📎</button>
+      <input type="file" id="chat-file" style="display:none" onchange="uploadFile(this)">
     </div>
-  </div>
-  <div class="card">
-    <div class="card-head"><h2>Recent tasks</h2></div>
-    <div class="chips" id="histList"></div>
   </div>
   <div class="card">
     <div class="card-head">
-      <h2>Result</h2>
-      <button class="sec sm" onclick="copyPre('out')">Copy</button>
+      <h2>已上传文件</h2>
+      <button class="sec sm" onclick="loadUploads()">Refresh</button>
     </div>
-    <pre id="out">等待输入…</pre>
+    <div class="chips" id="uploads-list">加载中…</div>
+    <div class="hint">文本类文件自动分块入库（RAG）；上传的文件保存在 state/uploads/。</div>
   </div>`;
 
 panels.agents = `
@@ -530,6 +538,70 @@ panels.agents = `
     </div>
   </div>`;
 
+panels.policy = `
+  <div class="card">
+    <h2>添加策略规则</h2>
+    <div class="hint">deny 的工具会同时被两层拦截：规划侧从工具目录中隐藏（LLM 看不到），执行侧硬性拒绝（即使 LLM 尝试绕过）。规则按 tool 名精确匹配，"*" 为通配；精确规则始终优先于通配规则，同级后写覆盖先写。规则持久化到 state 目录 policy.json，重启后生效。</div>
+    <div class="row">
+      <select id="pol-tool" style="flex:1;min-width:160px">
+        <option value="*">*</option>
+      </select>
+      <select id="pol-action" style="flex:0 0 110px">
+        <option value="deny">deny</option>
+        <option value="allow">allow</option>
+        <option value="ask">ask</option>
+      </select>
+      <input id="pol-reason" type="text" placeholder="原因（可选）" style="flex:2;min-width:200px">
+      <button onclick="policyAdd()">添加</button>
+    </div>
+    <div class="row"><span id="pol-stat" class="muted"></span></div>
+  </div>
+  <div class="card">
+    <div class="card-head">
+      <h2>当前规则</h2>
+      <button class="sec sm" onclick="loadPolicy()">Refresh</button>
+    </div>
+    <div class="hint">ask 在无交互确认回调时退化为 deny。被拒绝的调用不记为失败，agent 会跳过并在回答中说明。</div>
+    <div id="pol-list">加载中…</div>
+  </div>`;
+
+panels.flow = `
+  <div class="card">
+    <h2>自动编排（LLM 生成 DAG）</h2>
+    <div class="hint">输入一个总任务，LLM 自动分解成 Flow DAG（每个子任务一个节点，并行执行）。生成后填入下方编辑器，可修改再执行；「自动执行」则一步完成 分解→执行→LLM 综合答案。需先在 Agents 页注册 agent。</div>
+    <div class="row">
+      <input id="flow-task" type="text" placeholder="描述总任务，如：调研 dist 目录并写一份问题清单" style="flex:1;min-width:220px">
+      <button onclick="flowGen()">生成 DAG</button>
+      <button onclick="flowAuto()">自动执行</button>
+      <span id="flow-gen-status" class="muted" style="font-size:12px"></span>
+    </div>
+  </div>
+  <div class="card">
+    <h2>Flow DAG</h2>
+    <div class="hint">手写或修改 DAG：nodes 每项 {id, agent, task}（agent 需先注册），edges 每项 {from, to}。task 里可用 {{节点id}} 引用上游节点的结果。校验通过后按拓扑分层并行执行，结果写入黑板 flow/&lt;id&gt;/result。</div>
+    <textarea id="flow-json" style="width:100%;min-height:150px;font-family:monospace;font-size:12px" placeholder='{"nodes":[{"id":"a","agent":"alpha","task":"创建 f.txt 写入内容为 hi"},{"id":"b","agent":"beta","task":"总结: {{a}}"}],"edges":[{"from":"a","to":"b"}]}'></textarea>
+    <div class="row" style="margin-top:8px">
+      <button onclick="flowRun()">执行 Flow</button>
+      <button class="sec" onclick="flowMerge()">综合答案</button>
+      <button class="sec" onclick="loadFlow()">加载黑板记录</button>
+      <span id="flow-status" class="muted" style="font-size:12px"></span>
+    </div>
+    <div id="flow-out" style="font-size:12.5px;white-space:pre-wrap;margin-top:8px"></div>
+    <div class="row" style="margin-top:8px">
+      <input id="flow-follow" type="text" placeholder="执行完后继续追问，如：把第 2 步的结果整理成表格" style="flex:1;min-width:220px" onkeydown="if(event.key==='Enter')flowFollow()">
+      <button onclick="flowFollow()">继续对话</button>
+      <span id="flow-follow-status" class="muted" style="font-size:12px"></span>
+    </div>
+    <div class="hint" style="margin-top:4px">「综合答案」把 Flow 各节点结果交给 LLM 汇总成最终结论；「继续对话」带着 Flow 结果进入对话（走 /v1/chat，保留上下文）。</div>
+  </div>
+  <div class="card">
+    <div class="card-head">
+      <h2>最近 Flow 结果（黑板）</h2>
+      <button class="sec sm" onclick="loadFlow()">Refresh</button>
+    </div>
+    <div id="flow-board">加载中…</div>
+  </div>`;
+
 panels.mcp = `
   <div class="card">
     <h2>MCP 广场</h2>
@@ -538,13 +610,21 @@ panels.mcp = `
   </div>
   <div class="card">
     <h2>Add MCP connection</h2>
-    <div class="hint">注册一个 JSON-RPC 2.0 MCP 服务器连接（例如本地 mock：http://127.0.0.1:9000）。注册后 agent 可调用其工具。</div>
+    <div class="hint">注册一个标准 MCP 服务器连接：http 传输填 url；stdio 传输填 command（如 npx）与 args（如 -y @modelcontextprotocol/server-memory）。注册后自动发现工具，agent 可直接调用 mcp__&lt;server&gt;__&lt;tool&gt;。</div>
     <div class="row">
       <input id="mcp-name" type="text" placeholder="name (如 local-mock)" style="flex:1;min-width:140px">
-      <input id="mcp-url" type="text" placeholder="url (如 http://host:port/mcp)" style="flex:2;min-width:200px">
+      <select id="mcp-transport" style="flex:0 0 110px">
+        <option value="http">http</option>
+        <option value="stdio">stdio</option>
+      </select>
+      <input id="mcp-url" type="text" placeholder="url (http 传输必填)" style="flex:2;min-width:200px">
     </div>
     <div class="row">
-      <input id="mcp-token" type="text" placeholder="token (可选)" style="flex:1;min-width:140px">
+      <input id="mcp-command" type="text" placeholder="command (stdio 传输必填，如 npx)" style="flex:1;min-width:160px">
+      <input id="mcp-args" type="text" placeholder="args (空格分隔，如 -y @modelcontextprotocol/server-memory)" style="flex:2;min-width:200px">
+    </div>
+    <div class="row">
+      <input id="mcp-token" type="text" placeholder="token (http 可选)" style="flex:1;min-width:140px">
       <button onclick="mcpAdd()">Add</button>
       <span id="mcp-stat" class="muted"></span>
     </div>
@@ -641,6 +721,18 @@ panels.snapshots = `
       <button onclick="load('snapshots')">Refresh</button>
       <button class="sec danger" onclick="rollback()">Rollback latest</button>
     </div>
+  </div>
+  <div class="card">
+    <div class="card-head">
+      <h2>大文件保护上限</h2>
+    </div>
+    <div class="row">
+      <input id="snap-max" type="number" min="0" step="1" style="width:140px">
+      <span class="muted">MB</span>
+      <button onclick="saveSnapshotCfg()">保存</button>
+      <span id="snap-max-msg" class="muted"></span>
+    </div>
+    <div class="hint">超过该大小的文件不再复制进快照（回滚时保持原样），0 = 不限制。保存后立即生效并持久化。</div>
   </div>
   <div class="card">
     <div class="card-head">
@@ -808,6 +900,10 @@ async function load(panel){
   if(panel === 'mcp') return loadMcp();
   if(panel === 'skills') return loadSkillsMarket();
   if(panel === 'plugins') return loadPluginMarket();
+  if(panel === 'snapshots') return loadSnapshots();
+  if(panel === 'chat') return loadChat();
+  if(panel === 'policy') return loadPolicy();
+  if(panel === 'flow') return loadFlow();
   if(panel === 'metrics'){
     const r = await call('GET', '/metrics');
     const el = $('metrics-out'); if(el) el.textContent = r.text;
@@ -817,6 +913,31 @@ async function load(panel){
   if(!f) return;
   const r = await call('GET', f.path);
   const el = $(f.out); if(el) renderJSON(r.obj, el);
+}
+
+/* ================= Snapshots ================= */
+
+async function loadSnapshots(){
+  const r = await call('GET', '/v1/snapshots');
+  const el = $('snapshots-out'); if(el) renderJSON(r.obj, el);
+  await loadSnapshotCfg();
+}
+
+async function loadSnapshotCfg(){
+  const r = await call('GET', '/v1/config/snapshot');
+  const el = $('snap-max'); if(!el) return;
+  const v = (r.obj && typeof r.obj.max_file === 'number' && r.obj.max_file >= 0) ? r.obj.max_file : 67108864;
+  el.value = v === 0 ? 0 : Math.round(v / 1048576);
+  const st = $('snap-max-msg'); if(st) st.textContent = '';
+}
+
+async function saveSnapshotCfg(){
+  const el = $('snap-max'); if(!el) return;
+  const st = $('snap-max-msg');
+  const mb = parseInt(el.value, 10);
+  if(isNaN(mb) || mb < 0){ if(st) st.textContent = '请输入 ≥ 0 的整数（0 = 不限制）'; return; }
+  const r = await call('POST', '/v1/config/snapshot', {max_file: mb * 1048576});
+  if(st) st.textContent = (r.status === 200 && r.obj && r.obj.ok) ? '已保存' : ('失败: ' + (r.text || ('HTTP ' + r.status)).slice(0, 80));
 }
 
 /* ================= Agents ================= */
@@ -878,9 +999,13 @@ async function loadMcp(){
   if(!MCP_CONNS.length){
     box.innerHTML = '<span class="muted" style="font-size:12px">（暂无连接，先添加一个）</span>';
   } else {
-    box.innerHTML = '<div class="table-wrap"><table><thead><tr><th>Name</th><th>URL</th><th>Token</th><th></th></tr></thead><tbody>' +
-      MCP_CONNS.map((c, i) => '<tr><td>' + esc(c.name) + '</td><td class="muted">' + esc(c.url) + '</td><td>' + (c.has_token ? '已设置' : '—') + '</td>' +
-        '<td><button class="sec sm danger" onclick="mcpDelete(' + i + ')">Delete</button></td></tr>').join('') +
+    box.innerHTML = '<div class="table-wrap"><table><thead><tr><th>Name</th><th>Transport</th><th>Target</th><th>Tools</th><th>Token</th><th></th></tr></thead><tbody>' +
+      MCP_CONNS.map((c, i) => '<tr><td>' + esc(c.name) + '</td><td>' + esc(c.transport || 'http') + '</td>' +
+        '<td class="muted">' + esc((c.transport === 'stdio') ? ((c.command || '') + ' ' + (c.args || '')) : c.url) + '</td>' +
+        '<td>' + (typeof c.tools === 'number' ? c.tools : '—') + '</td>' +
+        '<td>' + (c.has_token ? '已设置' : '—') + '</td>' +
+        '<td><button class="sec sm danger" onclick="mcpDelete(' + i + ')">Delete</button> ' +
+        '<button class="sec sm" onclick="mcpSync()">Sync</button></td></tr>').join('') +
       '</tbody></table></div>';
   }
   loadMcpPlaza();
@@ -896,31 +1021,62 @@ async function loadMcpPlaza(){
   if(!MCP_PLAZA.length){ box.innerHTML = '<span class="muted" style="font-size:12px">（目录为空）</span>'; return; }
   box.innerHTML = MCP_PLAZA.map((m, i) =>
     '<div class="item"><h3>' + esc(m.name) + (m.repo ? ' <a class="tag" href="' + esc(m.repo) + '" target="_blank" rel="noopener">GitHub</a>' : '') + '</h3><p>' + esc(m.description) + '</p>' +
-    '<div class="url">' + esc(m.url) + '</div>' +
+    '<div class="url">' + esc(m.transport === 'stdio' ? ((m.command || '') + ' ' + (m.args || '')) : m.url) + '</div>' +
     '<div class="hint">' + (m.needs_local ? '需本地运行 · ' : '') + esc(m.key_hint || '') + '</div>' +
     '<button class="sec sm" onclick="mcpPlazaUse(' + i + ')">添加连接</button></div>'
   ).join('');
 }
 
-function mcpPlazaUse(i){
+async function mcpPlazaUse(i){
   const m = MCP_PLAZA[i]; if(!m) return;
-  $('mcp-name').value = m.id;
-  $('mcp-url').value = m.url;
-  mcpAdd();
+  toast('添加 MCP 连接 ' + m.id + ' …');
+  const body = {name: m.id, transport: m.transport || 'http'};
+  if(m.transport === 'stdio'){
+    body.command = m.command || '';
+    body.args = m.args || '';
+    if(!body.command){ toast('该条目缺少 stdio 命令'); return; }
+  } else {
+    body.url = m.url;
+  }
+  if(m.token && m.token_hint) body.token = m.token;
+  if(m.needs_token && !body.token){
+    const tok = prompt('该 MCP 服务器需要凭据，请输入 ' + (m.key_hint || 'token') + '：');
+    if(!tok){ toast('已取消（未填 token）'); return; }
+    body.token = tok.trim();
+    if(!body.token){ toast('已取消（未填 token）'); return; }
+  }
+  const r = await call('POST', '/v1/mcp', body);
+  if(r.status < 300) toast('✔ 已添加连接 ' + m.id);
+  else toast('添加失败: ' + ((r.obj && r.obj.error) || ('HTTP ' + r.status)));
+  loadMcp();
 }
 
 function mcpAdd(){
   const name = $('mcp-name').value.trim();
+  const transport = $('mcp-transport') ? $('mcp-transport').value : 'http';
   const url = $('mcp-url').value.trim();
+  const command = $('mcp-command') ? $('mcp-command').value.trim() : '';
+  const args = $('mcp-args') ? $('mcp-args').value.trim() : '';
   const token = $('mcp-token').value.trim();
   const st = $('mcp-stat');
-  if(!name || !url){ if(st) st.textContent = '需要 name 和 url'; return; }
-  const body = {name, url};
+  if(!name){ if(st) st.textContent = '需要 name'; return; }
+  if(transport === 'http' && !url){ if(st) st.textContent = 'http 传输需要 url'; return; }
+  if(transport === 'stdio' && !command){ if(st) st.textContent = 'stdio 传输需要 command'; return; }
+  const body = {name, transport};
+  if(transport === 'http') body.url = url; else { body.command = command; if(args) body.args = args; }
   if(token) body.token = token;
   call('POST', '/v1/mcp', body).then(r => {
     if(st) st.textContent = (r.status < 300) ? '✔ 已添加' : ((r.obj && r.obj.error) ? 'error: ' + r.obj.error : 'error ' + r.status);
-    if(r.status < 300){ $('mcp-name').value = ''; $('mcp-url').value = ''; $('mcp-token').value = ''; loadMcp(); }
+    if(r.status < 300){ $('mcp-name').value = ''; $('mcp-url').value = ''; $('mcp-command').value = ''; $('mcp-args').value = ''; $('mcp-token').value = ''; loadMcp(); }
   });
+}
+
+async function mcpSync(){
+  toast('重新发现 MCP 工具…');
+  const r = await call('POST', '/v1/mcp/sync', {});
+  if(r.status < 300) toast('✔ 已重新发现 ' + ((r.obj && r.obj.registered) || 0) + ' 个工具');
+  else toast('同步失败: HTTP ' + r.status);
+  loadMcp();
 }
 
 function mcpDelete(i){
@@ -987,13 +1143,15 @@ async function loadSkillsMarket(){
   let html = '<div class="sub">市场模板（点击安装）</div>' +
     (t.length ? t.map((x,i) =>
       '<div class="item"><b>' + esc(x.name) + '</b> <span class="muted">' + esc(x.kind) + '</span>' +
+      (x.installed ? ' <span class="tag">已安装</span>' : '') +
       '<div class="hint">' + esc(x.description || '') + '</div>' +
-      '<button class="sec sm" onclick="installSkill(' + i + ')">安装</button></div>').join('')
+      '<button class="sec sm" onclick="installSkill(' + i + ')">' + (x.installed ? '重装/更新' : '安装') + '</button></div>').join('')
       : '<span class="muted">（空）</span>');
-  html += '<div class="sub">GitHub 热门应用（点击查看仓库）</div>' +
+  html += '<div class="sub">GitHub 热门应用（点击安装 / 查看仓库）</div>' +
     (gh.length ? gh.map(x =>
       '<div class="item"><b><a href="' + esc(x.repo) + '" target="_blank" rel="noopener">' + esc(x.name) + '</a></b> <span class="muted">' + esc(x.kind) + '</span>' +
-      '<div class="hint">' + esc(x.description || '') + '</div></div>').join('')
+      '<div class="hint">' + esc(x.description || '') + '</div>' +
+      (x.winget_id ? '<button class="sec sm" onclick="ghInstall(\'' + esc(x.name) + '\')">安装（winget）</button>' : '') + '</div>').join('')
       : '<span class="muted">（空）</span>');
   html += '<div class="sub">已安装（可删除）</div>' +
     (inst.length ? inst.map(x =>
@@ -1007,8 +1165,16 @@ async function installSkill(i){
   const t = (SKILL_MARKET.templates || [])[i]; if(!t) return;
   const r = await call('POST', '/v1/skills/publish',
     {name:t.name, description:t.description, kind:t.kind, body:t.body});
-  toast((r.obj && r.obj.ok) ? '已安装 ' + t.name : '安装失败');
+  if(r.obj && r.obj.ok) toast('已' + (t.installed ? '更新 ' : '安装 ') + t.name);
+  else toast('安装失败: ' + ((r.obj && r.obj.error) || ('HTTP ' + r.status)));
   loadSkillsMarket();
+}
+
+async function ghInstall(name){
+  toast('启动安装 ' + name + '（后台 winget）…');
+  const r = await call('POST', '/v1/tools/gh-install', {name});
+  if(r.obj && r.obj.ok) toast(name + ' 后台安装已启动，完成后可在 shell 里直接使用');
+  else toast('安装失败: ' + ((r.obj && r.obj.error) || ('HTTP ' + r.status)));
 }
 
 async function deleteSkill(n){
@@ -1326,6 +1492,21 @@ function wsConnect(){
           } else {
             toast('📩 新消息: ' + ((m.role === 'user') ? '用户' : '助手'));
           }
+        } else if(m.type === 'event' && m.source === 'flow'){
+          const el = $('flow-out');
+          if(el && m.payload){
+            const p = m.payload;
+            let line = '';
+            if(p.stage === 'execute') line = '→ [' + (p.node || '') + ':' + (p.agent || '') + '] ' + (p.detail || '');
+            else if(p.stage === 'done') line = '✓ [' + (p.node || '') + ':' + (p.agent || '') + '] ' + (p.detail || '完成');
+            if(line) el.textContent += (el.textContent ? '\n' : '') + line;
+          }
+        } else if(m.type === 'event' && CHAT_BUSY){
+          const st = $('chat-status');
+          if(st && m.payload){
+            if(m.payload.plan) st.textContent = '第 ' + (CHAT_ROUND = (CHAT_ROUND||0) + 1) + ' 轮：规划中…';
+            else if(m.payload.result) st.textContent = '第 ' + (CHAT_ROUND||1) + ' 轮：动作结果已回传';
+          }
         }
       } catch(err) { /* ignore non-JSON */ }
     };
@@ -1334,57 +1515,336 @@ function wsConnect(){
   } catch(e) { /* ws unsupported */ }
 }
 
-/* ================= 任务 ================= */
+/* ================= 对话（连续多轮聊天） ================= */
 
-let TASK_HIST = [];
-try { TASK_HIST = JSON.parse(localStorage.getItem('cagent-task-hist') || '[]'); } catch(e) { TASK_HIST = []; }
-
-function addHist(id, prompt){
-  TASK_HIST.unshift({id, prompt: String(prompt).slice(0, 60), t: Date.now()});
-  TASK_HIST = TASK_HIST.slice(0, 12);
-  try { localStorage.setItem('cagent-task-hist', JSON.stringify(TASK_HIST)); } catch(e) {}
-  renderHist();
+async function loadChat(){
+  const box = $('chat-box'); if(!box) return;
+  const r = await call('GET', '/v1/chat/history');
+  const turns = (r.obj && Array.isArray(r.obj.turns)) ? r.obj.turns : [];
+  box.innerHTML = '';
+  turns.forEach(t => { if(t.q) chatAddBubble('user', t.q); if(t.a) chatAddBubble('bot', t.a); });
+  chatScroll();
+  loadUploads();
 }
 
-function renderHist(){
-  const el = $('histList'); if(!el) return;
-  if(!TASK_HIST.length){
-    el.innerHTML = '<span class="muted" style="font-size:12px">暂无历史任务</span>';
-    return;
+function chatAddBubble(role, text){
+  const box = $('chat-box'); if(!box) return;
+  const wrap = document.createElement('div');
+  wrap.style.cssText = role === 'user'
+    ? 'align-self:flex-end;max-width:85%;background:var(--accent,#3b82f6);color:#fff;border-radius:12px 12px 2px 12px;padding:8px 12px;white-space:pre-wrap;word-break:break-word'
+    : 'align-self:flex-start;max-width:92%;background:var(--card2,#1f2430);border:1px solid var(--border,#333);border-radius:12px 12px 12px 2px;padding:8px 12px';
+  if(role === 'bot'){
+    const pre = document.createElement('pre');
+    pre.style.cssText = 'margin:0;white-space:pre-wrap;word-break:break-word;font-size:12.5px';
+    pre.textContent = text;
+    wrap.appendChild(pre);
+  } else {
+    wrap.textContent = text;
   }
-  el.innerHTML = TASK_HIST.map(h =>
-    '<button class="chip" onclick="viewHist(' + h.id + ')" title="' + esc(h.prompt) + '">' +
-    '<b>#' + h.id + '</b><span>' + esc(h.prompt) + '</span></button>'
-  ).join('');
+  box.appendChild(wrap);
+  chatScroll();
+  return wrap;
 }
 
-async function viewHist(id){
-  const st = $('taskstat'); if(st) st.textContent = 'loading #' + id + '…';
-  const r = await call('GET', '/v1/tasks/' + id);
-  renderJSON(r.obj, $('out'));
-  if(st) st.textContent = (r.obj && r.obj.status) || '';
+function chatScroll(){
+  const box = $('chat-box');
+  if(box) box.scrollTop = box.scrollHeight;
 }
 
-async function runTask(){
-  const prompt = $('prompt').value.trim();
-  if(!prompt) return;
-  const st = $('taskstat'); if(st) st.textContent = 'submitting…';
-  const c = await call('POST', '/v1/tasks', {prompt});
+let CHAT_BUSY = false;
+let CHAT_ROUND = 0;
+
+async function chatSend(){
+  if(CHAT_BUSY) return;
+  const input = $('chat-input');
+  const msg = input ? input.value.trim() : '';
+  if(!msg) return;
+  const st = $('chat-status');
+  CHAT_BUSY = true;
+  CHAT_ROUND = 0;
+  input.value = '';
+  chatAddBubble('user', msg);
+  const bot = chatAddBubble('bot', '…');
+  const c = await call('POST', '/v1/chat', {message: msg});
   const id = c.obj && c.obj.id;
   if(id === undefined){
-    renderJSON(c.obj, $('out'));
-    if(st) st.textContent = '';
+    bot.querySelector('pre').textContent = '提交失败: ' + (c.text || ('HTTP ' + c.status));
+    CHAT_BUSY = false;
     return;
   }
-  addHist(id, prompt);
-  for(let i = 0; i < 120; i++){
+  for(let i = 0; i < 600; i++){
     const r = await call('GET', '/v1/tasks/' + id);
-    renderJSON(r.obj, $('out'));
-    const taskStatus = r.obj.status;
-    if(st) st.textContent = taskStatus || '';
-    if(taskStatus === 'DONE' || taskStatus === 'FAILED' || taskStatus === 'CANCELLED' || taskStatus === 'TIMEOUT') return;
+    const t = r.obj;
+    if(st) st.textContent = (t && t.status && t.status !== 'DONE') ? ('状态: ' + t.status) : '';
+    if(t && (t.status === 'DONE' || t.status === 'FAILED' || t.status === 'CANCELLED' || t.status === 'TIMEOUT')){
+      bot.querySelector('pre').textContent = (t.output && t.output.trim()) ? t.output : ('(' + t.status + '，无输出)');
+      if(st) st.textContent = '';
+      CHAT_BUSY = false;
+      chatScroll();
+      return;
+    }
     await new Promise(res => setTimeout(res, 300));
   }
+  bot.querySelector('pre').textContent = '(等待超时，任务仍在后台执行；可在 Tasks 页查看)';
+  CHAT_BUSY = false;
+}
+
+async function uploadFile(inp){
+  const f = inp.files && inp.files[0];
+  if(!f) return;
+  const st = $('chat-status');
+  if(st) st.textContent = '上传中: ' + f.name + '…';
+  try {
+    const resp = await fetch('/v1/upload?name=' + encodeURIComponent(f.name), {method:'POST', body: f});
+    const obj = await resp.json().catch(() => ({}));
+    if(resp.ok && obj.ok) toast('已上传 ' + obj.name + (obj.chunks ? ('（' + obj.chunks + ' 块入库）') : ''));
+    else toast('上传失败: ' + (obj.error || ('HTTP ' + resp.status)));
+  } catch(e) { toast('上传失败: ' + e); }
+  inp.value = '';
+  if(st) st.textContent = '';
+  loadUploads();
+}
+
+async function loadUploads(){
+  const el = $('uploads-list'); if(!el) return;
+  const r = await call('GET', '/v1/uploads');
+  const files = (r.obj && Array.isArray(r.obj.files)) ? r.obj.files : [];
+  el.innerHTML = files.length
+    ? files.map(f => '<span class="chip">' + esc(f.name) + ' <span class="muted">(' + (f.size/1024).toFixed(1) + ' KB)</span> <button class="sec sm" onclick="delUpload(\'' + esc(f.name).replace(/'/g,"\\'") + '\')">✕</button></span>').join('')
+    : '<span class="muted">（暂无上传）</span>';
+}
+
+async function delUpload(name){
+  const r = await call('DELETE', '/v1/uploads/' + encodeURIComponent(name));
+  if(r.status === 200) { toast('已删除 ' + name); loadUploads(); }
+  else toast('删除失败');
+}
+
+/* Enter 发送 */
+document.addEventListener('keydown', (e) => {
+  if(e.key === 'Enter' && !e.shiftKey && e.target && e.target.id === 'chat-input'){
+    e.preventDefault();
+    chatSend();
+  }
+});
+
+/* ================= Flow（自动编排 + 手写 DAG） ================= */
+
+let FLOW_BUSY = false;
+
+/* 生成 DAG：LLM 分解总任务 → 填入下方编辑器（不执行，可修改） */
+async function flowGen(){
+  const input = $('flow-task'), st = $('flow-gen-status'), ta = $('flow-json');
+  if(!input || !st) return;
+  const task = input.value.trim();
+  if(!task){ st.textContent = '请先输入总任务'; return; }
+  st.textContent = '分解中…';
+  const c = await call('POST', '/v1/flows/decompose', {task});
+  if(c.status === 200 && c.obj && c.obj.dag){
+    if(ta) ta.value = JSON.stringify(c.obj.dag, null, 2);
+    st.textContent = '已生成，可在下方修改后执行';
+  } else {
+    st.textContent = '生成失败: ' + ((c.obj && c.obj.error) || c.text || ('HTTP ' + c.status));
+  }
+}
+
+/* 自动执行：分解→执行→综合答案一步完成 */
+async function flowAuto(){
+  if(FLOW_BUSY) return;
+  const input = $('flow-task'), st = $('flow-gen-status'), out = $('flow-out');
+  if(!input) return;
+  const task = input.value.trim();
+  if(!task){ if(st) st.textContent = '请先输入总任务'; return; }
+  FLOW_BUSY = true;
+  if(st) st.textContent = '已提交（分解→执行→综合）…';
+  if(out) out.textContent = '';
+  const c = await call('POST', '/v1/orchestrate', {task});
+  const id = c.obj && c.obj.id;
+  if(id === undefined){
+    if(st) st.textContent = '提交失败: ' + (c.text || ('HTTP ' + c.status));
+    FLOW_BUSY = false;
+    return;
+  }
+  for(let i = 0; i < 600; i++){
+    const r = await call('GET', '/v1/tasks/' + id);
+    const t = r.obj;
+    if(st && t && t.status && t.status !== 'DONE') st.textContent = '状态: ' + t.status;
+    if(t && (t.status === 'DONE' || t.status === 'FAILED' || t.status === 'CANCELLED' || t.status === 'TIMEOUT')){
+      FLOW_LAST_OUTPUT = t.output || '';
+      if(out) out.textContent = FLOW_LAST_OUTPUT ? ('—— 综合答案 ——\n' + FLOW_LAST_OUTPUT) : '(无输出)';
+      if(st) st.textContent = '';
+      FLOW_BUSY = false;
+      loadFlow();
+      return;
+    }
+    await new Promise(res => setTimeout(res, 300));
+  }
+  if(st) st.textContent = '(等待超时，任务仍在后台执行)';
+  FLOW_BUSY = false;
+}
+
+/* ================= 策略规则 ================= */
+
+let POLICY_TOOLS_LOADED = false;
+async function loadPolicyTools(){
+  const sel = $('pol-tool'); if(!sel) return;
+  if(POLICY_TOOLS_LOADED) return;
+  const r = await call('GET', '/v1/tools');
+  const tools = Array.isArray(r.obj) ? r.obj : [];
+  if(!tools.length) return;
+  const cur = sel.value || '*';
+  sel.innerHTML = '<option value="*">*</option>' +
+    tools.map(t => '<option value="' + esc(t.name) + '">' + esc(t.name) + '</option>').join('');
+  sel.value = [...sel.options].some(o => o.value === cur) ? cur : '*';
+  POLICY_TOOLS_LOADED = true;
+}
+
+async function loadPolicy(){
+  const el = $('pol-list'); if(!el) return;
+  loadPolicyTools();
+  const r = await call('GET', '/v1/policy/rules');
+  const rules = (r.obj && r.obj.rules) ? r.obj.rules : [];
+  if(!rules.length){
+    el.innerHTML = '<span class="muted" style="font-size:12px">暂无规则（默认全放行）</span>';
+    return;
+  }
+  const parts = [];
+  for(const g of rules){
+    const deny = g.action === 'deny';
+    const color = deny ? '#e74c3c' : (g.action === 'ask' ? '#f39c12' : '#27ae60');
+    parts.push('<div style="display:flex;align-items:center;gap:8px;margin:6px 0">' +
+      '<span style="font-family:monospace;color:' + color + ';font-weight:600">' + esc(g.action) + '</span>' +
+      '<span style="font-family:monospace">' + esc(g.tool) + '</span>' +
+      (g.reason ? '<span class="muted" style="font-size:12px">' + esc(g.reason) + '</span>' : '') +
+      '<span style="flex:1"></span>' +
+      '<button class="sec sm" onclick="policyDelete(' + g.index + ')">删除</button>' +
+      '</div>');
+  }
+  el.innerHTML = parts.join('');
+}
+
+async function policyAdd(){
+  const tool = $('pol-tool'), act = $('pol-action'), reason = $('pol-reason'), st = $('pol-stat');
+  if(!tool || !act) return;
+  const t = tool.value.trim();
+  if(!t){ if(st) st.textContent = 'tool 名不能为空'; return; }
+  const c = await call('POST', '/v1/policy/rules',
+    {tool: t, action: act.value, reason: reason ? reason.value.trim() : ''});
+  if(c.status === 200){
+    if(st) st.textContent = '已添加' + (c.obj && c.obj.saved ? '并持久化' : '（持久化失败，重启会丢失）');
+    tool.value = '*'; if(reason) reason.value = '';
+    loadPolicy();
+  } else {
+    if(st) st.textContent = '添加失败: ' + (c.text || ('HTTP ' + c.status));
+  }
+}
+
+async function policyDelete(idx){
+  const c = await call('DELETE', '/v1/policy/rules/' + idx);
+  if(c.status === 200) loadPolicy();
+  else toast('删除失败');
+}
+
+/* ================= Flow DAG 执行 ================= */
+
+async function loadFlow(){
+  const el = $('flow-board'); if(!el) return;
+  const r = await call('GET', '/v1/blackboard');
+  const facts = (r.obj && r.obj.facts) ? r.obj.facts : {};
+  const parts = [];
+  for(const k of Object.keys(facts)){
+    if(k === 'flow/trace' || k.indexOf('flow/') === 0){
+      parts.push('<div style="margin:6px 0"><b>' + esc(k) + '</b>' +
+        '<pre style="margin:2px 0;white-space:pre-wrap;font-size:12px">' +
+        esc(String(facts[k]).slice(0, 1200)) + '</pre></div>');
+    }
+  }
+  el.innerHTML = parts.length ? parts.join('')
+    : '<span class="muted" style="font-size:12px">暂无 Flow 记录</span>';
+}
+
+let FLOW_LAST_OUTPUT = '';
+
+/* 把 Flow 执行结果 + 追加指令交给 LLM（走 /v1/chat，保留对话上下文） */
+async function flowChat(promptPrefix, statusEl){
+  if(FLOW_BUSY) return;
+  const out = $('flow-out'), st = statusEl, inp = $('flow-follow');
+  if(!FLOW_LAST_OUTPUT){
+    if(st) st.textContent = '请先执行 Flow（或加载黑板记录）';
+    return;
+  }
+  FLOW_BUSY = true;
+  if(st) st.textContent = 'LLM 处理中…';
+  const tail = FLOW_LAST_OUTPUT.length > 3000 ? FLOW_LAST_OUTPUT.slice(-3000) : FLOW_LAST_OUTPUT;
+  const message = promptPrefix.replace('%RESULTS%', tail) + ((inp && inp.value.trim()) ? ('\n\n' + inp.value.trim()) : '');
+  const c = await call('POST', '/v1/chat', {message});
+  const id = c.obj && c.obj.id;
+  if(id === undefined){
+    if(st) st.textContent = '提交失败: ' + (c.text || ('HTTP ' + c.status));
+    FLOW_BUSY = false;
+    return;
+  }
+  for(let i = 0; i < 600; i++){
+    const r = await call('GET', '/v1/tasks/' + id);
+    const t = r.obj;
+    if(st && t && t.status && t.status !== 'DONE') st.textContent = '状态: ' + t.status;
+    if(t && (t.status === 'DONE' || t.status === 'FAILED' || t.status === 'CANCELLED' || t.status === 'TIMEOUT')){
+      if(out) out.textContent = (out.textContent ? out.textContent + '\n\n' : '') + '—— LLM 回答 ——\n' + (t.output || '(无输出)');
+      if(st) st.textContent = '';
+      if(inp) inp.value = '';
+      FLOW_BUSY = false;
+      return;
+    }
+    await new Promise(res => setTimeout(res, 300));
+  }
+  if(st) st.textContent = '(等待超时，任务仍在后台执行)';
+  FLOW_BUSY = false;
+}
+
+/* LLM 综合 Flow 各节点结果为最终结论 */
+function flowMerge(){
+  flowChat('请综合以下 Flow 执行结果，给出最终结论（直接回答，不要复述过程）：\n\n%RESULTS%', $('flow-status'));
+}
+
+/* 继续对话：带着 Flow 结果追问 */
+function flowFollow(){
+  flowChat('以下是刚才 Flow 的执行结果：\n\n%RESULTS%\n\n请基于以上结果继续。', $('flow-follow-status'));
+}
+
+async function flowRun(){
+  if(FLOW_BUSY) return;
+  const ta = $('flow-json'), st = $('flow-status'), out = $('flow-out');
+  if(!ta) return;
+  let dag;
+  try { dag = JSON.parse(ta.value); }
+  catch(e){ if(st) st.textContent = 'JSON 解析失败: ' + e.message; return; }
+  if(!dag.nodes){ if(st) st.textContent = '缺少 nodes 数组'; return; }
+  FLOW_BUSY = true;
+  if(st) st.textContent = '提交中…';
+  if(out) out.textContent = '';
+  const c = await call('POST', '/v1/flows', dag);
+  const id = c.obj && c.obj.id;
+  if(id === undefined){
+    if(st) st.textContent = '提交失败: ' + (c.obj && c.obj.error ? c.obj.error : (c.text || ('HTTP ' + c.status)));
+    FLOW_BUSY = false;
+    return;
+  }
+  for(let i = 0; i < 600; i++){
+    const r = await call('GET', '/v1/tasks/' + id);
+    const t = r.obj;
+    if(st) st.textContent = (t && t.status && t.status !== 'DONE') ? ('状态: ' + t.status) : '';
+    if(t && (t.status === 'DONE' || t.status === 'FAILED' || t.status === 'CANCELLED' || t.status === 'TIMEOUT')){
+      FLOW_LAST_OUTPUT = t.output || '';
+      if(out) out.textContent = FLOW_LAST_OUTPUT ? ('—— Flow 输出 ——\n' + FLOW_LAST_OUTPUT) : '(无输出)';
+      if(st) st.textContent = '';
+      FLOW_BUSY = false;
+      loadFlow();
+      return;
+    }
+    await new Promise(res => setTimeout(res, 300));
+  }
+  if(st) st.textContent = '(等待超时，任务仍在后台执行)';
+  FLOW_BUSY = false;
 }
 
 /* ================= 模型路由 ================= */
@@ -1610,7 +2070,7 @@ async function testForm(){
 
 /* ================= 导航 ================= */
 
-const TITLES = {dashboard:'Dashboard', tasks:'Tasks', agents:'Agents', models:'Models', mcp:'MCP', skills:'Skills', plugins:'Plugins', im:'IM', memory:'Memory', snapshots:'Execution', trace:'Monitor', cluster:'Cluster', metrics:'Metrics'};
+const TITLES = {dashboard:'Dashboard', chat:'对话', agents:'Agents', policy:'策略', flow:'Flow', models:'Models', mcp:'MCP', skills:'Skills', plugins:'Plugins', im:'IM', memory:'Memory', snapshots:'Execution', trace:'Monitor', cluster:'Cluster', metrics:'Metrics'};
 let current = 'dashboard';
 
 function switchPanel(p){
@@ -1622,7 +2082,6 @@ function switchPanel(p){
   });
   const t = $('pageTitle'); if(t) t.textContent = TITLES[p] || p;
   $('content').innerHTML = panels[p];
-  if(p === 'tasks'){ renderHist(); return; }
   load(p);
   if(window.innerWidth < 900) toggleSidebar(false);
 }
@@ -1672,12 +2131,8 @@ setInterval(pingServer, 8000);
 /* ================= 初始化 ================= */
 
 $('content').innerHTML = panels.dashboard;
-$('prompt').addEventListener('keydown', e => {
-  if(e.key === 'Enter' && (e.ctrlKey || e.metaKey)) runTask();
-});
 const imInput = $('im-input');
 if(imInput) imInput.addEventListener('keydown', e => { if(e.key === 'Enter') imSend(); });
-renderHist();
 pingServer();
 wsConnect();
 loadDashboard();

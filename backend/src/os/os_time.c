@@ -16,7 +16,10 @@ int64_t ca_time_now_us(void) {
     LARGE_INTEGER f, c;
     QueryPerformanceFrequency(&f);
     QueryPerformanceCounter(&c);
-    return (int64_t)((c.QuadPart * 1000000LL) / f.QuadPart);
+    /* avoid the QuadPart * 1e6 signed overflow once the counter grows past
+     * ~9.2e12 ticks (days of uptime at typical QPC frequencies) */
+    return (int64_t)((c.QuadPart / f.QuadPart) * 1000000LL +
+                     ((c.QuadPart % f.QuadPart) * 1000000LL) / f.QuadPart);
 }
 
 static void win_epoch_utc(struct tm *out) {

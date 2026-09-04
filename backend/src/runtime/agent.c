@@ -1,10 +1,12 @@
 /* agent.c — multi-agent coordinator sharing a blackboard. */
 #include "cagent/runtime/agent.h"
+#include "cagent/os/os_fs.h"
 #include "cagent/os/os_thread.h"
 #include "cagent/infra/util.h"
 
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 #include "cJSON.h"
 
 typedef struct ca_agent_entry {
@@ -17,6 +19,7 @@ typedef struct ca_agent_entry {
 struct ca_agent_pool {
     ca_mutex mtx;
     ca_blackboard *bb;
+    int owns_bb;           /* 1 = pool created (and frees) the blackboard */
     ca_agent_entry *agents;
     size_t count;
     size_t cap;
@@ -26,6 +29,7 @@ ca_agent_pool *ca_agent_pool_new(void) {
     ca_agent_pool *p = (ca_agent_pool *)calloc(1, sizeof(*p));
     if (!p) return NULL;
     ca_mutex_init(&p->mtx);
+    p->owns_bb = 1;
     p->bb = ca_blackboard_new();
     if (!p->bb) {
         ca_mutex_destroy(&p->mtx);
@@ -48,9 +52,19 @@ void ca_agent_pool_free(ca_agent_pool *p) {
     p->agents = NULL;
     p->count = p->cap = 0;
     ca_mutex_unlock(&p->mtx);
-    ca_blackboard_free(p->bb);
+    if (p->owns_bb) ca_blackboard_free(p->bb);
     ca_mutex_destroy(&p->mtx);
     free(p);
+}
+
+/* Replace the pool's blackboard with an externally owned one (ctx owns and
+ * frees it; the pool only borrows). Lets /v1/blackboard and agent runs share
+ * a single state space. */
+void ca_agent_pool_adopt_blackboard(ca_agent_pool *p, ca_blackboard *b) {
+    if (!p || !b || p->bb == b) return;
+    if (p->owns_bb) ca_blackboard_free(p->bb);
+    p->bb = b;
+    p->owns_bb = 0;
 }
 
 /* Returns index of name, or -1. Caller must hold p->mtx. */
@@ -97,6 +111,14 @@ int ca_agent_pool_count(ca_agent_pool *p) {
     return n;
 }
 
+int ca_agent_pool_find(ca_agent_pool *p, const char *name) {
+    if (!p || !name) return -1;
+    ca_mutex_lock(&p->mtx);
+    int idx = find_agent(p, name);
+    ca_mutex_unlock(&p->mtx);
+    return idx;
+}
+
 ca_blackboard *ca_agent_pool_blackboard(ca_agent_pool *p) {
     return p ? p->bb : NULL;
 }
@@ -139,4 +161,68 @@ char *ca_agent_pool_snapshot_json(ca_agent_pool *p) {
     char *s = root ? cJSON_PrintUnformatted(root) : NULL;
     if (root) cJSON_Delete(root);
     return s ? s : ca_strdup("{}");
+}
+
+/* ---------- roster persistence (<state_root>/agents.json) ---------- */
+
+int ca_agent_pool_save(ca_agent_pool *p, const char *dir) {
+    if (!p || !dir || !*dir) return -1;
+    ca_mutex_lock(&p->mtx);
+    cJSON *root = cJSON_CreateObject();
+    cJSON *arr = cJSON_CreateArray();
+    int ok = 0;
+    if (root && arr) {
+        cJSON_AddItemToObject(root, "agents", arr);
+        for (size_t i = 0; i < p->count; i++) {
+            cJSON *o = cJSON_CreateObject();
+            if (!o) continue;
+            cJSON_AddStringToObject(o, "name", p->agents[i].name ? p->agents[i].name : "");
+            cJSON_AddStringToObject(o, "role", p->agents[i].role ? p->agents[i].role : "");
+            if (p->agents[i].provider) cJSON_AddStringToObject(o, "provider", p->agents[i].provider);
+            if (p->agents[i].model) cJSON_AddStringToObject(o, "model", p->agents[i].model);
+            cJSON_AddItemToArray(arr, o);
+        }
+        char *s = cJSON_PrintUnformatted(root);
+        if (s) {
+            char path[512];
+            if (snprintf(path, sizeof(path), "%s/agents.json", dir) < (int)sizeof(path))
+                ok = ca_fs_write_file(path, s, strlen(s)) == 0;
+            free(s);
+        }
+    } else if (arr) {
+        cJSON_Delete(arr);
+    }
+    if (root) cJSON_Delete(root);
+    ca_mutex_unlock(&p->mtx);
+    return ok ? 0 : -1;
+}
+
+int ca_agent_pool_load(ca_agent_pool *p, const char *dir) {
+    if (!p || !dir || !*dir) return -1;
+    char path[512];
+    if (snprintf(path, sizeof(path), "%s/agents.json", dir) >= (int)sizeof(path)) return -1;
+    char *s = ca_fs_read_file(path);
+    if (!s) return -1;
+    cJSON *root = cJSON_Parse(s);
+    free(s);
+    if (!root) return -1;
+    cJSON *arr = cJSON_GetObjectItemCaseSensitive(root, "agents");
+    int loaded = 0;
+    if (cJSON_IsArray(arr)) {
+        cJSON *it;
+        cJSON_ArrayForEach(it, arr) {
+            cJSON *n = cJSON_GetObjectItemCaseSensitive(it, "name");
+            if (!n || !cJSON_IsString(n) || !n->valuestring || !*n->valuestring) continue;
+            cJSON *r = cJSON_GetObjectItemCaseSensitive(it, "role");
+            cJSON *prov = cJSON_GetObjectItemCaseSensitive(it, "provider");
+            cJSON *mod = cJSON_GetObjectItemCaseSensitive(it, "model");
+            if (ca_agent_pool_add_model(p, n->valuestring,
+                                        (r && cJSON_IsString(r)) ? r->valuestring : "",
+                                        (prov && cJSON_IsString(prov)) ? prov->valuestring : NULL,
+                                        (mod && cJSON_IsString(mod)) ? mod->valuestring : NULL) >= 0)
+                loaded++;
+        }
+    }
+    cJSON_Delete(root);
+    return loaded;
 }

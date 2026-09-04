@@ -9,10 +9,17 @@
 #include <stdio.h>
 #include "cJSON.h"
 
+/* Files larger than this are NOT captured (reading a 10G+ file into memory
+ * and duplicating it into the block store is not viable). Rollback cannot
+ * restore their content — such files should be protected by git or backups.
+ * Override with env CA_SNAPSHOT_MAX_FILE (bytes; 0 = unlimited). */
+#define SNAPSHOT_DEFAULT_MAX_FILE (64LL * 1024 * 1024)
+
 typedef struct captured {
     char *path;
     char hash[17];   /* content hash of the original; empty if file didn't exist */
     int existed;
+    int skipped;     /* existed but too large to capture; rollback leaves it as-is */
 } captured;
 
 typedef struct snapshot_entry {
@@ -25,6 +32,7 @@ typedef struct snapshot_entry {
 struct ca_snapshot {
     char root[512];
     ca_cow *cow;
+    long long max_file;      /* capture size limit in bytes; 0 = unlimited */
     captured *pending;
     size_t pending_count, pending_cap;
     snapshot_entry *committed;
@@ -38,6 +46,14 @@ ca_snapshot *ca_snapshot_open(const char *state_root) {
     ca_snapshot *s = calloc(1, sizeof(ca_snapshot));
     if (!s) return NULL;
     snprintf(s->root, sizeof(s->root), "%s", state_root);
+    s->max_file = SNAPSHOT_DEFAULT_MAX_FILE;
+    {
+        const char *env = getenv("CA_SNAPSHOT_MAX_FILE");
+        if (env && *env) {
+            long long v = atoll(env);
+            if (v >= 0) s->max_file = v; /* 0 disables the limit entirely */
+        }
+    }
     char blocks[600];
     ca_path_join(blocks, sizeof(blocks), state_root, "snapshots/blocks");
     s->cow = ca_cow_open(blocks);
@@ -65,6 +81,15 @@ ca_snapshot *ca_snapshot_open(const char *state_root) {
     return s;
 }
 
+void ca_snapshot_set_max_file(ca_snapshot *s, long long bytes) {
+    if (!s || bytes < 0) return;
+    s->max_file = bytes;
+}
+
+long long ca_snapshot_get_max_file(const ca_snapshot *s) {
+    return s ? s->max_file : -1;
+}
+
 /* helper used above to rebuild committed list from a persisted manifest */
 static int ca_snapshot_restore_from_manifest(ca_snapshot *s, const char *json_text, const char *fname) {
     cJSON *root = cJSON_Parse(json_text);
@@ -86,9 +111,11 @@ static int ca_snapshot_restore_from_manifest(ca_snapshot *s, const char *json_te
             cJSON *p = cJSON_GetObjectItemCaseSensitive(it, "path");
             cJSON *h = cJSON_GetObjectItemCaseSensitive(it, "hash");
             cJSON *ex = cJSON_GetObjectItemCaseSensitive(it, "existed");
+            cJSON *sk = cJSON_GetObjectItemCaseSensitive(it, "skipped");
             cap->path = (p && cJSON_IsString(p)) ? ca_strdup(p->valuestring) : ca_strdup("");
             if (h && cJSON_IsString(h)) snprintf(cap->hash, sizeof(cap->hash), "%s", h->valuestring);
             cap->existed = ex ? cJSON_IsTrue(ex) : 1;
+            cap->skipped = sk ? cJSON_IsTrue(sk) : 0;
         }
     }
     if (s->committed_count == s->committed_cap) {
@@ -121,11 +148,18 @@ int ca_snapshot_capture(ca_snapshot *s, const char *path) {
     cap.path = ca_strdup(path);
     cap.existed = ca_fs_exists(path) && !ca_fs_is_dir(path);
     if (cap.existed) {
-        char *content = ca_fs_read_file(path);
-        if (content) {
-            const char *h = ca_cow_put(s->cow, content, strlen(content));
-            if (h) snprintf(cap.hash, sizeof(cap.hash), "%s", h);
-            free(content);
+        long long sz = ca_fs_file_size(path);
+        if (s->max_file > 0 && sz > s->max_file) {
+            /* too large to copy into the block store: mark skipped. Rollback
+             * will leave the file untouched instead of deleting it. */
+            cap.skipped = 1;
+        } else {
+            char *content = ca_fs_read_file(path);
+            if (content) {
+                const char *h = ca_cow_put(s->cow, content, strlen(content));
+                if (h) snprintf(cap.hash, sizeof(cap.hash), "%s", h);
+                free(content);
+            }
         }
     }
     if (s->pending_count == s->pending_cap) {
@@ -165,6 +199,7 @@ const char *ca_snapshot_commit(ca_snapshot *s) {
         cJSON_AddStringToObject(o, "path", s->pending[i].path);
         cJSON_AddStringToObject(o, "hash", s->pending[i].hash);
         cJSON_AddBoolToObject(o, "existed", s->pending[i].existed ? 1 : 0);
+        if (s->pending[i].skipped) cJSON_AddBoolToObject(o, "skipped", 1);
         cJSON_AddItemToArray(files, o);
     }
     char *text = cJSON_PrintUnformatted(root);
@@ -227,6 +262,11 @@ char *ca_snapshot_list(ca_snapshot *s) {
 static int restore_entry(ca_snapshot *s, snapshot_entry *e) {
     for (size_t i = 0; i < e->nfiles; i++) {
         captured *cap = &e->files[i];
+        if (cap->existed && cap->skipped) {
+            /* original content was too large to capture — leave the (modified)
+             * file alone rather than deleting a huge file we cannot restore */
+            continue;
+        }
         if (cap->existed && cap->hash[0]) {
             size_t blen = 0;
             char *blob = ca_cow_get(s->cow, cap->hash, &blen);

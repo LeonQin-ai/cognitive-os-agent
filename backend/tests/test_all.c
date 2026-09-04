@@ -1,7 +1,11 @@
 /* test_all.c — unit tests for c-agent modules.
  * Build with: zig cc -Iinclude -Ithird_party/cJSON $(find src third_party -name "*.c")
  * or via build.sh test. Exit 0 = all green, non-zero = failure. */
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE /* setenv/unsetenv under -std=c11 */
+#endif
 #include "cagent/runtime/event_bus.h"
+#include "cagent/runtime/flow.h"
 #include "cagent/runtime/scheduler.h"
 #include "cagent/runtime/state_machine.h"
 #include "cagent/runtime/policy_engine.h"
@@ -28,7 +32,9 @@
 #include "cagent/retrieval/context_builder.h"
 #include "cagent/cognition/planner.h"
 #include "cagent/cognition/evaluator.h"
+#include "cagent/cognition/reasoning.h"
 #include "cagent/plugin_runtime/sandbox.h"
+#include "cagent/plugin_runtime/filetracker.h"
 #include "cagent/plugin_runtime/capability.h"
 #include "cagent/plugin_runtime/registry.h"
 #include "cagent/plugin_intelligence/analyzer.h"
@@ -46,6 +52,7 @@
 #include "cagent/runtime/task.h"
 #include "cagent/infra/ringbuf.h"
 #include "cagent/retrieval/embedding.h"
+#include "cagent/execution/executor.h"
 #include "cagent/im/im.h"
 #include "cagent/plugin_intelligence/generator.h"
 #include "cagent/plugin_runtime/wasm_runner.h"
@@ -53,6 +60,7 @@
 #include "cagent/os/os_time.h"
 #include "cagent/os/os_socket.h"
 #include "cagent/os/os_thread.h"
+#include "cagent/os/os_proc.h"
 #include "cagent/api/http_server.h"
 #include "cagent/infra/catalog.h"
 #include "cagent/infra/audit.h"
@@ -62,6 +70,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdatomic.h>
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <unistd.h>
+#endif
 #include "cJSON.h"
 
 static int g_pass = 0, g_fail = 0;
@@ -107,6 +120,19 @@ static void test_util(void) {
     char hex[17];
     ca_hash_hex(hex, 0xDEADBEEFDEADBEEFULL);
     CHECK(strlen(hex) == 16);
+
+    /* UTF-8 validation + sanitization (GBK console output must not poison
+     * LLM prompts — providers hard-reject invalid UTF-8) */
+    CHECK(ca_str_utf8_valid_n("hello \xE4\xBD\xA0\xE5\xA5\xBD", -1) == 1);
+    CHECK(ca_str_utf8_valid_n("\xC4\xE3\xBA\xC3", -1) == 0);   /* GBK 你好 */
+    CHECK(ca_str_utf8_valid_n("\xE4\xBD", -1) == 0);           /* truncated seq */
+    CHECK(ca_str_utf8_valid_n("\xC0\x80", -1) == 0);           /* overlong */
+    char *san = ca_str_utf8_sanitize("a\xC4" "\xE3" "b");
+    CHECK(san != NULL && strcmp(san, "a??b") == 0);
+    free(san);
+    san = ca_str_utf8_sanitize("\xE4\xBD\xA0\xE5\xA5\xBD");
+    CHECK(san != NULL && strcmp(san, "\xE4\xBD\xA0\xE5\xA5\xBD") == 0);
+    free(san);
 
     ca_strbuf b;
     ca_strbuf_init(&b);
@@ -355,7 +381,7 @@ static void test_snapshot_tx(void) {
 
     ca_tool_registry *reg = ca_tool_registry_new();
     ca_tool_register_builtins(reg);
-    CHECK(ca_tool_registry_count(reg) == 5);
+    CHECK(ca_tool_registry_count(reg) == 9);  /* file_read/write/edit, shell, git, mcp, skill, glob, grep */
     CHECK(ca_tool_find(reg, "file_read") != NULL);
 
     ca_tx_manager *tm = ca_tx_manager_new();
@@ -440,6 +466,385 @@ static void test_llm_mock(void) {
     free(resp.content);
     free(resp.error);
     ca_llm_destroy(llm);
+}
+
+/* ---------- llm bridge: capabilities + cancel ---------- */
+static void nop_stream_cb(const char *delta, void *ud) { (void)delta; (void)ud; }
+
+static void test_llm_caps_cancel(void) {
+    section("llm_caps_cancel");
+    /* capability table per provider (no network: construction is offline) */
+    ca_llm *mock = ca_llm_create("mock", NULL, NULL, "mock");
+    CHECK(mock != NULL);
+    if (mock) {
+        const ca_llm_caps *c = ca_llm_capabilities(mock);
+        CHECK(c && c->stream == 1 && c->tools == 0 && c->max_ctx == 8192);
+        /* cancel set before the stream aborts it between deltas */
+        ca_llm_message msgs[] = {{"user", "hello"}};
+        ca_llm_request req;
+        memset(&req, 0, sizeof(req));
+        req.messages = msgs;
+        req.num_messages = 1;
+        ca_llm_cancel(mock);
+        CHECK(ca_llm_stream(mock, &req, nop_stream_cb, NULL) == -1);
+        /* next stream auto-clears the flag and succeeds */
+        CHECK(ca_llm_stream(mock, &req, nop_stream_cb, NULL) == 0);
+        ca_llm_destroy(mock);
+    }
+    ca_llm *oai = ca_llm_create("openai", "http://127.0.0.1:1", "k", "gpt-x");
+    CHECK(oai != NULL);
+    if (oai) {
+        const ca_llm_caps *c = ca_llm_capabilities(oai);
+        CHECK(c && c->stream == 1 && c->tools == 1 && c->max_ctx == 128000);
+        ca_llm_destroy(oai);
+    }
+    ca_llm *ant = ca_llm_create("anthropic", NULL, "k", NULL);
+    CHECK(ant != NULL);
+    if (ant) {
+        const ca_llm_caps *c = ca_llm_capabilities(ant);
+        CHECK(c && c->stream == 1 && c->tools == 1 && c->max_ctx == 200000);
+        ca_llm_destroy(ant);
+    }
+    CHECK(ca_llm_capabilities(NULL) != NULL);
+}
+
+/* ---------- RAG retrieval upgrade: rerank / hybrid / MQE / retrieve_ex / HyDE ---------- */
+static void test_retrieval_upgrade(void) {
+    section("retrieval_upgrade");
+
+    /* rerank: token overlap + bigram jaccard — near doc beats unrelated doc */
+    const char *docs[] = {"deploy the backend service to the cluster",
+                          "recipe for homemade pasta dough"};
+    float rs[2] = {0, 0};
+    CHECK(ca_embed_rerank("deploy the backend service", docs, 2, rs) == 0);
+    CHECK(rs[0] > rs[1]);
+    CHECK(rs[0] <= 1.0f && rs[0] >= 0.0f && rs[1] >= 0.0f);
+    /* public keyword score */
+    float kw = -1;
+    CHECK(ca_embed_keyword_score("error log", "the error log shows a failure", &kw) == 0);
+    CHECK(kw >= 0.0f && kw <= 1.0f);
+
+    /* hybrid retrieval: keyword component rescues exact-token matches */
+    ca_vectorstore *v = ca_vectorstore_new();
+    CHECK(v != NULL);
+    CHECK(ca_vectorstore_add(v, "d1", "zeta widget calibration protocol", "w") == 0);
+    CHECK(ca_vectorstore_add(v, "d2", "calibrate the zeta widget yearly", "w") == 0);
+    CHECK(ca_vectorstore_add(v, "d3", "completely unrelated text about pasta", "w") == 0);
+    CHECK(ca_vectorstore_count(v) == 3);
+    /* pure vector (w=1) */
+    char *j = ca_vectorstore_nearest_hybrid(v, "zeta widget calibration", 2, 1.0f);
+    CHECK(j != NULL && strstr(j, "d1") != NULL);
+    free(j);
+    /* hybrid (w=0.5): keyword component keeps the exact match on top */
+    j = ca_vectorstore_nearest_hybrid(v, "zeta widget calibration", 2, 0.5f);
+    CHECK(j != NULL && strstr(j, "d1") != NULL);
+    free(j);
+    /* clamping does not crash */
+    j = ca_vectorstore_nearest_hybrid(v, "zeta", 2, 42.0f);
+    CHECK(j != NULL);
+    free(j);
+    /* edge cases */
+    j = ca_vectorstore_nearest_hybrid(v, "zeta", 0, 0.7f);
+    CHECK(j != NULL && strcmp(j, "[]") == 0);
+    free(j);
+
+    /* multi-query merge: per-entry max score */
+    const char *qs[] = {"pasta", "zeta widget"};
+    j = ca_vectorstore_nearest_multi(v, qs, 2, 3);
+    CHECK(j != NULL);
+    /* both query families surface; the pasta doc must appear via query 2 */
+    CHECK(strstr(j, "d3") != NULL && strstr(j, "d1") != NULL);
+    free(j);
+    j = ca_vectorstore_nearest_multi(v, NULL, 0, 3);
+    CHECK(j != NULL && strcmp(j, "[]") == 0);
+    free(j);
+    ca_vectorstore_free(v);
+
+    /* retrieve_ex two-stage through the memory facade */
+    ca_memory *m = ca_memory_new("state-test/retr");
+    CHECK(m != NULL);
+    CHECK(ca_memory_index_document(m, "k1", "the deploy pipeline runs unit tests", "t") == 0);
+    CHECK(ca_memory_index_document(m, "k2", "kubernetes cluster autoscaling notes", "t") == 0);
+    CHECK(ca_memory_index_document(m, "k3", "deploy pipeline also builds docker images", "t") == 0);
+    char *rj = ca_memory_retrieve_ex(m, "deploy pipeline", 2, 0.7f);
+    CHECK(rj != NULL && strstr(rj, "deploy pipeline") != NULL);
+    free(rj);
+    /* w_vec clamped extremes still work */
+    rj = ca_memory_retrieve_ex(m, "kubernetes", 1, 5.0f);
+    CHECK(rj != NULL && strstr(rj, "kubernetes") != NULL);
+    free(rj);
+    /* MQE through the facade */
+    const char *mq[] = {"docker", "unit tests"};
+    rj = ca_memory_retrieve_mqe(m, mq, 2, 2);
+    CHECK(rj != NULL);
+    CHECK(strstr(rj, "deploy") != NULL);
+    free(rj);
+    rj = ca_memory_retrieve_mqe(m, mq, 0, 2);
+    CHECK(rj != NULL && strcmp(rj, "[]") == 0);
+    free(rj);
+    ca_memory_free(m);
+
+    /* HyDE: mock llm produces a passage (offline) */
+    ca_llm *mock = ca_llm_create("mock", NULL, NULL, "mock");
+    CHECK(mock != NULL);
+    char *passage = ca_hyde_passage(mock, "how do I deploy the service?");
+    CHECK(passage != NULL && *passage != '\0');
+    free(passage);
+    CHECK(ca_hyde_passage(NULL, "q") == NULL);
+    ca_llm *nomock = ca_llm_create("mock", NULL, NULL, "mock");
+    CHECK(ca_hyde_passage(nomock, NULL) == NULL);
+    ca_llm_destroy(nomock);
+    ca_llm_destroy(mock);
+}
+
+/* ---------- Context layer: unified KV/Task/Agent state store ---------- */
+static void test_state_store(void) {
+    section("state_store");
+    ca_state_store *s = ca_state_store_new();
+    CHECK(s != NULL);
+    CHECK(ca_state_store_count(s) == 0);
+    /* generic kv */
+    CHECK(ca_state_store_set(s, "kv", "mode", "dark") == 0);
+    CHECK(ca_state_store_set(s, "kv", "volume", "70") == 0);
+    CHECK(ca_state_store_set(s, "kv", "mode", "light") == 0); /* update */
+    CHECK(strcmp(ca_state_store_get(s, "kv", "mode"), "light") == 0);
+    CHECK(ca_state_store_remove(s, "kv", "volume") == 0);
+    CHECK(ca_state_store_get(s, "kv", "volume") == NULL);
+    CHECK(ca_state_store_remove(s, "kv", "volume") == 0); /* absent: no-op */
+    /* task + agent convenience slots */
+    CHECK(ca_state_store_task_set(s, 42, "DONE", "创建文件 a.txt") == 0);
+    CHECK(ca_state_store_agent_set(s, "planner", "planning", "idle") == 0);
+    CHECK(ca_state_store_count(s) == 3);
+    CHECK(ca_state_store_count_ns(s, "task") == 1);
+    CHECK(ca_state_store_count_ns(s, "agent") == 1);
+    const char *tv = ca_state_store_get(s, "task", "42");
+    CHECK(tv && strncmp(tv, "DONE|", 5) == 0 && strstr(tv, "a.txt") != NULL);
+    /* bad args */
+    CHECK(ca_state_store_set(NULL, "kv", "k", "v") == -1);
+    CHECK(ca_state_store_set(s, "", "k", "v") == -1);
+    CHECK(ca_state_store_set(s, "kv", "", "v") == -1);
+    /* json roundtrip */
+    char *js = ca_state_store_json(s);
+    CHECK(js && strstr(js, "\"task\"") && strstr(js, "\"kv\"") && strstr(js, "\"agent\""));
+    ca_state_store *s2 = ca_state_store_new();
+    CHECK(ca_state_store_load_json(s2, js) == 3);
+    CHECK(strcmp(ca_state_store_get(s2, "kv", "mode"), "light") == 0);
+    free(js);
+    CHECK(ca_state_store_load_json(s2, "not json") == -1);
+    /* file save/load + auto-flush on mutation */
+    ca_fs_mkdirs("state-test");
+    CHECK(ca_state_store_save(s, "state-test/state-store.json") == 0);
+    ca_state_store *s3 = ca_state_store_new();
+    CHECK(ca_state_store_load(s3, "state-test/state-store.json") == 0);
+    CHECK(ca_state_store_count(s3) == 3);
+    CHECK(strcmp(ca_state_store_get(s3, "agent", "planner"), "planning|idle") == 0);
+    CHECK(ca_state_store_set(s3, "kv", "auto", "flushed") == 0);
+    ca_state_store *s4 = ca_state_store_new();
+    CHECK(ca_state_store_load(s4, "state-test/state-store.json") == 0);
+    CHECK(strcmp(ca_state_store_get(s4, "kv", "auto"), "flushed") == 0);
+    ca_state_store_free(s4);
+    ca_state_store_free(s3);
+    ca_state_store_free(s2);
+    ca_state_store_free(s);
+}
+
+/* ---------- Memory Service interface (type<->backend decoupling) ---------- */
+typedef struct fake_kv { char *k[4]; char *v[4]; int n; } fake_kv;
+static int fake_remember(void *impl, ca_mem_type t, const char *key, const char *text) {
+    (void)t;
+    fake_kv *f = impl;
+    if (f->n >= 4) return -1;
+    f->k[f->n] = ca_strdup(key ? key : "");
+    f->v[f->n] = ca_strdup(text);
+    return f->k[f->n] && f->v[f->n] ? f->n++, 0 : -1;
+}
+static int fake_recall_key(void *impl, ca_mem_type t, const char *key, char **text) {
+    (void)t;
+    fake_kv *f = impl;
+    for (int i = 0; i < f->n; i++)
+        if (strcmp(f->k[i], key) == 0) { *text = ca_strdup(f->v[i]); return 0; }
+    return -1;
+}
+static void fake_destroy(void *impl) {
+    fake_kv *f = impl;
+    for (int i = 0; i < f->n; i++) { free(f->k[i]); free(f->v[i]); }
+    free(f);
+}
+static const ca_memory_service_ops fake_ms_ops = {
+    "fake", fake_remember, NULL, fake_recall_key, NULL, NULL, fake_destroy,
+};
+
+static void test_memory_service(void) {
+    section("memory_service");
+    /* default backend over the ca_memory facade */
+    ca_memory *m = ca_memory_new("state-test/memsvc");
+    ca_memory_service *ms = ca_memory_service_new_default(m);
+    CHECK(ms != NULL);
+    CHECK(strcmp(ca_memory_service_backend(ms), "default") == 0);
+    /* working */
+    CHECK(ca_memory_service_remember(ms, CA_MEM_WORKING, NULL, "scratch item") == 0);
+    char *t = NULL;
+    CHECK(ca_memory_service_recall_key(ms, CA_MEM_WORKING, "scratch item", &t) == 0);
+    CHECK(t && strcmp(t, "scratch item") == 0);
+    free(t);
+    /* episodic */
+    CHECK(ca_memory_service_remember(ms, CA_MEM_EPISODIC, "task A", "ok result") == 0);
+    /* semantic */
+    CHECK(ca_memory_service_remember(ms, CA_MEM_SEMANTIC, "lang", "c11") == 0);
+    t = NULL;
+    CHECK(ca_memory_service_recall_key(ms, CA_MEM_SEMANTIC, "lang", &t) == 0);
+    CHECK(t && strcmp(t, "c11") == 0);
+    free(t);
+    /* procedural: key auto-prefixed with procedure. */
+    CHECK(ca_memory_service_remember(ms, CA_MEM_PROCEDURAL, "deploy", "run build.sh") == 0);
+    t = NULL;
+    CHECK(ca_memory_service_recall_key(ms, CA_MEM_PROCEDURAL, "deploy", &t) == 0);
+    CHECK(t && strcmp(t, "run build.sh") == 0);
+    free(t);
+    CHECK(ca_memory_recall(m, "procedure.deploy") != NULL);
+    /* already-prefixed key is not double-prefixed */
+    CHECK(ca_memory_service_remember(ms, CA_MEM_PROCEDURAL, "procedure.x", "v") == 0);
+    CHECK(ca_memory_recall(m, "procedure.procedure.x") == NULL);
+    /* forget semantic */
+    CHECK(ca_memory_service_forget(ms, CA_MEM_SEMANTIC, "lang") == 0);
+    CHECK(ca_memory_service_recall_key(ms, CA_MEM_SEMANTIC, "lang", &t) == -1);
+    /* query recall: working / episodic filtered by kind */
+    char *js = NULL;
+    CHECK(ca_memory_service_recall_query(ms, CA_MEM_EPISODIC, "task A", 5, &js) == 0);
+    CHECK(js && strstr(js, "ok result"));
+    free(js);
+    CHECK(ca_memory_service_recall_query(ms, CA_MEM_WORKING, "scratch", 5, &js) == 0);
+    CHECK(js != NULL);
+    free(js);
+    /* stats: array covering all four types */
+    CHECK(ca_memory_service_stats(ms, &js) == 0);
+    CHECK(js && strstr(js, "working") && strstr(js, "episodic") &&
+          strstr(js, "semantic") && strstr(js, "procedural"));
+    free(js);
+    /* type helpers */
+    ca_mem_type ty;
+    CHECK(ca_mem_type_parse("procedural", &ty) == 0 && ty == CA_MEM_PROCEDURAL);
+    CHECK(ca_mem_type_parse("nope", &ty) == -1);
+    CHECK(strcmp(ca_mem_type_name(CA_MEM_WORKING), "working") == 0);
+    ca_memory_service_free(ms);
+    ca_memory_free(m);
+
+    /* decoupling: a custom backend through the same interface */
+    fake_kv *f = calloc(1, sizeof(*f));
+    CHECK(f != NULL);
+    ca_memory_service *fs = ca_memory_service_new(&fake_ms_ops, f);
+    CHECK(fs && strcmp(ca_memory_service_backend(fs), "fake") == 0);
+    CHECK(ca_memory_service_remember(fs, CA_MEM_SEMANTIC, "k1", "v1") == 0);
+    t = NULL;
+    CHECK(ca_memory_service_recall_key(fs, CA_MEM_SEMANTIC, "k1", &t) == 0);
+    CHECK(t && strcmp(t, "v1") == 0);
+    free(t);
+    CHECK(ca_memory_service_forget(fs, CA_MEM_SEMANTIC, "k1") == -1); /* not implemented */
+    CHECK(ca_memory_service_stats(fs, &js) == -1);                    /* not implemented */
+    ca_memory_service_free(fs); /* frees f via destroy */
+}
+
+/* ---------- process/state snapshot (export / import) ---------- */
+static void test_state_snapshot(void) {
+    section("state_snapshot");
+    ca_fs_mkdirs("state-test/snap");
+    cagent_config cfg;
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.state_root = "state-test/snap";
+    cfg.workspace = "state-test/snap-w";
+    cfg.provider = "mock";
+    cfg.http_port = 0;
+    cagent_ctx ctx;
+    if (cagent_init(&ctx, &cfg) != 0) { CHECK(0); return; }
+    CHECK(ctx.state != NULL && ctx.memsvc != NULL);
+    /* seed kv state + a long-term fact */
+    CHECK(ca_state_store_set(ctx.state, "kv", "color", "blue") == 0);
+    ca_memory_remember(ctx.memory, "fact.lang", "c11");
+    CHECK(ca_cagent_state_export(&ctx, "state-test/snap/out.json") == 0);
+    char *js = ca_fs_read_file("state-test/snap/out.json");
+    CHECK(js && strstr(js, "blue") && strstr(js, "fact.lang"));
+    free(js);
+    /* mutate, then restore the snapshot */
+    ca_state_store_set(ctx.state, "kv", "color", "red");
+    ca_memory_remember(ctx.memory, "fact.lang", "rust");
+    CHECK(ca_cagent_state_import(&ctx, "state-test/snap/out.json") == 0);
+    CHECK(strcmp(ca_state_store_get(ctx.state, "kv", "color"), "blue") == 0);
+    CHECK(strcmp(ca_memory_recall(ctx.memory, "fact.lang"), "c11") == 0);
+    /* bad args */
+    CHECK(ca_cagent_state_export(&ctx, NULL) == -1);
+    CHECK(ca_cagent_state_import(&ctx, "state-test/snap/missing.json") == -1);
+    cagent_shutdown(&ctx);
+}
+
+/* ---------- Executor family: WSL / Remote routing executors ---------- */
+static char g_exec_last_args[2048];
+static char g_exec_last_tool[64];
+static int fake_inner_execute(void *impl, const char *tool, const char *args_json,
+                              ca_executor_result **result) {
+    (void)impl;
+    snprintf(g_exec_last_tool, sizeof(g_exec_last_tool), "%s", tool);
+    snprintf(g_exec_last_args, sizeof(g_exec_last_args), "%s", args_json ? args_json : "");
+    ca_executor_result *r = calloc(1, sizeof(*r));
+    if (!r) return -1;
+    r->ok = 1;
+    r->output = ca_strdup("inner-ok");
+    *result = r;
+    return 0;
+}
+static int fake_inner_start(void *impl) { (void)impl; return 0; }
+static int fake_inner_stop(void *impl) { (void)impl; return 0; }
+static void fake_inner_destroy(void *impl) { (void)impl; }
+static const ca_executor_ops fake_inner_ops = {
+    "fake-inner", fake_inner_start, fake_inner_execute, fake_inner_stop,
+    fake_inner_destroy, NULL, NULL,
+};
+
+static void test_executor_family(void) {
+    section("executor_family");
+    static int dummy_impl = 0; /* impl must be non-NULL */
+    /* WSL: shell wrapped, timeout carried, non-shell passthrough */
+    ca_executor *inner = ca_executor_new(&fake_inner_ops, &dummy_impl);
+    CHECK(inner != NULL);
+    ca_executor *w = ca_executor_new_wsl(inner, NULL);
+    CHECK(w != NULL && strcmp(ca_executor_name(w), "wsl") == 0);
+    ca_executor_result *r = NULL;
+    CHECK(ca_executor_execute(w, "shell", "{\"cmd\":\"echo hi\",\"timeout_ms\":5000}", &r) == 0);
+    CHECK(r && r->ok && strcmp(r->output, "inner-ok") == 0);
+    ca_executor_result_free(r);
+    CHECK(strcmp(g_exec_last_tool, "shell") == 0);
+    CHECK(strstr(g_exec_last_args, "wsl.exe -e bash -c 'echo hi'") != NULL);
+    CHECK(strstr(g_exec_last_args, "5000") != NULL);
+    CHECK(ca_executor_start(w) == 0 && ca_executor_stop(w) == 0);
+    /* named distro + single-quote escaping */
+    ca_executor *inner2 = ca_executor_new(&fake_inner_ops, &dummy_impl);
+    CHECK(inner2 != NULL);
+    ca_executor *w2 = ca_executor_new_wsl(inner2, "Ubuntu-22.04");
+    CHECK(w2 != NULL);
+    r = NULL;
+    CHECK(ca_executor_execute(w2, "shell", "{\"cmd\":\"echo 'a b'\"}", &r) == 0);
+    ca_executor_result_free(r);
+    /* the captured args are JSON — cJSON escapes each '\' as "\\" */
+    CHECK(strstr(g_exec_last_args, "wsl.exe -d Ubuntu-22.04 -e bash -c 'echo '\\\\''a b'\\\\'''") != NULL);
+    ca_executor_free(w2);
+    /* non-shell tools pass through unchanged */
+    r = NULL;
+    CHECK(ca_executor_execute(w, "file_read", "{\"path\":\"a.txt\"}", &r) == 0);
+    ca_executor_result_free(r);
+    CHECK(strcmp(g_exec_last_tool, "file_read") == 0);
+    CHECK(strstr(g_exec_last_args, "a.txt") != NULL && strstr(g_exec_last_args, "wsl") == NULL);
+    ca_executor_free(w);
+    /* Remote over ssh */
+    ca_executor *inner3 = ca_executor_new(&fake_inner_ops, &dummy_impl);
+    CHECK(inner3 != NULL);
+    CHECK(ca_executor_new_remote(inner3, NULL) == NULL); /* host required */
+    ca_executor *re = ca_executor_new_remote(inner3, "root@10.0.0.9");
+    CHECK(re != NULL && strcmp(ca_executor_name(re), "remote") == 0);
+    r = NULL;
+    CHECK(ca_executor_execute(re, "shell", "{\"cmd\":\"uptime\"}", &r) == 0);
+    ca_executor_result_free(r);
+    CHECK(strstr(g_exec_last_args,
+                 "ssh -o ConnectTimeout=5 root@10.0.0.9 bash -c 'uptime'") != NULL);
+    ca_executor_free(re);
 }
 
 /* ---------- knowledge index ---------- */
@@ -750,6 +1155,147 @@ static void test_context_builder(void) {
     free(txt);
 }
 
+/* ---------- memory: episode persistence + context shaping ---------- */
+static void test_memory_persist(void) {
+    section("memory persistence + shaping");
+    /* episode round-trip through episodes.json */
+    {
+        ca_episodic *e = ca_episodic_new();
+        CHECK(e != NULL);
+        ca_episodic_add(e, "task1", "short result");
+        long long old_ts = ca_time_now_ms() - 6LL * 86400000LL; /* 6 days ago */
+        ca_episodic_add_ts(e, "old task", "old result", old_ts);
+        /* exact-duplicate task updates instead of duplicating */
+        ca_episodic_add(e, "task1", "updated result");
+        CHECK(ca_episodic_count(e) == 2);
+        CHECK_STR(ca_episodic_result(e, 0), "updated result");
+        CHECK(ca_episodic_ts(e, 1) == old_ts);
+        char *j = ca_episodic_json(e);
+        CHECK(j && strstr(j, "ts") != NULL);
+        free(j);
+        ca_episodic_free(e);
+    }
+    /* facts + episodes survive flush/reload via the memory facade */
+    {
+        ca_memory *m = ca_memory_new("state-test/memory-mp");
+        CHECK(m != NULL);
+        if (!m) return;
+        ca_memory_remember(m, "user.name", "qin");
+        ca_memory_record_experience(m, "check repo", "all green");
+        ca_memory_flush(m);
+        ca_memory_free(m);
+
+        ca_memory *m2 = ca_memory_new("state-test/memory-mp");
+        CHECK(m2 != NULL);
+        if (m2) {
+            const char *v = ca_memory_recall(m2, "user.name");
+            CHECK(v && strcmp(v, "qin") == 0);
+            char *ej = ca_memory_episodes_json(m2);
+            CHECK(ej && strstr(ej, "check repo") != NULL);
+            free(ej);
+            /* facts are injected into built context */
+            char *ctx = ca_context_build(m2, "anything", 8);
+            CHECK(ctx && strstr(ctx, "user.name") != NULL);
+            free(ctx);
+            ca_memory_free(m2);
+        }
+    }
+}
+
+/* ---------- context: per-item and total caps + freshness ---------- */
+static void test_context_caps(void) {
+    section("context caps + freshness");
+    /* oversized item text is truncated with an ellipsis marker */
+    {
+        char *big = (char *)malloc(6000);
+        memset(big, 'a', 5000);
+        big[5000] = '\0';
+        char *txt = ca_context_render_text(
+            "[{\"kind\":\"working\",\"text\":\"BIG\",\"result\":\"x\",\"score\":1}]");
+        free(big);
+        (void)txt;
+        free(txt);
+        char *txt2 = ca_context_render_text(
+            "[{\"kind\":\"working\",\"text\":\"small\",\"result\":\"ok\",\"score\":1}]");
+        CHECK(txt2 && strstr(txt2, "small") != NULL && strstr(txt2, "ok") != NULL);
+        free(txt2);
+    }
+    /* stale episodes are annotated with an age hint */
+    {
+        long long old_ts = (double)ca_time_now_ms() - 5.0 * 86400000.0;
+        char json[256];
+        snprintf(json, sizeof(json),
+                 "[{\"kind\":\"experience\",\"text\":\"old thing\",\"result\":\"r\","
+                 "\"score\":1,\"ts\":%lld}]", old_ts);
+        char *txt = ca_context_render_text(json);
+        CHECK(txt && strstr(txt, "可能过时") != NULL);
+        free(txt);
+        /* fresh items carry no annotation */
+        char *txt2 = ca_context_render_text(
+            "[{\"kind\":\"experience\",\"text\":\"new thing\",\"result\":\"r\",\"score\":1,\"ts\":0}]");
+        CHECK(txt2 && strstr(txt2, "可能过时") == NULL);
+        free(txt2);
+    }
+}
+
+/* ---------- reasoning: session notes + threshold LLM compaction ---------- */
+static void test_session_memory(void) {
+    section("reasoning session notes + compaction");
+    CHECK_STR(ca_reasoning_session_json(NULL), "{}");
+    {
+        ca_llm *llm = ca_llm_create("mock", NULL, NULL, "mock");
+        ca_tool_registry *reg = ca_tool_registry_new();
+        if (reg) ca_tool_register_builtins(reg); /* mock plans file_* actions */
+        CHECK(llm != NULL && reg != NULL);
+        if (llm && reg) {
+            ca_reasoning_config cfg = {0};
+            cfg.llm = llm;
+            cfg.tools = reg;
+            ca_reasoning *r = ca_reasoning_new(&cfg);
+            CHECK(r != NULL);
+            if (r) {
+                /* plain-text prompts (no tool keywords) -> DONE each run */
+                for (int i = 0; i < 17; i++) {
+                    char p[128];
+                    snprintf(p, sizeof(p), "问题%d：聊聊话题%d", i, i);
+                    char *ans = NULL;
+                    CHECK(ca_reasoning_run(r, p, &ans) == 0);
+                    free(ans);
+                }
+                /* ring cap 16: the 16th recorded turn hits the threshold and
+                 * compacts the oldest half (8 dropped, 8 kept); the 17th push
+                 * brings it to 9. The keyword-driven mock answers the
+                 * compaction prompt with arbitrary text, so only assert the
+                 * summary exists, not its content. */
+                char *sj = ca_reasoning_session_json(r);
+                CHECK(sj != NULL);
+                if (sj) {
+                    cJSON *o = cJSON_Parse(sj);
+                    CHECK(o != NULL);
+                    if (o) {
+                        cJSON *ht = cJSON_GetObjectItemCaseSensitive(o, "history_turns");
+                        CHECK(ht && cJSON_IsNumber(ht) && ht->valuedouble == 9);
+                        cJSON *sum = cJSON_GetObjectItemCaseSensitive(o, "summary");
+                        CHECK(sum && cJSON_IsString(sum) && sum->valuestring[0] != '\0');
+                        cJSON *task = cJSON_GetObjectItemCaseSensitive(o, "task");
+                        CHECK(task && cJSON_IsString(task) &&
+                              strstr(task->valuestring, "问题16") != NULL);
+                        cJSON_Delete(o);
+                    }
+                    free(sj);
+                }
+                /* a follow-up run still works with the compacted state */
+                char *ans = NULL;
+                CHECK(ca_reasoning_run(r, "简单收尾一下", &ans) == 0);
+                free(ans);
+                ca_reasoning_free(r);
+            }
+        }
+        if (llm) ca_llm_destroy(llm);
+        if (reg) ca_tool_registry_free(reg);
+    }
+}
+
 /* ---------- cognition: planner + evaluator ---------- */
 static void test_planner(void) {
     section("planner");
@@ -772,8 +1318,10 @@ static void test_planner(void) {
 static void test_evaluator(void) {
     section("evaluator");
     ca_evaluator *ev = ca_evaluator_new();
-    CHECK(ca_evaluator_verify(ev, 1, 2) == 1);
-    CHECK(ca_evaluator_verify(ev, 0, 2) == 0);
+    CHECK(ca_evaluator_verify(ev, 1, 2, 2) == 1);
+    CHECK(ca_evaluator_verify(ev, 0, 2, 2) == 1);
+    CHECK(ca_evaluator_verify(ev, 0, 2, 0) == 0);
+    CHECK(ca_evaluator_verify(ev, 1, 0, 0) == 1);
     CHECK(ca_evaluator_score(ev, 2, 2, 1, "ok") > 0.5);
     CHECK(ca_evaluator_score(ev, 2, 1, 0, "FAILED") == 0.0);
     ca_evaluator_free(ev);
@@ -794,6 +1342,68 @@ static void test_sandbox(void) {
     }
     CHECK(ca_sandbox_run(sb, "rm -rf /tmp/x") == NULL);
     ca_sandbox_free(sb);
+}
+
+static void test_filetracker(void) {
+    section("filetracker");
+    /* registry: record / ops merge / dedup */
+    ca_filetracker *ft = ca_filetracker_new();
+    CHECK(ca_filetracker_record(ft, "a.txt", CA_FT_READ) == CA_FT_READ);
+    CHECK(ca_filetracker_record(ft, "a.txt", CA_FT_WRITE) == (CA_FT_READ | CA_FT_WRITE));
+    CHECK(ca_filetracker_record(ft, "b.txt", CA_FT_EXEC) == CA_FT_EXEC);
+    CHECK(ca_filetracker_record(ft, NULL, CA_FT_READ) == 0);
+    CHECK(ca_filetracker_count(ft) == 2);
+    CHECK(strcmp(ca_filetracker_ops_str(CA_FT_READ | CA_FT_DELETE), "read,delete") == 0);
+    CHECK(strcmp(ca_filetracker_ops_str(CA_FT_READ | CA_FT_WRITE | CA_FT_DELETE | CA_FT_EXEC),
+                 "read,write,delete,exec") == 0);
+    CHECK(strcmp(ca_filetracker_ops_str(0), "none") == 0);
+    char *j = ca_filetracker_json(ft);
+    CHECK(j && strstr(j, "a.txt") != NULL && strstr(j, "read,write") != NULL);
+    free(j);
+    ca_filetracker_clear(ft);
+    CHECK(ca_filetracker_count(ft) == 0);
+
+    /* snapshot / diff with real files */
+    ca_fs_mkdirs("state-test/ft-w");
+    ca_fs_remove("state-test/ft-w/new.txt");
+    ca_fs_remove("state-test/ft-w/out.txt");
+    ca_fs_write_file("state-test/ft-w/base.txt", "base", 4);
+    ca_fs_write_file("state-test/ft-w/del.txt", "del", 3);
+    ca_ft_snapshot *snap = ca_filetracker_dir_snapshot("state-test/ft-w");
+    CHECK(snap != NULL);
+    CHECK(ca_filetracker_dir_diff(ft, snap, "state-test/ft-w") == 0); /* unchanged */
+
+    ca_fs_write_file("state-test/ft-w/new.txt", "new", 3);            /* created */
+    ca_fs_write_file("state-test/ft-w/base.txt", "base changed!", 13); /* modified */
+    ca_fs_remove("state-test/ft-w/del.txt");                           /* deleted */
+    CHECK(ca_filetracker_dir_diff(ft, snap, "state-test/ft-w") == 3);
+    char *j2 = ca_filetracker_json(ft);
+    CHECK(j2 && strstr(j2, "new.txt") != NULL && strstr(j2, "write") != NULL);
+    CHECK(j2 && strstr(j2, "del.txt") != NULL && strstr(j2, "delete") != NULL);
+    free(j2);
+    ca_filetracker_snapshot_free(snap);
+
+    /* command read detection */
+    ca_filetracker_clear(ft);
+    CHECK(ca_filetracker_cmd_reads(ft, "cat state-test/ft-w/base.txt", ".") == 1);
+    char *j3 = ca_filetracker_json(ft);
+    CHECK(j3 && strstr(j3, "base.txt") != NULL && strstr(j3, "read") != NULL);
+    free(j3);
+
+    /* sandbox integration: workspace diff lands in result->files_json */
+    ca_sandbox *sb = ca_sandbox_new(8000);
+    CHECK(ca_sandbox_filetracker(sb) == NULL); /* lazy until workspace set */
+    ca_sandbox_set_workspace(sb, "state-test/ft-w");
+    CHECK(ca_sandbox_filetracker(sb) != NULL);
+    ca_sandbox_result *r = ca_sandbox_run(sb, "echo hi > state-test/ft-w/out.txt");
+    CHECK(r != NULL && r->ok == 1);
+    if (r) {
+        CHECK(r->files_json && strstr(r->files_json, "out.txt") != NULL);
+        CHECK(r->files_json && strstr(r->files_json, "write") != NULL);
+        ca_sandbox_result_free(r);
+    }
+    ca_sandbox_free(sb);
+    ca_filetracker_free(ft);
 }
 
 static void test_capability(void) {
@@ -949,7 +1559,7 @@ static void test_skills(void) {
     ca_skill_registry *r = ca_skill_registry_new();
     CHECK(r != NULL);
     if (!r) return;
-    ca_skill s = { "echo_hi", "print hi", "shell", "echo hi" };
+    ca_skill s = { "echo_hi", "print hi", "shell", "echo hi", NULL };
     CHECK(ca_skill_register(r, &s) == 0);
     CHECK(ca_skill_register(r, &s) == -1); /* duplicate */
     CHECK(ca_skill_count(r) == 1);
@@ -982,11 +1592,1061 @@ static void test_mcp(void) {
     char *j = ca_mcp_manager_json(m);
     CHECK(j && strstr(j, "srv1") != NULL);
     free(j);
-    /* unreachable server: call returns NULL without crashing */
-    CHECK(ca_mcp_manager_call(m, "srv1", "ping", "{}") == NULL);
+    /* unreachable server: call fails with a diagnostic, no crash */
+    {
+        char *out = NULL, *err = NULL;
+        CHECK(ca_mcp_manager_call(m, "srv1", "ping", "{}", &out, &err) != 0);
+        free(out);
+        free(err);
+    }
     CHECK(ca_mcp_manager_remove(m, "srv1") == 0);
     CHECK(ca_mcp_manager_count(m) == 0);
     ca_mcp_manager_free(m);
+}
+
+/* ---------- tools: JSON-schema validation ---------- */
+static ca_tool_result *big_out_exec(const ca_tool *self, const ca_tool_ctx *ctx, const char *args_json) {
+    (void)self; (void)ctx; (void)args_json;
+    char *big = (char *)malloc(20001);
+    if (!big) return ca_tool_result_new(0, "oom");
+    for (int i = 0; i < 20000; i++) big[i] = 'x';
+    big[20000] = '\0';
+    ca_tool_result *r = ca_tool_result_new(1, big);
+    free(big);
+    return r;
+}
+
+static void test_tool_schema(void) {
+    section("tool schema validation");
+    ca_tool t;
+    memset(&t, 0, sizeof(t));
+    t.name = "schematool";
+    t.json_schema =
+        "{\"type\":\"object\",\"properties\":{"
+        "\"s\":{\"type\":\"string\"},\"n\":{\"type\":\"integer\"},"
+        "\"b\":{\"type\":\"boolean\"},\"o\":{\"type\":\"object\"}},"
+        "\"required\":[\"s\"]}";
+
+    char *err = NULL;
+    CHECK(ca_tool_validate_args(&t, "{\"s\":\"hi\",\"n\":5}", &err) == 0);
+    free(err);
+    CHECK(ca_tool_validate_args(&t, "{\"s\":\"hi\",\"b\":true,\"o\":{\"k\":1}}", &err) == 0);
+    free(err); err = NULL;
+    /* missing required */
+    CHECK(ca_tool_validate_args(&t, "{\"n\":1}", &err) != 0);
+    CHECK(err && strstr(err, "s") != NULL);
+    free(err); err = NULL;
+    /* wrong type */
+    CHECK(ca_tool_validate_args(&t, "{\"s\":42}", &err) != 0);
+    CHECK(err && strstr(err, "s") != NULL);
+    free(err); err = NULL;
+    CHECK(ca_tool_validate_args(&t, "{\"s\":\"x\",\"n\":\"no\"}", &err) != 0);
+    free(err); err = NULL;
+    /* invalid args JSON */
+    CHECK(ca_tool_validate_args(&t, "not-json", &err) != 0);
+    free(err); err = NULL;
+    /* NULL schema always validates */
+    ca_tool t2; memset(&t2, 0, sizeof(t2));
+    t2.name = "noschema";
+    CHECK(ca_tool_validate_args(&t2, "{\"anything\":1}", &err) == 0);
+    free(err);
+}
+
+static void test_tool_truncate(void) {
+    section("tool result truncation");
+    ca_tool_registry *reg = ca_tool_registry_new();
+    CHECK(reg != NULL);
+    if (!reg) return;
+    ca_tool t;
+    memset(&t, 0, sizeof(t));
+    t.name = "bigout";
+    t.execute = big_out_exec;
+    CHECK(ca_tool_register(reg, &t) == 0);
+
+    ca_tool_result *r = ca_tool_execute(reg, "bigout", "{}", NULL);
+    CHECK(r != NULL);
+    if (r) {
+        CHECK(r->ok == 1);
+        CHECK(r->output && strlen(r->output) < 20000);
+        CHECK(r->output && strstr(r->output, "[truncated") != NULL);
+        ca_tool_result_free(r);
+    }
+    ca_tool_registry_free(reg);
+}
+
+/* ---------- skills: {{placeholder}} args binding ---------- */
+static void test_skill_args(void) {
+    section("skill args binding");
+    ca_skill_registry *r = ca_skill_registry_new();
+    CHECK(r != NULL);
+    if (!r) return;
+    ca_skill s = { "greet_test", "greet someone", "shell", "echo hello {{who}}", NULL };
+    CHECK(ca_skill_register(r, &s) == 0);
+    ca_skill_result *res = ca_skill_execute(r, "greet_test", "{\"who\":\"claude\"}", NULL, 8000);
+    CHECK(res != NULL);
+    if (res) {
+        CHECK(res->ok == 1);
+        CHECK(res->output && strstr(res->output, "hello claude") != NULL);
+        ca_skill_result_free(res);
+    }
+    /* missing key: placeholder stays and a hint is appended */
+    res = ca_skill_execute(r, "greet_test", "{}", NULL, 8000);
+    CHECK(res != NULL);
+    if (res) {
+        CHECK(res->output && strstr(res->output, "{{who}}") != NULL);
+        ca_skill_result_free(res);
+    }
+    ca_skill_registry_free(r);
+}
+
+/* ---------- capability gate on plugin skills ---------- */
+static void test_caps_gate(void) {
+    section("skill capability gate");
+    ca_skill_registry *r = ca_skill_registry_new();
+    CHECK(r != NULL);
+    if (!r) return;
+    ca_skill deny = { "caps_deny", "write denied", "shell",
+                      "echo gate-data > caps_gate_out.txt", "fs.read" };
+    ca_skill allow = { "caps_allow", "write allowed", "shell",
+                       "echo gate-data > caps_gate_out.txt", "fs.write" };
+    CHECK(ca_skill_register(r, &deny) == 0);
+    CHECK(ca_skill_register(r, &allow) == 0);
+
+    /* fs.write operation not covered by "fs.read" -> denied with reason */
+    ca_skill_result *res = ca_skill_execute(r, "caps_deny", NULL, NULL, 8000);
+    CHECK(res != NULL);
+    if (res) {
+        CHECK(res->ok == 0);
+        CHECK(res->output && strstr(res->output, "capability denied") != NULL);
+        CHECK(res->output && strstr(res->output, "fs.write") != NULL);
+        ca_skill_result_free(res);
+    }
+    /* covered -> runs */
+    res = ca_skill_execute(r, "caps_allow", NULL, NULL, 8000);
+    CHECK(res != NULL);
+    if (res) {
+        CHECK(res->ok == 1);
+        ca_skill_result_free(res);
+    }
+    /* wildcard "fs.*" also covers fs.write */
+    ca_skill wild = { "caps_wild", "wildcard", "shell",
+                      "echo gate-data > caps_gate_out.txt", "fs.*" };
+    CHECK(ca_skill_register(r, &wild) == 0);
+    res = ca_skill_execute(r, "caps_wild", NULL, NULL, 8000);
+    CHECK(res != NULL);
+    if (res) {
+        CHECK(res->ok == 1);
+        ca_skill_result_free(res);
+    }
+    ca_skill_registry_free(r);
+}
+
+/* ---------- generated-plugin tool binding (self-evolution loop) ---------- */
+static void test_generated_tool(void) {
+    section("generated plugin -> tool binding");
+    ca_skill_registry *skills = ca_skill_registry_new();
+    ca_tool_registry *reg = ca_tool_registry_new();
+    CHECK(skills != NULL && reg != NULL);
+    if (!skills || !reg) { ca_skill_registry_free(skills); ca_tool_registry_free(reg); return; }
+
+    /* run the generation pipeline offline (mock design) and bind the produced
+     * plugin as a callable tool, like reasoning.c does on missing capability */
+    ca_plugin_gen_deps gd;
+    memset(&gd, 0, sizeof(gd));
+    gd.skills = skills;
+    char *gjson = ca_plugin_generate_deps(&gd, "读取配置 config 文件");
+    CHECK(gjson != NULL);
+    char name[128] = "";
+    if (gjson) {
+        cJSON *g = cJSON_Parse(gjson);
+        cJSON *okj = g ? cJSON_GetObjectItemCaseSensitive(g, "ok") : NULL;
+        cJSON *pj = g ? cJSON_GetObjectItemCaseSensitive(g, "plugin") : NULL;
+        cJSON *nj = pj ? cJSON_GetObjectItemCaseSensitive(pj, "name") : NULL;
+        CHECK(okj && cJSON_IsTrue(okj));
+        if (nj && cJSON_IsString(nj)) snprintf(name, sizeof(name), "%s", nj->valuestring);
+        if (g) cJSON_Delete(g);
+        free(gjson);
+    }
+    CHECK(name[0] != '\0');
+    CHECK(ca_tool_register_generated(reg, skills, "auto_fixed_tool", name) == 0);
+
+    const ca_tool *t = ca_tool_find(reg, "auto_fixed_tool");
+    CHECK(t != NULL);
+    if (t) {
+        CHECK(strstr(t->description, "generated plugin") != NULL);
+        ca_tool_ctx tctx;
+        memset(&tctx, 0, sizeof(tctx));
+        tctx.reg = reg;
+        tctx.skills = skills;
+        ca_tool_result *res = ca_tool_execute(reg, "auto_fixed_tool", "{}", &tctx);
+        CHECK(res != NULL);
+        if (res) {
+            CHECK(res->ok == 1);
+            CHECK(res->output && strstr(res->output, "plugin:") != NULL);
+            ca_tool_result_free(res);
+        }
+    }
+    /* rebinding the same tool name is idempotent (already registered) */
+    CHECK(ca_tool_register_generated(reg, skills, "auto_fixed_tool", name) == 0);
+    CHECK(ca_tool_find(reg, "auto_fixed_tool") != NULL);
+
+    /* bad args */
+    CHECK(ca_tool_register_generated(NULL, skills, "x", name) == -1);
+    CHECK(ca_tool_register_generated(reg, NULL, "x", name) == -1);
+    CHECK(ca_tool_register_generated(reg, skills, NULL, name) == -1);
+    CHECK(ca_tool_register_generated(reg, skills, "y", "no_such_skill") == -1);
+
+    ca_tool_registry_free(reg);
+    ca_skill_registry_free(skills);
+}
+
+/* ---------- memory graph + consolidation ---------- */
+static void test_memory_graph(void) {
+    section("memory graph + consolidation");
+    ca_memory *m = ca_memory_new(NULL);
+    CHECK(m != NULL);
+    if (!m) return;
+
+    ca_memory_record_edge(m, "taskA", "file_write", "used_tool");
+    ca_memory_record_edge(m, "file_write", "a.txt", "touched");
+    ca_memory_record_edge(m, "taskA", "file_write", "used_tool"); /* dup folded */
+
+    char *gj = ca_memory_graph_json(m);
+    CHECK(gj != NULL);
+    CHECK(gj && strstr(gj, "taskA") && strstr(gj, "used_tool"));
+    free(gj);
+
+    /* token-based recall: query "taskA" finds both edges */
+    char *rel = ca_memory_graph_related(m, "taskA", 10);
+    CHECK(rel != NULL);
+    CHECK(rel && strstr(rel, "used_tool") != NULL);
+    free(rel);
+    /* unrelated query -> empty array */
+    rel = ca_memory_graph_related(m, "zzz_nothing", 10);
+    CHECK(rel != NULL);
+    CHECK(rel && strcmp(rel, "[]") == 0);
+    free(rel);
+
+    /* consolidation: a token appearing in >= 3 episode tasks becomes a fact */
+    ca_memory_record_experience(m, "fix the parser bug", "done");
+    ca_memory_record_experience(m, "parser cleanup task", "done");
+    ca_memory_record_experience(m, "extend parser tests", "done");
+    int facts = ca_memory_consolidate(m);
+    CHECK(facts >= 1);
+    const char *fact = ca_memory_recall(m, "topic.parser");
+    CHECK(fact != NULL);
+    CHECK(fact && strstr(fact, "3") != NULL);
+
+    ca_memory_free(m);
+}
+
+/* ---------- file_edit / glob / grep tools (Claude Code ports) ---------- */
+static void test_edit_search(void) {
+    section("file_edit + glob + grep");
+    /* hermetic start: a killed earlier run may have left files behind */
+    ca_fs_remove("tw-edit/a.txt");
+    ca_fs_remove("tw-edit/b.txt");
+    ca_fs_remove("tw-edit/sub/c.txt");
+#ifdef _WIN32
+    RemoveDirectoryA("tw-edit/sub");
+    RemoveDirectoryA("tw-edit");
+#else
+    rmdir("tw-edit/sub");
+    rmdir("tw-edit");
+#endif
+    ca_tool_registry *reg = ca_tool_registry_new();
+    ca_tool_register_builtins(reg);
+    CHECK(ca_tool_find(reg, "file_edit") != NULL);
+    CHECK(ca_tool_find(reg, "glob") != NULL);
+    CHECK(ca_tool_find(reg, "grep") != NULL);
+
+    ca_tool_ctx tctx;
+    memset(&tctx, 0, sizeof(tctx));
+    tctx.reg = reg;
+    tctx.workspace = "tw-edit";
+    ca_fs_mkdirs("tw-edit");
+
+    /* seed files */
+    ca_tool_result *r = ca_tool_execute(
+        reg, "file_write",
+        "{\"path\":\"a.txt\",\"content\":\"foo bar\\nfoo baz\\n\"}", &tctx);
+    CHECK(r != NULL && r->ok == 1);
+    ca_tool_result_free(r);
+    r = ca_tool_execute(reg, "file_write",
+                        "{\"path\":\"b.txt\",\"content\":\"bar only\\n\"}", &tctx);
+    CHECK(r != NULL && r->ok == 1);
+    ca_tool_result_free(r);
+    r = ca_tool_execute(reg, "file_write",
+                        "{\"path\":\"sub/c.txt\",\"content\":\"nested bar\\n\"}", &tctx);
+    CHECK(r != NULL && r->ok == 1);
+    ca_tool_result_free(r);
+
+    /* --- file_edit --- */
+    /* unique replacement */
+    r = ca_tool_execute(reg, "file_edit",
+                        "{\"path\":\"a.txt\",\"old_string\":\"bar\",\"new_string\":\"qux\"}",
+                        &tctx);
+    CHECK(r != NULL && r->ok == 1);
+    ca_tool_result_free(r);
+    char *d = ca_fs_read_file("tw-edit/a.txt");
+    CHECK(d != NULL && strstr(d, "foo qux") != NULL && strstr(d, "foo baz") != NULL);
+    free(d);
+    /* old_string not found -> error */
+    r = ca_tool_execute(reg, "file_edit",
+                        "{\"path\":\"a.txt\",\"old_string\":\"nope\",\"new_string\":\"x\"}",
+                        &tctx);
+    CHECK(r != NULL && r->ok == 0);
+    CHECK(r && r->output && strstr(r->output, "not found") != NULL);
+    ca_tool_result_free(r);
+    /* not unique (two "foo") -> error without replace_all */
+    r = ca_tool_execute(reg, "file_edit",
+                        "{\"path\":\"a.txt\",\"old_string\":\"foo\",\"new_string\":\"x\"}",
+                        &tctx);
+    CHECK(r != NULL && r->ok == 0);
+    CHECK(r && r->output && strstr(r->output, "not unique") != NULL);
+    ca_tool_result_free(r);
+    /* replace_all replaces every instance */
+    r = ca_tool_execute(reg, "file_edit",
+                        "{\"path\":\"a.txt\",\"old_string\":\"foo\",\"new_string\":\"x\",\"replace_all\":true}",
+                        &tctx);
+    CHECK(r != NULL && r->ok == 1);
+    ca_tool_result_free(r);
+    d = ca_fs_read_file("tw-edit/a.txt");
+    CHECK(d != NULL && strstr(d, "x qux") != NULL && strstr(d, "x baz") != NULL &&
+          strstr(d, "foo") == NULL);
+    free(d);
+    /* missing file -> error mentioning file_write */
+    r = ca_tool_execute(reg, "file_edit",
+                        "{\"path\":\"missing.txt\",\"old_string\":\"a\",\"new_string\":\"b\"}",
+                        &tctx);
+    CHECK(r != NULL && r->ok == 0);
+    CHECK(r && r->output && strstr(r->output, "file_write") != NULL);
+    ca_tool_result_free(r);
+
+    /* --- glob --- */
+    r = ca_tool_execute(reg, "glob", "{\"pattern\":\"**/*.txt\"}", &tctx);
+    CHECK(r != NULL && r->ok == 1);
+    CHECK(r && r->output && strstr(r->output, "a.txt") != NULL &&
+          r->output && strstr(r->output, "sub/c.txt") != NULL);
+    ca_tool_result_free(r);
+    /* top-level-only pattern excludes nested files */
+    r = ca_tool_execute(reg, "glob", "{\"pattern\":\"*.txt\"}", &tctx);
+    CHECK(r != NULL && r->ok == 1);
+    CHECK(r && r->output && strstr(r->output, "a.txt") != NULL &&
+          (!r->output || strstr(r->output, "sub/c.txt") == NULL));
+    ca_tool_result_free(r);
+    /* no match */
+    r = ca_tool_execute(reg, "glob", "{\"pattern\":\"**/*.xyz\"}", &tctx);
+    CHECK(r != NULL && r->ok == 1);
+    CHECK(r && r->output && strstr(r->output, "No files found") != NULL);
+    ca_tool_result_free(r);
+
+    /* --- grep --- */
+    /* default mode: files_with_matches (a.txt no longer contains bar) */
+    r = ca_tool_execute(reg, "grep", "{\"pattern\":\"bar\"}", &tctx);
+    CHECK(r != NULL && r->ok == 1);
+    CHECK(r && r->output && strstr(r->output, "b.txt") != NULL &&
+          r->output && strstr(r->output, "sub/c.txt") != NULL);
+    ca_tool_result_free(r);
+    /* content mode: path:line:text */
+    r = ca_tool_execute(reg, "grep",
+                        "{\"pattern\":\"baz\",\"output_mode\":\"content\"}", &tctx);
+    CHECK(r != NULL && r->ok == 1);
+    CHECK(r && r->output && strstr(r->output, "a.txt:2:x baz") != NULL);
+    ca_tool_result_free(r);
+    /* count mode */
+    r = ca_tool_execute(reg, "grep", "{\"pattern\":\"bar\",\"output_mode\":\"count\"}",
+                        &tctx);
+    CHECK(r != NULL && r->ok == 1);
+    CHECK(r && r->output && strstr(r->output, "b.txt:1") != NULL &&
+          r->output && strstr(r->output, "sub/c.txt:1") != NULL);
+    ca_tool_result_free(r);
+    /* case-insensitive */
+    r = ca_tool_execute(reg, "grep",
+                        "{\"pattern\":\"BAZ\",\"ignore_case\":true,\"output_mode\":\"content\"}",
+                        &tctx);
+    CHECK(r != NULL && r->ok == 1);
+    CHECK(r && r->output && strstr(r->output, "a.txt") != NULL);
+    ca_tool_result_free(r);
+    /* glob filter narrows to one file */
+    r = ca_tool_execute(reg, "grep",
+                        "{\"pattern\":\"bar\",\"glob\":\"b.txt\",\"output_mode\":\"count\"}",
+                        &tctx);
+    CHECK(r != NULL && r->ok == 1);
+    CHECK(r && r->output && strstr(r->output, "b.txt:1") != NULL &&
+          (!r->output || strstr(r->output, "sub/c.txt") == NULL));
+    ca_tool_result_free(r);
+    /* head_limit truncates */
+    r = ca_tool_execute(reg, "grep",
+                        "{\"pattern\":\"bar\",\"output_mode\":\"content\",\"head_limit\":1}",
+                        &tctx);
+    CHECK(r != NULL && r->ok == 1);
+    CHECK(r && r->output && strstr(r->output, "truncated") != NULL);
+    ca_tool_result_free(r);
+    /* no match */
+    r = ca_tool_execute(reg, "grep", "{\"pattern\":\"zzznothing\"}", &tctx);
+    CHECK(r != NULL && r->ok == 1);
+    CHECK(r && r->output && strstr(r->output, "No matches found") != NULL);
+    ca_tool_result_free(r);
+
+    /* schema validation: required args enforced */
+    char *err = NULL;
+    CHECK(ca_tool_validate_args(ca_tool_find(reg, "file_edit"),
+                                "{\"path\":\"a.txt\"}", &err) == -1);
+    free(err);
+
+    /* cleanup */
+    ca_fs_remove("tw-edit/a.txt");
+    ca_fs_remove("tw-edit/b.txt");
+    ca_fs_remove("tw-edit/sub/c.txt");
+#ifdef _WIN32
+    RemoveDirectoryA("tw-edit/sub");
+    RemoveDirectoryA("tw-edit");
+#else
+    rmdir("tw-edit/sub");
+    rmdir("tw-edit");
+#endif
+    ca_tool_registry_free(reg);
+}
+
+/* ---------- snapshot: large-file guard + git-managed bypass ---------- */
+static void test_snapshot_bigfile(void) {
+    section("snapshot big-file guard + git bypass");
+    /* shrink the capture limit so a small file exercises the skip path */
+#ifdef _WIN32
+    _putenv("CA_SNAPSHOT_MAX_FILE=1024");
+#else
+    setenv("CA_SNAPSHOT_MAX_FILE", "1024", 1);
+#endif
+
+    ca_snapshot *snap = ca_snapshot_open("state-test/snap-big");
+    CHECK(snap != NULL);
+    if (!snap) return;
+
+    /* --- small file (under the 1KB limit) still round-trips --- */
+    const char *small = "state-test/snap-big/small.txt";
+    ca_fs_write_file(small, "original-small", 14);
+    CHECK(ca_snapshot_capture(snap, small) == 0);
+    ca_fs_write_file(small, "modified-small!!", 16);
+    CHECK(ca_snapshot_restore_pending(snap) == 0);
+    char *d = ca_fs_read_file(small);
+    CHECK(d != NULL && strcmp(d, "original-small") == 0);
+    free(d);
+
+    /* --- large file (over the limit): capture is skipped, and rollback
+     * leaves the (modified) file alone instead of deleting it --- */
+    const char *big = "state-test/snap-big/big.txt";
+    char *bigbuf = (char *)malloc(4096);
+    memset(bigbuf, 'A', 4096);
+    ca_fs_write_file(big, bigbuf, 4096);
+    long long sz = ca_fs_file_size(big);
+    CHECK(sz == 4096);
+    CHECK(ca_snapshot_capture(snap, big) == 0); /* must not read the file */
+    CHECK(ca_fs_file_size(big) == 4096);        /* no temp copies either */
+    memset(bigbuf, 'B', 4096);
+    ca_fs_write_file(big, bigbuf, 4096);
+    CHECK(ca_snapshot_restore_pending(snap) == 0);
+    d = ca_fs_read_file(big);
+    CHECK(d != NULL && strlen(d) == 4096);      /* still there... */
+    CHECK(d != NULL && d[0] == 'B');            /* ...with modified content (not deletable-restore) */
+    free(d);
+    free(bigbuf);
+    ca_fs_remove(big);
+    ca_fs_remove(small);
+    ca_snapshot_close(snap);
+#ifdef _WIN32
+    _putenv("CA_SNAPSHOT_MAX_FILE=");
+#else
+    unsetenv("CA_SNAPSHOT_MAX_FILE");
+#endif
+
+    /* --- git-managed workspace: tx does not snapshot, rollback is a no-op --- */
+    ca_fs_mkdirs("state-test/tw-git/.git");
+    ca_tool_registry *reg = ca_tool_registry_new();
+    ca_tool_register_builtins(reg);
+    ca_tx_manager *tm = ca_tx_manager_new();
+
+    ca_snapshot *snap2 = ca_snapshot_open("state-test/snap-big2");
+    CHECK(snap2 != NULL);
+
+    ca_tool_ctx gctx;
+    memset(&gctx, 0, sizeof(gctx));
+    gctx.reg = reg;
+    gctx.workspace = "state-test/tw-git";
+    ca_tx *gtx = ca_tx_begin(tm, snap2, reg, &gctx);
+    CHECK(ca_tx_run(gtx, "file_write", "{\"path\":\"f.txt\",\"content\":\"git-ver\"}") == 0);
+    d = ca_fs_read_file("state-test/tw-git/f.txt");
+    CHECK(d != NULL && strcmp(d, "git-ver") == 0);
+    free(d);
+    /* rollback: no snapshot was taken, so the file stays as written */
+    CHECK(ca_tx_rollback(gtx) == 0);
+    d = ca_fs_read_file("state-test/tw-git/f.txt");
+    CHECK(d != NULL && strcmp(d, "git-ver") == 0);
+    free(d);
+    ca_tx_free(gtx);
+
+    /* --- non-git workspace: same tx DOES snapshot and rollback removes --- */
+    ca_tool_ctx pctx;
+    memset(&pctx, 0, sizeof(pctx));
+    pctx.reg = reg;
+    pctx.workspace = "state-test/tw-plain";
+    ca_tx *ptx = ca_tx_begin(tm, snap2, reg, &pctx);
+    CHECK(ca_tx_run(ptx, "file_write", "{\"path\":\"f.txt\",\"content\":\"plain-ver\"}") == 0);
+    CHECK(ca_tx_rollback(ptx) == 0);
+    CHECK(ca_fs_exists("state-test/tw-plain/f.txt") == 0); /* restored to absent */
+    ca_tx_free(ptx);
+
+    ca_tx_manager_free(tm);
+    ca_tool_registry_free(reg);
+    ca_snapshot_close(snap2);
+    ca_fs_remove("state-test/tw-git/f.txt");
+}
+
+/* ---------- agent loop: bounded multi-round plan->act->replan ---------- */
+static void test_agent_loop(void) {
+    section("agent loop (multi-round)");
+    ca_fs_mkdirs("state-test/loop-w");
+
+    /* default rounds (8): analyze -> fix -> final text answer */
+    {
+        const char *f = "state-test/loop-w/a.txt";
+        ca_fs_write_file(f, "fixme OLD fixme", 15);
+        cagent_config cfg;
+        memset(&cfg, 0, sizeof(cfg));
+        cfg.state_root = "state-test/loop";
+        cfg.workspace = "state-test/loop-w";
+        cfg.provider = "mock";
+        cfg.http_port = 0;
+        cagent_ctx ctx;
+        if (cagent_init(&ctx, &cfg) != 0) { CHECK(0); return; }
+        char *ans = NULL;
+        CHECK(ca_reasoning_run(ctx.reasoning, "分析 a.txt 并修复其中的 OLD", &ans) == 0);
+        CHECK(ans != NULL);
+        CHECK(ans && strstr(ans, "[file_read]") != NULL);   /* round 1 observed */
+        CHECK(ans && strstr(ans, "[file_edit]") != NULL);   /* round 2 applied */
+        CHECK(ans && strstr(ans, "任务完成") != NULL);       /* final text */
+        free(ans);
+        /* the fix really landed on disk */
+        char *content = ca_fs_read_file(f);
+        CHECK(content && strstr(content, "NEW") != NULL && strstr(content, "OLD") == NULL);
+        free(content);
+        cagent_shutdown(&ctx);
+        ca_fs_remove(f);
+    }
+
+    /* max_rounds=1 via <state_root>/cagent.json: single-shot — the loop runs
+     * one round (the analyze read) and stops without ever fixing the file */
+    {
+        const char *f = "state-test/loop-w/b.txt";
+        ca_fs_write_file(f, "fixme OLD fixme", 15);
+        ca_fs_mkdirs("state-test/loop1");
+        ca_fs_write_file("state-test/loop1/cagent.json",
+                         "{\"reasoning.max_rounds\":1}", 26);
+        cagent_config cfg;
+        memset(&cfg, 0, sizeof(cfg));
+        cfg.state_root = "state-test/loop1";
+        cfg.workspace = "state-test/loop-w";
+        cfg.provider = "mock";
+        cfg.http_port = 0;
+        cagent_ctx ctx;
+        if (cagent_init(&ctx, &cfg) != 0) { CHECK(0); return; }
+        char *ans = NULL;
+        CHECK(ca_reasoning_run(ctx.reasoning, "分析 b.txt 并修复其中的 OLD", &ans) == 0);
+        CHECK(ans && strstr(ans, "[file_read]") != NULL);
+        CHECK(ans && strstr(ans, "未完全完成") != NULL); /* budget note */
+        free(ans);
+        char *content = ca_fs_read_file(f);
+        CHECK(content && strstr(content, "OLD") != NULL); /* untouched */
+        free(content);
+        cagent_shutdown(&ctx);
+        ca_fs_remove(f);
+        ca_fs_remove("state-test/loop1/cagent.json");
+    }
+
+    /* plain chat is unchanged: no plan on round 1 -> answer is the LLM text */
+    {
+        cagent_config cfg;
+        memset(&cfg, 0, sizeof(cfg));
+        cfg.state_root = "state-test/loop-chat";
+        cfg.workspace = "state-test/loop-w";
+        cfg.provider = "mock";
+        cfg.http_port = 0;
+        cagent_ctx ctx;
+        if (cagent_init(&ctx, &cfg) != 0) { CHECK(0); return; }
+        char *ans = NULL;
+        CHECK(ca_reasoning_run(ctx.reasoning, "你好", &ans) == 0);
+        CHECK(ans != NULL && strstr(ans, "[") == NULL); /* no action lines */
+        free(ans);
+        cagent_shutdown(&ctx);
+    }
+}
+
+/* ---------- chat history + upload RAG + self-evolution restart rebind ---------- */
+static void test_chat_upload_evolve(void) {
+    section("chat history / upload RAG / evolve rebind");
+
+    /* multi-turn history is readable across runs (oldest first) */
+    {
+        cagent_config cfg;
+        memset(&cfg, 0, sizeof(cfg));
+        cfg.state_root = "state-test/chat-hist";
+        cfg.workspace = "state-test/loop-w";
+        cfg.provider = "mock";
+        cfg.http_port = 0;
+        cagent_ctx ctx;
+        if (cagent_init(&ctx, &cfg) != 0) { CHECK(0); return; }
+        char *a1 = NULL, *a2 = NULL;
+        CHECK(ca_reasoning_run(ctx.reasoning, "你好", &a1) == 0);
+        CHECK(ca_reasoning_run(ctx.reasoning, "继续聊天", &a2) == 0);
+        free(a1); free(a2);
+        char *hj = ca_reasoning_history_json(ctx.reasoning, 10);
+        CHECK(hj && strstr(hj, "你好") != NULL && strstr(hj, "继续聊天") != NULL);
+        if (hj) {
+            cJSON *arr = cJSON_Parse(hj);
+            CHECK(arr && cJSON_IsArray(arr) && cJSON_GetArraySize(arr) == 2);
+            if (arr) {
+                cJSON *first = cJSON_GetArrayItem(arr, 0);
+                cJSON *q = first ? cJSON_GetObjectItemCaseSensitive(first, "q") : NULL;
+                CHECK(q && cJSON_IsString(q) && strstr(q->valuestring, "你好") != NULL);
+                cJSON_Delete(arr);
+            }
+        }
+        free(hj);
+        cagent_shutdown(&ctx);
+    }
+
+    /* uploaded documents are recallable via the vector store (Chinese text
+     * exercises the CJK bigram fallback of the local embedder) */
+    {
+        cagent_config cfg;
+        memset(&cfg, 0, sizeof(cfg));
+        cfg.state_root = "state-test/up-rag";
+        cfg.workspace = "state-test/loop-w";
+        cfg.provider = "mock";
+        cfg.http_port = 0;
+        cagent_ctx ctx;
+        if (cagent_init(&ctx, &cfg) != 0) { CHECK(0); return; }
+        CHECK(ctx.memory != NULL);
+        /* two long paragraphs (each > the ~600-byte chunk target) -> 2 chunks */
+        ca_strbuf doc;
+        ca_strbuf_init(&doc);
+        for (int i = 0; i < 20; i++)
+            ca_strbuf_append(&doc, "埃菲尔铁塔位于法国巴黎，是著名的地标建筑。");
+        ca_strbuf_append(&doc, "\n\n");
+        for (int i = 0; i < 20; i++)
+            ca_strbuf_append(&doc, "今天股市收盘上涨百分之二，成交量明显放大。");
+        int n = ca_memory_index_text(ctx.memory, "upload:notes.txt", doc.buf);
+        ca_strbuf_free(&doc);
+        CHECK(n == 2);
+        char *hits = ca_memory_retrieve(ctx.memory, "埃菲尔铁塔在哪里", 3);
+        CHECK(hits && strstr(hits, "埃菲尔铁塔") != NULL);
+        free(hits);
+        cagent_shutdown(&ctx);
+    }
+
+    /* missing-capability generation persists: after the drill, the tool is
+     * re-bound from generated_tools.json in a FRESH context (no regeneration) */
+    {
+        cagent_config cfg;
+        memset(&cfg, 0, sizeof(cfg));
+        cfg.state_root = "state-test/evo";
+        cfg.workspace = "state-test/loop-w";
+        cfg.provider = "mock";
+        cfg.http_port = 0;
+        cagent_ctx ctx;
+        if (cagent_init(&ctx, &cfg) != 0) { CHECK(0); return; }
+        char *ans = NULL;
+        CHECK(ca_reasoning_run(ctx.reasoning, "北京今天天气怎么样", &ans) == 0);
+        free(ans);
+        /* mapping persisted for the generated capability */
+        char *gmap = ca_tool_generated_load_mapping("state-test/evo");
+        CHECK(gmap && strstr(gmap, "weather_lookup") != NULL);
+        free(gmap);
+        cagent_shutdown(&ctx);
+
+        /* fresh init: the tool re-binds without a new generation run */
+        cagent_ctx ctx2;
+        if (cagent_init(&ctx2, &cfg) != 0) { CHECK(0); return; }
+        CHECK(ca_tool_find(ctx2.tools, "weather_lookup") != NULL);
+        cagent_shutdown(&ctx2);
+    }
+}
+
+/* ---------- policy rules: persistence + hard enforcement ---------- */
+static void test_policy_rules(void) {
+    section("policy rules (persist + deny hard-block)");
+
+    /* save/load round-trip with decision strings */
+    {
+        ca_policy_engine *pe = ca_policy_engine_new();
+        ca_policy_add_rule(pe, "file_write", "deny", "readonly mode");
+        ca_policy_add_rule(pe, "*", "allow", NULL);
+        ca_fs_mkdirs("state-test/policy-round");
+        CHECK(ca_policy_save_file(pe, "state-test/policy-round/policy.json") == 0);
+        ca_policy_engine *pe2 = ca_policy_engine_new();
+        CHECK(ca_policy_load_file(pe2, "state-test/policy-round/policy.json") == 2);
+        /* exact deny beats wildcard allow regardless of order */
+        CHECK(ca_policy_check(pe2, "file_write", "{}", NULL) == CA_POLICY_DENY);
+        CHECK(ca_policy_check(pe2, "file_read", "{}", NULL) == CA_POLICY_ALLOW);
+        const char *tool = NULL, *action = NULL, *reason = NULL;
+        CHECK(ca_policy_rule_get(pe2, 0, &tool, &action, &reason) == 0);
+        CHECK(strcmp(tool, "file_write") == 0 && strcmp(action, "deny") == 0 &&
+              reason && strcmp(reason, "readonly mode") == 0);
+        /* removal works */
+        ca_policy_remove_rule(pe2, 0);
+        CHECK(ca_policy_rule_count(pe2) == 1);
+        CHECK(ca_policy_check(pe2, "file_write", "{}", NULL) == CA_POLICY_ALLOW);
+        ca_policy_engine_free(pe);
+        ca_policy_engine_free(pe2);
+    }
+
+    /* e2e: a persisted deny rule keeps file_write out of the run — the mock
+     * planner still emits the action, the execution layer must hard-block it */
+    {
+        cagent_config cfg;
+        memset(&cfg, 0, sizeof(cfg));
+        cfg.state_root = "state-test/policy-e2e";
+        cfg.workspace = "state-test/loop-w";
+        cfg.provider = "mock";
+        cfg.http_port = 0;
+        cagent_ctx ctx;
+        if (cagent_init(&ctx, &cfg) != 0) { CHECK(0); return; }
+        ca_policy_add_rule(ctx.policy, "file_write", "deny", "readonly guard");
+
+        char *ans = NULL;
+        CHECK(ca_reasoning_run(ctx.reasoning, "创建 blocked.txt 写入内容 x", &ans) == 0);
+        CHECK(ans && strstr(ans, "denied by policy") != NULL);
+        free(ans);
+        /* the file must NOT exist (hard block, not just a warning) */
+        char *data = ca_fs_read_file("state-test/loop-w/blocked.txt");
+        CHECK(data == NULL);
+        free(data);
+        cagent_shutdown(&ctx);
+    }
+}
+
+/* ---------- multi-agent orchestration: decompose -> execute -> merge ---------- */
+static void test_orchestrate(void) {
+    section("multi-agent orchestration");
+
+    /* full pipeline: mock decompose assigns to "alpha", the plan compiles to a
+     * Flow DAG, ca_flow_run executes it (the worker writes the file), the merge
+     * synthesizes the final answer; the flow trace lands on the board */
+    {
+        cagent_config cfg;
+        memset(&cfg, 0, sizeof(cfg));
+        cfg.state_root = "state-test/orch";
+        cfg.workspace = "state-test/loop-w";
+        cfg.provider = "mock";
+        cfg.http_port = 0;
+        cagent_ctx ctx;
+        if (cagent_init(&ctx, &cfg) != 0) { CHECK(0); return; }
+        CHECK(ca_agent_pool_add(ctx.agents, "alpha", "writer") >= 0);
+
+        char *ans = NULL, *trace = NULL;
+        CHECK(cagent_orchestrate(&ctx, "创建 orch.txt 写入内容为 orch-ok", &ans, &trace) == 0);
+        CHECK(ans && strstr(ans, "综合完成") != NULL);
+        CHECK(trace && strstr(trace, "\"agent\":\"alpha\"") != NULL &&
+              strstr(trace, "\"status\":\"ok\"") != NULL);
+        free(ans); free(trace);
+
+        /* the worker actually executed (file written) and results hit the board */
+        char *data = ca_fs_read_file("state-test/loop-w/orch.txt");
+        CHECK(data && strstr(data, "orch-ok") != NULL);
+        free(data);
+        char *tr = ca_blackboard_get(ctx.blackboard, "flow/trace");
+        CHECK(tr && strstr(tr, "alpha") != NULL);
+        free(tr);
+        char *fin = ca_blackboard_get(ctx.blackboard, "flow/final");
+        CHECK(fin && strstr(fin, "综合完成") != NULL);
+        free(fin);
+
+        /* per-agent blackboard keys don't collide between agents */
+        CHECK(ca_agent_pool_add(ctx.agents, "beta", "reviewer") >= 0);
+        char *a2 = NULL;
+        CHECK(cagent_agent_run(&ctx, "alpha", "纯聊天模式回复即可", &a2) == 0);
+        char *k1 = ca_blackboard_get(ctx.blackboard, "result:alpha");
+        CHECK(k1 != NULL);
+        free(k1);
+        free(a2);
+        cagent_shutdown(&ctx);
+    }
+
+    /* fallback: no registered agents -> plain single-agent run */
+    {
+        cagent_config cfg;
+        memset(&cfg, 0, sizeof(cfg));
+        cfg.state_root = "state-test/orch-fb";
+        cfg.workspace = "state-test/loop-w";
+        cfg.provider = "mock";
+        cfg.http_port = 0;
+        cagent_ctx ctx;
+        if (cagent_init(&ctx, &cfg) != 0) { CHECK(0); return; }
+        char *ans = NULL;
+        CHECK(cagent_orchestrate(&ctx, "你好", &ans, NULL) == 0);
+        CHECK(ans && *ans != '\0');
+        free(ans);
+        cagent_shutdown(&ctx);
+    }
+}
+
+/* decompose-only: task compiles to an inspectable Flow DAG (no execution) */
+static void test_flow_decompose(void) {
+    section("flow decompose (LLM plan -> DAG)");
+    cagent_config cfg;
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.state_root = "state-test/flow-decomp";
+    cfg.workspace = "state-test/loop-w";
+    cfg.provider = "mock";
+    cfg.http_port = 0;
+    cagent_ctx ctx;
+    if (cagent_init(&ctx, &cfg) != 0) { CHECK(0); return; }
+
+    /* no agents -> no plan */
+    char *dag = NULL;
+    CHECK(cagent_flow_decompose(&ctx, "创建 a.txt 写入内容为 x", &dag) == -1);
+    CHECK(dag == NULL);
+
+    /* with agents -> valid DAG, nothing executed */
+    CHECK(ca_agent_pool_add(ctx.agents, "alpha", "writer") >= 0);
+    CHECK(cagent_flow_decompose(&ctx, "创建 a.txt 写入内容为 x", &dag) == 0);
+    CHECK(dag && strstr(dag, "\"agent\":\"alpha\"") != NULL &&
+          strstr(dag, "\"nodes\"") != NULL);
+    free(dag);
+    char *data = ca_fs_read_file("state-test/loop-w/a.txt");
+    CHECK(data == NULL); /* decompose must not run the nodes */
+    free(data);
+    cagent_shutdown(&ctx);
+}
+
+/* ---------- Flow Compiler: DAG validation + topological execution ---------- */
+static void test_flow(void) {
+    section("flow compiler (DAG)");
+
+    /* validation: cycle detection, duplicate ids, unknown edge endpoints */
+    {
+        char *err = NULL;
+        CHECK(ca_flow_validate("{\"nodes\":[{\"id\":\"a\",\"agent\":\"x\","
+                               "\"task\":\"t\"},{\"id\":\"b\",\"agent\":\"x\","
+                               "\"task\":\"t\"}],\"edges\":[{\"from\":\"a\","
+                               "\"to\":\"b\"}]}", &err) == 0);
+        free(err);
+
+        err = NULL;
+        CHECK(ca_flow_validate("{\"nodes\":[{\"id\":\"a\",\"agent\":\"x\","
+                               "\"task\":\"t\"},{\"id\":\"b\",\"agent\":\"x\","
+                               "\"task\":\"t\"}],\"edges\":[{\"from\":\"a\","
+                               "\"to\":\"b\"},{\"from\":\"b\",\"to\":\"a\"}]}",
+                               &err) == -1);
+        CHECK(err && strstr(err, "cycle") != NULL);
+        free(err);
+
+        err = NULL;
+        CHECK(ca_flow_validate("{\"nodes\":[{\"id\":\"a\",\"agent\":\"x\","
+                               "\"task\":\"t\"},{\"id\":\"a\",\"agent\":\"x\","
+                               "\"task\":\"t\"}]}", &err) == -1);
+        CHECK(err && strstr(err, "duplicate") != NULL);
+        free(err);
+
+        err = NULL;
+        CHECK(ca_flow_validate("{\"nodes\":[{\"id\":\"a\",\"agent\":\"x\","
+                               "\"task\":\"t\"}],\"edges\":[{\"from\":\"a\","
+                               "\"to\":\"ghost\"}]}", &err) == -1);
+        CHECK(err && strstr(err, "unknown node") != NULL);
+        free(err);
+    }
+
+    /* execution: 2-node chain with {{a}} substitution; results on the board */
+    {
+        cagent_config cfg;
+        memset(&cfg, 0, sizeof(cfg));
+        cfg.state_root = "state-test/flow";
+        cfg.workspace = "state-test/loop-w";
+        cfg.provider = "mock";
+        cfg.http_port = 0;
+        cagent_ctx ctx;
+        if (cagent_init(&ctx, &cfg) != 0) { CHECK(0); return; }
+        CHECK(ca_agent_pool_add(ctx.agents, "alpha", "writer") >= 0);
+        CHECK(ca_agent_pool_add(ctx.agents, "beta", "reviewer") >= 0);
+
+        const char *dag =
+            "{\"nodes\":["
+            "{\"id\":\"a\",\"agent\":\"alpha\",\"task\":\"创建 flow-a.txt 写入内容为 flow-ok\"},"
+            "{\"id\":\"b\",\"agent\":\"beta\",\"task\":\"总结以下内容: {{a}}\"}],"
+            "\"edges\":[{\"from\":\"a\",\"to\":\"b\"}]}";
+
+        char *ans = NULL, *trace = NULL;
+        CHECK(ca_flow_run(&ctx, dag, &ans, &trace) == 0);
+        CHECK(ans && *ans != '\0');
+        /* both nodes ran; {{a}} was substituted away in b's recorded task */
+        CHECK(trace && strstr(trace, "\"id\":\"a\"") != NULL &&
+              strstr(trace, "\"id\":\"b\"") != NULL &&
+              strstr(trace, "\"status\":\"ok\"") != NULL);
+        CHECK(trace && strstr(trace, "{{a}}") == NULL);
+        free(ans); free(trace);
+
+        /* node a actually executed its file write */
+        char *data = ca_fs_read_file("state-test/loop-w/flow-a.txt");
+        CHECK(data && strstr(data, "flow-ok") != NULL);
+        free(data);
+        char *tr = ca_blackboard_get(ctx.blackboard, "flow/trace");
+        CHECK(tr && strstr(tr, "beta") != NULL);
+        free(tr);
+        cagent_shutdown(&ctx);
+    }
+
+    /* run rejects unregistered agents and cycles */
+    {
+        cagent_config cfg;
+        memset(&cfg, 0, sizeof(cfg));
+        cfg.state_root = "state-test/flow-bad";
+        cfg.workspace = "state-test/loop-w";
+        cfg.provider = "mock";
+        cfg.http_port = 0;
+        cagent_ctx ctx;
+        if (cagent_init(&ctx, &cfg) != 0) { CHECK(0); return; }
+        char *ans = NULL;
+        CHECK(ca_flow_run(&ctx,
+            "{\"nodes\":[{\"id\":\"a\",\"agent\":\"ghost\",\"task\":\"t\"}]}",
+            &ans, NULL) == -1);
+        CHECK(ca_flow_run(&ctx,
+            "{\"nodes\":[{\"id\":\"a\",\"agent\":\"alpha\",\"task\":\"t\"},"
+            "{\"id\":\"b\",\"agent\":\"alpha\",\"task\":\"t\"}],"
+            "\"edges\":[{\"from\":\"a\",\"to\":\"b\"},{\"from\":\"b\",\"to\":\"a\"}]}",
+            &ans, NULL) == -1);
+        free(ans);
+        cagent_shutdown(&ctx);
+    }
+}
+
+/* ---------- MCP: node availability + live mock server ---------- */
+static int node_available(void) {
+    ca_proc_result *r = ca_proc_run("node --version", 5000);
+    int ok = r && r->exit_code == 0;
+    ca_proc_result_free(r);
+    return ok;
+}
+
+static void wait_for_mcp(ca_mcp_manager *m, const char *server) {
+    for (int i = 0; i < 40; i++) { /* up to ~4s */
+        char *out = NULL, *err = NULL;
+        int rc = ca_mcp_manager_call(m, server, "echo", "{\"text\":\"ping\"}", &out, &err);
+        free(out); free(err);
+        if (rc == 0) return;
+        ca_time_sleep_ms(100);
+    }
+}
+
+static void test_mcp_standard(void) {
+    section("mcp standard protocol (http)");
+    if (!node_available()) { printf("  (node not available, skipped)\n"); return; }
+    /* spawn detached so it survives this call */
+    CHECK(ca_proc_spawn_detached("node build/mock_mcp_server.js --port 9321") == 0);
+
+    ca_mcp_manager *m = ca_mcp_manager_new();
+    CHECK(m != NULL);
+    if (!m) return;
+    CHECK(ca_mcp_manager_add(m, "mock", "http://127.0.0.1:9321/mcp", NULL) == 0);
+    wait_for_mcp(m, "mock");
+
+    /* standard tools/call over http */
+    {
+        char *out = NULL, *err = NULL;
+        int rc = ca_mcp_manager_call(m, "mock", "echo", "{\"text\":\"hi\"}", &out, &err);
+        CHECK(rc == 0);
+        CHECK(out && strstr(out, "echo: hi") != NULL);
+        free(out); free(err);
+    }
+    /* unknown tool -> error result */
+    {
+        char *out = NULL, *err = NULL;
+        CHECK(ca_mcp_manager_call(m, "mock", "nope", "{}", &out, &err) != 0);
+        free(out); free(err);
+    }
+    /* dynamic registration: mcp__mock__echo lands in the registry with schema */
+    ca_tool_registry *reg = ca_tool_registry_new();
+    CHECK(reg != NULL);
+    int n = ca_mcp_manager_sync_tools(m, reg);
+    CHECK(n >= 1);
+    const ca_tool *et = reg ? ca_tool_find(reg, "mcp__mock__echo") : NULL;
+    CHECK(et != NULL);
+    CHECK(et && et->json_schema && strstr(et->json_schema, "text") != NULL);
+    /* execute through the normal tool path */
+    if (et) {
+        ca_tool_ctx tctx;
+        memset(&tctx, 0, sizeof(tctx));
+        tctx.reg = reg;
+        tctx.mcp = m;
+        ca_tool_result *r = ca_tool_execute(reg, "mcp__mock__echo", "{\"text\":\"toolpath\"}", &tctx);
+        CHECK(r != NULL && r->ok == 1 && r->output && strstr(r->output, "echo: toolpath") != NULL);
+        ca_tool_result_free(r);
+    }
+    /* persist + reload round-trip */
+    ca_fs_mkdirs("state-test-mcp");
+    CHECK(ca_mcp_manager_persist(m, "state-test-mcp") == 0);
+    {
+        ca_mcp_manager *m2 = ca_mcp_manager_new();
+        CHECK(ca_mcp_manager_load(m2, "state-test-mcp") == 0);
+        const ca_mcp_conn *c = ca_mcp_manager_find(m2, "mock");
+        CHECK(c != NULL && c->url && strstr(c->url, "9321") != NULL);
+        if (c) CHECK(strcmp(c->transport, "http") == 0);
+        ca_mcp_manager_free(m2);
+    }
+    ca_fs_remove("state-test-mcp/mcp.json");
+    ca_fs_remove("state-test-mcp");
+
+    /* graceful shutdown of the mock server via its shutdown tool */
+    {
+        char *out = NULL, *err = NULL;
+        ca_mcp_manager_call(m, "mock", "shutdown", "{}", &out, &err);
+        free(out); free(err);
+    }
+    ca_tool_registry_free(reg);
+    ca_mcp_manager_free(m);
+}
+
+static void test_mcp_stdio(void) {
+    section("mcp stdio transport");
+    if (!node_available()) { printf("  (node not available, skipped)\n"); return; }
+    ca_mcp_manager *m = ca_mcp_manager_new();
+    CHECK(m != NULL);
+    if (!m) return;
+    ca_mcp_conn c;
+    memset(&c, 0, sizeof(c));
+    c.name = (char *)"mocks";
+    c.transport = (char *)"stdio";
+    c.command = (char *)"node";
+    c.args_csv = (char *)"build/mock_mcp_server.js --stdio";
+    CHECK(ca_mcp_manager_add_ex(m, &c) == 0);
+
+    /* first call spawns the child lazily and runs the handshake */
+    char *out = NULL, *err = NULL;
+    int rc = -1;
+    for (int i = 0; i < 10 && rc != 0; i++) {
+        rc = ca_mcp_manager_call(m, "mocks", "echo", "{\"text\":\"stdio-test\"}", &out, &err);
+        if (rc != 0) {
+            printf("  stdio call attempt %d failed: %s\n", i, err ? err : "?");
+            free(out); free(err); out = NULL; err = NULL; ca_time_sleep_ms(200);
+        }
+    }
+    CHECK(rc == 0);
+    CHECK(out && strstr(out, "echo: stdio-test") != NULL);
+    free(out); free(err);
+
+    /* second call reuses the persistent child */
+    out = err = NULL;
+    CHECK(ca_mcp_manager_call(m, "mocks", "echo", "{\"text\":\"again\"}", &out, &err) == 0);
+    CHECK(out && strstr(out, "echo: again") != NULL);
+    free(out); free(err);
+
+    /* dynamic registration over stdio */
+    ca_tool_registry *reg = ca_tool_registry_new();
+    CHECK(reg != NULL);
+    CHECK(ca_mcp_manager_sync_tools(m, reg) >= 1);
+    CHECK(reg && ca_tool_find(reg, "mcp__mocks__echo") != NULL);
+
+    ca_tool_registry_free(reg);
+    ca_mcp_manager_free(m); /* kills the child */
 }
 
 /* ---------- cluster ---------- */
@@ -1016,9 +2676,327 @@ static void test_cluster(void) {
     CHECK(ca_cluster_remove(c, "n1") == 0);
     CHECK(ca_cluster_count(c) == 1);
     ca_cluster_free(c);
+
+    /* capability tags + heartbeat-driven liveness cycle (3 missed periods) */
+    c = ca_cluster_new();
+    if (!c) { CHECK(0); return; }
+    CHECK(ca_cluster_upsert_ex(c, "w1", "10.0.0.5", 9000, "worker",
+                               "llm,tools,mcp") == 0);
+    const ca_cluster_node *w = ca_cluster_find(c, "w1");
+    CHECK(w != NULL && strcmp(w->caps, "llm,tools,mcp") == 0);
+    CHECK(ca_cluster_upsert_ex(c, "w2", "10.0.0.6", 9001, "worker", NULL) == 0);
+    w = ca_cluster_find(c, "w2");
+    CHECK(w != NULL && w->caps && *w->caps == '\0');
+    /* simulate missed heartbeats: everything stale except freshly-beaten w1 */
+    ca_cluster_mark_down(c, -1);
+    CHECK(ca_cluster_up_count(c) == 0);
+    CHECK(ca_cluster_heartbeat(c, "w1") == 0);
+    CHECK(ca_cluster_up_count(c) == 1);
+    /* unknown node heartbeat rejected */
+    CHECK(ca_cluster_heartbeat(c, "ghost") == -1);
+    char *j2 = ca_cluster_json(c);
+    CHECK(j2 && strstr(j2, "\"caps\":\"llm,tools,mcp\"") != NULL &&
+          strstr(j2, "\"caps\":\"\"") != NULL);
+    free(j2);
+    CHECK(ca_cluster_remove(c, "w1") == 0);
+    CHECK(ca_cluster_remove(c, "w2") == 0);
+    CHECK(ca_cluster_count(c) == 0);
+    ca_cluster_free(c);
 }
 
 /* ---------- attention ---------- */
+/* ---------- runtime: horizontal hook system ---------- */
+static int hk_block(const char *event, const char *payload, void *ud) {
+    (void)event; (void)payload;
+    return *(int *)ud; /* nonzero = block */
+}
+static int hk_seen_event(const char *event, const char *payload, void *ud) {
+    (void)payload;
+    ca_strbuf_append((ca_strbuf *)ud, event);
+    ca_strbuf_append((ca_strbuf *)ud, ",");
+    return 0;
+}
+
+static void test_hook(void) {
+    section("hook");
+    ca_hook_registry *h = ca_hook_registry_new();
+    CHECK(h != NULL);
+    if (!h) return;
+
+    /* exact-event matching: fires only for its own event */
+    ca_strbuf seen;
+    ca_strbuf_init(&seen);
+    CHECK(ca_hook_register(h, "exec.after_execute", hk_seen_event, &seen) > 0);
+    CHECK(ca_hook_dispatch(h, "exec.after_execute", "{\"tool\":\"t\"}") == 0);
+    CHECK(seen.buf && strstr(seen.buf, "exec.after_execute"));
+    CHECK(ca_hook_dispatch(h, "exec.before_execute", NULL) == 0);
+    CHECK(seen.buf && strstr(seen.buf, ",") && !strstr(seen.buf, "before"));
+
+    /* wildcard "*" receives everything */
+    ca_strbuf wild;
+    ca_strbuf_init(&wild);
+    CHECK(ca_hook_register(h, "*", hk_seen_event, &wild) > 0);
+    ca_hook_dispatch(h, "agent.before_run", "{}");
+    ca_hook_dispatch(h, "exec.after_execute", NULL);
+    CHECK(wild.buf && strstr(wild.buf, "agent.before_run"));
+    CHECK(wild.buf && strstr(wild.buf, "exec.after_execute"));
+
+    /* blocking hook: nonzero return => dispatch reports 1 */
+    int block = 1;
+    CHECK(ca_hook_register(h, "exec.before_execute", hk_block, &block) > 0);
+    CHECK(ca_hook_dispatch(h, "exec.before_execute", "{}") == 1);
+    block = 0;
+    CHECK(ca_hook_dispatch(h, "exec.before_execute", "{}") == 0);
+
+    /* registry listing + unregister */
+    char *js = ca_hook_registry_json(h);
+    CHECK(js && strstr(js, "exec.after_execute") && strstr(js, "\"*\""));
+    free(js);
+    CHECK(ca_hook_unregister(h, 999) == -1);
+    CHECK(ca_hook_unregister(h, 1) == 0);
+    CHECK(ca_hook_unregister(h, 1) == -1); /* already removed */
+    ca_strbuf_free(&seen);
+    ca_strbuf_free(&wild);
+    ca_hook_registry_free(h);
+
+    /* builtin audit hook writes JSONL */
+    const char *path = "state-hook-test.jsonl";
+    ca_fs_remove(path);
+    ca_hook_registry *h2 = ca_hook_registry_new();
+    CHECK(h2 != NULL);
+    CHECK(ca_hook_register(h2, "*", ca_hook_audit_file, (void *)path) > 0);
+    ca_hook_dispatch(h2, "agent.after_run", "{\"status\":\"done\"}");
+    ca_hook_registry_free(h2);
+    FILE *f = fopen(path, "r");
+    CHECK(f != NULL);
+    if (f) {
+        char buf[512];
+        int ok = fgets(buf, sizeof buf, f) != NULL &&
+                 strstr(buf, "agent.after_run") && strstr(buf, "ts_ms");
+        CHECK(ok);
+        fclose(f);
+    }
+    ca_fs_remove(path);
+}
+
+/* ---------- llm: routing policy (cost / latency / capability) ---------- */
+static void test_router_policy(void) {
+    section("router policy");
+    ca_router *r = ca_router_new();
+    CHECK(r != NULL);
+    if (!r) return;
+    CHECK(ca_router_add_ex(r, "cheap", "openai", "https://c", "k", "m1", 1.0,
+                           1, 0, "text") == 0);
+    CHECK(ca_router_add_ex(r, "fast", "openai", "https://f", "k", "m2", 1.0,
+                           3, 80, "text,json") == 0);
+    CHECK(ca_router_add_ex(r, "vision", "openai", "https://v", "k", "m3", 1.0,
+                           2, 200, "vision,json") == 0);
+
+    /* cost: cheapest first */
+    CHECK(ca_router_set_policy(r, "cost") == 0);
+    const ca_route *p = ca_router_pick(r);
+    CHECK(p && strcmp(p->name, "cheap") == 0);
+    p = ca_router_pick(r);
+    CHECK(p && strcmp(p->name, "cheap") == 0); /* single best keeps winning */
+
+    /* latency: fastest (fast, 80ms) beats cheap (unknown) and vision (200) */
+    CHECK(ca_router_set_policy(r, "latency") == 0);
+    p = ca_router_pick(r);
+    CHECK(p && strcmp(p->name, "fast") == 0);
+
+    /* capability: only routes carrying the tag are picked */
+    CHECK(ca_router_set_policy(r, "capability:vision") == 0);
+    for (int i = 0; i < 3; i++) {
+        p = ca_router_pick(r);
+        CHECK(p && strcmp(p->name, "vision") == 0);
+    }
+    /* capability with no carrier degrades to full rotation */
+    CHECK(ca_router_set_policy(r, "capability:audio") == 0);
+    p = ca_router_pick(r);
+    CHECK(p != NULL);
+
+    /* unknown policy rejected; round_robin rotates */
+    CHECK(ca_router_set_policy(r, "bogus") == -1);
+    CHECK(ca_router_set_policy(r, "round_robin") == 0);
+    const char *a = ca_router_pick(r)->name;
+    const char *b2 = ca_router_pick(r)->name;
+    CHECK(strcmp(a, b2) != 0);
+
+    /* json + persistence carry the new fields */
+    char *j = ca_router_json(r);
+    CHECK(j && strstr(j, "cost_rank") && strstr(j, "latency_ms") && strstr(j, "caps"));
+    free(j);
+    ca_router_save_file(r, "state-test/routes-pol.json");
+    ca_router *r2 = ca_router_new();
+    CHECK(ca_router_load_file(r2, "state-test/routes-pol.json") == 0);
+    const ca_route *g = ca_router_get(r2, 0);
+    CHECK(g && g->cost_rank == 1 && g->latency_ms == 0 && g->caps &&
+          strcmp(g->caps, "text") == 0);
+    ca_router_free(r2);
+    ca_fs_remove("state-test/routes-pol.json");
+    ca_router_free(r);
+}
+
+/* ---------- memory: automatic consolidation (threshold + interval) ---------- */
+static void test_consolidation(void) {
+    section("memory consolidation auto");
+    /* clean persisted state so the test is re-runnable (episodes persist) */
+    ca_fs_remove("state-test/consol/memory/facts.json");
+    ca_fs_remove("state-test/consol/memory/episodes.json");
+    ca_fs_remove("state-test/consol/memory/graph.json");
+    ca_fs_remove("state-test/consol/memory/vectors.json");
+    ca_memory *m = ca_memory_new("state-test/consol");
+    CHECK(m != NULL);
+    if (!m) return;
+    /* below threshold: skipped (episodes dedup by task string — use unique names) */
+    ca_memory_record_experience(m, "write report alpha one", "ok");
+    ca_memory_record_experience(m, "write report beta two", "ok");
+    CHECK(ca_memory_maybe_consolidate(m, 10, 0) == 0);
+    /* reach the threshold: the pass runs */
+    for (int i = 0; i < 9; i++) {
+        char task[64];
+        snprintf(task, sizeof(task), "write report gamma %d", i);
+        ca_memory_record_experience(m, task, "ok");
+    }
+    CHECK(ca_memory_maybe_consolidate(m, 10, 0) == 1);
+    CHECK(ca_memory_consolidation_count(m) == 1);
+    /* semantic fact distilled from the recurring theme */
+    const char *fact = ca_memory_recall(m, "topic.report");
+    CHECK(fact && strstr(fact, "tasks") != NULL);
+    /* procedural fact from the recurring used_tool edges */
+    ca_memory_record_edge(m, "write report gamma", "file_write", "used_tool");
+    ca_memory_record_edge(m, "write report delta", "file_write", "used_tool");
+    ca_memory_record_edge(m, "write report eps", "file_write", "used_tool");
+    ca_memory_record_experience(m, "write report zeta", "ok");
+    CHECK(ca_memory_maybe_consolidate(m, 1, 0) == 1);
+    fact = ca_memory_recall(m, "procedure.file_write");
+    CHECK(fact && strstr(fact, "used in") != NULL);
+    /* interval gate: too soon even with new episodes */
+    ca_memory_record_experience(m, "write report eta", "ok");
+    CHECK(ca_memory_maybe_consolidate(m, 1, 3600000) == 0);
+    CHECK(ca_memory_consolidation_count(m) == 2);
+    ca_memory_free(m);
+}
+
+/* ---------- memory lifecycle: reinforce / decay / forget / archive ---------- */
+static void test_memory_lifecycle(void) {
+    section("memory lifecycle");
+    /* clean persisted state for re-runnability */
+    ca_fs_remove("state-test/lc-mem/memory/archive.jsonl");
+    ca_fs_remove("state-test/lc-mem/memory/episodes.json");
+    ca_fs_remove("state-test/lc-mem/memory/facts.json");
+    ca_fs_remove("state-test/lc-mem/memory/graph.json");
+    ca_fs_remove("state-test/lc-mem/memory/vectors.json");
+
+    /* --- facade: reinforce (dedup = +1) + archive/forget below threshold --- */
+    ca_memory *m = ca_memory_new("state-test/lc-mem");
+    CHECK(m != NULL);
+    if (!m) return;
+    CHECK(ca_memory_episode_count(m) == 0);
+    ca_memory_record_experience(m, "kept task", "ok");
+    ca_memory_record_experience(m, "kept task", "ok again");   /* reinforce -> 2.0 */
+    ca_memory_record_experience(m, "forgotten task", "ok");    /* stays 1.0 */
+    ca_memory_reinforce(m, "kept task");                        /* -> 3.0 */
+    CHECK(ca_memory_episode_count(m) == 2);
+    CHECK(ca_memory_lifecycle_pass(m, NULL) == 0);              /* no config: no-op */
+
+    ca_memory_lifecycle_cfg lc;
+    memset(&lc, 0, sizeof(lc));
+    lc.min_strength = 1.5;
+    lc.archive = 1;
+    int dropped = ca_memory_lifecycle_pass(m, &lc);
+    CHECK(dropped == 1);
+    CHECK(ca_memory_episode_count(m) == 1);
+    CHECK(ca_memory_recall(m, "ignored") == NULL); /* borrow-check filler */
+    char *arch = ca_fs_read_file("state-test/lc-mem/memory/archive.jsonl");
+    CHECK(arch && strstr(arch, "forgotten task") != NULL);
+    free(arch);
+    ca_memory_flush(m); /* persist the post-forget roster */
+    ca_memory_free(m);
+
+    /* --- episode level: decay by age + drop_below + strength round-trip --- */
+    ca_episodic *e = ca_episodic_new();
+    CHECK(e != NULL);
+    if (!e) return;
+    long long now = ca_time_now_ms();
+    ca_episodic_add_full(e, "old task", "r", now - 2 * 3600000LL, 1.0); /* 2h old */
+    ca_episodic_add_full(e, "new task", "r", now, 1.0);                 /* fresh */
+    ca_episodic_add_full(e, "strong task", "r", now - 2 * 3600000LL, 9.0);
+    CHECK(ca_episodic_count(e) == 3);
+    CHECK(ca_episodic_decay(e, now, 0, 0.001) == 0);     /* half_life<=0: no-op */
+    CHECK(ca_episodic_decay(e, now, 3600000LL, 0.001) == 2); /* old+strong decayed */
+    CHECK(ca_episodic_strength(e, 0) == 0.25);           /* 1.0 / 2^2 */
+    CHECK(ca_episodic_strength(e, 1) == 1.0);            /* age < half_life */
+    CHECK(ca_episodic_strength(e, 2) == 2.25);           /* 9.0 / 2^2 */
+    /* reinforce refreshes strength */
+    ca_episodic_reinforce(e, "new task");
+    CHECK(ca_episodic_strength(e, 1) == 2.0);
+    /* archive payload lists exactly the below-threshold episodes */
+    char *below = ca_episodic_below_json(e, 0.5);
+    CHECK(below && strstr(below, "old task") != NULL);
+    CHECK(below && strstr(below, "new task") == NULL);
+    free(below);
+    CHECK(ca_episodic_drop_below(e, 0.5) == 1);
+    CHECK(ca_episodic_count(e) == 2);
+    /* strength survives the JSON round-trip */
+    char *j = ca_episodic_json(e);
+    CHECK(j && strstr(j, "strength") != NULL);
+    free(j);
+    ca_episodic_free(e);
+
+    /* --- persistence: strength restored through ca_memory reload --- */
+    ca_memory *m2 = ca_memory_new("state-test/lc-mem"); /* sees kept task (3.0) */
+    CHECK(m2 != NULL);
+    if (m2) {
+        CHECK(ca_memory_episode_count(m2) == 1);
+        ca_memory_free(m2);
+    }
+}
+
+/* ---------- context MMU: explicit budgets with auto-degradation ---------- */
+static void test_context_budget(void) {
+    section("context budget");
+    ca_fs_mkdirs("state-test/budget");
+    /* tiny budgets force every tier to degrade; the run must still work */
+    static const char budget_cfg[] =
+        "{\"context.budget_hot\":64,"
+        "\"context.budget_warm\":64,"
+        "\"context.budget_cold\":80}";
+    ca_fs_write_file("state-test/budget/cagent.json", budget_cfg,
+                     sizeof(budget_cfg) - 1);
+    cagent_config cfg;
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.state_root = "state-test/budget";
+    cfg.workspace = "state-test";
+    cfg.provider = "mock";
+    cfg.http_port = 0;
+    cagent_ctx ctx;
+    if (cagent_init(&ctx, &cfg) != 0) { CHECK(0); return; }
+    /* seed enough history to overflow the hot budget */
+    for (int i = 0; i < 3; i++) {
+        char *ans = NULL;
+        CHECK(ca_reasoning_run(ctx.reasoning, "你好", &ans) == 0);
+        free(ans);
+    }
+    /* per-tier accounting is exposed as gauges */
+    char *mx = ca_metrics_render(ctx.metrics);
+    CHECK(mx && strstr(mx, "context.bytes_hot") != NULL);
+    CHECK(mx && strstr(mx, "context.bytes_warm") != NULL);
+    CHECK(mx && strstr(mx, "context.bytes_cold") != NULL);
+    free(mx);
+    /* RAG-indexed content must respect the cold budget: retrieved section
+     * (header + truncation marker) stays small */
+    ca_memory_index_document(ctx.memory, "doc1",
+                             "long document about taxes and budgets and more",
+                             "upload");
+    char *ans = NULL;
+    CHECK(ca_reasoning_run(ctx.reasoning, "税收文档", &ans) == 0);
+    CHECK(ans != NULL);
+    free(ans);
+    cagent_shutdown(&ctx);
+    ca_fs_remove("state-test/budget/cagent.json");
+}
+
 static void test_attention(void) {
     section("attention");
     ca_attention *a = ca_attention_new();
@@ -1396,7 +3374,9 @@ static const unsigned char WASM_ADD[] = {
 
 static void test_sandbox_wasm(void) {
     section("sandbox_wasm");
-    /* before registering a runner the seam reports "unsupported" */
+    /* reset any runner registered earlier in the suite (cagent_init wires
+     * wasm3 automatically) so the "unsupported" seam is testable in any order */
+    ca_sandbox_set_wasm_runner(NULL);
     CHECK(ca_sandbox_wasm_supported() == 0);
     char *we = ca_sandbox_run_wasm("\0asm", 4, "add", "{}");
     CHECK(we != NULL && strstr(we, "not registered") != NULL);
@@ -1983,6 +3963,7 @@ static void test_local_model(void) {
 }
 
 int main(void) {
+    setvbuf(stdout, NULL, _IONBF, 0); /* unbuffered: survive crashes mid-run */
     printf("c-agent unit tests\n");
     test_util();
     test_event_bus();
@@ -1997,6 +3978,12 @@ int main(void) {
     test_memory();
     test_snapshot_tx();
     test_llm_mock();
+    test_llm_caps_cancel();
+    test_retrieval_upgrade();
+    test_state_store();
+    test_memory_service();
+    test_state_snapshot();
+    test_executor_family();
     test_index();
     test_metrics();
     test_config();
@@ -2010,9 +3997,13 @@ int main(void) {
     test_vector();
     test_graph();
     test_context_builder();
+    test_memory_persist();
+    test_context_caps();
+    test_session_memory();
     test_planner();
     test_evaluator();
     test_sandbox();
+    test_filetracker();
     test_capability();
     test_plugin_intelligence();
     test_trace();
@@ -2020,10 +4011,31 @@ int main(void) {
     test_usage();
     test_registry();
     test_skills();
+    test_skill_args();
+    test_caps_gate();
+    test_generated_tool();
+    test_memory_graph();
+    test_edit_search();
+    test_snapshot_bigfile();
     test_mcp();
+    test_tool_schema();
+    test_tool_truncate();
+    test_mcp_standard();
+    test_mcp_stdio();
     test_cluster();
+    test_hook();
+    test_router_policy();
+    test_consolidation();
+    test_memory_lifecycle();
+    test_context_budget();
     test_attention();
     test_sandbox_wasm();
+    test_agent_loop(); /* full-runtime init: keep after the sandbox seam test */
+    test_chat_upload_evolve();
+    test_orchestrate();
+    test_flow();
+    test_flow_decompose();
+    test_policy_rules();
     test_im();
     test_im_search();
     test_im_bridge();

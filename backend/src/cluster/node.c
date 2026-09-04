@@ -19,6 +19,7 @@ static void node_free(ca_cluster_node *n) {
     free(n->host);
     free(n->role);
     free(n->status);
+    free(n->caps);
 }
 
 static const char *valid_role(const char *role) {
@@ -53,6 +54,11 @@ static int find_node(ca_cluster *c, const char *id) {
 
 int ca_cluster_upsert(ca_cluster *c, const char *id, const char *host,
                       uint16_t port, const char *role) {
+    return ca_cluster_upsert_ex(c, id, host, port, role, NULL);
+}
+
+int ca_cluster_upsert_ex(ca_cluster *c, const char *id, const char *host,
+                         uint16_t port, const char *role, const char *caps) {
     if (!c || !id || !*id || !host || !*host) return -1;
     const char *r = valid_role(role);
     ca_mutex_lock(&c->mtx);
@@ -73,12 +79,13 @@ int ca_cluster_upsert(ca_cluster *c, const char *id, const char *host,
         e->last_seen_ms = ca_time_now_ms();
     } else {
         e = &c->items[i];
-        free(e->host); free(e->role);
-        e->host = NULL; e->role = NULL;
+        free(e->host); free(e->role); free(e->caps);
+        e->host = NULL; e->role = NULL; e->caps = NULL;
     }
     e->host = ca_strdup(host);
     e->port = port;
     e->role = ca_strdup(r);
+    e->caps = ca_strdup(caps && *caps ? caps : "");
     ca_mutex_unlock(&c->mtx);
     return 0;
 }
@@ -170,6 +177,7 @@ char *ca_cluster_json(ca_cluster *c) {
         cJSON_AddNumberToObject(o, "port", (double)n->port);
         cJSON_AddStringToObject(o, "role", n->role);
         cJSON_AddStringToObject(o, "status", n->status);
+        cJSON_AddStringToObject(o, "caps", n->caps ? n->caps : "");
         cJSON_AddNumberToObject(o, "last_seen_ms", (double)n->last_seen_ms);
         cJSON_AddItemToArray(arr, o);
     }

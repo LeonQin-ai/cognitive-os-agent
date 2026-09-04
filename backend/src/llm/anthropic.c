@@ -129,6 +129,7 @@ static int anthropic_stream(ca_llm *llm, const ca_llm_request *req, ca_llm_strea
 
     char line[32768];
     while (ca_sse_next(s, line, sizeof(line)) == 1) {
+        if (llm->cancel) { ca_sse_close(s); return -1; }
         cJSON *root = cJSON_Parse(line);
         if (!root) continue;
         /* content_block_delta -> delta.text */

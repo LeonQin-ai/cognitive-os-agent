@@ -8,7 +8,18 @@
 #include <stdio.h>
 #include "cJSON.h"
 
-static ca_tool_result *git_exec(const ca_tool_ctx *ctx, const char *args_json) {
+/* Reject inputs that could escape the quoted argument context. */
+static int has_shell_metachars(const char *s) {
+    if (!s) return 0;
+    for (; *s; s++)
+        if (*s == '"' || *s == '`' || *s == '\n' || *s == '\r' ||
+            (s[0] == '$' && s[1] == '('))
+            return 1;
+    return 0;
+}
+
+static ca_tool_result *git_exec(const ca_tool *self, const ca_tool_ctx *ctx, const char *args_json) {
+    (void)self;
     cJSON *args = cJSON_Parse(args_json);
     if (!args) return ca_tool_result_new(0, "git: invalid args JSON");
     cJSON *sub = cJSON_GetObjectItemCaseSensitive(args, "args");
@@ -16,6 +27,11 @@ static ca_tool_result *git_exec(const ca_tool_ctx *ctx, const char *args_json) {
     const char *dir = NULL;
     cJSON *dir_j = cJSON_GetObjectItemCaseSensitive(args, "dir");
     if (dir_j && cJSON_IsString(dir_j)) dir = dir_j->valuestring;
+
+    if (has_shell_metachars(subargs) || has_shell_metachars(dir)) {
+        cJSON_Delete(args);
+        return ca_tool_result_new(0, "git: args contain forbidden characters (quote/backtick/$(/newline)");
+    }
 
     char cmd[4096];
     if (dir && *dir)

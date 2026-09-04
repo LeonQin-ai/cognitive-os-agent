@@ -8,8 +8,8 @@
 #      wizard, desktop + start-menu shortcuts, and an uninstaller
 #
 # The installed app is a single native window: c-agent-desktop.exe starts the
-# backend (cagent.exe serve 8080) and opens the web console at
-# http://localhost:8080/ — no console, no separate browser.
+# backend (cagent.exe serve 18300) and opens the web console at
+# http://localhost:18300/ — no console, no separate browser.
 #
 # Prerequisites: bundled zig (tools/zig or PATH), python, and Inno Setup
 # (`winget install JRSoftware.InnoSetup`).
@@ -62,8 +62,10 @@ fi
 # --- 1. build CLI -------------------------------------------------------------
 echo "[1/5] building release CLI binary"
 ./build.sh cli
-BIN="build/cagent"
-[ -f "$BIN" ] || BIN="build/cagent.exe"
+# MSYS bash hides the .exe suffix in listings; on Windows the real NTFS name is
+# cagent.exe, which is what build.sh emits and what setup.iss references.
+BIN="build/cagent.exe"
+[ -f "$BIN" ] || BIN="build/cagent"
 [ -f "$BIN" ] || { echo "ERROR: build/cagent[.exe] not produced." >&2; exit 1; }
 
 # --- 2. build desktop shell ---------------------------------------------------

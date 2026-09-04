@@ -15,6 +15,8 @@ typedef struct ca_skill {
     const char *description;
     const char *kind;      /* "shell" or "python" */
     const char *body;      /* shell command, or python source for kind=python */
+    const char *caps;      /* granted capability tokens, csv (e.g. "fs.read,net");
+                            * NULL = unrestricted legacy skill */
 } ca_skill;
 
 typedef struct ca_skill_registry ca_skill_registry;
@@ -29,6 +31,10 @@ void ca_skill_registry_free(ca_skill_registry *r);
 
 /* Register a skill (copies name/desc/kind/body). 0 ok, -1 duplicate/empty. */
 int ca_skill_register(ca_skill_registry *r, const ca_skill *s);
+/* Register with upsert semantics: when replace is 1 an existing skill with the
+ * same name is overwritten (used by the market "install" flow so reinstall and
+ * update always succeed). 0 ok, -1 empty name/invalid kind. */
+int ca_skill_register_ex(ca_skill_registry *r, const ca_skill *s, int replace);
 const ca_skill *ca_skill_find(ca_skill_registry *r, const char *name);
 int ca_skill_count(ca_skill_registry *r);
 const ca_skill *ca_skill_get(ca_skill_registry *r, size_t i);

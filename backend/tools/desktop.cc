@@ -2,9 +2,9 @@
 //
 // The installed app is a single window (no console, no separate browser). On
 // launch it:
-//   1. spawns  cagent.exe serve 8080  (hidden, output to c-agent-server.log)
-//   2. waits for the HTTP server to accept connections on 127.0.0.1:8080
-//   3. opens a native WebView2 window pointed at http://localhost:8080/
+//   1. spawns  cagent.exe serve 18300  (hidden, output to c-agent-server.log)
+//   2. waits for the HTTP server to accept connections on 127.0.0.1:18300
+//   3. opens a native WebView2 window pointed at http://localhost:18300/
 //   4. terminates the server when the window is closed
 //
 // The WebView2 window is provided by the vendored single-header webview.h
@@ -26,7 +26,7 @@
 
 #include "webview.h"
 
-static const int kPort = 8080;
+static const int kPort = 18300;
 
 static std::wstring exe_dir() {
     wchar_t path[MAX_PATH];

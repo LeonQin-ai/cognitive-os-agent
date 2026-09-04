@@ -140,3 +140,102 @@ char *ca_vectorstore_nearest(ca_vectorstore *v, const char *query, int k) {
     if (arr) cJSON_Delete(arr);
     return s ? s : ca_strdup("[]");
 }
+
+/* ---------- hybrid + multi-query retrieval (shared helpers) ---------- */
+
+/* Caller holds v->mtx. score = w_vec*cosine + (1-w_vec)*keyword for every
+ * entry. w_vec >= 0.999 skips the keyword pass (pure vector). */
+static void score_all(ca_vectorstore *v, const char *query, float w_vec,
+                      float *out) {
+    float qvec[CA_EMBED_DIM];
+    ca_embed_text(query, qvec);
+    int do_kw = w_vec < 0.999f;
+    for (size_t i = 0; i < v->count; i++) {
+        float cos = ca_embed_cosine(qvec, v->items[i].vec, CA_EMBED_DIM);
+        if (cos < 0) cos = 0;
+        float s = w_vec * cos;
+        if (do_kw) {
+            float kw = 0;
+            ca_embed_keyword_score(query, v->items[i].text, &kw);
+            s += (1.0f - w_vec) * kw;
+        }
+        out[i] = s;
+    }
+}
+
+/* Caller holds v->mtx. Top-k by the given per-entry scores -> JSON array. */
+static char *topk_json(ca_vectorstore *v, const float *scores, int k) {
+    if (k <= 0) return ca_strdup("[]");
+    int *top_idx = (int *)malloc((size_t)k * sizeof(int));
+    float *top_score = (float *)malloc((size_t)k * sizeof(float));
+    if (!top_idx || !top_score) { free(top_idx); free(top_score); return ca_strdup("[]"); }
+    int ntop = 0;
+    for (size_t i = 0; i < v->count; i++) {
+        float s = scores[i];
+        if (ntop >= k && s <= top_score[ntop - 1]) continue;
+        int pos = ntop < k ? ntop : k - 1;
+        while (pos > 0 && top_score[pos - 1] < s) pos--;
+        if (ntop < k) ntop++;
+        for (int j = ntop - 1; j > pos; j--) {
+            top_idx[j] = top_idx[j - 1];
+            top_score[j] = top_score[j - 1];
+        }
+        top_idx[pos] = (int)i;
+        top_score[pos] = s;
+    }
+    cJSON *arr = cJSON_CreateArray();
+    if (arr) {
+        for (int i = 0; i < ntop; i++) {
+            vec_entry *e = &v->items[top_idx[i]];
+            cJSON *o = cJSON_CreateObject();
+            cJSON_AddStringToObject(o, "id", e->id);
+            cJSON_AddStringToObject(o, "text", e->text);
+            cJSON_AddStringToObject(o, "meta", e->meta);
+            cJSON_AddNumberToObject(o, "score", (double)top_score[i]);
+            cJSON_AddItemToArray(arr, o);
+        }
+    }
+    free(top_idx);
+    free(top_score);
+    char *s = arr ? cJSON_PrintUnformatted(arr) : NULL;
+    if (arr) cJSON_Delete(arr);
+    return s ? s : ca_strdup("[]");
+}
+
+char *ca_vectorstore_nearest_hybrid(ca_vectorstore *v, const char *query,
+                                    int k, float w_vec) {
+    if (!v || !query || k <= 0) return ca_strdup("[]");
+    if (w_vec < 0) w_vec = 0;
+    if (w_vec > 1) w_vec = 1;
+    ca_mutex_lock(&v->mtx);
+    if (v->count == 0) { ca_mutex_unlock(&v->mtx); return ca_strdup("[]"); }
+    float *scores = (float *)malloc(v->count * sizeof(float));
+    if (!scores) { ca_mutex_unlock(&v->mtx); return ca_strdup("[]"); }
+    score_all(v, query, w_vec, scores);
+    char *out = topk_json(v, scores, k);
+    free(scores);
+    ca_mutex_unlock(&v->mtx);
+    return out;
+}
+
+char *ca_vectorstore_nearest_multi(ca_vectorstore *v, const char *const *queries,
+                                   int nq, int k) {
+    if (!v || !queries || nq <= 0 || k <= 0) return ca_strdup("[]");
+    ca_mutex_lock(&v->mtx);
+    if (v->count == 0) { ca_mutex_unlock(&v->mtx); return ca_strdup("[]"); }
+    float *best = (float *)calloc(v->count, sizeof(float));
+    if (!best) { ca_mutex_unlock(&v->mtx); return ca_strdup("[]"); }
+    for (int q = 0; q < nq; q++) {
+        if (!queries[q] || !*queries[q]) continue;
+        float *scores = (float *)malloc(v->count * sizeof(float));
+        if (!scores) continue;
+        score_all(v, queries[q], 1.0f, scores);
+        for (size_t i = 0; i < v->count; i++)
+            if (scores[i] > best[i]) best[i] = scores[i];
+        free(scores);
+    }
+    char *out = topk_json(v, best, k);
+    free(best);
+    ca_mutex_unlock(&v->mtx);
+    return out;
+}

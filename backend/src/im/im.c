@@ -196,7 +196,10 @@ ca_im *ca_im_new(const char *state_root) {
         ca_fs_mkdirs(dir);
         snprintf(dir, sizeof(dir), "%s/im", im->path);
         ca_fs_mkdirs(dir);
-        snprintf(im->path, sizeof(im->path), "%s/im/sessions.json", im->path);
+        /* self-referential snprintf is UB — build into a scratch buffer */
+        char pbuf[600];
+        snprintf(pbuf, sizeof(pbuf), "%s/im/sessions.json", im->path);
+        snprintf(im->path, sizeof(im->path), "%s", pbuf);
     }
     ca_mutex_init(&im->mtx);
     im->next_id = 1;

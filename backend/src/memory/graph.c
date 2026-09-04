@@ -75,6 +75,15 @@ int ca_graph_add_node(ca_graph *g, const char *id, const char *label) {
 int ca_graph_add_edge(ca_graph *g, const char *from, const char *to, const char *relation) {
     if (!g || !from || !to) return -1;
     ca_mutex_lock(&g->mtx);
+    /* dedup: identical labeled edges are folded (idempotent recording) */
+    for (size_t i = 0; i < g->n_edges; i++) {
+        if (strcmp(g->edges[i].from, from) == 0 &&
+            strcmp(g->edges[i].to, to) == 0 &&
+            strcmp(g->edges[i].relation, relation ? relation : "") == 0) {
+            ca_mutex_unlock(&g->mtx);
+            return 0;
+        }
+    }
     if (g->n_edges == g->cap_edges) {
         size_t cap = g->cap_edges ? g->cap_edges * 2 : 8;
         gedge *ne = (gedge *)realloc(g->edges, cap * sizeof(gedge));

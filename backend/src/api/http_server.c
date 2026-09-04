@@ -11,7 +11,7 @@
 #include <stdarg.h>
 
 #define MAX_HEADER_BYTES (16 * 1024)
-#define MAX_BODY_BYTES   (1024 * 1024)
+#define MAX_BODY_BYTES   (32 * 1024 * 1024)
 
 typedef struct route {
     char method[16];
@@ -171,12 +171,11 @@ static int read_request(ca_socket *sock, char *buf, size_t cap, size_t *head_len
     return 0;
 }
 
-/* Handle one accepted connection. Returns 1 if the socket was handed off to a
- * WebSocket client thread (caller must not close it), 0 otherwise. */
-static int handle_conn(ca_http_server *s, ca_socket *sock) {
-    char buf[MAX_HEADER_BYTES + MAX_BODY_BYTES];
+/* Handle one accepted connection (buf supplied by the heap-allocating
+ * wrapper; MAX_BODY_BYTES is 32MB — far too large for the stack). */
+static int handle_conn_buf(ca_http_server *s, ca_socket *sock, char *buf) {
     size_t hlen = 0, blen = 0;
-    if (read_request(sock, buf, sizeof(buf), &hlen, &blen) != 0) return 0;
+    if (read_request(sock, buf, MAX_HEADER_BYTES + MAX_BODY_BYTES, &hlen, &blen) != 0) return 0;
 
     /* parse request line */
     char method[16], path[1024], query[512];
@@ -296,6 +295,17 @@ static int handle_conn(ca_http_server *s, ca_socket *sock) {
     if (resp.body.len > 0) ca_sock_send(sock, resp.body.buf, resp.body.len);
     ca_strbuf_free(&resp.body);
     return 0;
+}
+
+/* Heap-allocating wrapper: the request buffer is up to MAX_BODY_BYTES (32MB),
+ * which must not live on the stack. Returns 1 if the socket was handed off to
+ * a WebSocket client thread (caller must not close it), 0 otherwise. */
+static int handle_conn(ca_http_server *s, ca_socket *sock) {
+    char *buf = malloc(MAX_HEADER_BYTES + MAX_BODY_BYTES);
+    if (!buf) return 0;
+    int rc = handle_conn_buf(s, sock, buf);
+    free(buf);
+    return rc;
 }
 
 int ca_http_server_serve(ca_http_server *s) {

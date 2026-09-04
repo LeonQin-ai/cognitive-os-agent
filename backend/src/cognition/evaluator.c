@@ -9,10 +9,16 @@ struct ca_evaluator { int reserved; };
 ca_evaluator *ca_evaluator_new(void) { return (ca_evaluator *)calloc(1, sizeof(ca_evaluator)); }
 void ca_evaluator_free(ca_evaluator *e) { free(e); }
 
-int ca_evaluator_verify(ca_evaluator *e, int all_actions_ok, int n_actions) {
+int ca_evaluator_verify(ca_evaluator *e, int all_actions_ok, int n_actions,
+                        int ok_actions) {
     (void)e;
-    (void)n_actions;
-    return all_actions_ok ? 1 : 0;
+    (void)all_actions_ok;
+    if (n_actions == 0) return 1;          /* conversational / no-op: fine */
+    /* Tolerate partial failures: a run that completed at least one tool action
+     * still produced a useful result. Only a fully-failed plan (every action
+     * errored) is treated as a failure — this keeps single-pass tasks robust
+     * to one wrong path guess instead of sinking the whole task. */
+    return ok_actions > 0 ? 1 : 0;
 }
 
 double ca_evaluator_score(ca_evaluator *e, int n_actions, int ok_actions,

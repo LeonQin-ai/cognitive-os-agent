@@ -15,6 +15,11 @@ typedef struct ca_snapshot ca_snapshot;
 ca_snapshot *ca_snapshot_open(const char *state_root);
 void ca_snapshot_close(ca_snapshot *s);
 
+/* Capture size limit in bytes (0 = unlimited). Overrides the built-in default
+ * (64MB) and the CA_SNAPSHOT_MAX_FILE env value; persists via config. */
+void ca_snapshot_set_max_file(ca_snapshot *s, long long bytes);
+long long ca_snapshot_get_max_file(const ca_snapshot *s);
+
 /* Capture the current content of `path` into the pending snapshot.
  * If the file does not exist, records it as "to be created" so rollback deletes it.
  * Returns 0 ok, -1 error. */

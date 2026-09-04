@@ -33,6 +33,9 @@ char *ca_config_to_json(const ca_config *c);
 
 /* Set a dotted-path string value (used when persisting runtime changes). */
 void ca_config_set_str(ca_config *c, const char *key, const char *value);
+/* Set a dotted-path numeric value (persisted as a JSON number so
+ * ca_config_get_int reads it back after restart). */
+void ca_config_set_int(ca_config *c, const char *key, int64_t value);
 /* Serialize the whole config to a JSON file (atomic write). Returns 0 ok, -1 error. */
 int ca_config_save_file(ca_config *c, const char *path);
 

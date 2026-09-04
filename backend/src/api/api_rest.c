@@ -4,11 +4,13 @@
 #include "cagent/api/web_ui.h"
 #include "cagent/api/market.h"
 #include "cagent/runtime/scheduler.h"
+#include "cagent/runtime/flow.h"
 #include "cagent/action/tools.h"
 #include "cagent/memory/memory.h"
 #include "cagent/snapshot/snapshot.h"
 #include "cagent/infra/metrics.h"
 #include "cagent/infra/util.h"
+#include "cagent/infra/config.h"
 #include "cagent/infra/catalog.h"
 #include "cagent/llm/llm.h"
 #include "cagent/os/os_time.h"
@@ -83,12 +85,16 @@ static int h_task_create(const ca_http_request *req, ca_http_response *resp, voi
         return 0;
     }
     int64_t id = ca_scheduler_submit(ctx->scheduler, 0, prompt, NULL, 0);
+    /* prompt borrows into the cJSON tree — copy before freeing it */
+    char prompt_copy[512];
+    snprintf(prompt_copy, sizeof(prompt_copy), "%s", prompt);
     cJSON_Delete(root);
     if (id < 0) {
         resp->status = 500;
         ca_http_resp_json(resp, "{\"error\":\"scheduler submit failed\"}");
         return 0;
     }
+    if (ctx->state) ca_state_store_task_set(ctx->state, id, "QUEUED", prompt_copy);
     ca_http_resp_appendf(resp, "{\"id\":%lld,\"status\":\"queued\"}", (long long)id);
     return 0;
 }
@@ -120,6 +126,452 @@ static int h_task_get(const ca_http_request *req, ca_http_response *resp, void *
     return 0;
 }
 
+/* POST /v1/chat {"message":"..."} — conversational counterpart of task
+ * creation: same async scheduler path, but semantically a chat turn (the
+ * reasoning engine keeps the multi-turn context across calls). */
+static int h_chat(const ca_http_request *req, ca_http_response *resp, void *ud) {
+    cagent_ctx *ctx = (cagent_ctx *)ud;
+    if (!authz_ok(ctx, req, resp)) return 0;
+    char *b = body_str(req);
+    cJSON *root = b ? cJSON_Parse(b) : NULL;
+    free(b);
+    const char *msg = NULL;
+    if (root && cJSON_IsObject(root)) {
+        cJSON *p = cJSON_GetObjectItemCaseSensitive(root, "message");
+        if (p && cJSON_IsString(p)) msg = p->valuestring;
+    }
+    if (!msg || !*msg) {
+        if (root) cJSON_Delete(root);
+        resp->status = 400;
+        ca_http_resp_json(resp, "{\"error\":\"missing 'message' string\"}");
+        return 0;
+    }
+    int64_t id = ca_scheduler_submit(ctx->scheduler, 0, msg, NULL, 0);
+    cJSON_Delete(root);
+    if (id < 0) {
+        resp->status = 500;
+        ca_http_resp_json(resp, "{\"error\":\"scheduler submit failed\"}");
+        return 0;
+    }
+    ca_http_resp_appendf(resp, "{\"id\":%lld,\"status\":\"queued\"}", (long long)id);
+    return 0;
+}
+
+/* POST /v1/orchestrate {"task":"..."} — multi-agent orchestration: the task is
+ * decomposed across registered agents (blackboard + merge), executed async via
+ * the scheduler. Poll /v1/tasks/<id> for the final answer; live progress comes
+ * over WebSocket (source "orchestrator"); steps land on the blackboard "orch/". */
+static int h_orchestrate(const ca_http_request *req, ca_http_response *resp, void *ud) {
+    cagent_ctx *ctx = (cagent_ctx *)ud;
+    if (!authz_ok(ctx, req, resp)) return 0;
+    char *b = body_str(req);
+    cJSON *root = b ? cJSON_Parse(b) : NULL;
+    free(b);
+    const char *task = NULL;
+    if (root && cJSON_IsObject(root)) {
+        cJSON *p = cJSON_GetObjectItemCaseSensitive(root, "task");
+        if (p && cJSON_IsString(p)) task = p->valuestring;
+    }
+    if (!task || !*task) {
+        if (root) cJSON_Delete(root);
+        resp->status = 400;
+        ca_http_resp_json(resp, "{\"error\":\"missing 'task' string\"}");
+        return 0;
+    }
+    /* userdata = marker so the task runner routes to cagent_orchestrate */
+    int64_t id = ca_scheduler_submit(ctx->scheduler, 0, task, (void *)1, 0);
+    cJSON_Delete(root);
+    if (id < 0) {
+        resp->status = 500;
+        ca_http_resp_json(resp, "{\"error\":\"scheduler submit failed\"}");
+        return 0;
+    }
+    ca_http_resp_appendf(resp, "{\"id\":%lld,\"status\":\"queued\"}", (long long)id);
+    return 0;
+}
+
+/* POST /v1/flows — compile + execute an explicit DAG flow (async via the
+ * scheduler). Body: either the raw DAG {"nodes":[...],"edges":[...]} or
+ * {"flow": <that object>}. Validated synchronously so 400s carry the reason. */
+static int h_flow_run(const ca_http_request *req, ca_http_response *resp, void *ud) {
+    cagent_ctx *ctx = (cagent_ctx *)ud;
+    if (!authz_ok(ctx, req, resp)) return 0;
+    char *b = body_str(req);
+    cJSON *root = b ? cJSON_Parse(b) : NULL;
+    free(b);
+    cJSON *dag = NULL;
+    if (root && cJSON_IsObject(root)) {
+        dag = root;
+        cJSON *f = cJSON_GetObjectItemCaseSensitive(root, "flow");
+        if (f && cJSON_IsObject(f)) dag = f;
+        if (!cJSON_GetObjectItemCaseSensitive(dag, "nodes")) dag = NULL;
+    }
+    if (!dag) {
+        if (root) cJSON_Delete(root);
+        resp->status = 400;
+        ca_http_resp_json(resp, "{\"error\":\"need a flow object with 'nodes'\"}");
+        return 0;
+    }
+    char *dag_json = cJSON_PrintUnformatted(dag);
+    cJSON_Delete(root);
+    if (!dag_json) {
+        resp->status = 500;
+        ca_http_resp_json(resp, "{\"error\":\"serialize failed\"}");
+        return 0;
+    }
+    char *verr = NULL;
+    if (ca_flow_validate(dag_json, &verr) != 0) {
+        ca_http_resp_appendf(resp, "{\"error\":\"invalid flow: %s\"}",
+                             verr ? verr : "unknown");
+        free(verr);
+        free(dag_json);
+        resp->status = 400;
+        return 0;
+    }
+    free(verr);
+    /* userdata marker 2 routes the task runner to ca_flow_run */
+    int64_t id = ca_scheduler_submit(ctx->scheduler, 0, dag_json, (void *)2, 0);
+    free(dag_json);
+    if (id < 0) {
+        resp->status = 500;
+        ca_http_resp_json(resp, "{\"error\":\"scheduler submit failed\"}");
+        return 0;
+    }
+    ca_http_resp_appendf(resp, "{\"id\":%lld,\"status\":\"queued\"}", (long long)id);
+    return 0;
+}
+
+/* POST /v1/flows/decompose {task} — compile a task into a Flow DAG via the
+ * orchestrator's LLM decomposition WITHOUT executing it. Returns the DAG so
+ * the client can inspect/modify it before POST /v1/flows. */
+static int h_flow_decompose(const ca_http_request *req, ca_http_response *resp, void *ud) {
+    cagent_ctx *ctx = (cagent_ctx *)ud;
+    if (!authz_ok(ctx, req, resp)) return 0;
+    char *b = body_str(req);
+    cJSON *root = b ? cJSON_Parse(b) : NULL;
+    free(b);
+    cJSON *t = root ? cJSON_GetObjectItemCaseSensitive(root, "task") : NULL;
+    if (!t || !cJSON_IsString(t) || !t->valuestring || !*t->valuestring) {
+        cJSON_Delete(root);
+        resp->status = 400;
+        ca_http_resp_json(resp, "{\"error\":\"missing 'task' string\"}");
+        return 0;
+    }
+    char *dag_json = NULL;
+    int rc = cagent_flow_decompose(ctx, t->valuestring, &dag_json);
+    cJSON_Delete(root);
+    if (rc != 0 || !dag_json) {
+        resp->status = 422;
+        ca_http_resp_json(resp,
+            "{\"error\":\"no multi-agent plan (register agents or check LLM config)\"}");
+        return 0;
+    }
+    cJSON *dag = cJSON_Parse(dag_json);
+    free(dag_json);
+    if (!dag) {
+        resp->status = 500;
+        ca_http_resp_json(resp, "{\"error\":\"dag serialize failed\"}");
+        return 0;
+    }
+    cJSON *out = cJSON_CreateObject();
+    cJSON_AddItemToObject(out, "dag", dag);
+    char *js = cJSON_PrintUnformatted(out);
+    cJSON_Delete(out);
+    if (js) { ca_http_resp_json(resp, js); free(js); }
+    return 0;
+}
+
+/* ---------- policy rules: list / add / delete (persisted to policy.json) ---------- */
+
+static void policy_path_of(cagent_ctx *ctx, char *out, size_t cap) {
+    ca_path_join(out, cap, ctx->state_root ? ctx->state_root : "state", "policy.json");
+}
+
+static int h_policy_rules(const ca_http_request *req, ca_http_response *resp, void *ud) {
+    cagent_ctx *ctx = (cagent_ctx *)ud;
+    if (!authz_ok(ctx, req, resp)) return 0;
+    (void)req;
+    cJSON *arr = cJSON_CreateArray();
+    int n = ctx->policy ? ca_policy_rule_count(ctx->policy) : 0;
+    for (int i = 0; i < n; i++) {
+        const char *tool = NULL, *action = NULL, *reason = NULL;
+        cJSON *o = cJSON_CreateObject();
+        cJSON_AddNumberToObject(o, "index", i);
+        if (ca_policy_rule_get(ctx->policy, (size_t)i, &tool, &action, &reason) == 0) {
+            cJSON_AddStringToObject(o, "tool", tool ? tool : "*");
+            cJSON_AddStringToObject(o, "action", action ? action : "deny");
+            cJSON_AddStringToObject(o, "reason", reason ? reason : "");
+        }
+        cJSON_AddItemToArray(arr, o);
+    }
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddItemToObject(root, "rules", arr);
+    char *js = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (js) { ca_http_resp_append(resp, js); free(js); }
+    return 0;
+}
+
+static int h_policy_add(const ca_http_request *req, ca_http_response *resp, void *ud) {
+    cagent_ctx *ctx = (cagent_ctx *)ud;
+    if (!authz_ok(ctx, req, resp)) return 0;
+    char *b = body_str(req);
+    cJSON *root = b ? cJSON_Parse(b) : NULL;
+    free(b);
+    cJSON *t = root ? cJSON_GetObjectItemCaseSensitive(root, "tool") : NULL;
+    cJSON *a = root ? cJSON_GetObjectItemCaseSensitive(root, "action") : NULL;
+    cJSON *r = root ? cJSON_GetObjectItemCaseSensitive(root, "reason") : NULL;
+    if (!t || !cJSON_IsString(t) || !t->valuestring || !*t->valuestring ||
+        !a || !cJSON_IsString(a) || !a->valuestring) {
+        cJSON_Delete(root);
+        resp->status = 400;
+        ca_http_resp_json(resp, "{\"error\":\"need 'tool' and 'action' (allow|deny|ask)\"}");
+        return 0;
+    }
+    ca_policy_add_rule(ctx->policy, t->valuestring, a->valuestring,
+                       (r && cJSON_IsString(r)) ? r->valuestring : NULL);
+    cJSON_Delete(root);
+    char ppath[600];
+    policy_path_of(ctx, ppath, sizeof(ppath));
+    int saved = ca_policy_save_file(ctx->policy, ppath);
+    ca_http_resp_appendf(resp, "{\"ok\":true,\"saved\":%s}",
+                         saved == 0 ? "true" : "false");
+    return 0;
+}
+
+static int h_policy_delete(const ca_http_request *req, ca_http_response *resp, void *ud) {
+    cagent_ctx *ctx = (cagent_ctx *)ud;
+    if (!authz_ok(ctx, req, resp)) return 0;
+    int idx = atoi(req->path + strlen("/v1/policy/rules/"));
+    if (idx < 0 || (size_t)idx >= (size_t)ca_policy_rule_count(ctx->policy)) {
+        resp->status = 404;
+        ca_http_resp_json(resp, "{\"error\":\"no such rule\"}");
+        return 0;
+    }
+    ca_policy_remove_rule(ctx->policy, (size_t)idx);
+    char ppath[600];
+    policy_path_of(ctx, ppath, sizeof(ppath));
+    ca_policy_save_file(ctx->policy, ppath);
+    ca_http_resp_json(resp, "{\"ok\":true}");
+    return 0;
+}
+
+/* GET /v1/hooks — list registered hooks [{"id":N,"event":"..."}]. */
+static int h_hooks(const ca_http_request *req, ca_http_response *resp, void *ud) {
+    cagent_ctx *ctx = (cagent_ctx *)ud;
+    if (!authz_ok(ctx, req, resp)) return 0;
+    (void)req;
+    char *js = ctx->hooks ? ca_hook_registry_json(ctx->hooks) : ca_strdup("[]");
+    ca_http_resp_appendf(resp, "{\"hooks\":%s}", js ? js : "[]");
+    free(js);
+    return 0;
+}
+
+/* POST /v1/hooks {"event":"agent.after_run","type":"log","file":"..."} —
+ * register a hook from outside the process (web UI, plugins). type "log"
+ * appends {"ts_ms","event","payload"} JSON lines to `file` (default
+ * <state_root>/hooks-external.jsonl). Returns the hook id. */
+static int h_hook_add(const ca_http_request *req, ca_http_response *resp, void *ud) {
+    cagent_ctx *ctx = (cagent_ctx *)ud;
+    if (!authz_ok(ctx, req, resp)) return 0;
+    if (!ctx->hooks) {
+        resp->status = 500;
+        ca_http_resp_json(resp, "{\"error\":\"hook registry unavailable\"}");
+        return 0;
+    }
+    char *b = body_str(req);
+    cJSON *root = b ? cJSON_Parse(b) : NULL;
+    free(b);
+    cJSON *ev = root ? cJSON_GetObjectItemCaseSensitive(root, "event") : NULL;
+    if (!ev || !cJSON_IsString(ev) || !ev->valuestring || !*ev->valuestring) {
+        cJSON_Delete(root);
+        resp->status = 400;
+        ca_http_resp_json(resp,
+            "{\"error\":\"need 'event' (name or '*') and optional 'file', 'type'='log'\"}");
+        return 0;
+    }
+    char fpath[600];
+    cJSON *fj = cJSON_GetObjectItemCaseSensitive(root, "file");
+    if (fj && cJSON_IsString(fj) && fj->valuestring && *fj->valuestring) {
+        snprintf(fpath, sizeof(fpath), "%s", fj->valuestring);
+    } else {
+        ca_path_join(fpath, sizeof(fpath),
+                     ctx->state_root ? ctx->state_root : "state",
+                     "hooks-external.jsonl");
+    }
+    char *fpath_heap = ca_strdup(fpath);
+    int id = fpath_heap
+        ? ca_hook_register(ctx->hooks, ev->valuestring, ca_hook_audit_file, fpath_heap)
+        : -1;
+    cJSON_Delete(root);
+    if (id < 0) {
+        free(fpath_heap);
+        resp->status = 500;
+        ca_http_resp_json(resp, "{\"error\":\"register failed\"}");
+        return 0;
+    }
+    ca_http_resp_appendf(resp, "{\"ok\":true,\"id\":%d}", id);
+    return 0;
+}
+
+/* DELETE /v1/hooks/<id> — unregister a hook (builtin audit hook id 1 stays). */
+static int h_hook_delete(const ca_http_request *req, ca_http_response *resp, void *ud) {
+    cagent_ctx *ctx = (cagent_ctx *)ud;
+    if (!authz_ok(ctx, req, resp)) return 0;
+    int id = atoi(req->path + strlen("/v1/hooks/"));
+    if (id <= 0 || ca_hook_unregister(ctx->hooks, id) != 0) {
+        resp->status = 404;
+        ca_http_resp_json(resp, "{\"error\":\"no such hook\"}");
+        return 0;
+    }
+    ca_http_resp_json(resp, "{\"ok\":true}");
+    return 0;
+}
+
+/* GET /v1/chat/history — recent conversation turns (oldest first) for the
+ * chat panel to backfill on open. */
+static int h_chat_history(const ca_http_request *req, ca_http_response *resp, void *ud) {
+    cagent_ctx *ctx = (cagent_ctx *)ud;
+    if (!authz_ok(ctx, req, resp)) return 0;
+    (void)req;
+    char *turns = ctx->reasoning ? ca_reasoning_history_json(ctx->reasoning, 20)
+                                 : ca_strdup("[]");
+    ca_http_resp_appendf(resp, "{\"turns\":%s}", turns ? turns : "[]");
+    free(turns);
+    return 0;
+}
+
+/* Copy `in` (the ?name= parameter) into `out`, percent-decoding and replacing
+ * unsafe characters so the result is a plain basename (no traversal). */
+static void sanitize_upload_name(const char *in, char *out, size_t cap) {
+    char dec[256];
+    size_t di = 0;
+    for (const char *p = in; *p && *p != '&' && di + 1 < sizeof(dec); p++) {
+        if (*p == '%' && p[1] && p[2]) {
+            char hex[3] = {p[1], p[2], 0};
+            dec[di++] = (char)strtol(hex, NULL, 16);
+            p += 2;
+        } else if (*p == '+') {
+            dec[di++] = ' ';
+        } else {
+            dec[di++] = *p;
+        }
+    }
+    dec[di] = '\0';
+    size_t oi = 0;
+    for (size_t k = 0; k < di && oi + 1 < cap; k++) {
+        unsigned char c = (unsigned char)dec[k];
+        if (c == '/' || c == '\\' || c == ':' || c == '*' || c == '?' || c == '"' ||
+            c == '<' || c == '>' || c == '|' || c < 0x20)
+            c = '_';
+        out[oi++] = (char)c;
+    }
+    out[oi] = '\0';
+    /* strip leading dots: no hidden entries, no "." / ".." */
+    size_t strip = 0;
+    while (out[strip] == '.') strip++;
+    if (strip) memmove(out, out + strip, oi - strip + 1);
+}
+
+static void uploads_dir_of(const cagent_ctx *ctx, char *dir, size_t cap) {
+    ca_path_join(dir, cap, ctx->state_root, "uploads");
+    ca_fs_mkdirs(dir);
+}
+
+/* POST /v1/upload?name=<filename> — raw-body upload for RAG. The file is
+ * stored under <state_root>/uploads/<name>; text content is chunked into the
+ * vector store so later prompts recall it via "## Retrieved context". */
+static int h_upload(const ca_http_request *req, ca_http_response *resp, void *ud) {
+    cagent_ctx *ctx = (cagent_ctx *)ud;
+    if (!authz_ok(ctx, req, resp)) return 0;
+    char name[192];
+    const char *nmp = strstr(req->query, "name=");
+    sanitize_upload_name(nmp ? nmp + 5 : req->query, name, sizeof(name));
+    if (!name[0] || !req->body || req->body_len == 0) {
+        resp->status = 400;
+        ca_http_resp_json(resp, "{\"error\":\"need ?name=<file> and a non-empty body\"}");
+        return 0;
+    }
+    char dir[600], fpath[820];
+    uploads_dir_of(ctx, dir, sizeof(dir));
+    ca_path_join(fpath, sizeof(fpath), dir, name);
+    if (ca_fs_write_file(fpath, req->body, req->body_len) != 0) {
+        resp->status = 500;
+        ca_http_resp_json(resp, "{\"error\":\"write failed\"}");
+        return 0;
+    }
+    /* text files (no NUL byte) go into the vector store */
+    int chunks = 0;
+    if (!memchr(req->body, 0, req->body_len) && ctx->memory) {
+        char *text = malloc(req->body_len + 1);
+        if (text) {
+            memcpy(text, req->body, req->body_len);
+            text[req->body_len] = '\0';
+            char *clean = ca_str_utf8_sanitize(text); /* GBK/invalid bytes guard */
+            if (clean) { free(text); text = clean; }
+            char base[224];
+            snprintf(base, sizeof(base), "upload:%s", name);
+            chunks = ca_memory_index_text(ctx->memory, base, text);
+            free(text);
+        }
+    }
+    ca_http_resp_appendf(resp, "{\"ok\":true,\"name\":\"%s\",\"size\":%d,\"chunks\":%d}",
+                         name, (int)req->body_len, chunks);
+    return 0;
+}
+
+/* GET /v1/uploads — uploaded files with sizes. */
+static int h_uploads(const ca_http_request *req, ca_http_response *resp, void *ud) {
+    cagent_ctx *ctx = (cagent_ctx *)ud;
+    if (!authz_ok(ctx, req, resp)) return 0;
+    (void)req;
+    char dir[600];
+    uploads_dir_of(ctx, dir, sizeof(dir));
+    ca_dir_list dl;
+    cJSON *arr = cJSON_CreateArray();
+    if (ca_fs_list_dir(dir, &dl) == 0) {
+        for (size_t i = 0; i < dl.count; i++) {
+            if (dl.items[i].is_dir) continue;
+            char fpath[820];
+            ca_path_join(fpath, sizeof(fpath), dir, dl.items[i].name);
+            cJSON *o = cJSON_CreateObject();
+            cJSON_AddStringToObject(o, "name", dl.items[i].name);
+            cJSON_AddNumberToObject(o, "size", (double)ca_fs_file_size(fpath));
+            cJSON_AddItemToArray(arr, o);
+        }
+        ca_fs_list_free(&dl);
+    }
+    char *s = cJSON_PrintUnformatted(arr);
+    cJSON_Delete(arr);
+    ca_http_resp_appendf(resp, "{\"files\":%s}", s ? s : "[]");
+    free(s);
+    return 0;
+}
+
+/* DELETE /v1/uploads/<name> — remove an uploaded file (its vectors stay until
+ * the next startup rebuild, which scans the directory). */
+static int h_upload_delete(const ca_http_request *req, ca_http_response *resp, void *ud) {
+    cagent_ctx *ctx = (cagent_ctx *)ud;
+    if (!authz_ok(ctx, req, resp)) return 0;
+    char name[192];
+    sanitize_upload_name(req->path + strlen("/v1/uploads/"), name, sizeof(name));
+    if (!name[0]) {
+        resp->status = 400;
+        ca_http_resp_json(resp, "{\"error\":\"missing file name\"}");
+        return 0;
+    }
+    char dir[600], fpath[820];
+    ca_path_join(dir, sizeof(dir), ctx->state_root, "uploads");
+    snprintf(fpath, sizeof(fpath), "%s/%s", dir, name);
+    if (ca_fs_remove(fpath) != 0) {
+        resp->status = 404;
+        ca_http_resp_json(resp, "{\"error\":\"not found\"}");
+        return 0;
+    }
+    ca_http_resp_json(resp, "{\"ok\":true}");
+    return 0;
+}
+
 static int h_tools(const ca_http_request *req, ca_http_response *resp, void *ud) {
     cagent_ctx *ctx = (cagent_ctx *)ud;
     if (!authz_ok(ctx, req, resp)) return 0;
@@ -132,6 +584,11 @@ static int h_tools(const ca_http_request *req, ca_http_response *resp, void *ud)
         cJSON_AddStringToObject(o, "name", t->name);
         cJSON_AddStringToObject(o, "description", t->description ? t->description : "");
         cJSON_AddBoolToObject(o, "write", t->is_write ? 1 : 0);
+        if (t->json_schema && *t->json_schema) {
+            cJSON *sc = cJSON_Parse(t->json_schema);
+            if (sc) cJSON_AddItemToObject(o, "schema", sc);
+            else cJSON_AddStringToObject(o, "schema", t->json_schema);
+        }
         cJSON_AddItemToArray(arr, o);
     }
     char *s = cJSON_PrintUnformatted(arr);
@@ -250,13 +707,24 @@ static int h_agent_add(const ca_http_request *req, ca_http_response *resp, void 
     int idx = ctx->agents ? ca_agent_pool_add_model(ctx->agents, name, role ? role : "",
                                                     provider, model) : -1;
     if (idx < 0) { resp->status = 400; ca_http_resp_json(resp, "{\"error\":\"add agent failed (duplicate?)\"}"); return 0; }
+    ca_agent_pool_save(ctx->agents, ctx->state_root); /* roster persists across restarts */
+    if (ctx->state) ca_state_store_agent_set(ctx->state, name, role, "idle");
     ca_http_resp_appendf(resp, "{\"ok\":true,\"index\":%d}", idx);
     return 0;
 }
 
+static int h_agent_run(const ca_http_request *req, ca_http_response *resp, void *ud);
+
 static int h_agent_post(const ca_http_request *req, ca_http_response *resp, void *ud) {
     cagent_ctx *ctx = (cagent_ctx *)ud;
     if (!authz_ok(ctx, req, resp)) return 0;
+    /* dispatch: "<name>/run" executes a task through the reasoning engine */
+    {
+        const char *p = req->path + strlen("/v1/agents/");
+        size_t plen = strlen(p);
+        if (plen >= 4 && strcmp(p + plen - 4, "/run") == 0)
+            return h_agent_run(req, resp, ud);
+    }
     const char *rest = req->path + strlen("/v1/agents/");
     char name[128];
     snprintf(name, sizeof(name), "%s", rest);
@@ -280,6 +748,58 @@ static int h_agent_post(const ca_http_request *req, ca_http_response *resp, void
     }
     int rc = ctx->agents ? ca_agent_post(ctx->agents, name, key, val) : -1;
     ca_http_resp_appendf(resp, "{\"ok\":%s}", rc == 0 ? "true" : "false");
+    return 0;
+}
+
+/* POST /v1/agents/<name>/run  {"task": "..."} — execute a task as the agent
+ * through the reasoning engine; the result is published on the shared
+ * blackboard and returned here. (Dispatched from h_agent_post for /run.) */
+static int h_agent_run(const ca_http_request *req, ca_http_response *resp, void *ud) {
+    cagent_ctx *ctx = (cagent_ctx *)ud;
+    if (!authz_ok(ctx, req, resp)) return 0;
+    const char *rest = req->path + strlen("/v1/agents/");
+    char name[128];
+    snprintf(name, sizeof(name), "%s", rest);
+    char *slash = strstr(name, "/run");
+    if (slash) *slash = '\0';
+    char *b = body_str(req);
+    cJSON *root = b ? cJSON_Parse(b) : NULL;
+    free(b);
+    const char *task = NULL;
+    if (root && cJSON_IsObject(root)) {
+        cJSON *t = cJSON_GetObjectItemCaseSensitive(root, "task");
+        if (t && cJSON_IsString(t)) task = t->valuestring;
+    }
+    if (!task || !*task) {
+        if (root) cJSON_Delete(root);
+        resp->status = 400;
+        ca_http_resp_json(resp, "{\"error\":\"need 'task' string\"}");
+        return 0;
+    }
+    char *answer = NULL;
+    int rc = cagent_agent_run(ctx, name, task, &answer);
+    cJSON_Delete(root);
+    if (rc == -2) {
+        free(answer);
+        resp->status = 404;
+        ca_http_resp_json(resp, "{\"error\":\"unknown agent\"}");
+        return 0;
+    }
+    if (rc != 0) {
+        free(answer);
+        resp->status = 500;
+        ca_http_resp_json(resp, "{\"error\":\"agent run failed\"}");
+        return 0;
+    }
+    cJSON *out = cJSON_CreateObject();
+    cJSON_AddBoolToObject(out, "ok", 1);
+    cJSON_AddStringToObject(out, "agent", name);
+    cJSON_AddStringToObject(out, "answer", answer ? answer : "");
+    char *s = cJSON_PrintUnformatted(out);
+    cJSON_Delete(out);
+    free(answer);
+    ca_http_resp_json(resp, s ? s : "{}");
+    free(s);
     return 0;
 }
 
@@ -347,9 +867,12 @@ static int h_route_add(const ca_http_request *req, ca_http_response *resp, void 
         return 0;
     }
     if (ctx->router)
-        ca_router_add(ctx->router, name, provider, json_str(root, "base_url"),
-                      json_str(root, "api_key"), json_str(root, "model"),
-                      json_dbl(root, "weight", 1.0));
+        ca_router_add_ex(ctx->router, name, provider, json_str(root, "base_url"),
+                         json_str(root, "api_key"), json_str(root, "model"),
+                         json_dbl(root, "weight", 1.0),
+                         (int)json_dbl(root, "cost_rank", 0),
+                         (int)json_dbl(root, "latency_ms", 0),
+                         json_str(root, "caps"));
     cJSON_Delete(root);
     char *s = ctx->router ? ca_router_json(ctx->router) : ca_strdup("[]");
     ca_http_resp_json(resp, s ? s : "[]");
@@ -360,6 +883,33 @@ static int h_route_add(const ca_http_request *req, ca_http_response *resp, void 
         ca_path_join(rpath, sizeof(rpath), ctx->state_root, "routes.json");
         ca_router_save_file(ctx->router, rpath);
     }
+    return 0;
+}
+
+/* POST /v1/routes/policy {"policy":"cost|latency|round_robin|capability:<tag>"} */
+static int h_route_policy(const ca_http_request *req, ca_http_response *resp, void *ud) {
+    cagent_ctx *ctx = (cagent_ctx *)ud;
+    if (!authz_ok(ctx, req, resp)) return 0;
+    char *b = body_str(req);
+    cJSON *root = b ? cJSON_Parse(b) : NULL;
+    free(b);
+    cJSON *p = root ? cJSON_GetObjectItemCaseSensitive(root, "policy") : NULL;
+    if (!p || !cJSON_IsString(p) || !p->valuestring) {
+        cJSON_Delete(root);
+        resp->status = 400;
+        ca_http_resp_json(resp,
+            "{\"error\":\"need 'policy': cost|latency|round_robin|capability:<tag>\"}");
+        return 0;
+    }
+    int rc = ca_router_set_policy(ctx->router, p->valuestring);
+    cJSON_Delete(root);
+    if (rc != 0) {
+        resp->status = 400;
+        ca_http_resp_json(resp, "{\"error\":\"unknown policy\"}");
+        return 0;
+    }
+    ca_http_resp_appendf(resp, "{\"ok\":true,\"policy\":\"%s\"}",
+                         ca_router_policy(ctx->router));
     return 0;
 }
 
@@ -439,6 +989,49 @@ static int h_config_llm(const ca_http_request *req, ca_http_response *resp, void
     ca_http_resp_append(resp, s ? s : "[]");
     ca_http_resp_append(resp, "}");
     free(s);
+    return 0;
+}
+
+/* Snapshot capture size limit (bytes; 0 = unlimited). UI-configurable
+ * override of the built-in 64MB default / CA_SNAPSHOT_MAX_FILE env. */
+static int h_config_snapshot_get(const ca_http_request *req, ca_http_response *resp, void *ud) {
+    cagent_ctx *ctx = (cagent_ctx *)ud;
+    if (!authz_ok(ctx, req, resp)) return 0;
+    (void)req;
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddNumberToObject(o, "max_file",
+        (double)(ctx->snapshot ? ca_snapshot_get_max_file(ctx->snapshot) : -1));
+    char *s = cJSON_PrintUnformatted(o);
+    ca_http_resp_json(resp, s ? s : "{}");
+    free(s);
+    cJSON_Delete(o);
+    return 0;
+}
+
+static int h_config_snapshot(const ca_http_request *req, ca_http_response *resp, void *ud) {
+    cagent_ctx *ctx = (cagent_ctx *)ud;
+    if (!authz_ok(ctx, req, resp)) return 0;
+    char *b = body_str(req);
+    cJSON *root = b ? cJSON_Parse(b) : NULL;
+    free(b);
+    cJSON *mf = root ? cJSON_GetObjectItemCaseSensitive(root, "max_file") : NULL;
+    if (!mf || !cJSON_IsNumber(mf) || mf->valuedouble < 0.0) {
+        if (root) cJSON_Delete(root);
+        resp->status = 400;
+        ca_http_resp_json(resp,
+            "{\"error\":\"need 'max_file' number >= 0 (bytes; 0 = unlimited)\"}");
+        return 0;
+    }
+    long long v = (long long)mf->valuedouble;
+    cJSON_Delete(root);
+    if (ctx->snapshot) ca_snapshot_set_max_file(ctx->snapshot, v);
+    ca_config_set_int(ctx->config, "snapshot.max_file", v);
+    if (ctx->state_root) {
+        char cfgfile[600];
+        ca_path_join(cfgfile, sizeof(cfgfile), ctx->state_root, "cagent.json");
+        ca_config_save_file(ctx->config, cfgfile);
+    }
+    ca_http_resp_json(resp, "{\"ok\":true}");
     return 0;
 }
 
@@ -541,6 +1134,53 @@ static int h_plugin_generate(const ca_http_request *req, ca_http_response *resp,
     return 0;
 }
 
+/* POST /v1/plugins/native/load — load a native shared-library plugin
+ * (.dll/.so) and probe its entry symbol. Body: {"path": "...",
+ * "entry": "ca_plugin_main" (optional, defaults to ca_plugin_main)}.
+ * The library is unloaded after the probe; tests exercise the error paths. */
+static int h_plugin_native_load(const ca_http_request *req, ca_http_response *resp, void *ud) {
+    cagent_ctx *ctx = (cagent_ctx *)ud;
+    if (!authz_ok(ctx, req, resp)) return 0;
+    char *b = body_str(req);
+    cJSON *root = b ? cJSON_Parse(b) : NULL;
+    free(b);
+    cJSON *pj = root ? cJSON_GetObjectItemCaseSensitive(root, "path") : NULL;
+    cJSON *ej = root ? cJSON_GetObjectItemCaseSensitive(root, "entry") : NULL;
+    const char *path = (pj && cJSON_IsString(pj)) ? pj->valuestring : NULL;
+    const char *entry = (ej && cJSON_IsString(ej) && *ej->valuestring)
+                            ? ej->valuestring : "ca_plugin_main";
+    if (root) cJSON_Delete(root);
+    if (!path || !*path) {
+        resp->status = 400;
+        ca_http_resp_json(resp, "{\"ok\":false,\"error\":\"need 'path' string\"}");
+        return 0;
+    }
+    ca_plugin *p = ca_plugin_load(path);
+    if (!p) {
+        resp->status = 400;
+        cJSON *e = cJSON_CreateObject();
+        cJSON_AddBoolToObject(e, "ok", 0);
+        cJSON_AddStringToObject(e, "error", ca_plugin_error());
+        char *s = cJSON_PrintUnformatted(e);
+        cJSON_Delete(e);
+        ca_http_resp_json(resp, s ? s : "{\"ok\":false,\"error\":\"load failed\"}");
+        free(s);
+        return 0;
+    }
+    void *sym = ca_plugin_symbol(p, entry);
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddBoolToObject(o, "ok", 1);
+    cJSON_AddStringToObject(o, "path", path);
+    cJSON_AddStringToObject(o, "entry", entry);
+    cJSON_AddBoolToObject(o, "entry_found", sym ? 1 : 0);
+    char *s = cJSON_PrintUnformatted(o);
+    cJSON_Delete(o);
+    ca_plugin_unload(p);
+    ca_http_resp_json(resp, s ? s : "{}");
+    free(s);
+    return 0;
+}
+
 static int h_skills(const ca_http_request *req, ca_http_response *resp, void *ud) {
     cagent_ctx *ctx = (cagent_ctx *)ud;
     if (!authz_ok(ctx, req, resp)) return 0;
@@ -601,6 +1241,8 @@ static const skill_tmpl SKILL_TMPLS[] = {
     {"sys_info",    "显示内核/系统信息",             "shell",   "uname -a"},
     {"disk_usage",  "显示磁盘占用",                  "shell",   "df -h"},
     {"py_now",      "Python 打印当前时间",           "python",  "import datetime; print(datetime.datetime.now())"},
+    {"greet",       "参数化问候（args: {\"who\":\"名字\"}）", "shell",  "echo hello {{who}}"},
+    {"py_sum",      "Python 求和（args: {\"a\":1,\"b\":2}）", "python", "print({{a}} + {{b}})"},
 };
 #define N_SKILL_TMPLS (int)(sizeof(SKILL_TMPLS)/sizeof(SKILL_TMPLS[0]))
 
@@ -639,6 +1281,19 @@ static int market_merge_field(cJSON *local, cJSON *remote_root, const char *fiel
     return 1;
 }
 
+/* GitHub 热门应用（可安装为 skill 的开源工具/仓库，附仓库链接）。
+ * winget_id: Windows 下一键安装用的 winget 包 ID（"" = 未收录）。 */
+static const struct { const char *name, *desc, *repo, *kind, *winget_id; } GH_SKILLS[] = {
+    { "jq",      "命令行 JSON 处理工具（解析/转换 JSON）",       "https://github.com/jqlang/jq",          "shell", "jqlang.jq" },
+    { "ripgrep", "极速递归正则搜索（rg）",                       "https://github.com/BurntSushi/ripgrep", "shell", "BurntSushi.ripgrep.MSVC" },
+    { "yt-dlp",  "视频/音频下载器（支持大量站点）",              "https://github.com/yt-dlp/yt-dlp",      "shell", "yt-dlp.yt-dlp" },
+    { "pandoc",  "万能文档格式转换（markdown/HTML/PDF…）",       "https://github.com/jgm/pandoc",         "shell", "JohnMacFarlane.Pandoc" },
+    { "ffmpeg",  "音视频处理工具箱",                             "https://github.com/FFmpeg/FFmpeg",      "shell", "Gyan.FFmpeg" },
+    { "gh",      "GitHub 官方命令行（Issue/PR/Release）",        "https://github.com/cli/cli",            "shell", "GitHub.cli" },
+    { "fd",      "更友好的 find 替代",                           "https://github.com/sharkdp/fd",         "shell", "sharkdp.fd" },
+    { "bat",     "带语法高亮的 cat 替代",                        "https://github.com/sharkdp/bat",        "shell", "sharkdp.bat" },
+};
+
 static int h_skills_market(const ca_http_request *req, ca_http_response *resp, void *ud) {
     cagent_ctx *ctx = (cagent_ctx *)ud;
     if (!authz_ok(ctx, req, resp)) return 0;
@@ -658,22 +1313,13 @@ static int h_skills_market(const ca_http_request *req, ca_http_response *resp, v
     cJSON_AddItemToObject(root, "templates", tmpl);
     /* GitHub 热门应用（可安装为 skill 的开源工具/仓库，附仓库链接） */
     cJSON *gh = cJSON_CreateArray();
-    static const struct { const char *name, *desc, *repo, *kind; } GH_SKILLS[] = {
-        { "jq", "命令行 JSON 处理工具（解析/转换 JSON）", "https://github.com/jqlang/jq", "shell" },
-        { "ripgrep", "极速递归正则搜索（rg）", "https://github.com/BurntSushi/ripgrep", "shell" },
-        { "yt-dlp", "视频/音频下载器（支持大量站点）", "https://github.com/yt-dlp/yt-dlp", "shell" },
-        { "pandoc", "万能文档格式转换（markdown/HTML/PDF…）", "https://github.com/jgm/pandoc", "shell" },
-        { "ffmpeg", "音视频处理工具箱", "https://github.com/FFmpeg/FFmpeg", "shell" },
-        { "gh", "GitHub 官方命令行（Issue/PR/Release）", "https://github.com/cli/cli", "shell" },
-        { "fd", "更友好的 find 替代", "https://github.com/sharkdp/fd", "shell" },
-        { "bat", "带语法高亮的 cat 替代", "https://github.com/sharkdp/bat", "shell" },
-    };
     for (size_t i = 0; i < sizeof(GH_SKILLS) / sizeof(GH_SKILLS[0]); i++) {
         cJSON *o = cJSON_CreateObject();
         cJSON_AddStringToObject(o, "name", GH_SKILLS[i].name);
         cJSON_AddStringToObject(o, "description", GH_SKILLS[i].desc);
         cJSON_AddStringToObject(o, "repo", GH_SKILLS[i].repo);
         cJSON_AddStringToObject(o, "kind", GH_SKILLS[i].kind);
+        cJSON_AddStringToObject(o, "winget_id", GH_SKILLS[i].winget_id);
         cJSON_AddItemToArray(gh, o);
     }
     cJSON_AddItemToObject(root, "github", gh);
@@ -703,6 +1349,45 @@ static int h_skills_market(const ca_http_request *req, ca_http_response *resp, v
     return 0;
 }
 
+/* One-click install of a GitHub 热门应用 native tool via winget. The install
+ * runs DETACHED (winget can take minutes) — the single-threaded HTTP server
+ * must never block inside a handler. */
+static int h_gh_install(const ca_http_request *req, ca_http_response *resp, void *ud) {
+    (void)ud;
+    char *b = body_str(req);
+    cJSON *root = b ? cJSON_Parse(b) : NULL;
+    free(b);
+    const char *name = json_str(root, "name");
+    char namebuf[128] = "";
+    if (name && *name) snprintf(namebuf, sizeof(namebuf), "%s", name);
+    cJSON_Delete(root);
+    name = namebuf;
+    const char *winget = NULL;
+    if (name && *name) {
+        for (size_t i = 0; i < sizeof(GH_SKILLS) / sizeof(GH_SKILLS[0]); i++)
+            if (strcmp(GH_SKILLS[i].name, name) == 0) { winget = GH_SKILLS[i].winget_id; break; }
+    }
+    if (!winget || !*winget) {
+        resp->status = 404;
+        ca_http_resp_json(resp, "{\"error\":\"unknown tool or no winget package\"}");
+        return 0;
+    }
+    char cmd[512];
+    snprintf(cmd, sizeof(cmd),
+             "winget install --id %s -e --silent --accept-package-agreements "
+             "--accept-source-agreements --disable-interactivity", winget);
+    if (ca_proc_spawn_detached(cmd) != 0) {
+        resp->status = 500;
+        ca_http_resp_json(resp, "{\"error\":\"failed to start winget (is it installed?)\"}");
+        return 0;
+    }
+    ca_http_resp_appendf(resp,
+        "{\"ok\":true,\"started\":true,\"tool\":\"%s\",\"winget_id\":\"%s\","
+        "\"hint\":\"后台安装已启动，稍后在 shell 里运行该命令验证\"}",
+        name, winget);
+    return 0;
+}
+
 static int h_skills_publish(const ca_http_request *req, ca_http_response *resp, void *ud) {
     cagent_ctx *ctx = (cagent_ctx *)ud;
     if (!authz_ok(ctx, req, resp)) return 0;
@@ -722,11 +1407,13 @@ static int h_skills_publish(const ca_http_request *req, ca_http_response *resp, 
     sk.description = json_str(root, "description") ? json_str(root, "description") : "";
     sk.kind = (kind && *kind) ? kind : "shell";
     sk.body = json_str(root, "body") ? json_str(root, "body") : "";
-    int rc = ctx->skills ? ca_skill_register(ctx->skills, &sk) : -1;
+    /* Upsert semantics: the market "install" button re-publishes templates,
+     * so an existing skill with the same name is updated, not rejected. */
+    int rc = ctx->skills ? ca_skill_register_ex(ctx->skills, &sk, 1) : -1;
     if (rc != 0) {
         cJSON_Delete(root);
         resp->status = 400;
-        ca_http_resp_json(resp, "{\"error\":\"register failed (duplicate name or invalid kind)\"}");
+        ca_http_resp_json(resp, "{\"error\":\"register failed (invalid name or kind)\"}");
         return 0;
     }
     if (ctx->state_root) ca_skill_registry_persist(ctx->skills, ctx->state_root);
@@ -934,25 +1621,55 @@ static int h_mcp_add(const ca_http_request *req, ca_http_response *resp, void *u
     char *b = body_str(req);
     cJSON *root = b ? cJSON_Parse(b) : NULL;
     free(b);
-    const char *name = NULL, *url = NULL, *token = NULL;
+    ca_mcp_conn c;
+    memset(&c, 0, sizeof(c));
+    int ok_body = 0;
     if (root && cJSON_IsObject(root)) {
         cJSON *n = cJSON_GetObjectItemCaseSensitive(root, "name");
+        cJSON *tr = cJSON_GetObjectItemCaseSensitive(root, "transport");
         cJSON *u = cJSON_GetObjectItemCaseSensitive(root, "url");
         cJSON *t = cJSON_GetObjectItemCaseSensitive(root, "token");
-        if (n && cJSON_IsString(n)) name = n->valuestring;
-        if (u && cJSON_IsString(u)) url = u->valuestring;
-        if (t && cJSON_IsString(t)) token = t->valuestring;
+        cJSON *cmd = cJSON_GetObjectItemCaseSensitive(root, "command");
+        cJSON *a = cJSON_GetObjectItemCaseSensitive(root, "args");
+        if (n && cJSON_IsString(n)) c.name = n->valuestring;
+        if (tr && cJSON_IsString(tr)) c.transport = tr->valuestring;
+        if (u && cJSON_IsString(u)) c.url = u->valuestring;
+        if (t && cJSON_IsString(t)) c.token = t->valuestring;
+        if (cmd && cJSON_IsString(cmd)) c.command = cmd->valuestring;
+        if (a && cJSON_IsString(a)) c.args_csv = a->valuestring;
+        ok_body = c.name && *c.name;
     }
     if (root) cJSON_Delete(root);
-    if (!name || !*name || !url || !*url) {
+    int rc = ok_body ? (ctx->mcp ? ca_mcp_manager_add_ex(ctx->mcp, &c) : -1) : -1;
+    if (rc != 0) {
         resp->status = 400;
-        ca_http_resp_json(resp, "{\"error\":\"need 'name' and 'url' strings\"}");
+        ca_http_resp_json(resp,
+            "{\"error\":\"add failed: need 'name' plus 'url' (http) or "
+            "'command' (stdio), and a valid transport\"}");
         return 0;
     }
-    int rc = ctx->mcp ? ca_mcp_manager_add(ctx->mcp, name, url, token) : -1;
-    if (rc != 0) { resp->status = 400; ca_http_resp_json(resp, "{\"error\":\"add failed\"}"); return 0; }
+    /* re-discover tools for the (possibly new) server and persist */
+    if (ctx->mcp) {
+        if (ctx->tools) ca_mcp_manager_sync_tools(ctx->mcp, ctx->tools);
+        ca_mcp_manager_persist(ctx->mcp, ctx->state_root);
+    }
     char *s = ctx->mcp ? ca_mcp_manager_json(ctx->mcp) : ca_strdup("[]");
     ca_http_resp_json(resp, s ? s : "[]");
+    free(s);
+    return 0;
+}
+
+/* Re-discover tools on every connection (manual refresh). */
+static int h_mcp_sync(const ca_http_request *req, ca_http_response *resp, void *ud) {
+    cagent_ctx *ctx = (cagent_ctx *)ud;
+    if (!authz_ok(ctx, req, resp)) return 0;
+    int n = (ctx->mcp && ctx->tools) ? ca_mcp_manager_sync_tools(ctx->mcp, ctx->tools) : -1;
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddNumberToObject(o, "registered", n);
+    cJSON_AddBoolToObject(o, "ok", n >= 0);
+    char *s = cJSON_PrintUnformatted(o);
+    cJSON_Delete(o);
+    ca_http_resp_json(resp, s ? s : "{}");
     free(s);
     return 0;
 }
@@ -962,6 +1679,7 @@ static int h_mcp_delete(const ca_http_request *req, ca_http_response *resp, void
     if (!authz_ok(ctx, req, resp)) return 0;
     const char *name = req->path + strlen("/v1/mcp/");
     int rc = ctx->mcp ? ca_mcp_manager_remove(ctx->mcp, name) : -1;
+    if (rc == 0 && ctx->mcp) ca_mcp_manager_persist(ctx->mcp, ctx->state_root);
     ca_http_resp_appendf(resp, "{\"removed\":%s}", rc == 0 ? "true" : "false");
     return 0;
 }
@@ -972,6 +1690,85 @@ static int h_cluster(const ca_http_request *req, ca_http_response *resp, void *u
     char *s = ctx->cluster ? ca_cluster_json(ctx->cluster) : ca_strdup("[]");
     ca_http_resp_json(resp, s ? s : "[]");
     free(s);
+    return 0;
+}
+
+/* POST /v1/cluster/join — register a node {id, host, port, role, caps}.
+ * Capability tags are comma-separated; the node must heartbeat to stay "up". */
+static int h_cluster_join(const ca_http_request *req, ca_http_response *resp, void *ud) {
+    cagent_ctx *ctx = (cagent_ctx *)ud;
+    if (!authz_ok(ctx, req, resp)) return 0;
+    char *b = body_str(req);
+    cJSON *root = b ? cJSON_Parse(b) : NULL;
+    free(b);
+    cJSON *jid = root ? cJSON_GetObjectItemCaseSensitive(root, "id") : NULL;
+    cJSON *jhost = root ? cJSON_GetObjectItemCaseSensitive(root, "host") : NULL;
+    cJSON *jport = root ? cJSON_GetObjectItemCaseSensitive(root, "port") : NULL;
+    cJSON *jrole = root ? cJSON_GetObjectItemCaseSensitive(root, "role") : NULL;
+    cJSON *jcaps = root ? cJSON_GetObjectItemCaseSensitive(root, "caps") : NULL;
+    if (!cJSON_IsString(jid) || !*jid->valuestring ||
+        !cJSON_IsString(jhost) || !*jhost->valuestring ||
+        !cJSON_IsNumber(jport)) {
+        cJSON_Delete(root);
+        resp->status = 400;
+        ca_http_resp_json(resp, "{\"error\":\"need 'id', 'host' and numeric 'port'\"}");
+        return 0;
+    }
+    int rc = ca_cluster_upsert_ex(ctx->cluster, jid->valuestring, jhost->valuestring,
+                                  (uint16_t)jport->valuedouble,
+                                  cJSON_IsString(jrole) ? jrole->valuestring : NULL,
+                                  cJSON_IsString(jcaps) ? jcaps->valuestring : NULL);
+    cJSON_Delete(root);
+    if (rc != 0) {
+        resp->status = 500;
+        ca_http_resp_json(resp, "{\"error\":\"upsert failed\"}");
+        return 0;
+    }
+    ca_http_resp_json(resp, "{\"ok\":true}");
+    return 0;
+}
+
+/* POST /v1/cluster/heartbeat {id} — refresh a node's liveness. */
+static int h_cluster_heartbeat(const ca_http_request *req, ca_http_response *resp, void *ud) {
+    cagent_ctx *ctx = (cagent_ctx *)ud;
+    if (!authz_ok(ctx, req, resp)) return 0;
+    char *b = body_str(req);
+    cJSON *root = b ? cJSON_Parse(b) : NULL;
+    free(b);
+    cJSON *jid = root ? cJSON_GetObjectItemCaseSensitive(root, "id") : NULL;
+    if (!cJSON_IsString(jid) || !*jid->valuestring) {
+        cJSON_Delete(root);
+        resp->status = 400;
+        ca_http_resp_json(resp, "{\"error\":\"need 'id'\"}");
+        return 0;
+    }
+    int rc = ca_cluster_heartbeat(ctx->cluster, jid->valuestring);
+    cJSON_Delete(root);
+    if (rc != 0) {
+        resp->status = 404;
+        ca_http_resp_json(resp, "{\"error\":\"unknown node\"}");
+        return 0;
+    }
+    ca_http_resp_json(resp, "{\"ok\":true}");
+    return 0;
+}
+
+/* DELETE /v1/cluster/nodes/<id> — leave the cluster. */
+static int h_cluster_leave(const ca_http_request *req, ca_http_response *resp, void *ud) {
+    cagent_ctx *ctx = (cagent_ctx *)ud;
+    if (!authz_ok(ctx, req, resp)) return 0;
+    const char *id = req->path + strlen("/v1/cluster/nodes/");
+    if (!*id) {
+        resp->status = 400;
+        ca_http_resp_json(resp, "{\"error\":\"need node id in path\"}");
+        return 0;
+    }
+    if (ca_cluster_remove(ctx->cluster, id) != 0) {
+        resp->status = 404;
+        ca_http_resp_json(resp, "{\"error\":\"unknown node\"}");
+        return 0;
+    }
+    ca_http_resp_json(resp, "{\"ok\":true}");
     return 0;
 }
 
@@ -1124,7 +1921,14 @@ static int h_local_start(const ca_http_request *req, ca_http_response *resp, voi
     cJSON *root = b ? cJSON_Parse(b) : NULL;
     free(b);
     const char *engine = root ? json_str(root, "engine") : NULL;
-    if (!engine || !*engine) engine = "ollama";
+    /* engine borrows into the cJSON tree — copy before freeing it */
+    char engine_buf[64];
+    if (engine && *engine) {
+        snprintf(engine_buf, sizeof(engine_buf), "%s", engine);
+        engine = engine_buf;
+    } else {
+        engine = "ollama";
+    }
     if (root) cJSON_Delete(root);
 
     if (strcmp(engine, "ollama") == 0) {
@@ -1494,6 +2298,168 @@ static int h_im_search(const ca_http_request *req, ca_http_response *resp, void 
     return 0;
 }
 
+/* ---------- Context layer: unified KV/Task/Agent state (/v1/state) ---------- */
+
+/* GET /v1/state — the whole store */
+static int h_state_all(const ca_http_request *req, ca_http_response *resp, void *ud) {
+    cagent_ctx *ctx = (cagent_ctx *)ud;
+    if (!authz_ok(ctx, req, resp)) return 0;
+    char *s = ctx->state ? ca_state_store_json(ctx->state) : ca_strdup("{}");
+    ca_http_resp_appendf(resp, "{\"ok\":true,\"count\":%d,\"state\":",
+                         ctx->state ? ca_state_store_count(ctx->state) : 0);
+    ca_http_resp_append(resp, s ? s : "{}");
+    ca_http_resp_append(resp, "}");
+    free(s);
+    return 0;
+}
+
+/* GET /v1/state/<ns>[/<key>] — one namespace or one entry (borrowed value) */
+static int h_state_get(const ca_http_request *req, ca_http_response *resp, void *ud) {
+    cagent_ctx *ctx = (cagent_ctx *)ud;
+    if (!authz_ok(ctx, req, resp)) return 0;
+    if (!ctx->state) { resp->status = 500; ca_http_resp_json(resp, "{\"error\":\"state store disabled\"}"); return 0; }
+    const char *rest = req->path + strlen("/v1/state/");
+    char ns[128], key[256];
+    snprintf(ns, sizeof(ns), "%s", rest);
+    char *slash = strchr(ns, '/');
+    if (slash) { *slash = '\0'; snprintf(key, sizeof(key), "%s", slash + 1); }
+    else key[0] = '\0';
+    if (!*ns) { resp->status = 404; ca_http_resp_json(resp, "{\"error\":\"missing namespace\"}"); return 0; }
+    if (*key) {
+        const char *v = ca_state_store_get(ctx->state, ns, key);
+        if (!v) { resp->status = 404; ca_http_resp_json(resp, "{\"error\":\"not found\"}"); return 0; }
+        char *esc = cJSON_PrintUnformatted(cJSON_CreateString(v));
+        ca_http_resp_appendf(resp, "{\"ok\":true,\"ns\":\"%s\",\"key\":\"%s\",\"value\":%s}",
+                             ns, key, esc ? esc : "\"\"");
+        free(esc);
+        return 0;
+    }
+    /* whole namespace */
+    cJSON *o = cJSON_CreateObject();
+    cJSON *sub = cJSON_CreateObject();
+    char *all = ca_state_store_json(ctx->state);
+    cJSON *root = all ? cJSON_Parse(all) : NULL;
+    free(all);
+    cJSON *nsobj = root ? cJSON_GetObjectItemCaseSensitive(root, ns) : NULL;
+    if (nsobj && cJSON_IsObject(nsobj)) {
+        cJSON *it;
+        cJSON_ArrayForEach(it, nsobj) {
+            if (it->string && cJSON_IsString(it))
+                cJSON_AddStringToObject(sub, it->string, it->valuestring);
+        }
+    }
+    if (root) cJSON_Delete(root);
+    cJSON_AddItemToObject(o, ns, sub);
+    char *s = cJSON_PrintUnformatted(o);
+    cJSON_Delete(o);
+    ca_http_resp_json(resp, s ? s : "{}");
+    free(s);
+    return 0;
+}
+
+/* PUT /v1/state/<ns>/<key> — body is the raw value, or {"value":"..."} */
+static int h_state_put(const ca_http_request *req, ca_http_response *resp, void *ud) {
+    cagent_ctx *ctx = (cagent_ctx *)ud;
+    if (!authz_ok(ctx, req, resp)) return 0;
+    if (!ctx->state) { resp->status = 500; ca_http_resp_json(resp, "{\"error\":\"state store disabled\"}"); return 0; }
+    const char *rest = req->path + strlen("/v1/state/");
+    char ns[128], key[256];
+    snprintf(ns, sizeof(ns), "%s", rest);
+    char *slash = strchr(ns, '/');
+    if (!slash) { resp->status = 400; ca_http_resp_json(resp, "{\"error\":\"need <ns>/<key>\"}"); return 0; }
+    *slash = '\0';
+    snprintf(key, sizeof(key), "%s", slash + 1);
+    if (!*ns || !*key) { resp->status = 400; ca_http_resp_json(resp, "{\"error\":\"need <ns>/<key>\"}"); return 0; }
+    char *b = body_str(req);
+    cJSON *root = b ? cJSON_Parse(b) : NULL; /* JSON body {"value":...}? */
+    const char *val = (root && cJSON_IsObject(root)) ? json_str(root, "value") : NULL;
+    if (!val) val = b ? b : "";
+    ca_state_store_set(ctx->state, ns, key, val);
+    if (root) cJSON_Delete(root);
+    free(b);
+    ca_http_resp_json(resp, "{\"ok\":true}");
+    return 0;
+}
+
+/* DELETE /v1/state/<ns>/<key> */
+static int h_state_del(const ca_http_request *req, ca_http_response *resp, void *ud) {
+    cagent_ctx *ctx = (cagent_ctx *)ud;
+    if (!authz_ok(ctx, req, resp)) return 0;
+    if (!ctx->state) { resp->status = 500; ca_http_resp_json(resp, "{\"error\":\"state store disabled\"}"); return 0; }
+    const char *rest = req->path + strlen("/v1/state/");
+    char ns[128], key[256];
+    snprintf(ns, sizeof(ns), "%s", rest);
+    char *slash = strchr(ns, '/');
+    if (!slash) { resp->status = 400; ca_http_resp_json(resp, "{\"error\":\"need <ns>/<key>\"}"); return 0; }
+    *slash = '\0';
+    snprintf(key, sizeof(key), "%s", slash + 1);
+    int removed = *ns && *key && ca_state_store_get(ctx->state, ns, key) != NULL;
+    ca_state_store_remove(ctx->state, ns, key);
+    ca_http_resp_appendf(resp, "{\"ok\":true,\"removed\":%s}",
+                         removed ? "true" : "false");
+    return 0;
+}
+
+/* POST /v1/state/snapshot — full runtime state export to <state_root>/snapshot.json */
+static int h_state_snapshot(const ca_http_request *req, ca_http_response *resp, void *ud) {
+    cagent_ctx *ctx = (cagent_ctx *)ud;
+    if (!authz_ok(ctx, req, resp)) return 0;
+    char *b = body_str(req);
+    cJSON *root = b ? cJSON_Parse(b) : NULL;
+    free(b);
+    const char *p = (root && cJSON_IsObject(root)) ? json_str(root, "path") : NULL;
+    char path[600];
+    if (p && *p)
+        snprintf(path, sizeof(path), "%s", p);
+    else
+        ca_path_join(path, sizeof(path), ctx->state_root, "snapshot.json");
+    if (root) cJSON_Delete(root);
+    if (ca_cagent_state_export(ctx, path) != 0) {
+        resp->status = 500;
+        ca_http_resp_json(resp, "{\"error\":\"export failed\"}");
+        return 0;
+    }
+    ca_http_resp_appendf(resp, "{\"ok\":true,\"path\":\"%s\"}", path);
+    return 0;
+}
+
+/* POST /v1/state/restore — import <state_root>/snapshot.json back */
+static int h_state_restore(const ca_http_request *req, ca_http_response *resp, void *ud) {
+    cagent_ctx *ctx = (cagent_ctx *)ud;
+    if (!authz_ok(ctx, req, resp)) return 0;
+    char *b = body_str(req);
+    cJSON *root = b ? cJSON_Parse(b) : NULL;
+    free(b);
+    const char *p = (root && cJSON_IsObject(root)) ? json_str(root, "path") : NULL;
+    char path[600];
+    if (p && *p)
+        snprintf(path, sizeof(path), "%s", p);
+    else
+        ca_path_join(path, sizeof(path), ctx->state_root, "snapshot.json");
+    if (root) cJSON_Delete(root);
+    if (ca_cagent_state_import(ctx, path) != 0) {
+        resp->status = 500;
+        ca_http_resp_json(resp, "{\"error\":\"restore failed\"}");
+        return 0;
+    }
+    ca_http_resp_json(resp, "{\"ok\":true}");
+    return 0;
+}
+
+/* GET /v1/memory/service — Memory Service interface: backend + per-type stats */
+static int h_memory_service(const ca_http_request *req, ca_http_response *resp, void *ud) {
+    cagent_ctx *ctx = (cagent_ctx *)ud;
+    if (!authz_ok(ctx, req, resp)) return 0;
+    char *s = NULL;
+    if (ctx->memsvc) ca_memory_service_stats(ctx->memsvc, &s);
+    ca_http_resp_appendf(resp, "{\"ok\":true,\"backend\":\"%s\",\"types\":",
+                         ctx->memsvc ? ca_memory_service_backend(ctx->memsvc) : "none");
+    ca_http_resp_append(resp, s ? s : "[]");
+    ca_http_resp_append(resp, "}");
+    free(s);
+    return 0;
+}
+
 int cagent_api_attach(cagent_ctx *ctx) {
     if (!ctx || ctx->http_port == 0) return 0;
     if (!ctx->http) {
@@ -1517,13 +2483,38 @@ int cagent_api_attach(cagent_ctx *ctx) {
     ca_http_server_route(ctx->http, "POST", "/v1/local/start", h_local_start, ctx);
     ca_http_server_route(ctx->http, "GET", "/v1/routes", h_routes, ctx);
     ca_http_server_route(ctx->http, "POST", "/v1/routes", h_route_add, ctx);
+    ca_http_server_route(ctx->http, "POST", "/v1/routes/policy", h_route_policy, ctx);
     ca_http_server_route(ctx->http, "DELETE", "/v1/routes/", h_route_delete, ctx);
     ca_http_server_route(ctx->http, "GET", "/v1/config/llm", h_config_llm_get, ctx);
     ca_http_server_route(ctx->http, "POST", "/v1/config/llm", h_config_llm, ctx);
     ca_http_server_route(ctx->http, "POST", "/v1/config/llm/test", h_config_llm_test, ctx);
+    ca_http_server_route(ctx->http, "GET", "/v1/config/snapshot", h_config_snapshot_get, ctx);
+    ca_http_server_route(ctx->http, "POST", "/v1/config/snapshot", h_config_snapshot, ctx);
+    ca_http_server_route(ctx->http, "POST", "/v1/chat", h_chat, ctx);
+    ca_http_server_route(ctx->http, "GET", "/v1/chat/history", h_chat_history, ctx);
+    ca_http_server_route(ctx->http, "GET", "/v1/policy/rules", h_policy_rules, ctx);
+    ca_http_server_route(ctx->http, "POST", "/v1/policy/rules", h_policy_add, ctx);
+    ca_http_server_route(ctx->http, "DELETE", "/v1/policy/rules/", h_policy_delete, ctx);
+    ca_http_server_route(ctx->http, "POST", "/v1/orchestrate", h_orchestrate, ctx);
+    ca_http_server_route(ctx->http, "POST", "/v1/flows", h_flow_run, ctx);
+    ca_http_server_route(ctx->http, "POST", "/v1/flows/decompose", h_flow_decompose, ctx);
+    ca_http_server_route(ctx->http, "GET", "/v1/hooks", h_hooks, ctx);
+    ca_http_server_route(ctx->http, "POST", "/v1/hooks", h_hook_add, ctx);
+    ca_http_server_route(ctx->http, "DELETE", "/v1/hooks/", h_hook_delete, ctx);
+    ca_http_server_route(ctx->http, "POST", "/v1/upload", h_upload, ctx);
+    ca_http_server_route(ctx->http, "GET", "/v1/uploads", h_uploads, ctx);
+    ca_http_server_route(ctx->http, "DELETE", "/v1/uploads/", h_upload_delete, ctx);
     ca_http_server_route(ctx->http, "GET", "/v1/usage", h_usage, ctx);
+    ca_http_server_route(ctx->http, "GET", "/v1/state", h_state_all, ctx);
+    ca_http_server_route(ctx->http, "GET", "/v1/state/", h_state_get, ctx);
+    ca_http_server_route(ctx->http, "PUT", "/v1/state/", h_state_put, ctx);
+    ca_http_server_route(ctx->http, "DELETE", "/v1/state/", h_state_del, ctx);
+    ca_http_server_route(ctx->http, "POST", "/v1/state/snapshot", h_state_snapshot, ctx);
+    ca_http_server_route(ctx->http, "POST", "/v1/state/restore", h_state_restore, ctx);
+    ca_http_server_route(ctx->http, "GET", "/v1/memory/service", h_memory_service, ctx);
     ca_http_server_route(ctx->http, "GET", "/v1/plugins", h_plugins, ctx);
     ca_http_server_route(ctx->http, "POST", "/v1/plugins/generate", h_plugin_generate, ctx);
+    ca_http_server_route(ctx->http, "POST", "/v1/plugins/native/load", h_plugin_native_load, ctx);
     ca_http_server_route(ctx->http, "GET", "/v1/plugins/market", h_plugins_market, ctx);
     ca_http_server_route(ctx->http, "POST", "/v1/plugins/publish", h_plugins_publish, ctx);
     ca_http_server_route(ctx->http, "DELETE", "/v1/plugins/market/", h_plugin_market_delete, ctx);
@@ -1531,11 +2522,16 @@ int cagent_api_attach(cagent_ctx *ctx) {
     ca_http_server_route(ctx->http, "POST", "/v1/skills/run", h_skill_run, ctx);
     ca_http_server_route(ctx->http, "GET", "/v1/skills/market", h_skills_market, ctx);
     ca_http_server_route(ctx->http, "POST", "/v1/skills/publish", h_skills_publish, ctx);
+    ca_http_server_route(ctx->http, "POST", "/v1/tools/gh-install", h_gh_install, NULL);
     ca_http_server_route(ctx->http, "DELETE", "/v1/skills/", h_skill_delete, ctx);
     ca_http_server_route(ctx->http, "GET", "/v1/mcp", h_mcp, ctx);
     ca_http_server_route(ctx->http, "POST", "/v1/mcp", h_mcp_add, ctx);
+    ca_http_server_route(ctx->http, "POST", "/v1/mcp/sync", h_mcp_sync, ctx);
     ca_http_server_route(ctx->http, "DELETE", "/v1/mcp/", h_mcp_delete, ctx);
     ca_http_server_route(ctx->http, "GET", "/v1/cluster", h_cluster, ctx);
+    ca_http_server_route(ctx->http, "POST", "/v1/cluster/join", h_cluster_join, ctx);
+    ca_http_server_route(ctx->http, "POST", "/v1/cluster/heartbeat", h_cluster_heartbeat, ctx);
+    ca_http_server_route(ctx->http, "DELETE", "/v1/cluster/nodes/", h_cluster_leave, ctx);
     ca_http_server_route(ctx->http, "GET", "/v1/im/sessions", h_im_sessions, ctx);
     ca_http_server_route(ctx->http, "POST", "/v1/im/sessions", h_im_session_create, ctx);
     ca_http_server_route(ctx->http, "GET", "/v1/im/search", h_im_search, ctx);

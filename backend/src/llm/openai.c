@@ -52,14 +52,23 @@ static void set_error(ca_llm_response *resp, const char *msg) {
     resp->error = ca_strdup(msg);
 }
 
-static char *normalize_base(const char *base) {
+static char *normalize_base(const char *base, const char **path_out) {
     /* The fixed OPENAI_PATH already starts with /v1; if the user supplied a
      * base_url that already ends in /v1 (e.g. https://api.deepseek.com/v1),
-     * strip it to avoid a doubled /v1/v1/... path. */
+     * strip it to avoid a doubled /v1/v1/... path. A base ending in any other
+     * /vN (e.g. Volcengine Ark Coding Plan "https://ark.../api/coding/v3")
+     * keeps its own version, so only "/chat/completions" is appended. */
+    *path_out = OPENAI_PATH;
     size_t n = base ? strlen(base) : 0;
     if (n >= 3 && strcmp(base + n - 3, "/v1") == 0) {
         char *s = ca_strdup(base);
         s[n - 3] = '\0';
+        return s;
+    }
+    if (n >= 3 && base[n - 3] == '/' && base[n - 2] == 'v' &&
+        base[n - 1] >= '0' && base[n - 1] <= '9') {
+        char *s = ca_strdup(base);
+        *path_out = "/chat/completions";
         return s;
     }
     return ca_strdup(base);
@@ -69,7 +78,8 @@ static int openai_chat(ca_llm *llm, const ca_llm_request *req, ca_llm_response *
     char *body = build_request_body(req, llm->model, 0);
     if (!body) { set_error(resp, "request build failed"); return -1; }
 
-    char *base = normalize_base(impl_of(llm)->base_url);
+    const char *path;
+    char *base = normalize_base(impl_of(llm)->base_url, &path);
     ca_strmap *hdrs = NULL;
     if (llm->api_key) {
         hdrs = (ca_strmap *)calloc(1, sizeof(ca_strmap));
@@ -78,7 +88,7 @@ static int openai_chat(ca_llm *llm, const ca_llm_request *req, ca_llm_response *
         ca_strmap_set(hdrs, "Authorization", auth);
     }
 
-    ca_http_response *r = ca_http_post(base, OPENAI_PATH, body, "application/json", hdrs, 60000);
+    ca_http_response *r = ca_http_post(base, path, body, "application/json", hdrs, 60000);
     free(body);
     free(base);
     if (hdrs) { ca_strmap_free(hdrs); free(hdrs); }
@@ -117,7 +127,8 @@ static int openai_stream(ca_llm *llm, const ca_llm_request *req, ca_llm_stream_c
     char *body = build_request_body(req, llm->model, 1);
     if (!body) return -1;
 
-    char *base = normalize_base(impl_of(llm)->base_url);
+    const char *path;
+    char *base = normalize_base(impl_of(llm)->base_url, &path);
     ca_strmap *hdrs = NULL;
     if (llm->api_key) {
         hdrs = (ca_strmap *)calloc(1, sizeof(ca_strmap));
@@ -126,7 +137,7 @@ static int openai_stream(ca_llm *llm, const ca_llm_request *req, ca_llm_stream_c
         ca_strmap_set(hdrs, "Authorization", auth);
     }
 
-    ca_sse *s = ca_sse_start(base, OPENAI_PATH, body, "application/json", hdrs, 60000);
+    ca_sse *s = ca_sse_start(base, path, body, "application/json", hdrs, 60000);
     free(body);
     free(base);
     if (hdrs) { ca_strmap_free(hdrs); free(hdrs); }
@@ -140,6 +151,7 @@ static int openai_stream(ca_llm *llm, const ca_llm_request *req, ca_llm_stream_c
     char line[16384];
     int rc = 0;
     while (ca_sse_next(s, line, sizeof(line)) == 1) {
+        if (llm->cancel) { rc = -1; break; }
         cJSON *root = cJSON_Parse(line);
         if (!root) continue;
         cJSON *choices = cJSON_GetObjectItemCaseSensitive(root, "choices");

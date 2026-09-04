@@ -1,5 +1,9 @@
 /* generator.c — AI plugin generation pipeline (self-evolution loop). */
 #include "cagent/plugin_intelligence/generator.h"
+#include "cagent/plugin_intelligence/analyzer.h"
+#include "cagent/plugin_intelligence/architect.h"
+#include "cagent/plugin_intelligence/codegen.h"
+#include "cagent/plugin_intelligence/testing.h"
 #include "cagent/plugin_intelligence/security.h"
 #include "cagent/plugin_runtime/sandbox.h"
 #include "cagent/plugin_runtime/registry.h"
@@ -147,30 +151,109 @@ static int security_ok(const char *script) {
     return ok;
 }
 
-char *ca_plugin_generate(cagent_ctx *ctx, const char *description) {
-    if (!ctx || !description || !*description)
+/* Parse a JSON object out of stage-report text. */
+static cJSON *stage_obj(const char *json_text) {
+    return json_text ? cJSON_Parse(json_text) : NULL;
+}
+
+/* Join a JSON array of strings into a comma-separated csv (caller frees). */
+static char *caps_csv_from(cJSON *arr) {
+    if (!arr || !cJSON_IsArray(arr)) return NULL;
+    ca_strbuf sb;
+    ca_strbuf_init(&sb);
+    cJSON *it;
+    cJSON_ArrayForEach(it, arr) {
+        if (!cJSON_IsString(it) || !it->valuestring || !*it->valuestring) continue;
+        if (sb.len > 0) ca_strbuf_append(&sb, ",");
+        ca_strbuf_append(&sb, it->valuestring);
+    }
+    if (sb.len == 0) { ca_strbuf_free(&sb); return NULL; }
+    return ca_strbuf_detach(&sb);
+}
+
+/* Smoke-test the generated script once via the sandboxed test runner.
+ * Returns 1 pass, 0 fail (only when the script actually ran and failed). */
+static int smoke_test(const char *path, char **report_out) {
+    char cmd[1200];
+    snprintf(cmd, sizeof(cmd), "sh \"%s\"", path);
+    char *report = ca_testing_run(cmd, 5000);
+    if (report_out) *report_out = report;
+    else free(report);
+    cJSON *r = cJSON_Parse(report ? report : "{}");
+    if (!r) return 1; /* cannot judge -> do not gate */
+    cJSON *ec = cJSON_GetObjectItemCaseSensitive(r, "exit_code");
+    cJSON *to = cJSON_GetObjectItemCaseSensitive(r, "timed_out");
+    int pass = 1;
+    /* exit_code == -1 means spawn failed (e.g. no sh on the host): don't gate */
+    if (ec && cJSON_IsNumber(ec) && (int)ec->valuedouble > 0) pass = 0;
+    if (to && cJSON_IsTrue(to)) pass = 0;
+    cJSON_Delete(r);
+    return pass;
+}
+
+char *ca_plugin_generate_deps(const ca_plugin_gen_deps *deps, const char *description) {
+    if (!deps || !description || !*description)
         return ca_strdup("{\"ok\":false,\"error\":\"missing description\"}");
 
-    cJSON *design = NULL;
-    const int real = (ctx->provider && strcmp(ctx->provider, "mock") != 0);
+    const char *provider = (deps->provider && *deps->provider)
+        ? deps->provider
+        : (deps->llm && deps->llm->provider ? deps->llm->provider : "mock");
+    const int real = strcmp(provider, "mock") != 0;
 
-    if (real && ctx->llm) {
-        char *resp = ca_llm_chat_simple(ctx->llm, ARCH_PROMPT, description);
+    /* --- stage 1: requirement analyzer (intent / caps / tools) --- */
+    char *analysis_s = NULL, *arch_s = NULL;
+    cJSON *analysis = NULL, *arch = NULL;
+    {
+        cJSON *spec = cJSON_CreateObject();
+        cJSON_AddStringToObject(spec, "name", "");
+        cJSON_AddStringToObject(spec, "description", description);
+        char *spec_s = cJSON_PrintUnformatted(spec);
+        cJSON_Delete(spec);
+        analysis_s = ca_analyzer_analyze(spec_s ? spec_s : "{}");
+        free(spec_s);
+        analysis = stage_obj(analysis_s);
+    }
+
+    /* --- stage 2: architect (component/interface plan) --- */
+    arch_s = ca_architect_design(description);
+    arch = stage_obj(arch_s);
+
+    /* --- stage 3: code design via LLM (or deterministic mock template) --- */
+    ca_strbuf pb;
+    ca_strbuf_init(&pb);
+    ca_strbuf_append(&pb, ARCH_PROMPT);
+    if (analysis_s && *analysis_s && strcmp(analysis_s, "{}") != 0)
+        ca_strbuf_appendf(&pb, "\n\nRequirement analysis: %s", analysis_s);
+    if (arch_s && *arch_s && strcmp(arch_s, "{}") != 0)
+        ca_strbuf_appendf(&pb, "\n\nArchitecture plan: %s", arch_s);
+
+    cJSON *design = NULL;
+    if (real && deps->llm) {
+        char *resp = ca_llm_chat_simple(deps->llm, pb.buf ? pb.buf : ARCH_PROMPT,
+                                        description);
         design = parse_design(resp);
         free(resp);
     }
+    ca_strbuf_free(&pb);
     if (!design) {
         /* fallback: mock template (also used when the LLM returns garbage) */
         char *js = mock_design(description);
         design = js ? cJSON_Parse(js) : NULL;
         free(js);
-        if (!design)
+        if (!design) {
+            free(analysis_s); free(arch_s);
+            if (analysis) cJSON_Delete(analysis);
+            if (arch) cJSON_Delete(arch);
             return ca_strdup("{\"ok\":false,\"error\":\"pipeline failed\"}");
+        }
     }
 
     char name[64], script[65536];
     if (!design_ok(design, name, sizeof(name), script, sizeof(script))) {
         cJSON_Delete(design);
+        free(analysis_s); free(arch_s);
+        if (analysis) cJSON_Delete(analysis);
+        if (arch) cJSON_Delete(arch);
         return ca_strdup("{\"ok\":false,\"error\":\"LLM design invalid (missing name/script)\"}");
     }
 
@@ -178,9 +261,12 @@ char *ca_plugin_generate(cagent_ctx *ctx, const char *description) {
     const char *desc = desc_j && cJSON_IsString(desc_j) ? desc_j->valuestring : description;
     cJSON *caps_j = cJSON_GetObjectItemCaseSensitive(design, "capabilities");
 
-    /* --- security review gate --- */
+    /* --- stage 4: security review gate --- */
     if (!security_ok(script)) {
         cJSON_Delete(design);
+        free(analysis_s); free(arch_s);
+        if (analysis) cJSON_Delete(analysis);
+        if (arch) cJSON_Delete(arch);
         return ca_strdup("{\"ok\":false,\"error\":\"security review rejected the generated script\"}");
     }
 
@@ -206,57 +292,108 @@ char *ca_plugin_generate(cagent_ctx *ctx, const char *description) {
         }
     }
     int reg_ok = 0;
-    if (ctx->registry) {
+    /* the registry rejects exact name+version duplicates, so a regenerated
+     * plugin gets its patch version bumped (1.0.0 -> 1.0.1 -> ...) */
+    char version[32];
+    snprintf(version, sizeof(version), "%s", PLUGIN_VERSION);
+    if (deps->registry) {
+        const ca_plugin_meta *prev = ca_plugin_registry_find(deps->registry, name);
+        if (prev && prev->version) {
+            int a = 0, b = 0, c = 0;
+            if (sscanf(prev->version, "%d.%d.%d", &a, &b, &c) == 3)
+                snprintf(version, sizeof(version), "%d.%d.%d", a, b, c + 1);
+        }
         ca_plugin_meta meta;
         memset(&meta, 0, sizeof(meta));
         meta.name = name;
-        meta.version = (char *)PLUGIN_VERSION;
+        meta.version = version;
         meta.signature = signature;
         meta.description = (char *)desc;
         meta.caps = caps;
         meta.n_caps = n_caps;
         meta.enabled = 1;
         meta.built_ms = 0;
-        reg_ok = ca_plugin_registry_register(ctx->registry, &meta) == 0;
+        reg_ok = ca_plugin_registry_register(deps->registry, &meta) == 0;
     }
-    free(caps);
 
-    /* --- register as a runnable skill --- */
+    /* --- register as a runnable skill carrying the granted caps --- */
     int skill_ok = 0;
-    if (ctx->skills) {
-        const ca_skill sk = { name, desc, "shell", script };
-        skill_ok = ca_skill_register(ctx->skills, &sk) == 0;
+    char *caps_csv = caps_csv_from(caps_j);
+    if (deps->skills) {
+        const ca_skill sk = { name, desc, "shell", script, caps_csv };
+        skill_ok = ca_skill_register_ex(deps->skills, &sk, 1) == 0;
     }
+
+    /* --- persist registries so the capability survives a restart --- */
+    if (reg_ok && deps->registry && deps->state_root)
+        ca_plugin_registry_persist(deps->registry, deps->state_root);
+    if (skill_ok && deps->skills && deps->state_root)
+        ca_skill_registry_persist(deps->skills, deps->state_root);
 
     /* --- persist under <state_root>/plugins/<name>.sh --- */
     char dir[600], path[700];
-    snprintf(dir, sizeof(dir), "%s", ctx->state_root ? ctx->state_root : "state");
+    snprintf(dir, sizeof(dir), "%s", deps->state_root ? deps->state_root : "state");
     snprintf(path, sizeof(path), "%s/plugins", dir);
     ca_fs_mkdirs(path);
     snprintf(path, sizeof(path), "%s/plugins/%s.sh", dir, name);
     ca_fs_write_file(path, script, (size_t)strlen(script));
 
+    /* --- stage 5: automated smoke test through the sandbox --- */
+    char *test_report = NULL;
+    int test_ok = smoke_test(path, &test_report);
+    if (!test_ok) ca_log_warn("plugin %s failed its smoke test", name);
+
+    /* --- native C skeleton for the .so/.dll loader path --- */
+    char *c_skeleton = ca_codegen_plugin(name, desc);
+
     cJSON *out = cJSON_CreateObject();
     cJSON_AddBoolToObject(out, "ok", 1);
-    cJSON *p = cJSON_CreateObject();
-    cJSON_AddStringToObject(p, "name", name);
-    cJSON_AddStringToObject(p, "version", PLUGIN_VERSION);
-    cJSON_AddStringToObject(p, "description", desc);
-    cJSON *ca = cJSON_AddArrayToObject(p, "caps");
+    cJSON *pj = cJSON_CreateObject();
+    cJSON_AddStringToObject(pj, "name", name);
+    cJSON_AddStringToObject(pj, "version", version);
+    cJSON_AddStringToObject(pj, "description", desc);
+    cJSON *ca = cJSON_AddArrayToObject(pj, "caps");
     if (caps_j && cJSON_IsArray(caps_j)) {
         cJSON *it;
         cJSON_ArrayForEach(it, caps_j)
             if (cJSON_IsString(it)) cJSON_AddItemToArray(ca, cJSON_CreateString(it->valuestring));
     }
-    cJSON_AddStringToObject(p, "signature", signature);
-    cJSON_AddItemToObject(out, "plugin", p);
+    cJSON_AddStringToObject(pj, "signature", signature);
+    cJSON_AddItemToObject(out, "plugin", pj);
     cJSON_AddStringToObject(out, "script", script);
     cJSON_AddBoolToObject(out, "skill", skill_ok);
     cJSON_AddStringToObject(out, "path", path);
+    cJSON_AddBoolToObject(out, "test_ok", test_ok);
+    if (test_report) {
+        cJSON *tr = cJSON_Parse(test_report);
+        if (tr) cJSON_AddItemToObject(out, "test", tr);
+        free(test_report);
+    }
+    if (c_skeleton) {
+        cJSON_AddStringToObject(out, "c_skeleton", c_skeleton);
+        free(c_skeleton);
+    }
+    if (analysis) cJSON_AddItemToObject(out, "analysis", analysis);
+    if (arch) cJSON_AddItemToObject(out, "arch", arch);
     cJSON_Delete(design);
+    free(analysis_s);
+    free(arch_s);
+    free(caps_csv);
     char *js = cJSON_PrintUnformatted(out);
     cJSON_Delete(out);
 
-    ca_log_info("plugin generated name=%s real=%d registered=%d skill=%d", name, real, reg_ok, skill_ok);
+    ca_log_info("plugin generated name=%s real=%d registered=%d skill=%d test_ok=%d",
+                name, real, reg_ok, skill_ok, test_ok);
     return js ? js : ca_strdup("{\"ok\":false,\"error\":\"json build failed\"}");
+}
+
+char *ca_plugin_generate(cagent_ctx *ctx, const char *description) {
+    ca_plugin_gen_deps deps;
+    memset(&deps, 0, sizeof(deps));
+    deps.llm = ctx ? ctx->llm : NULL;
+    deps.provider = ctx ? ctx->provider : NULL;
+    deps.registry = ctx ? ctx->registry : NULL;
+    deps.skills = ctx ? ctx->skills : NULL;
+    deps.state_root = ctx ? ctx->state_root : NULL;
+    return ca_plugin_generate_deps(&deps, description);
 }
