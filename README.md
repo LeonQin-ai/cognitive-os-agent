@@ -135,7 +135,7 @@ The web console (React-free vanilla JS, ~100 KB) is **compiled into the binary**
 ## Quick Start
 
 ```bash
-git clone https://github.com/<you>/c-agent.git
+git clone https://github.com/LeonQin-ai/cognitive-os-agent.git
 cd c-agent/backend
 
 # Windows (MSYS2 / Git Bash) — bundled Zig toolchain, no system compiler needed
