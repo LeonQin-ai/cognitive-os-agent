@@ -1,17 +1,17 @@
 /* bench_real.c — real-LLM evaluation across mainstream agent benchmark families
- * that map onto c-agent's current tool set (file_read/file_write/shell/git/mcp)
+ * that map onto cognitive-os-agent's current tool set (file_read/file_write/shell/git/mcp)
  * and single-shot plan→act reasoning loop:
  *
  *   toolbench   ToolBench (ToolEval)-style: tool retrieval + parameter construction
  *   agentbench  AgentBench OS-CLI-style: OS command execution with file side effects
  *
  * Modes:
- *   --real  (default)  drive a live LLM via CA_LLM_PROVIDER / CA_LLM_BASE_URL /
- *                      CA_LLM_MODEL / CA_LLM_API_KEY
+ *   --real  (default)  drive a live LLM via COA_LLM_PROVIDER / COA_LLM_BASE_URL /
+ *                      COA_LLM_MODEL / COA_LLM_API_KEY
  *   --mock  offline deterministic planner (sanity check, no network)
  *
  * NOTE on the other mainstream benchmarks (honest scope boundary):
- *   SWE-bench  needs a read→fix→test *iterative* act-observe loop; c-agent's
+ *   SWE-bench  needs a read→fix→test *iterative* act-observe loop; cognitive-os-agent's
  *              reasoning is single-shot (one plan), so real issue-fixing is out
  *              of scope for now.
  *   GAIA       needs multimodal (image/audio) + web browsing + document parsing.
@@ -22,11 +22,11 @@
  * Reports per-family accuracy, end-to-end success, side-effect correctness,
  * per-task latency, and a one-line JSON summary.
  */
-#include "cagent/cagent.h"
-#include "cagent/llm/llm.h"
-#include "cagent/os/os_fs.h"
-#include "cagent/os/os_time.h"
-#include "cagent/infra/util.h"
+#include "cognitive-os-agent/cognitive-os-agent.h"
+#include "cognitive-os-agent/llm/llm.h"
+#include "cognitive-os-agent/os/os_fs.h"
+#include "cognitive-os-agent/os/os_time.h"
+#include "cognitive-os-agent/infra/util.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -123,44 +123,44 @@ int main(int argc, char **argv) {
         else { fprintf(stderr, "usage: %s [--mock|--real]\n", argv[0]); return 2; }
     }
 
-    cagent_config cfg;
+    coa_config cfg;
     memset(&cfg, 0, sizeof(cfg));
     cfg.state_root = "state-bench";
     cfg.workspace  = "state-bench/ws";
     cfg.http_port  = 0;
     if (real) {
-        cfg.provider = getenv("CA_LLM_PROVIDER");
-        cfg.base_url = getenv("CA_LLM_BASE_URL");
-        cfg.api_key  = getenv("CA_LLM_API_KEY");
-        cfg.model    = getenv("CA_LLM_MODEL");
+        cfg.provider = getenv("COA_LLM_PROVIDER");
+        cfg.base_url = getenv("COA_LLM_BASE_URL");
+        cfg.api_key  = getenv("COA_LLM_API_KEY");
+        cfg.model    = getenv("COA_LLM_MODEL");
         if (!cfg.provider || !*cfg.provider) cfg.provider = "openai";
     } else {
         cfg.provider = "mock";
     }
 
-    cagent_ctx ctx;
-    if (cagent_init(&ctx, &cfg) != 0) {
-        fprintf(stderr, "bench_real: cagent_init failed (provider=%s)\n",
+    coa_ctx ctx;
+    if (coa_init(&ctx, &cfg) != 0) {
+        fprintf(stderr, "bench_real: coa_init failed (provider=%s)\n",
                 cfg.provider ? cfg.provider : "?");
         return 1;
     }
-    printf("c-agent real-LLM benchmark [%s] provider=%s\n\n",
+    printf("cognitive-os-agent real-LLM benchmark [%s] provider=%s\n\n",
            real ? "REAL" : "MOCK", ctx.provider ? ctx.provider : "?");
 
     /* deterministic start state */
-    ca_fs_mkdirs("state-bench/ws");
-    ca_fs_mkdirs("state-bench/ws/test");
-    ca_fs_mkdirs("state-bench/ws/out");
-    ca_fs_write_file("state-bench/ws/test/note.txt", "hello\n", 6);
-    ca_fs_write_file("state-bench/ws/config.json", "{\"name\":\"bench\"}\n", 17);
-    ca_fs_remove("state-bench/ws/out/result.txt");
-    ca_fs_remove("state-bench/ws/out/echo.txt");
-    ca_fs_remove("state-bench/ws/out/note_copy.txt");
-    ca_fs_remove("state-bench/ws/out/listing.txt");
+    coa_fs_mkdirs("state-bench/ws");
+    coa_fs_mkdirs("state-bench/ws/test");
+    coa_fs_mkdirs("state-bench/ws/out");
+    coa_fs_write_file("state-bench/ws/test/note.txt", "hello\n", 6);
+    coa_fs_write_file("state-bench/ws/config.json", "{\"name\":\"bench\"}\n", 17);
+    coa_fs_remove("state-bench/ws/out/result.txt");
+    coa_fs_remove("state-bench/ws/out/echo.txt");
+    coa_fs_remove("state-bench/ws/out/note_copy.txt");
+    coa_fs_remove("state-bench/ws/out/listing.txt");
 
     int fam_sel[N_TASKS], fam_ok[N_TASKS], fam_side[N_TASKS];
     int64_t lat[N_TASKS];
-    int64_t t0 = ca_time_now_ms();
+    int64_t t0 = coa_time_now_ms();
 
     for (int i = 0; i < N_TASKS; i++) {
         const task_t *t = (i < N_TOOLBENCH) ? &TOOLBENCH[i] : &AGENTBENCH[i - N_TOOLBENCH];
@@ -168,7 +168,7 @@ int main(int argc, char **argv) {
         /* 1) planner probe: tool selection + parameter construction */
         int sel = 1;
         if (t->expect_tool) {
-            char *plan = ca_llm_chat_simple(ctx.llm, SYS_PROMPT, t->prompt);
+            char *plan = coa_llm_chat_simple(ctx.llm, SYS_PROMPT, t->prompt);
             sel = plan ? plan_has_tool(plan, t->expect_tool) : 0;
             if (sel && t->arg_key)
                 sel = plan_arg_contains(plan, t->expect_tool, t->arg_key, t->arg_val);
@@ -177,17 +177,17 @@ int main(int argc, char **argv) {
 
         /* 2) end-to-end full pipeline (latency + success) */
         char *answer = NULL;
-        int64_t s0 = ca_time_now_ms();
-        int rc = cagent_run(&ctx, t->prompt, &answer);
-        lat[i] = ca_time_now_ms() - s0;
+        int64_t s0 = coa_time_now_ms();
+        int rc = coa_run(&ctx, t->prompt, &answer);
+        lat[i] = coa_time_now_ms() - s0;
         free(answer);
 
         /* 3) side effect check */
         int side = 1;
         if (t->side_path) {
             char full[1024];
-            ca_path_resolve(full, sizeof(full), "state-bench/ws", t->side_path);
-            char *data = ca_fs_read_file(full);
+            coa_path_resolve(full, sizeof(full), "state-bench/ws", t->side_path);
+            char *data = coa_fs_read_file(full);
             side = data != NULL && (!t->side_contains || strstr(data, t->side_contains) != NULL);
             free(data);
         }
@@ -202,8 +202,8 @@ int main(int argc, char **argv) {
                (long long)lat[i]);
     }
 
-    int64_t total = ca_time_now_ms() - t0;
-    cagent_shutdown(&ctx);
+    int64_t total = coa_time_now_ms() - t0;
+    coa_shutdown(&ctx);
 
     /* aggregate per family */
     int tb_sel = 0, tb_ok = 0;

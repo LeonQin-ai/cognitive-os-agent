@@ -1,8 +1,8 @@
 /* vector.c — in-memory vector store with cosine nearest-neighbor recall. */
-#include "cagent/memory/vector.h"
-#include "cagent/retrieval/embedding.h"
-#include "cagent/os/os_thread.h"
-#include "cagent/infra/util.h"
+#include "cognitive-os-agent/memory/vector.h"
+#include "cognitive-os-agent/retrieval/embedding.h"
+#include "cognitive-os-agent/os/os_thread.h"
+#include "cognitive-os-agent/infra/util.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -12,20 +12,20 @@ typedef struct vec_entry {
     char *id;
     char *text;
     char *meta;
-    float vec[CA_EMBED_DIM];
+    float vec[COA_EMBED_DIM];
 } vec_entry;
 
-struct ca_vectorstore {
-    ca_mutex mtx;
+struct coa_vectorstore {
+    coa_mutex mtx;
     vec_entry *items;
     size_t count;
     size_t cap;
 };
 
-ca_vectorstore *ca_vectorstore_new(void) {
-    ca_vectorstore *v = (ca_vectorstore *)calloc(1, sizeof(*v));
+coa_vectorstore *coa_vectorstore_new(void) {
+    coa_vectorstore *v = (coa_vectorstore *)calloc(1, sizeof(*v));
     if (!v) return NULL;
-    ca_mutex_init(&v->mtx);
+    coa_mutex_init(&v->mtx);
     return v;
 }
 
@@ -36,64 +36,64 @@ static void entry_clear(vec_entry *e) {
     memset(e, 0, sizeof(*e));
 }
 
-void ca_vectorstore_free(ca_vectorstore *v) {
+void coa_vectorstore_free(coa_vectorstore *v) {
     if (!v) return;
-    ca_mutex_lock(&v->mtx);
+    coa_mutex_lock(&v->mtx);
     for (size_t i = 0; i < v->count; i++) entry_clear(&v->items[i]);
     free(v->items);
     v->items = NULL;
     v->count = v->cap = 0;
-    ca_mutex_unlock(&v->mtx);
-    ca_mutex_destroy(&v->mtx);
+    coa_mutex_unlock(&v->mtx);
+    coa_mutex_destroy(&v->mtx);
     free(v);
 }
 
-int ca_vectorstore_add(ca_vectorstore *v, const char *id, const char *text, const char *meta) {
+int coa_vectorstore_add(coa_vectorstore *v, const char *id, const char *text, const char *meta) {
     if (!v || !id || !text) return -1;
-    ca_mutex_lock(&v->mtx);
+    coa_mutex_lock(&v->mtx);
     /* update existing id */
     for (size_t i = 0; i < v->count; i++) {
         if (strcmp(v->items[i].id, id) == 0) {
             free(v->items[i].text);
             free(v->items[i].meta);
-            v->items[i].text = ca_strdup(text);
-            v->items[i].meta = ca_strdup(meta ? meta : "");
-            ca_embed_text(text, v->items[i].vec);
-            ca_mutex_unlock(&v->mtx);
+            v->items[i].text = coa_strdup(text);
+            v->items[i].meta = coa_strdup(meta ? meta : "");
+            coa_embed_text(text, v->items[i].vec);
+            coa_mutex_unlock(&v->mtx);
             return 0;
         }
     }
     if (v->count == v->cap) {
         size_t cap = v->cap ? v->cap * 2 : 8;
         vec_entry *ni = (vec_entry *)realloc(v->items, cap * sizeof(vec_entry));
-        if (!ni) { ca_mutex_unlock(&v->mtx); return -1; }
+        if (!ni) { coa_mutex_unlock(&v->mtx); return -1; }
         v->items = ni;
         v->cap = cap;
     }
     vec_entry *e = &v->items[v->count++];
     memset(e, 0, sizeof(*e));
-    e->id = ca_strdup(id);
-    e->text = ca_strdup(text);
-    e->meta = ca_strdup(meta ? meta : "");
-    ca_embed_text(text, e->vec);
-    ca_mutex_unlock(&v->mtx);
+    e->id = coa_strdup(id);
+    e->text = coa_strdup(text);
+    e->meta = coa_strdup(meta ? meta : "");
+    coa_embed_text(text, e->vec);
+    coa_mutex_unlock(&v->mtx);
     return 0;
 }
 
-int ca_vectorstore_count(ca_vectorstore *v) {
+int coa_vectorstore_count(coa_vectorstore *v) {
     if (!v) return 0;
-    ca_mutex_lock(&v->mtx);
+    coa_mutex_lock(&v->mtx);
     int n = (int)v->count;
-    ca_mutex_unlock(&v->mtx);
+    coa_mutex_unlock(&v->mtx);
     return n;
 }
 
-char *ca_vectorstore_nearest(ca_vectorstore *v, const char *query, int k) {
-    if (!v) return ca_strdup("[]");
-    float qvec[CA_EMBED_DIM];
-    ca_embed_text(query, qvec);
+char *coa_vectorstore_nearest(coa_vectorstore *v, const char *query, int k) {
+    if (!v) return coa_strdup("[]");
+    float qvec[COA_EMBED_DIM];
+    coa_embed_text(query, qvec);
 
-    ca_mutex_lock(&v->mtx);
+    coa_mutex_lock(&v->mtx);
     /* collect top-k with a simple insertion into a small sorted list of indices */
     int *top_idx = (int *)malloc(k > 0 ? (size_t)k * sizeof(int) : sizeof(int));
     float *top_score = (float *)malloc(k > 0 ? (size_t)k * sizeof(float) : sizeof(float));
@@ -101,12 +101,12 @@ char *ca_vectorstore_nearest(ca_vectorstore *v, const char *query, int k) {
     if (!top_idx || !top_score) {
         free(top_idx);
         free(top_score);
-        ca_mutex_unlock(&v->mtx);
-        return ca_strdup("[]");
+        coa_mutex_unlock(&v->mtx);
+        return coa_strdup("[]");
     }
 
     for (size_t i = 0; i < v->count; i++) {
-        float s = ca_embed_cosine(qvec, v->items[i].vec, CA_EMBED_DIM);
+        float s = coa_embed_cosine(qvec, v->items[i].vec, COA_EMBED_DIM);
         if (k > 0 && ntop >= k && s <= top_score[ntop - 1]) continue;
         int pos = ntop;
         while (pos > 0 && top_score[pos - 1] < s) { pos--; }
@@ -134,29 +134,29 @@ char *ca_vectorstore_nearest(ca_vectorstore *v, const char *query, int k) {
     }
     free(top_idx);
     free(top_score);
-    ca_mutex_unlock(&v->mtx);
+    coa_mutex_unlock(&v->mtx);
 
     char *s = arr ? cJSON_PrintUnformatted(arr) : NULL;
     if (arr) cJSON_Delete(arr);
-    return s ? s : ca_strdup("[]");
+    return s ? s : coa_strdup("[]");
 }
 
 /* ---------- hybrid + multi-query retrieval (shared helpers) ---------- */
 
 /* Caller holds v->mtx. score = w_vec*cosine + (1-w_vec)*keyword for every
  * entry. w_vec >= 0.999 skips the keyword pass (pure vector). */
-static void score_all(ca_vectorstore *v, const char *query, float w_vec,
+static void score_all(coa_vectorstore *v, const char *query, float w_vec,
                       float *out) {
-    float qvec[CA_EMBED_DIM];
-    ca_embed_text(query, qvec);
+    float qvec[COA_EMBED_DIM];
+    coa_embed_text(query, qvec);
     int do_kw = w_vec < 0.999f;
     for (size_t i = 0; i < v->count; i++) {
-        float cos = ca_embed_cosine(qvec, v->items[i].vec, CA_EMBED_DIM);
+        float cos = coa_embed_cosine(qvec, v->items[i].vec, COA_EMBED_DIM);
         if (cos < 0) cos = 0;
         float s = w_vec * cos;
         if (do_kw) {
             float kw = 0;
-            ca_embed_keyword_score(query, v->items[i].text, &kw);
+            coa_embed_keyword_score(query, v->items[i].text, &kw);
             s += (1.0f - w_vec) * kw;
         }
         out[i] = s;
@@ -164,11 +164,11 @@ static void score_all(ca_vectorstore *v, const char *query, float w_vec,
 }
 
 /* Caller holds v->mtx. Top-k by the given per-entry scores -> JSON array. */
-static char *topk_json(ca_vectorstore *v, const float *scores, int k) {
-    if (k <= 0) return ca_strdup("[]");
+static char *topk_json(coa_vectorstore *v, const float *scores, int k) {
+    if (k <= 0) return coa_strdup("[]");
     int *top_idx = (int *)malloc((size_t)k * sizeof(int));
     float *top_score = (float *)malloc((size_t)k * sizeof(float));
-    if (!top_idx || !top_score) { free(top_idx); free(top_score); return ca_strdup("[]"); }
+    if (!top_idx || !top_score) { free(top_idx); free(top_score); return coa_strdup("[]"); }
     int ntop = 0;
     for (size_t i = 0; i < v->count; i++) {
         float s = scores[i];
@@ -199,32 +199,32 @@ static char *topk_json(ca_vectorstore *v, const float *scores, int k) {
     free(top_score);
     char *s = arr ? cJSON_PrintUnformatted(arr) : NULL;
     if (arr) cJSON_Delete(arr);
-    return s ? s : ca_strdup("[]");
+    return s ? s : coa_strdup("[]");
 }
 
-char *ca_vectorstore_nearest_hybrid(ca_vectorstore *v, const char *query,
+char *coa_vectorstore_nearest_hybrid(coa_vectorstore *v, const char *query,
                                     int k, float w_vec) {
-    if (!v || !query || k <= 0) return ca_strdup("[]");
+    if (!v || !query || k <= 0) return coa_strdup("[]");
     if (w_vec < 0) w_vec = 0;
     if (w_vec > 1) w_vec = 1;
-    ca_mutex_lock(&v->mtx);
-    if (v->count == 0) { ca_mutex_unlock(&v->mtx); return ca_strdup("[]"); }
+    coa_mutex_lock(&v->mtx);
+    if (v->count == 0) { coa_mutex_unlock(&v->mtx); return coa_strdup("[]"); }
     float *scores = (float *)malloc(v->count * sizeof(float));
-    if (!scores) { ca_mutex_unlock(&v->mtx); return ca_strdup("[]"); }
+    if (!scores) { coa_mutex_unlock(&v->mtx); return coa_strdup("[]"); }
     score_all(v, query, w_vec, scores);
     char *out = topk_json(v, scores, k);
     free(scores);
-    ca_mutex_unlock(&v->mtx);
+    coa_mutex_unlock(&v->mtx);
     return out;
 }
 
-char *ca_vectorstore_nearest_multi(ca_vectorstore *v, const char *const *queries,
+char *coa_vectorstore_nearest_multi(coa_vectorstore *v, const char *const *queries,
                                    int nq, int k) {
-    if (!v || !queries || nq <= 0 || k <= 0) return ca_strdup("[]");
-    ca_mutex_lock(&v->mtx);
-    if (v->count == 0) { ca_mutex_unlock(&v->mtx); return ca_strdup("[]"); }
+    if (!v || !queries || nq <= 0 || k <= 0) return coa_strdup("[]");
+    coa_mutex_lock(&v->mtx);
+    if (v->count == 0) { coa_mutex_unlock(&v->mtx); return coa_strdup("[]"); }
     float *best = (float *)calloc(v->count, sizeof(float));
-    if (!best) { ca_mutex_unlock(&v->mtx); return ca_strdup("[]"); }
+    if (!best) { coa_mutex_unlock(&v->mtx); return coa_strdup("[]"); }
     for (int q = 0; q < nq; q++) {
         if (!queries[q] || !*queries[q]) continue;
         float *scores = (float *)malloc(v->count * sizeof(float));
@@ -236,6 +236,6 @@ char *ca_vectorstore_nearest_multi(ca_vectorstore *v, const char *const *queries
     }
     char *out = topk_json(v, best, k);
     free(best);
-    ca_mutex_unlock(&v->mtx);
+    coa_mutex_unlock(&v->mtx);
     return out;
 }

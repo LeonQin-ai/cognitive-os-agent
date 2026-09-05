@@ -18,7 +18,7 @@
  *   GET  /                       embedded web UI
  */
 #pragma once
-#include "cagent/cagent.h"
+#include "cognitive-os-agent/cognitive-os-agent.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -26,7 +26,7 @@ extern "C" {
 
 /* Create the HTTP server (if ctx->http_port > 0) and register routes.
  * Returns 0 ok, -1 if the server could not be started. */
-int cagent_api_attach(cagent_ctx *ctx);
+int coa_api_attach(coa_ctx *ctx);
 
 #ifdef __cplusplus
 }

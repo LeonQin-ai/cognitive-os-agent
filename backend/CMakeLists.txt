@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(cagent C)
+project(cognitive-os-agent C)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -9,7 +9,7 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 set(CAGENT_SOURCES
-  src/cagent.c
+  src/cognitive-os-agent.c
   src/runtime/event_bus.c
   src/runtime/scheduler.c
   src/runtime/state_machine.c
@@ -95,11 +95,11 @@ else()
   set(PLATFORM_LIBS pthread dl m)
 endif()
 
-add_executable(cagent ${CAGENT_SOURCES} cli/main.c)
-target_link_libraries(cagent ${PLATFORM_LIBS})
+add_executable(cognitive-os-agent ${CAGENT_SOURCES} cli/main.c)
+target_link_libraries(cognitive-os-agent ${PLATFORM_LIBS})
 
-add_executable(cagent-test ${CAGENT_SOURCES} tests/test_all.c)
-target_link_libraries(cagent-test ${PLATFORM_LIBS})
+add_executable(cognitive-os-agent-test ${CAGENT_SOURCES} tests/test_all.c)
+target_link_libraries(cognitive-os-agent-test ${PLATFORM_LIBS})
 
 add_executable(mock-llm-server ${CAGENT_SOURCES} tools/mock_llm_server.c)
 target_link_libraries(mock-llm-server ${PLATFORM_LIBS})
@@ -107,11 +107,11 @@ target_link_libraries(mock-llm-server ${PLATFORM_LIBS})
 add_executable(test-adapters ${CAGENT_SOURCES} tests/test_adapters.c)
 target_link_libraries(test-adapters ${PLATFORM_LIBS})
 
-add_executable(cagent-e2e ${CAGENT_SOURCES} tests/test_e2e.c)
-target_link_libraries(cagent-e2e ${PLATFORM_LIBS})
+add_executable(cognitive-os-agent-e2e ${CAGENT_SOURCES} tests/test_e2e.c)
+target_link_libraries(cognitive-os-agent-e2e ${PLATFORM_LIBS})
 
-add_executable(cagent-bench ${CAGENT_SOURCES} tests/bench_agent.c)
-target_link_libraries(cagent-bench ${PLATFORM_LIBS})
+add_executable(cognitive-os-agent-bench ${CAGENT_SOURCES} tests/bench_agent.c)
+target_link_libraries(cognitive-os-agent-bench ${PLATFORM_LIBS})
 
-add_executable(cagent-bench-real ${CAGENT_SOURCES} tests/bench_real.c)
-target_link_libraries(cagent-bench-real ${PLATFORM_LIBS})
+add_executable(cognitive-os-agent-bench-real ${CAGENT_SOURCES} tests/bench_real.c)
+target_link_libraries(cognitive-os-agent-bench-real ${PLATFORM_LIBS})

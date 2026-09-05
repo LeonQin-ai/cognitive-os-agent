@@ -1,15 +1,15 @@
 /* evaluator.c — result verification + heuristic quality scoring. */
-#include "cagent/cognition/evaluator.h"
+#include "cognitive-os-agent/cognition/evaluator.h"
 
 #include <stdlib.h>
 #include <string.h>
 
-struct ca_evaluator { int reserved; };
+struct coa_evaluator { int reserved; };
 
-ca_evaluator *ca_evaluator_new(void) { return (ca_evaluator *)calloc(1, sizeof(ca_evaluator)); }
-void ca_evaluator_free(ca_evaluator *e) { free(e); }
+coa_evaluator *coa_evaluator_new(void) { return (coa_evaluator *)calloc(1, sizeof(coa_evaluator)); }
+void coa_evaluator_free(coa_evaluator *e) { free(e); }
 
-int ca_evaluator_verify(ca_evaluator *e, int all_actions_ok, int n_actions,
+int coa_evaluator_verify(coa_evaluator *e, int all_actions_ok, int n_actions,
                         int ok_actions) {
     (void)e;
     (void)all_actions_ok;
@@ -21,7 +21,7 @@ int ca_evaluator_verify(ca_evaluator *e, int all_actions_ok, int n_actions,
     return ok_actions > 0 ? 1 : 0;
 }
 
-double ca_evaluator_score(ca_evaluator *e, int n_actions, int ok_actions,
+double coa_evaluator_score(coa_evaluator *e, int n_actions, int ok_actions,
                           int all_actions_ok, const char *answer) {
     (void)e;
     if (answer) {

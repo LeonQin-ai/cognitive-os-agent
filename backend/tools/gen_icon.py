@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""gen_icon.py — generate the c-agent application icon (dist/c-agent.ico).
+"""gen_icon.py — generate the cognitive-os-agent application icon (dist/cognitive-os-agent.ico).
 
 Produces a small self-contained .ico (a 32x32 RGBA PNG entry) with a teal
 rounded square and a white "core" bar. No image library required — the PNG is
@@ -43,7 +43,7 @@ def png_bytes(px):
 
 def main():
     import os
-    out = os.path.join(os.path.dirname(__file__), "..", "dist", "c-agent.ico")
+    out = os.path.join(os.path.dirname(__file__), "..", "dist", "cognitive-os-agent.ico")
     os.makedirs(os.path.dirname(out), exist_ok=True)
     png = png_bytes(build_pixels())
     # ICO container with a single PNG entry (size stored as 0,0 = 256).

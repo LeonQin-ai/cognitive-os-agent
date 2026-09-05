@@ -22,3 +22,6 @@ backend/test/
 *.obj
 .DS_Store
 Thumbs.db
+# Windows reserved device name — must never be committed
+nul
+backend/caps_gate_out.txt

@@ -15,37 +15,37 @@
 extern "C" {
 #endif
 
-typedef struct ca_state_store ca_state_store;
+typedef struct coa_state_store coa_state_store;
 
-ca_state_store *ca_state_store_new(void);
-void ca_state_store_free(ca_state_store *s);
+coa_state_store *coa_state_store_new(void);
+void coa_state_store_free(coa_state_store *s);
 
 /* Generic namespaced KV. val == NULL removes the key. Returns 0 ok,
  * -1 bad args. Borrowed values stay valid until the next mutation. */
-int ca_state_store_set(ca_state_store *s, const char *ns, const char *key,
+int coa_state_store_set(coa_state_store *s, const char *ns, const char *key,
                        const char *val);
-const char *ca_state_store_get(ca_state_store *s, const char *ns, const char *key);
-int ca_state_store_remove(ca_state_store *s, const char *ns, const char *key);
-int ca_state_store_count(ca_state_store *s);
-int ca_state_store_count_ns(ca_state_store *s, const char *ns);
+const char *coa_state_store_get(coa_state_store *s, const char *ns, const char *key);
+int coa_state_store_remove(coa_state_store *s, const char *ns, const char *key);
+int coa_state_store_count(coa_state_store *s);
+int coa_state_store_count_ns(coa_state_store *s, const char *ns);
 
 /* Architecture state slots:
  *  - task:  key = "<id>", value = "<status>|<input>"   (queued -> terminal)
  *  - agent: key = name,   value = "<role>|<status>"    */
-int ca_state_store_task_set(ca_state_store *s, long long id, const char *status,
+int coa_state_store_task_set(coa_state_store *s, long long id, const char *status,
                             const char *input);
-int ca_state_store_agent_set(ca_state_store *s, const char *name,
+int coa_state_store_agent_set(coa_state_store *s, const char *name,
                              const char *role, const char *status);
 
 /* Whole store as {"ns":{"key":"val",...},...} (malloc'd, caller frees). */
-char *ca_state_store_json(ca_state_store *s);
+char *coa_state_store_json(coa_state_store *s);
 /* Merge entries from that JSON shape. Returns entries applied, -1 bad args. */
-int ca_state_store_load_json(ca_state_store *s, const char *json);
+int coa_state_store_load_json(coa_state_store *s, const char *json);
 
 /* Persist to <path> / load (merge) from <path>; after either call the store
  * auto-flushes on every mutation. Returns 0 ok, -1 bad args/IO. */
-int ca_state_store_save(ca_state_store *s, const char *path);
-int ca_state_store_load(ca_state_store *s, const char *path);
+int coa_state_store_save(coa_state_store *s, const char *path);
+int coa_state_store_load(coa_state_store *s, const char *path);
 
 #ifdef __cplusplus
 }

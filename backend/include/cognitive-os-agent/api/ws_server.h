@@ -9,28 +9,28 @@
 extern "C" {
 #endif
 
-typedef struct ca_ws_server ca_ws_server;
-typedef struct ca_socket ca_socket;
+typedef struct coa_ws_server coa_ws_server;
+typedef struct coa_socket coa_socket;
 
 /* Called with each inbound text message (NUL-terminated, borrowed). */
-typedef void (*ca_ws_msg_handler)(const char *text, void *ud);
+typedef void (*coa_ws_msg_handler)(const char *text, void *ud);
 
-ca_ws_server *ca_ws_server_new(void);
-void ca_ws_server_free(ca_ws_server *s);
+coa_ws_server *coa_ws_server_new(void);
+void coa_ws_server_free(coa_ws_server *s);
 
 /* Set the inbound-message handler (default: ignore). */
-void ca_ws_server_on_message(ca_ws_server *s, ca_ws_msg_handler fn, void *ud);
+void coa_ws_server_on_message(coa_ws_server *s, coa_ws_msg_handler fn, void *ud);
 
 /* Accept an upgraded socket: send the 101 handshake (using the client's
  * Sec-WebSocket-Key), register the client, and spawn its reader thread.
  * Takes ownership of sock. Returns 0 ok, -1 error. */
-int ca_ws_server_accept(ca_ws_server *s, ca_socket *sock, const char *sec_ws_key);
+int coa_ws_server_accept(coa_ws_server *s, coa_socket *sock, const char *sec_ws_key);
 
 /* Broadcast a text message to every connected client. */
-void ca_ws_server_broadcast(ca_ws_server *s, const char *json_text);
+void coa_ws_server_broadcast(coa_ws_server *s, const char *json_text);
 
 /* Number of connected clients. */
-int ca_ws_server_count(ca_ws_server *s);
+int coa_ws_server_count(coa_ws_server *s);
 
 #ifdef __cplusplus
 }

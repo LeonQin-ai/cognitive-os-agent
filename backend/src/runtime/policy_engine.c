@@ -1,6 +1,6 @@
-#include "cagent/runtime/policy_engine.h"
-#include "cagent/infra/util.h"
-#include "cagent/os/os_fs.h"
+#include "cognitive-os-agent/runtime/policy_engine.h"
+#include "cognitive-os-agent/infra/util.h"
+#include "cognitive-os-agent/os/os_fs.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -14,18 +14,18 @@ typedef struct rule {
     char *reason;
 } rule;
 
-struct ca_policy_engine {
+struct coa_policy_engine {
     rule *rules;
     size_t count, cap;
-    ca_policy_ask_cb ask_cb;
+    coa_policy_ask_cb ask_cb;
     void *ask_ud;
 };
 
-ca_policy_engine *ca_policy_engine_new(void) {
-    return calloc(1, sizeof(ca_policy_engine));
+coa_policy_engine *coa_policy_engine_new(void) {
+    return calloc(1, sizeof(coa_policy_engine));
 }
 
-void ca_policy_engine_free(ca_policy_engine *pe) {
+void coa_policy_engine_free(coa_policy_engine *pe) {
     if (!pe) return;
     for (size_t i = 0; i < pe->count; i++) {
         free(pe->rules[i].tool);
@@ -43,7 +43,7 @@ static int parse_action(const char *action) {
     return 1;
 }
 
-void ca_policy_add_rule(ca_policy_engine *pe, const char *tool_name, const char *action,
+void coa_policy_add_rule(coa_policy_engine *pe, const char *tool_name, const char *action,
                         const char *reason) {
     if (!pe || !tool_name) return;
     if (pe->count == pe->cap) {
@@ -52,12 +52,12 @@ void ca_policy_add_rule(ca_policy_engine *pe, const char *tool_name, const char 
         pe->cap = cap;
     }
     rule *r = &pe->rules[pe->count++];
-    r->tool = ca_strdup(tool_name);
+    r->tool = coa_strdup(tool_name);
     r->decision = parse_action(action);
-    r->reason = reason ? ca_strdup(reason) : NULL;
+    r->reason = reason ? coa_strdup(reason) : NULL;
 }
 
-ca_policy_decision ca_policy_check(ca_policy_engine *pe, const char *tool_name,
+coa_policy_decision coa_policy_check(coa_policy_engine *pe, const char *tool_name,
                                    const char *args_json, const char **reason) {
     /* exact-name rules beat wildcard rules regardless of order; within the
      * same specificity the LAST matching rule wins */
@@ -70,26 +70,26 @@ ca_policy_decision ca_policy_check(ca_policy_engine *pe, const char *tool_name,
     if (match) {
         if (reason) *reason = match->reason ? match->reason : "rule match";
         if (match->decision == 2) {
-            if (pe->ask_cb && pe->ask_cb(tool_name, args_json, pe->ask_ud)) return CA_POLICY_ALLOW;
+            if (pe->ask_cb && pe->ask_cb(tool_name, args_json, pe->ask_ud)) return COA_POLICY_ALLOW;
             if (reason) *reason = "ask denied";
-            return CA_POLICY_DENY;
+            return COA_POLICY_DENY;
         }
-        return (ca_policy_decision)match->decision;
+        return (coa_policy_decision)match->decision;
     }
     /* default: allow if no rules at all, else ask */
     if (reason) *reason = "no rule";
-    return pe->count == 0 ? CA_POLICY_ALLOW : CA_POLICY_ASK;
+    return pe->count == 0 ? COA_POLICY_ALLOW : COA_POLICY_ASK;
 }
 
 /* ---------- rule management + persistence ---------- */
 
-int ca_policy_rule_count(const ca_policy_engine *pe) { return pe ? (int)pe->count : 0; }
+int coa_policy_rule_count(const coa_policy_engine *pe) { return pe ? (int)pe->count : 0; }
 
 static const char *decision_str(int d) {
     return d == 0 ? "allow" : d == 1 ? "deny" : "ask";
 }
 
-int ca_policy_rule_get(const ca_policy_engine *pe, size_t index, const char **tool,
+int coa_policy_rule_get(const coa_policy_engine *pe, size_t index, const char **tool,
                        const char **action, const char **reason) {
     if (!pe || index >= pe->count) return -1;
     if (tool) *tool = pe->rules[index].tool;
@@ -98,7 +98,7 @@ int ca_policy_rule_get(const ca_policy_engine *pe, size_t index, const char **to
     return 0;
 }
 
-void ca_policy_remove_rule(ca_policy_engine *pe, size_t index) {
+void coa_policy_remove_rule(coa_policy_engine *pe, size_t index) {
     if (!pe || index >= pe->count) return;
     free(pe->rules[index].tool);
     free(pe->rules[index].reason);
@@ -108,7 +108,7 @@ void ca_policy_remove_rule(ca_policy_engine *pe, size_t index) {
     pe->count--;
 }
 
-int ca_policy_save_file(const ca_policy_engine *pe, const char *path) {
+int coa_policy_save_file(const coa_policy_engine *pe, const char *path) {
     if (!pe || !path) return -1;
     cJSON *arr = cJSON_CreateArray();
     if (!arr) return -1;
@@ -122,14 +122,14 @@ int ca_policy_save_file(const ca_policy_engine *pe, const char *path) {
     char *js = cJSON_Print(arr); /* formatted: human-editable */
     cJSON_Delete(arr);
     if (!js) return -1;
-    int rc = ca_fs_write_file(path, js, strlen(js)) == 0 ? 0 : -1;
+    int rc = coa_fs_write_file(path, js, strlen(js)) == 0 ? 0 : -1;
     free(js);
     return rc;
 }
 
-int ca_policy_load_file(ca_policy_engine *pe, const char *path) {
+int coa_policy_load_file(coa_policy_engine *pe, const char *path) {
     if (!pe || !path) return -1;
-    char *txt = ca_fs_read_file(path);
+    char *txt = coa_fs_read_file(path);
     if (!txt) return -1; /* no file yet: not an error for callers */
     cJSON *arr = cJSON_Parse(txt);
     free(txt);
@@ -142,7 +142,7 @@ int ca_policy_load_file(ca_policy_engine *pe, const char *path) {
         cJSON *a = cJSON_GetObjectItemCaseSensitive(it, "action");
         cJSON *r = cJSON_GetObjectItemCaseSensitive(it, "reason");
         if (!t || !cJSON_IsString(t) || !t->valuestring) continue;
-        ca_policy_add_rule(pe, t->valuestring,
+        coa_policy_add_rule(pe, t->valuestring,
                            (a && cJSON_IsString(a)) ? a->valuestring : "deny",
                            (r && cJSON_IsString(r)) ? r->valuestring : NULL);
         n++;
@@ -151,7 +151,7 @@ int ca_policy_load_file(ca_policy_engine *pe, const char *path) {
     return n;
 }
 
-void ca_policy_set_ask_cb(ca_policy_engine *pe, ca_policy_ask_cb cb, void *ud) {
+void coa_policy_set_ask_cb(coa_policy_engine *pe, coa_policy_ask_cb cb, void *ud) {
     pe->ask_cb = cb;
     pe->ask_ud = ud;
 }
@@ -166,7 +166,7 @@ static int args_contain_dangerous(const char *args_json) {
     return 0;
 }
 
-int ca_policy_risk(const char *tool_name, const char *args_json) {
+int coa_policy_risk(const char *tool_name, const char *args_json) {
     int base = 0;
     if (!tool_name) return 0;
     if (strcmp(tool_name, "shell") == 0) base = 70;

@@ -1,6 +1,6 @@
 /* codegen.c — plugin code generation. */
-#include "cagent/plugin_intelligence/codegen.h"
-#include "cagent/infra/util.h"
+#include "cognitive-os-agent/plugin_intelligence/codegen.h"
+#include "cognitive-os-agent/infra/util.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -20,14 +20,14 @@ static const char *ident(const char *name, char *buf, size_t n) {
     return buf;
 }
 
-char *ca_codegen_plugin(const char *name, const char *description) {
+char *coa_codegen_plugin(const char *name, const char *description) {
     char id[128];
     ident(name, id, sizeof(id));
 
-    ca_strbuf sb;
-    ca_strbuf_init(&sb);
-    ca_strbuf_appendf(&sb,
-        "/* %s.c — generated c-agent plugin: %s */\n"
+    coa_strbuf sb;
+    coa_strbuf_init(&sb);
+    coa_strbuf_appendf(&sb,
+        "/* %s.c — generated cognitive-os-agent plugin: %s */\n"
         "#include <string.h>\n\n"
         "/* Plugin entry point. Returns 0 ok, -1 error. */\n"
         "int %s_run(const char *args_json, char **out) {\n"
@@ -43,5 +43,5 @@ char *ca_codegen_plugin(const char *name, const char *description) {
         id, description ? description : "", id, id, id, id, id,
         description ? description : "");
 
-    return ca_strbuf_detach(&sb);
+    return coa_strbuf_detach(&sb);
 }

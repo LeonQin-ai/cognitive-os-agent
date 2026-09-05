@@ -5,17 +5,17 @@
 extern "C" {
 #endif
 
-typedef struct ca_audit ca_audit;
+typedef struct coa_audit coa_audit;
 
 /* Open (append mode) an audit log file. NULL if the file cannot be opened. */
-ca_audit *ca_audit_open(const char *path);
+coa_audit *coa_audit_open(const char *path);
 
 /* Record an entry. detail is an optional JSON string (may be NULL). */
-void ca_audit_log(ca_audit *a, const char *action, const char *subject,
+void coa_audit_log(coa_audit *a, const char *action, const char *subject,
                   const char *result, const char *detail_json);
 
 /* Flush and close. */
-void ca_audit_close(ca_audit *a);
+void coa_audit_close(coa_audit *a);
 
 #ifdef __cplusplus
 }

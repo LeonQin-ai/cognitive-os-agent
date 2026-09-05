@@ -1,17 +1,17 @@
 /* attention.c — salience scoring and top-k selection. */
-#include "cagent/cognition/attention.h"
+#include "cognitive-os-agent/cognition/attention.h"
 
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
 
-struct ca_attention { int dummy; };
+struct coa_attention { int dummy; };
 
-ca_attention *ca_attention_new(void) {
-    return (ca_attention *)calloc(1, sizeof(ca_attention));
+coa_attention *coa_attention_new(void) {
+    return (coa_attention *)calloc(1, sizeof(coa_attention));
 }
 
-void ca_attention_free(ca_attention *a) { free(a); }
+void coa_attention_free(coa_attention *a) { free(a); }
 
 /* Case-insensitive substring match. */
 static int ci_substr(const char *hay, const char *needle) {
@@ -33,8 +33,8 @@ static int ci_substr(const char *hay, const char *needle) {
 
 /* Iterate query words; for each word present in the candidate text/tags add a
  * weight proportional to word length so rare/specific terms dominate. */
-double ca_attention_score(ca_attention *a, const char *query,
-                          const ca_attention_candidate *c) {
+double coa_attention_score(coa_attention *a, const char *query,
+                          const coa_attention_candidate *c) {
     (void)a;
     if (!c) return 0.0;
     double score = c->boost;
@@ -61,9 +61,9 @@ double ca_attention_score(ca_attention *a, const char *query,
 }
 
 /* Insertion sort by score descending (small n; simple and stable enough). */
-static void sort_results(ca_attention_result *r, int n) {
+static void sort_results(coa_attention_result *r, int n) {
     for (int i = 1; i < n; i++) {
-        ca_attention_result key = r[i];
+        coa_attention_result key = r[i];
         int j = i - 1;
         while (j >= 0 && r[j].score < key.score) {
             r[j + 1] = r[j];
@@ -73,16 +73,16 @@ static void sort_results(ca_attention_result *r, int n) {
     }
 }
 
-int ca_attention_select(ca_attention *a, const char *query,
-                        const ca_attention_candidate *cands, size_t n,
-                        ca_attention_result *out, size_t topk) {
+int coa_attention_select(coa_attention *a, const char *query,
+                        const coa_attention_candidate *cands, size_t n,
+                        coa_attention_result *out, size_t topk) {
     if (!a || !cands || !out || n == 0 || topk == 0) return 0;
 
-    ca_attention_result *tmp = (ca_attention_result *)malloc(n * sizeof(*tmp));
+    coa_attention_result *tmp = (coa_attention_result *)malloc(n * sizeof(*tmp));
     if (!tmp) return 0;
     for (size_t i = 0; i < n; i++) {
         tmp[i].index = (int)i;
-        tmp[i].score = ca_attention_score(a, query, &cands[i]);
+        tmp[i].score = coa_attention_score(a, query, &cands[i]);
     }
     sort_results(tmp, (int)n);
 

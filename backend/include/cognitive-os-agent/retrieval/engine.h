@@ -8,19 +8,19 @@
 extern "C" {
 #endif
 
-typedef struct ca_index ca_index;
+typedef struct coa_index coa_index;
 
-ca_index *ca_index_new(void);
-void ca_index_free(ca_index *idx);
+coa_index *coa_index_new(void);
+void coa_index_free(coa_index *idx);
 
 /* Index a single file's content (term -> file:line). */
-int ca_index_add_file(ca_index *idx, const char *path, const char *content);
+int coa_index_add_file(coa_index *idx, const char *path, const char *content);
 
 /* Scan a directory recursively, indexing files with known source extensions. */
-int ca_index_build_dir(ca_index *idx, const char *dir);
+int coa_index_build_dir(coa_index *idx, const char *dir);
 
 /* Search: returns a JSON array of {"term","file","line"} matches (caller frees). */
-char *ca_index_search(ca_index *idx, const char *query, int limit);
+char *coa_index_search(coa_index *idx, const char *query, int limit);
 
 #ifdef __cplusplus
 }

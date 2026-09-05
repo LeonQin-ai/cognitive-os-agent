@@ -1,85 +1,85 @@
 /* capability.c — capability tokens. */
-#include "cagent/plugin_runtime/capability.h"
-#include "cagent/os/os_thread.h"
-#include "cagent/infra/util.h"
+#include "cognitive-os-agent/plugin_runtime/capability.h"
+#include "cognitive-os-agent/os/os_thread.h"
+#include "cognitive-os-agent/infra/util.h"
 
 #include <stdlib.h>
 #include <string.h>
 #include "cJSON.h"
 
-struct ca_capability {
-    ca_mutex mtx;
+struct coa_capability {
+    coa_mutex mtx;
     char **caps;
     size_t count, cap;
 };
 
-ca_capability *ca_capability_new(void) {
-    ca_capability *c = (ca_capability *)calloc(1, sizeof(ca_capability));
+coa_capability *coa_capability_new(void) {
+    coa_capability *c = (coa_capability *)calloc(1, sizeof(coa_capability));
     if (!c) return NULL;
-    ca_mutex_init(&c->mtx);
+    coa_mutex_init(&c->mtx);
     return c;
 }
 
-void ca_capability_free(ca_capability *c) {
+void coa_capability_free(coa_capability *c) {
     if (!c) return;
-    ca_mutex_lock(&c->mtx);
+    coa_mutex_lock(&c->mtx);
     for (size_t i = 0; i < c->count; i++) free(c->caps[i]);
     free(c->caps);
     c->caps = NULL;
     c->count = c->cap = 0;
-    ca_mutex_unlock(&c->mtx);
-    ca_mutex_destroy(&c->mtx);
+    coa_mutex_unlock(&c->mtx);
+    coa_mutex_destroy(&c->mtx);
     free(c);
 }
 
-static int find_cap(ca_capability *c, const char *cap) {
+static int find_cap(coa_capability *c, const char *cap) {
     for (size_t i = 0; i < c->count; i++)
         if (strcmp(c->caps[i], cap) == 0) return (int)i;
     return -1;
 }
 
-int ca_capability_grant(ca_capability *c, const char *cap) {
+int coa_capability_grant(coa_capability *c, const char *cap) {
     if (!c || !cap || !*cap) return -1;
-    ca_mutex_lock(&c->mtx);
-    if (find_cap(c, cap) >= 0) { ca_mutex_unlock(&c->mtx); return -1; }
+    coa_mutex_lock(&c->mtx);
+    if (find_cap(c, cap) >= 0) { coa_mutex_unlock(&c->mtx); return -1; }
     if (c->count == c->cap) {
         size_t ncap = c->cap ? c->cap * 2 : 8;
         char **nc = (char **)realloc(c->caps, ncap * sizeof(char *));
-        if (!nc) { ca_mutex_unlock(&c->mtx); return -1; }
+        if (!nc) { coa_mutex_unlock(&c->mtx); return -1; }
         c->caps = nc;
         c->cap = ncap;
     }
-    c->caps[c->count++] = ca_strdup(cap);
-    ca_mutex_unlock(&c->mtx);
+    c->caps[c->count++] = coa_strdup(cap);
+    coa_mutex_unlock(&c->mtx);
     return 0;
 }
 
-int ca_capability_revoke(ca_capability *c, const char *cap) {
+int coa_capability_revoke(coa_capability *c, const char *cap) {
     if (!c || !cap) return 0;
-    ca_mutex_lock(&c->mtx);
+    coa_mutex_lock(&c->mtx);
     int i = find_cap(c, cap);
-    if (i < 0) { ca_mutex_unlock(&c->mtx); return 0; }
+    if (i < 0) { coa_mutex_unlock(&c->mtx); return 0; }
     free(c->caps[i]);
     if (c->count - i - 1 > 0)
         memmove(&c->caps[i], &c->caps[i + 1], (c->count - i - 1) * sizeof(char *));
     c->count--;
-    ca_mutex_unlock(&c->mtx);
+    coa_mutex_unlock(&c->mtx);
     return 1;
 }
 
-int ca_capability_has(ca_capability *c, const char *cap) {
+int coa_capability_has(coa_capability *c, const char *cap) {
     if (!c || !cap) return 0;
-    ca_mutex_lock(&c->mtx);
+    coa_mutex_lock(&c->mtx);
     int r = find_cap(c, cap) >= 0;
-    ca_mutex_unlock(&c->mtx);
+    coa_mutex_unlock(&c->mtx);
     return r;
 }
 
-int ca_capability_count(ca_capability *c) {
+int coa_capability_count(coa_capability *c) {
     if (!c) return 0;
-    ca_mutex_lock(&c->mtx);
+    coa_mutex_lock(&c->mtx);
     int n = (int)c->count;
-    ca_mutex_unlock(&c->mtx);
+    coa_mutex_unlock(&c->mtx);
     return n;
 }
 
@@ -95,25 +95,25 @@ static int wild_match(const char *pat, const char *s) {
     return strncmp(pat, s, pfix) == 0;
 }
 
-int ca_capability_match(ca_capability *c, const char *pattern) {
+int coa_capability_match(coa_capability *c, const char *pattern) {
     if (!c || !pattern) return 0;
-    ca_mutex_lock(&c->mtx);
+    coa_mutex_lock(&c->mtx);
     int r = 0;
     for (size_t i = 0; i < c->count; i++)
         if (wild_match(pattern, c->caps[i])) { r = 1; break; }
-    ca_mutex_unlock(&c->mtx);
+    coa_mutex_unlock(&c->mtx);
     return r;
 }
 
-char *ca_capability_json(ca_capability *c) {
-    if (!c) return ca_strdup("[]");
-    ca_mutex_lock(&c->mtx);
+char *coa_capability_json(coa_capability *c) {
+    if (!c) return coa_strdup("[]");
+    coa_mutex_lock(&c->mtx);
     cJSON *arr = cJSON_CreateArray();
     if (arr)
         for (size_t i = 0; i < c->count; i++)
             cJSON_AddItemToArray(arr, cJSON_CreateString(c->caps[i]));
-    ca_mutex_unlock(&c->mtx);
+    coa_mutex_unlock(&c->mtx);
     char *s = arr ? cJSON_PrintUnformatted(arr) : NULL;
     if (arr) cJSON_Delete(arr);
-    return s ? s : ca_strdup("[]");
+    return s ? s : coa_strdup("[]");
 }

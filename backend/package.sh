@@ -1,28 +1,28 @@
 #!/usr/bin/env bash
-# package.sh — one-click build + package the c-agent desktop installer.
+# package.sh — one-click build + package the cognitive-os-agent desktop installer.
 #
-#   1. compiles the release CLI binary (build/cagent[.exe])
-#   2. compiles the native WebView2 desktop shell (build/c-agent-desktop.exe)
-#   3. generates the application icon (dist/c-agent.ico)
-#   4. builds a standard Inno Setup installer (dist/c-agent-setup.exe) with a
+#   1. compiles the release CLI binary (build/cognitive-os-agent[.exe])
+#   2. compiles the native WebView2 desktop shell (build/cognitive-os-agent-desktop.exe)
+#   3. generates the application icon (dist/cognitive-os-agent.ico)
+#   4. builds a standard Inno Setup installer (dist/cognitive-os-agent-setup.exe) with a
 #      wizard, desktop + start-menu shortcuts, and an uninstaller
 #
-# The installed app is a single native window: c-agent-desktop.exe starts the
-# backend (cagent.exe serve 18300) and opens the web console at
+# The installed app is a single native window: cognitive-os-agent-desktop.exe starts the
+# backend (cognitive-os-agent.exe serve 18300) and opens the web console at
 # http://localhost:18300/ — no console, no separate browser.
 #
 # Prerequisites: bundled zig (tools/zig or PATH), python, and Inno Setup
 # (`winget install JRSoftware.InnoSetup`).
 #
 # Usage:
-#   ./package.sh              build + produce dist/c-agent-setup.exe
+#   ./package.sh              build + produce dist/cognitive-os-agent-setup.exe
 #   ./package.sh clean        remove dist/ and the desktop shell
 set -euo pipefail
 cd "$(dirname "$0")"
 
 ROOT="$(pwd)"
-OUT="$ROOT/dist/c-agent-setup.exe"
-DESKTOP="$ROOT/build/c-agent-desktop.exe"
+OUT="$ROOT/dist/cognitive-os-agent-setup.exe"
+DESKTOP="$ROOT/build/cognitive-os-agent-desktop.exe"
 
 if [ "${1:-}" = "clean" ]; then
     rm -rf "$ROOT/dist"
@@ -63,10 +63,10 @@ fi
 echo "[1/5] building release CLI binary"
 ./build.sh cli
 # MSYS bash hides the .exe suffix in listings; on Windows the real NTFS name is
-# cagent.exe, which is what build.sh emits and what setup.iss references.
-BIN="build/cagent.exe"
-[ -f "$BIN" ] || BIN="build/cagent"
-[ -f "$BIN" ] || { echo "ERROR: build/cagent[.exe] not produced." >&2; exit 1; }
+# cognitive-os-agent.exe, which is what build.sh emits and what setup.iss references.
+BIN="build/cognitive-os-agent.exe"
+[ -f "$BIN" ] || BIN="build/cognitive-os-agent"
+[ -f "$BIN" ] || { echo "ERROR: build/cognitive-os-agent[.exe] not produced." >&2; exit 1; }
 
 # --- 2. build desktop shell ---------------------------------------------------
 echo "[2/5] building native desktop shell (WebView2)"
@@ -91,7 +91,7 @@ if [ -f "$OUT" ]; then
     echo "  installer : $OUT"
     echo "  size      : $sz"
     echo ""
-    echo "  Run it to install to %LOCALAPPDATA%\\c-agent with desktop + start-menu"
+    echo "  Run it to install to %LOCALAPPDATA%\\cognitive-os-agent with desktop + start-menu"
     echo "  shortcuts and an uninstaller. The installed app opens the web console"
     echo "  in a single native window (no console, no browser)."
 else

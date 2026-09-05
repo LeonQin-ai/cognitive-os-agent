@@ -2,8 +2,8 @@
  * Free/cheap model presets (all OpenAI-compatible except noted) and an MCP
  * server marketplace. Entries that need a local process or a provider key are
  * flagged so the UI can guide the user. */
-#include "cagent/infra/catalog.h"
-#include "cagent/infra/util.h"
+#include "cognitive-os-agent/infra/catalog.h"
+#include "cognitive-os-agent/infra/util.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -113,8 +113,8 @@ static const mcp_entry MCPS[] = {
 };
 #define N_MCPS (int)(sizeof(MCPS) / sizeof(MCPS[0]))
 
-char *ca_catalog_models_json(void) {
-    char *out = ca_strdup("[");
+char *coa_catalog_models_json(void) {
+    char *out = coa_strdup("[");
     for (int i = 0; i < N_MODELS; i++) {
         char buf[1600];
         const model_entry *m = &MODELS[i];
@@ -145,8 +145,8 @@ char *ca_catalog_models_json(void) {
     return out;
 }
 
-char *ca_catalog_mcp_json(void) {
-    char *out = ca_strdup("[");
+char *coa_catalog_mcp_json(void) {
+    char *out = coa_strdup("[");
     for (int i = 0; i < N_MCPS; i++) {
         char buf[1400];
         const mcp_entry *m = &MCPS[i];

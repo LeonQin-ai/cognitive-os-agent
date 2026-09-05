@@ -8,15 +8,15 @@
 extern "C" {
 #endif
 
-typedef struct ca_memory ca_memory;
+typedef struct coa_memory coa_memory;
 
 /* Build a context block for `query` from memory. Returns a JSON array of
  * {kind,text,result,score} items (malloc'd; caller frees). max_items <= 0 = 8. */
-char *ca_context_build(ca_memory *m, const char *query, int max_items);
+char *coa_context_build(coa_memory *m, const char *query, int max_items);
 
-/* Render a context JSON array (from ca_context_build) into a readable text
+/* Render a context JSON array (from coa_context_build) into a readable text
  * block suitable for injecting into a prompt. Caller frees. */
-char *ca_context_render_text(const char *context_json);
+char *coa_context_render_text(const char *context_json);
 
 #ifdef __cplusplus
 }

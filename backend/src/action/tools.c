@@ -1,34 +1,34 @@
-#include "cagent/action/tools.h"
-#include "cagent/runtime/policy_engine.h"
-#include "cagent/runtime/event_bus.h"
-#include "cagent/infra/metrics.h"
-#include "cagent/infra/util.h"
+#include "cognitive-os-agent/action/tools.h"
+#include "cognitive-os-agent/runtime/policy_engine.h"
+#include "cognitive-os-agent/runtime/event_bus.h"
+#include "cognitive-os-agent/infra/metrics.h"
+#include "cognitive-os-agent/infra/util.h"
 
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
 #include "cJSON.h"
 
-struct ca_tool_registry {
-    const ca_tool **tools;
+struct coa_tool_registry {
+    const coa_tool **tools;
     size_t count, cap;
 };
 
-ca_tool_registry *ca_tool_registry_new(void) {
-    return calloc(1, sizeof(ca_tool_registry));
+coa_tool_registry *coa_tool_registry_new(void) {
+    return calloc(1, sizeof(coa_tool_registry));
 }
 
-void ca_tool_registry_free(ca_tool_registry *reg) {
+void coa_tool_registry_free(coa_tool_registry *reg) {
     if (!reg) return;
     free(reg->tools);
     free(reg);
 }
 
-int ca_tool_register(ca_tool_registry *reg, const ca_tool *tool) {
-    return ca_tool_register_ex(reg, tool, 0);
+int coa_tool_register(coa_tool_registry *reg, const coa_tool *tool) {
+    return coa_tool_register_ex(reg, tool, 0);
 }
 
-int ca_tool_register_ex(ca_tool_registry *reg, const ca_tool *tool, int replace) {
+int coa_tool_register_ex(coa_tool_registry *reg, const coa_tool *tool, int replace) {
     if (!reg || !tool) return -1;
     int i = -1;
     for (size_t k = 0; k < reg->count; k++)
@@ -40,7 +40,7 @@ int ca_tool_register_ex(ca_tool_registry *reg, const ca_tool *tool, int replace)
     }
     if (reg->count == reg->cap) {
         size_t cap = reg->cap ? reg->cap * 2 : 8;
-        const ca_tool **nt = realloc(reg->tools, cap * sizeof(ca_tool *));
+        const coa_tool **nt = realloc(reg->tools, cap * sizeof(coa_tool *));
         if (!nt) return -1;
         reg->tools = nt;
         reg->cap = cap;
@@ -49,42 +49,42 @@ int ca_tool_register_ex(ca_tool_registry *reg, const ca_tool *tool, int replace)
     return 0;
 }
 
-const ca_tool *ca_tool_find(ca_tool_registry *reg, const char *name) {
+const coa_tool *coa_tool_find(coa_tool_registry *reg, const char *name) {
     if (!reg) return NULL;
     for (size_t i = 0; i < reg->count; i++)
         if (strcmp(reg->tools[i]->name, name) == 0) return reg->tools[i];
     return NULL;
 }
 
-int ca_tool_registry_count(const ca_tool_registry *reg) {
+int coa_tool_registry_count(const coa_tool_registry *reg) {
     return reg ? (int)reg->count : 0;
 }
 
-const ca_tool *ca_tool_registry_get(const ca_tool_registry *reg, size_t i) {
+const coa_tool *coa_tool_registry_get(const coa_tool_registry *reg, size_t i) {
     return (reg && i < reg->count) ? reg->tools[i] : NULL;
 }
 
-void ca_tool_register_builtins(ca_tool_registry *reg) {
-    ca_tool_register(reg, ca_tool_file_read());
-    ca_tool_register(reg, ca_tool_file_write());
-    ca_tool_register(reg, ca_tool_file_edit());
-    ca_tool_register(reg, ca_tool_shell());
-    ca_tool_register(reg, ca_tool_git());
-    ca_tool_register(reg, ca_tool_mcp());
-    ca_tool_register(reg, ca_tool_skill());
-    ca_tool_register(reg, ca_tool_glob());
-    ca_tool_register(reg, ca_tool_grep());
+void coa_tool_register_builtins(coa_tool_registry *reg) {
+    coa_tool_register(reg, coa_tool_file_read());
+    coa_tool_register(reg, coa_tool_file_write());
+    coa_tool_register(reg, coa_tool_file_edit());
+    coa_tool_register(reg, coa_tool_shell());
+    coa_tool_register(reg, coa_tool_git());
+    coa_tool_register(reg, coa_tool_mcp());
+    coa_tool_register(reg, coa_tool_skill());
+    coa_tool_register(reg, coa_tool_glob());
+    coa_tool_register(reg, coa_tool_grep());
 }
 
-ca_tool_result *ca_tool_result_new(int ok, const char *output) {
-    ca_tool_result *r = calloc(1, sizeof(ca_tool_result));
+coa_tool_result *coa_tool_result_new(int ok, const char *output) {
+    coa_tool_result *r = calloc(1, sizeof(coa_tool_result));
     if (!r) return NULL;
     r->ok = ok;
-    r->output = ca_strdup(output ? output : "");
+    r->output = coa_strdup(output ? output : "");
     return r;
 }
 
-void ca_tool_result_free(ca_tool_result *r) {
+void coa_tool_result_free(coa_tool_result *r) {
     if (!r) return;
     free(r->output);
     free(r);
@@ -104,7 +104,7 @@ static int json_type_matches(const cJSON *v, const char *type) {
     return 1; /* unknown type keyword: don't reject */
 }
 
-int ca_tool_validate_args(const ca_tool *tool, const char *args_json, char **err_out) {
+int coa_tool_validate_args(const coa_tool *tool, const char *args_json, char **err_out) {
     if (err_out) *err_out = NULL;
     if (!tool || !tool->json_schema || !*tool->json_schema) return 0;
 
@@ -121,7 +121,7 @@ int ca_tool_validate_args(const ca_tool *tool, const char *args_json, char **err
 
     cJSON *args = cJSON_Parse(args_json && *args_json ? args_json : "{}");
     if (!args || !cJSON_IsObject(args)) {
-        if (err_out) *err_out = ca_strdup("args is not a JSON object");
+        if (err_out) *err_out = coa_strdup("args is not a JSON object");
         rc = -1;
     }
 
@@ -132,10 +132,10 @@ int ca_tool_validate_args(const ca_tool *tool, const char *args_json, char **err
             cJSON_ArrayForEach(it, required) {
                 if (!cJSON_IsString(it)) continue;
                 if (!cJSON_GetObjectItemCaseSensitive(args, it->valuestring)) {
-                    ca_strbuf b;
-                    ca_strbuf_init(&b);
-                    ca_strbuf_appendf(&b, "missing required arg '%s'", it->valuestring);
-                    if (err_out) *err_out = ca_strbuf_detach(&b);
+                    coa_strbuf b;
+                    coa_strbuf_init(&b);
+                    coa_strbuf_appendf(&b, "missing required arg '%s'", it->valuestring);
+                    if (err_out) *err_out = coa_strbuf_detach(&b);
                     rc = -1;
                     break;
                 }
@@ -152,12 +152,12 @@ int ca_tool_validate_args(const ca_tool *tool, const char *args_json, char **err
                 cJSON *ptype = cJSON_GetObjectItemCaseSensitive(pspec, "type");
                 const char *tname = (ptype && cJSON_IsString(ptype)) ? ptype->valuestring : NULL;
                 if (!json_type_matches(child, tname)) {
-                    ca_strbuf b;
-                    ca_strbuf_init(&b);
-                    ca_strbuf_appendf(&b, "arg '%s' expected type %s",
+                    coa_strbuf b;
+                    coa_strbuf_init(&b);
+                    coa_strbuf_appendf(&b, "arg '%s' expected type %s",
                                       child->string ? child->string : "?",
                                       tname ? tname : "any");
-                    if (err_out) *err_out = ca_strbuf_detach(&b);
+                    if (err_out) *err_out = coa_strbuf_detach(&b);
                     rc = -1;
                     break;
                 }
@@ -184,38 +184,38 @@ static char *truncate_output(const char *out, size_t limit) {
     return msg;
 }
 
-ca_tool_result *ca_tool_execute(ca_tool_registry *reg, const char *name,
-                                const char *args_json, const ca_tool_ctx *ctx) {
-    const ca_tool *tool = ca_tool_find(reg, name);
+coa_tool_result *coa_tool_execute(coa_tool_registry *reg, const char *name,
+                                const char *args_json, const coa_tool_ctx *ctx) {
+    const coa_tool *tool = coa_tool_find(reg, name);
     if (!tool) {
         char msg[256];
         snprintf(msg, sizeof(msg), "unknown tool: %s", name);
-        return ca_tool_result_new(0, msg);
+        return coa_tool_result_new(0, msg);
     }
 
     /* lightweight args schema validation (fail fast, before policy/execute) */
     char *verr = NULL;
-    if (ca_tool_validate_args(tool, args_json, &verr) != 0) {
+    if (coa_tool_validate_args(tool, args_json, &verr) != 0) {
         char msg[512];
         snprintf(msg, sizeof(msg), "args schema mismatch: %s", verr ? verr : "invalid");
         free(verr);
-        return ca_tool_result_new(0, msg);
+        return coa_tool_result_new(0, msg);
     }
 
     /* policy check */
     if (ctx && ctx->policy) {
         const char *reason = NULL;
-        ca_policy_decision d = ca_policy_check(ctx->policy, name, args_json, &reason);
-        if (d != CA_POLICY_ALLOW) {
+        coa_policy_decision d = coa_policy_check(ctx->policy, name, args_json, &reason);
+        if (d != COA_POLICY_ALLOW) {
             char msg[512];
             snprintf(msg, sizeof(msg), "denied by policy (%s): %s", reason ? reason : "no reason", name);
-            if (ctx->metrics) ca_metrics_inc(ctx->metrics, "tools.denied");
-            return ca_tool_result_new(0, msg);
+            if (ctx->metrics) coa_metrics_inc(ctx->metrics, "tools.denied");
+            return coa_tool_result_new(0, msg);
         }
     }
 
-    ca_tool_result *r = tool->execute(tool, ctx, args_json);
-    if (!r) r = ca_tool_result_new(0, "tool returned NULL");
+    coa_tool_result *r = tool->execute(tool, ctx, args_json);
+    if (!r) r = coa_tool_result_new(0, "tool returned NULL");
 
     /* cap output size before it enters the LLM context */
     if (r->output) {
@@ -227,10 +227,10 @@ ca_tool_result *ca_tool_execute(ca_tool_registry *reg, const char *name,
     }
 
     if (ctx && ctx->metrics) {
-        ca_metrics_inc(ctx->metrics, "tools.executed");
+        coa_metrics_inc(ctx->metrics, "tools.executed");
         char mname[128];
         snprintf(mname, sizeof(mname), "tools.%s", name);
-        ca_metrics_inc(ctx->metrics, mname);
+        coa_metrics_inc(ctx->metrics, mname);
     }
     if (ctx && ctx->bus) {
         cJSON *ev = cJSON_CreateObject();
@@ -238,7 +238,7 @@ ca_tool_result *ca_tool_execute(ca_tool_registry *reg, const char *name,
         cJSON_AddBoolToObject(ev, "ok", r->ok ? 1 : 0);
         const char *out = r->output ? r->output : "";
         cJSON_AddStringToObject(ev, "output", strlen(out) > 300 ? (out + strlen(out) - 300) : out);
-        ca_event_bus_publish(ctx->bus, CA_EV_TOOL, "tools", ev);
+        coa_event_bus_publish(ctx->bus, COA_EV_TOOL, "tools", ev);
     }
     return r;
 }

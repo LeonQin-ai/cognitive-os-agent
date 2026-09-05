@@ -1,30 +1,30 @@
 /* auth.c — API key / bearer-token authentication (constant-time compare). */
-#include "cagent/api/auth.h"
-#include "cagent/infra/util.h"
+#include "cognitive-os-agent/api/auth.h"
+#include "cognitive-os-agent/infra/util.h"
 
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
 #include <time.h>
 
-struct ca_auth {
+struct coa_auth {
     char **keys;
     size_t count;
     size_t cap;
 };
 
-ca_auth *ca_auth_new(void) {
-    return (ca_auth *)calloc(1, sizeof(ca_auth));
+coa_auth *coa_auth_new(void) {
+    return (coa_auth *)calloc(1, sizeof(coa_auth));
 }
 
-void ca_auth_free(ca_auth *a) {
+void coa_auth_free(coa_auth *a) {
     if (!a) return;
     for (size_t i = 0; i < a->count; i++) free(a->keys[i]);
     free(a->keys);
     free(a);
 }
 
-void ca_auth_add_key(ca_auth *a, const char *key) {
+void coa_auth_add_key(coa_auth *a, const char *key) {
     if (!a || !key || !*key) return;
     if (a->count == a->cap) {
         size_t cap = a->cap ? a->cap * 2 : 4;
@@ -33,10 +33,10 @@ void ca_auth_add_key(ca_auth *a, const char *key) {
         a->keys = nk;
         a->cap = cap;
     }
-    a->keys[a->count++] = ca_strdup(key);
+    a->keys[a->count++] = coa_strdup(key);
 }
 
-int ca_auth_count(ca_auth *a) {
+int coa_auth_count(coa_auth *a) {
     return a ? (int)a->count : 0;
 }
 
@@ -54,7 +54,7 @@ static int ct_equal(const char *a, const char *b) {
     return diff == 0;
 }
 
-int ca_auth_check(ca_auth *a, const char *token) {
+int coa_auth_check(coa_auth *a, const char *token) {
     if (!a || !token) return 0;
     for (size_t i = 0; i < a->count; i++)
         if (ct_equal(a->keys[i], token)) return 1;
@@ -72,13 +72,13 @@ static int prefix_ieq(const char *s, const char *prefix) {
     return 1;
 }
 
-int ca_auth_check_header(ca_auth *a, const char *authorization) {
+int coa_auth_check_header(coa_auth *a, const char *authorization) {
     if (!a || !authorization) return 0;
     const char *tok = authorization;
     if (prefix_ieq(authorization, "bearer ")) tok = authorization + 7;
     while (*tok == ' ' || *tok == '\t') tok++;
     if (!*tok) return 0;
-    return ca_auth_check(a, tok);
+    return coa_auth_check(a, tok);
 }
 
 /* Small xorshift64 PRNG seeded once per process from wall clock + stack
@@ -92,7 +92,7 @@ static unsigned long long xorshift64(unsigned long long *s) {
     return x;
 }
 
-void ca_auth_generate_token(char *out, size_t bytes) {
+void coa_auth_generate_token(char *out, size_t bytes) {
     if (!out || bytes == 0) return;
     static unsigned long long state;
     static int seeded = 0;

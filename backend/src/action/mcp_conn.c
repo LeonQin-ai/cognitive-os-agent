@@ -7,14 +7,14 @@
 #ifndef _POSIX_C_SOURCE
 #define _POSIX_C_SOURCE 200809L /* strtok_r */
 #endif
-#include "cagent/action/mcp_conn.h"
-#include "cagent/action/tools.h"
-#include "cagent/os/os_thread.h"
-#include "cagent/os/os_proc.h"
-#include "cagent/os/http.h"
-#include "cagent/os/os_fs.h"
-#include "cagent/os/os_time.h"
-#include "cagent/infra/util.h"
+#include "cognitive-os-agent/action/mcp_conn.h"
+#include "cognitive-os-agent/action/tools.h"
+#include "cognitive-os-agent/os/os_thread.h"
+#include "cognitive-os-agent/os/os_proc.h"
+#include "cognitive-os-agent/os/http.h"
+#include "cognitive-os-agent/os/os_fs.h"
+#include "cognitive-os-agent/os/os_time.h"
+#include "cognitive-os-agent/infra/util.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -24,50 +24,50 @@
 #define MCP_PROTO_VERSION "2024-11-05"
 #define MCP_HTTP_TIMEOUT_MS 10000
 #define MCP_STDIO_TIMEOUT_MS 30000   /* npx may download the server on first run */
-#define MCP_CLIENT_NAME "c-agent"
+#define MCP_CLIENT_NAME "cognitive-os-agent"
 #define MCP_CLIENT_VERSION "0.1"
 
 /* Per-connection runtime state. */
-typedef struct ca_mcp_session {
-    ca_proc_popen *proc;   /* stdio child (NULL until first use / http) */
+typedef struct coa_mcp_session {
+    coa_proc_popen *proc;   /* stdio child (NULL until first use / http) */
     int initialized;       /* handshake completed */
     cJSON *tools;          /* cached tools/list array (owned) */
-} ca_mcp_session;
+} coa_mcp_session;
 
-struct ca_mcp_manager {
-    ca_mutex mtx;
-    ca_mcp_conn *items;
-    ca_mcp_session *sess;  /* parallel to items */
+struct coa_mcp_manager {
+    coa_mutex mtx;
+    coa_mcp_conn *items;
+    coa_mcp_session *sess;  /* parallel to items */
     size_t count, cap;
-    /* dynamically created ca_tool structs owned here (registered into the
+    /* dynamically created coa_tool structs owned here (registered into the
      * tool registry; the registry stores borrowed pointers) */
-    ca_tool **owned;
+    coa_tool **owned;
     size_t n_owned, cap_owned;
 };
 
 static long g_jsonrpc_id = 1;
 
-static void conn_free(ca_mcp_conn *c) {
+static void conn_free(coa_mcp_conn *c) {
     free(c->name); free(c->transport); free(c->url); free(c->token);
     free(c->command); free(c->args_csv);
 }
 
-static void sess_clear(ca_mcp_session *s) {
-    if (s->proc) { ca_proc_popen_free(s->proc); s->proc = NULL; }
+static void sess_clear(coa_mcp_session *s) {
+    if (s->proc) { coa_proc_popen_free(s->proc); s->proc = NULL; }
     if (s->tools) { cJSON_Delete(s->tools); s->tools = NULL; }
     s->initialized = 0;
 }
 
-ca_mcp_manager *ca_mcp_manager_new(void) {
-    ca_mcp_manager *m = (ca_mcp_manager *)calloc(1, sizeof(ca_mcp_manager));
+coa_mcp_manager *coa_mcp_manager_new(void) {
+    coa_mcp_manager *m = (coa_mcp_manager *)calloc(1, sizeof(coa_mcp_manager));
     if (!m) return NULL;
-    ca_mutex_init(&m->mtx);
+    coa_mutex_init(&m->mtx);
     return m;
 }
 
-void ca_mcp_manager_free(ca_mcp_manager *m) {
+void coa_mcp_manager_free(coa_mcp_manager *m) {
     if (!m) return;
-    ca_mutex_lock(&m->mtx);
+    coa_mutex_lock(&m->mtx);
     for (size_t i = 0; i < m->count; i++) { conn_free(&m->items[i]); sess_clear(&m->sess[i]); }
     free(m->items);
     free(m->sess);
@@ -79,18 +79,18 @@ void ca_mcp_manager_free(ca_mcp_manager *m) {
         free(m->owned[i]);
     }
     free(m->owned);
-    ca_mutex_unlock(&m->mtx);
-    ca_mutex_destroy(&m->mtx);
+    coa_mutex_unlock(&m->mtx);
+    coa_mutex_destroy(&m->mtx);
     free(m);
 }
 
-static int find_conn(ca_mcp_manager *m, const char *name) {
+static int find_conn(coa_mcp_manager *m, const char *name) {
     for (size_t i = 0; i < m->count; i++)
         if (strcmp(m->items[i].name, name) == 0) return (int)i;
     return -1;
 }
 
-int ca_mcp_manager_add_ex(ca_mcp_manager *m, const ca_mcp_conn *conn) {
+int coa_mcp_manager_add_ex(coa_mcp_manager *m, const coa_mcp_conn *conn) {
     if (!m || !conn || !conn->name || !*conn->name) return -1;
     const char *transport = (conn->transport && *conn->transport) ? conn->transport : "http";
     int is_http = strcmp(transport, "http") == 0;
@@ -99,9 +99,9 @@ int ca_mcp_manager_add_ex(ca_mcp_manager *m, const ca_mcp_conn *conn) {
     if (is_http && (!conn->url || !*conn->url)) return -1;
     if (is_stdio && (!conn->command || !*conn->command)) return -1;
 
-    ca_mutex_lock(&m->mtx);
-    ca_mcp_conn *e = NULL;
-    ca_mcp_session *s = NULL;
+    coa_mutex_lock(&m->mtx);
+    coa_mcp_conn *e = NULL;
+    coa_mcp_session *s = NULL;
     int i = find_conn(m, conn->name);
     if (i >= 0) {
         e = &m->items[i];
@@ -112,9 +112,9 @@ int ca_mcp_manager_add_ex(ca_mcp_manager *m, const ca_mcp_conn *conn) {
     } else {
         if (m->count == m->cap) {
             size_t ncap = m->cap ? m->cap * 2 : 8;
-            ca_mcp_conn *ni = (ca_mcp_conn *)realloc(m->items, ncap * sizeof(*ni));
-            ca_mcp_session *ns = (ca_mcp_session *)realloc(m->sess, ncap * sizeof(*ns));
-            if (!ni || !ns) { ca_mutex_unlock(&m->mtx); return -1; }
+            coa_mcp_conn *ni = (coa_mcp_conn *)realloc(m->items, ncap * sizeof(*ni));
+            coa_mcp_session *ns = (coa_mcp_session *)realloc(m->sess, ncap * sizeof(*ns));
+            if (!ni || !ns) { coa_mutex_unlock(&m->mtx); return -1; }
             m->items = ni; m->sess = ns; m->cap = ncap;
         }
         e = &m->items[m->count];
@@ -123,84 +123,84 @@ int ca_mcp_manager_add_ex(ca_mcp_manager *m, const ca_mcp_conn *conn) {
         memset(s, 0, sizeof(*s));
         m->count++;
     }
-    e->name = ca_strdup(conn->name);
-    e->transport = ca_strdup(transport);
-    e->url = conn->url ? ca_strdup(conn->url) : NULL;
-    e->token = conn->token ? ca_strdup(conn->token) : NULL;
-    e->command = conn->command ? ca_strdup(conn->command) : NULL;
-    e->args_csv = conn->args_csv ? ca_strdup(conn->args_csv) : NULL;
-    ca_mutex_unlock(&m->mtx);
+    e->name = coa_strdup(conn->name);
+    e->transport = coa_strdup(transport);
+    e->url = conn->url ? coa_strdup(conn->url) : NULL;
+    e->token = conn->token ? coa_strdup(conn->token) : NULL;
+    e->command = conn->command ? coa_strdup(conn->command) : NULL;
+    e->args_csv = conn->args_csv ? coa_strdup(conn->args_csv) : NULL;
+    coa_mutex_unlock(&m->mtx);
     return 0;
 }
 
-int ca_mcp_manager_add(ca_mcp_manager *m, const char *name, const char *url, const char *token) {
+int coa_mcp_manager_add(coa_mcp_manager *m, const char *name, const char *url, const char *token) {
     if (!m || !name || !*name || !url || !*url) return -1;
-    ca_mcp_conn c;
+    coa_mcp_conn c;
     memset(&c, 0, sizeof(c));
     c.name = (char *)name;
     c.transport = (char *)"http";
     c.url = (char *)url;
     c.token = (char *)token;
-    return ca_mcp_manager_add_ex(m, &c);
+    return coa_mcp_manager_add_ex(m, &c);
 }
 
-int ca_mcp_manager_remove(ca_mcp_manager *m, const char *name) {
+int coa_mcp_manager_remove(coa_mcp_manager *m, const char *name) {
     if (!m || !name) return -1;
-    ca_mutex_lock(&m->mtx);
+    coa_mutex_lock(&m->mtx);
     int i = find_conn(m, name);
-    if (i < 0) { ca_mutex_unlock(&m->mtx); return -1; }
+    if (i < 0) { coa_mutex_unlock(&m->mtx); return -1; }
     conn_free(&m->items[i]);
     sess_clear(&m->sess[i]);
     if (m->count - (size_t)i - 1 > 0) {
-        memmove(&m->items[i], &m->items[i + 1], (m->count - (size_t)i - 1) * sizeof(ca_mcp_conn));
-        memmove(&m->sess[i], &m->sess[i + 1], (m->count - (size_t)i - 1) * sizeof(ca_mcp_session));
+        memmove(&m->items[i], &m->items[i + 1], (m->count - (size_t)i - 1) * sizeof(coa_mcp_conn));
+        memmove(&m->sess[i], &m->sess[i + 1], (m->count - (size_t)i - 1) * sizeof(coa_mcp_session));
     }
     m->count--;
-    ca_mutex_unlock(&m->mtx);
+    coa_mutex_unlock(&m->mtx);
     return 0;
 }
 
-const ca_mcp_conn *ca_mcp_manager_find(ca_mcp_manager *m, const char *name) {
+const coa_mcp_conn *coa_mcp_manager_find(coa_mcp_manager *m, const char *name) {
     if (!m || !name) return NULL;
-    ca_mutex_lock(&m->mtx);
-    const ca_mcp_conn *c = NULL;
+    coa_mutex_lock(&m->mtx);
+    const coa_mcp_conn *c = NULL;
     int i = find_conn(m, name);
     if (i >= 0) c = &m->items[i];
-    ca_mutex_unlock(&m->mtx);
+    coa_mutex_unlock(&m->mtx);
     return c;
 }
 
-int ca_mcp_manager_count(ca_mcp_manager *m) {
+int coa_mcp_manager_count(coa_mcp_manager *m) {
     if (!m) return 0;
-    ca_mutex_lock(&m->mtx);
+    coa_mutex_lock(&m->mtx);
     int n = (int)m->count;
-    ca_mutex_unlock(&m->mtx);
+    coa_mutex_unlock(&m->mtx);
     return n;
 }
 
-const ca_mcp_conn *ca_mcp_manager_get(ca_mcp_manager *m, size_t i) {
+const coa_mcp_conn *coa_mcp_manager_get(coa_mcp_manager *m, size_t i) {
     if (!m) return NULL;
-    ca_mutex_lock(&m->mtx);
-    const ca_mcp_conn *c = (i < m->count) ? &m->items[i] : NULL;
-    ca_mutex_unlock(&m->mtx);
+    coa_mutex_lock(&m->mtx);
+    const coa_mcp_conn *c = (i < m->count) ? &m->items[i] : NULL;
+    coa_mutex_unlock(&m->mtx);
     return c;
 }
 
 /* ---- stdio transport helpers ---- */
 
 /* Split args_csv on whitespace into a NULL-terminated argv. */
-static char **stdio_argv(const ca_mcp_conn *c) {
+static char **stdio_argv(const coa_mcp_conn *c) {
     size_t max = 4;
     if (c->args_csv) for (const char *p = c->args_csv; *p; p++) if (*p == ' ') max++;
     char **argv = (char **)calloc(max + 2, sizeof(char *));
     if (!argv) return NULL;
     int n = 0;
-    argv[n++] = ca_strdup(c->command);
+    argv[n++] = coa_strdup(c->command);
     if (c->args_csv) {
-        char *copy = ca_strdup(c->args_csv);
+        char *copy = coa_strdup(c->args_csv);
         char *save = NULL;
         for (char *tok = strtok_r(copy, " \t", &save); tok; tok = strtok_r(NULL, " \t", &save))
-            argv[n++] = ca_strdup(tok);
+            argv[n++] = coa_strdup(tok);
         free(copy);
     }
     return argv;
@@ -212,17 +212,17 @@ static void free_argv(char **argv) {
     free(argv);
 }
 
-static int stdio_ensure(ca_mcp_manager *m, size_t idx) {
-    ca_mcp_conn *c = &m->items[idx];
-    ca_mcp_session *s = &m->sess[idx];
-    if (s->proc && ca_proc_popen_alive(s->proc)) return 0;
-    if (s->proc) { ca_proc_popen_free(s->proc); s->proc = NULL; }
+static int stdio_ensure(coa_mcp_manager *m, size_t idx) {
+    coa_mcp_conn *c = &m->items[idx];
+    coa_mcp_session *s = &m->sess[idx];
+    if (s->proc && coa_proc_popen_alive(s->proc)) return 0;
+    if (s->proc) { coa_proc_popen_free(s->proc); s->proc = NULL; }
     s->initialized = 0;
     if (s->tools) { cJSON_Delete(s->tools); s->tools = NULL; }
 
     char **argv = stdio_argv(c);
     if (!argv) return -1;
-    s->proc = ca_proc_popen_new(argv);
+    s->proc = coa_proc_popen_new(argv);
     free_argv(argv);
     return s->proc ? 0 : -1;
 }
@@ -230,8 +230,8 @@ static int stdio_ensure(ca_mcp_manager *m, size_t idx) {
 /* Scan the stdio buffer for the response with `want_id`; on success returns a
  * malloc'd JSON text of that response line and consumes it (and everything
  * before it) from the buffer. */
-static char *stdio_take_response(ca_proc_popen *p, long want_id) {
-    const char *buf = ca_proc_popen_buffer(p);
+static char *stdio_take_response(coa_proc_popen *p, long want_id) {
+    const char *buf = coa_proc_popen_buffer(p);
     const char *cur = buf;
     while (cur && *cur) {
         const char *nl = strchr(cur, '\n');
@@ -250,7 +250,7 @@ static char *stdio_take_response(ca_proc_popen *p, long want_id) {
         if (is_match) {
             /* consume everything through the matched line's newline (or to
              * end-of-buffer when the line is unterminated) */
-            ca_proc_popen_trim(p, (size_t)((nl ? nl + 1 : cur + len) - buf));
+            coa_proc_popen_trim(p, (size_t)((nl ? nl + 1 : cur + len) - buf));
             return line;
         }
         free(line);
@@ -261,7 +261,7 @@ static char *stdio_take_response(ca_proc_popen *p, long want_id) {
 
 /* Send one JSON-RPC request over the connection and return the parsed
  * "result" object (owned) or NULL with *err set. */
-static cJSON *rpc_http(const ca_mcp_conn *c, const char *method, cJSON *params,
+static cJSON *rpc_http(const coa_mcp_conn *c, const char *method, cJSON *params,
                        long id, char **err) {
     cJSON *rpc = cJSON_CreateObject();
     cJSON_AddStringToObject(rpc, "jsonrpc", "2.0");
@@ -270,14 +270,14 @@ static cJSON *rpc_http(const ca_mcp_conn *c, const char *method, cJSON *params,
     if (params) cJSON_AddItemToObject(rpc, "params", params);
     char *body = cJSON_PrintUnformatted(rpc);
     cJSON_Delete(rpc);
-    if (!body) { if (err) *err = ca_strdup("rpc: build request failed"); return NULL; }
+    if (!body) { if (err) *err = coa_strdup("rpc: build request failed"); return NULL; }
 
-    ca_strmap hdrs;
+    coa_strmap hdrs;
     memset(&hdrs, 0, sizeof(hdrs));
     if (c->token && *c->token) {
         char auth[512];
         snprintf(auth, sizeof(auth), "Bearer %s", c->token);
-        ca_strmap_set(&hdrs, "Authorization", auth);
+        coa_strmap_set(&hdrs, "Authorization", auth);
     }
 
     char base[512], path[512];
@@ -294,20 +294,20 @@ static cJSON *rpc_http(const ca_mcp_conn *c, const char *method, cJSON *params,
         snprintf(path, sizeof(path), "/");
     }
 
-    ca_http_response *r = ca_http_post(base, path, body, "application/json",
+    coa_http_response *r = coa_http_post(base, path, body, "application/json",
                                        (c->token && *c->token) ? &hdrs : NULL,
                                        MCP_HTTP_TIMEOUT_MS);
     free(body);
-    if (c->token && *c->token) ca_strmap_free(&hdrs);
-    if (!r) { if (err) *err = ca_strdup("http request failed"); return NULL; }
+    if (c->token && *c->token) coa_strmap_free(&hdrs);
+    if (!r) { if (err) *err = coa_strdup("http request failed"); return NULL; }
     cJSON *resp = r->body ? cJSON_Parse(r->body) : NULL;
     int status = r->status;
-    ca_http_response_free(r);
+    coa_http_response_free(r);
     if (!resp) {
         if (err) {
             char msg[128];
             snprintf(msg, sizeof(msg), "http %d: invalid JSON response", status);
-            *err = ca_strdup(msg);
+            *err = coa_strdup(msg);
         }
         return NULL;
     }
@@ -315,7 +315,7 @@ static cJSON *rpc_http(const ca_mcp_conn *c, const char *method, cJSON *params,
     if (jerr) {
         if (err) {
             char *es = cJSON_PrintUnformatted(jerr);
-            *err = ca_strdup(es ? es : "json-rpc error");
+            *err = coa_strdup(es ? es : "json-rpc error");
             free(es);
         }
         cJSON_Delete(resp);
@@ -323,18 +323,18 @@ static cJSON *rpc_http(const ca_mcp_conn *c, const char *method, cJSON *params,
     }
     cJSON *result = cJSON_DetachItemFromObjectCaseSensitive(resp, "result");
     cJSON_Delete(resp);
-    if (!result) { if (err) *err = ca_strdup("response has no result"); return NULL; }
+    if (!result) { if (err) *err = coa_strdup("response has no result"); return NULL; }
     return result;
 }
 
-static cJSON *rpc_stdio(ca_mcp_manager *m, size_t idx, const char *method,
+static cJSON *rpc_stdio(coa_mcp_manager *m, size_t idx, const char *method,
                         cJSON *params, long id, char **err) {
-    ca_mcp_conn *c = &m->items[idx];
-    ca_mcp_session *s = &m->sess[idx];
+    coa_mcp_conn *c = &m->items[idx];
+    coa_mcp_session *s = &m->sess[idx];
     (void)c;
     if (stdio_ensure(m, idx) != 0) {
         if (params) cJSON_Delete(params);
-        if (err) *err = ca_strdup("stdio: failed to spawn server process");
+        if (err) *err = coa_strdup("stdio: failed to spawn server process");
         return NULL;
     }
     s = &m->sess[idx];
@@ -346,34 +346,34 @@ static cJSON *rpc_stdio(ca_mcp_manager *m, size_t idx, const char *method,
     if (params) cJSON_AddItemToObject(rpc, "params", params);
     char *body = cJSON_PrintUnformatted(rpc);
     cJSON_Delete(rpc);
-    if (!body) { if (err) *err = ca_strdup("rpc: build request failed"); return NULL; }
+    if (!body) { if (err) *err = coa_strdup("rpc: build request failed"); return NULL; }
 
-    ca_strbuf wire;
-    ca_strbuf_init(&wire);
-    ca_strbuf_append(&wire, body);
-    ca_strbuf_append(&wire, "\n");
+    coa_strbuf wire;
+    coa_strbuf_init(&wire);
+    coa_strbuf_append(&wire, body);
+    coa_strbuf_append(&wire, "\n");
     free(body);
-    int wrc = ca_proc_popen_write(s->proc, wire.buf ? wire.buf : "", wire.len);
-    ca_strbuf_free(&wire);
+    int wrc = coa_proc_popen_write(s->proc, wire.buf ? wire.buf : "", wire.len);
+    coa_strbuf_free(&wire);
     if (wrc != 0) {
-        if (err) *err = ca_strdup("stdio: write failed (server died?)");
+        if (err) *err = coa_strdup("stdio: write failed (server died?)");
         return NULL;
     }
 
     int timeout = s->initialized ? MCP_STDIO_TIMEOUT_MS : MCP_STDIO_TIMEOUT_MS;
-    int64_t deadline = ca_time_now_ms() + timeout;
-    while (ca_time_now_ms() < deadline && ca_proc_popen_alive(s->proc)) {
-        ca_proc_popen_read(s->proc, 100);
+    int64_t deadline = coa_time_now_ms() + timeout;
+    while (coa_time_now_ms() < deadline && coa_proc_popen_alive(s->proc)) {
+        coa_proc_popen_read(s->proc, 100);
         char *line = stdio_take_response(s->proc, id);
         if (line) {
             cJSON *resp = cJSON_Parse(line);
             free(line);
-            if (!resp) { if (err) *err = ca_strdup("stdio: invalid JSON response"); return NULL; }
+            if (!resp) { if (err) *err = coa_strdup("stdio: invalid JSON response"); return NULL; }
             cJSON *jerr = cJSON_GetObjectItemCaseSensitive(resp, "error");
             if (jerr) {
                 if (err) {
                     char *es = cJSON_PrintUnformatted(jerr);
-                    *err = ca_strdup(es ? es : "json-rpc error");
+                    *err = coa_strdup(es ? es : "json-rpc error");
                     free(es);
                 }
                 cJSON_Delete(resp);
@@ -381,23 +381,23 @@ static cJSON *rpc_stdio(ca_mcp_manager *m, size_t idx, const char *method,
             }
             cJSON *result = cJSON_DetachItemFromObjectCaseSensitive(resp, "result");
             cJSON_Delete(resp);
-            if (!result) { if (err) *err = ca_strdup("response has no result"); return NULL; }
+            if (!result) { if (err) *err = coa_strdup("response has no result"); return NULL; }
             return result;
         }
     }
-    if (err) *err = ca_strdup("stdio: timeout waiting for response");
+    if (err) *err = coa_strdup("stdio: timeout waiting for response");
     return NULL;
 }
 
-static cJSON *rpc(ca_mcp_manager *m, size_t idx, const char *method,
+static cJSON *rpc(coa_mcp_manager *m, size_t idx, const char *method,
                   cJSON *params, long id, char **err) {
     if (strcmp(m->items[idx].transport ? m->items[idx].transport : "http", "stdio") == 0)
         return rpc_stdio(m, idx, method, params, id, err);
     return rpc_http(&m->items[idx], method, params, id, err);
 }
 
-static void send_notification_stdio(ca_mcp_manager *m, size_t idx, const char *method) {
-    ca_mcp_session *s = &m->sess[idx];
+static void send_notification_stdio(coa_mcp_manager *m, size_t idx, const char *method) {
+    coa_mcp_session *s = &m->sess[idx];
     if (!s->proc) return;
     cJSON *rpc = cJSON_CreateObject();
     cJSON_AddStringToObject(rpc, "jsonrpc", "2.0");
@@ -405,19 +405,19 @@ static void send_notification_stdio(ca_mcp_manager *m, size_t idx, const char *m
     char *body = cJSON_PrintUnformatted(rpc);
     cJSON_Delete(rpc);
     if (body) {
-        ca_strbuf wire;
-        ca_strbuf_init(&wire);
-        ca_strbuf_append(&wire, body);
-        ca_strbuf_append(&wire, "\n");
-        ca_proc_popen_write(s->proc, wire.buf ? wire.buf : "", wire.len);
-        ca_strbuf_free(&wire);
+        coa_strbuf wire;
+        coa_strbuf_init(&wire);
+        coa_strbuf_append(&wire, body);
+        coa_strbuf_append(&wire, "\n");
+        coa_proc_popen_write(s->proc, wire.buf ? wire.buf : "", wire.len);
+        coa_strbuf_free(&wire);
         free(body);
     }
 }
 
 /* Ensure the session completed the MCP handshake. 0 ok. */
-static int ensure_initialized(ca_mcp_manager *m, size_t idx) {
-    ca_mcp_session *s = &m->sess[idx];
+static int ensure_initialized(coa_mcp_manager *m, size_t idx) {
+    coa_mcp_session *s = &m->sess[idx];
     if (strcmp(m->items[idx].transport ? m->items[idx].transport : "http", "stdio") == 0
         && stdio_ensure(m, idx) != 0) return -1;
     if (s->initialized) return 0;
@@ -446,8 +446,8 @@ static int ensure_initialized(ca_mcp_manager *m, size_t idx) {
 }
 
 /* Fetch (and cache) the tools/list array. Borrowed pointer, NULL on error. */
-static const cJSON *fetch_tools(ca_mcp_manager *m, size_t idx) {
-    ca_mcp_session *s = &m->sess[idx];
+static const cJSON *fetch_tools(coa_mcp_manager *m, size_t idx) {
+    coa_mcp_session *s = &m->sess[idx];
     if (s->tools) return s->tools;
     long id = g_jsonrpc_id++;
     char *err = NULL;
@@ -461,25 +461,25 @@ static const cJSON *fetch_tools(ca_mcp_manager *m, size_t idx) {
     return s->tools;
 }
 
-int ca_mcp_manager_call(ca_mcp_manager *m, const char *name,
+int coa_mcp_manager_call(coa_mcp_manager *m, const char *name,
                         const char *tool, const char *args_json,
                         char **out_text, char **err_text) {
     if (out_text) *out_text = NULL;
     if (err_text) *err_text = NULL;
     if (!m || !name || !tool) {
-        if (err_text) *err_text = ca_strdup("mcp: invalid call");
+        if (err_text) *err_text = coa_strdup("mcp: invalid call");
         return -1;
     }
-    ca_mutex_lock(&m->mtx);
+    coa_mutex_lock(&m->mtx);
     int idx = find_conn(m, name);
     if (idx < 0) {
-        ca_mutex_unlock(&m->mtx);
-        if (err_text) *err_text = ca_strdup("mcp: unknown server");
+        coa_mutex_unlock(&m->mtx);
+        if (err_text) *err_text = coa_strdup("mcp: unknown server");
         return -1;
     }
     if (ensure_initialized(m, (size_t)idx) != 0) {
-        ca_mutex_unlock(&m->mtx);
-        if (err_text) *err_text = ca_strdup("mcp: handshake failed");
+        coa_mutex_unlock(&m->mtx);
+        if (err_text) *err_text = coa_strdup("mcp: handshake failed");
         return -1;
     }
 
@@ -493,40 +493,40 @@ int ca_mcp_manager_call(ca_mcp_manager *m, const char *name,
     char *err = NULL;
     cJSON *result = rpc(m, (size_t)idx, "tools/call", params, id, &err);
     if (!result) {
-        ca_mutex_unlock(&m->mtx);
-        if (err_text) *err_text = err ? err : ca_strdup("mcp: call failed");
+        coa_mutex_unlock(&m->mtx);
+        if (err_text) *err_text = err ? err : coa_strdup("mcp: call failed");
         return -1;
     }
     /* Standard result: {content:[{type:"text",text:...}], isError?} */
     cJSON *is_err = cJSON_GetObjectItemCaseSensitive(result, "isError");
     int tool_is_error = (is_err && cJSON_IsTrue(is_err)) ? 1 : 0;
     cJSON *content = cJSON_GetObjectItemCaseSensitive(result, "content");
-    ca_strbuf sb;
-    ca_strbuf_init(&sb);
+    coa_strbuf sb;
+    coa_strbuf_init(&sb);
     if (cJSON_IsArray(content)) {
         cJSON *it;
         cJSON_ArrayForEach(it, content) {
             cJSON *text = cJSON_GetObjectItemCaseSensitive(it, "text");
             if (text && cJSON_IsString(text) && text->valuestring) {
-                ca_strbuf_append(&sb, text->valuestring);
-                ca_strbuf_append(&sb, "\n");
+                coa_strbuf_append(&sb, text->valuestring);
+                coa_strbuf_append(&sb, "\n");
             }
         }
     } else if (!cJSON_IsArray(content)) {
         char *rs = cJSON_PrintUnformatted(result);
-        ca_strbuf_append(&sb, rs ? rs : "");
+        coa_strbuf_append(&sb, rs ? rs : "");
         free(rs);
     }
     cJSON_Delete(result);
-    ca_mutex_unlock(&m->mtx);
+    coa_mutex_unlock(&m->mtx);
 
-    char *text = ca_strbuf_detach(&sb);
+    char *text = coa_strbuf_detach(&sb);
     if (tool_is_error) {
-        if (err_text) *err_text = text ? text : ca_strdup("tool reported error");
+        if (err_text) *err_text = text ? text : coa_strdup("tool reported error");
         else free(text);
         return -1;
     }
-    if (out_text) *out_text = text ? text : ca_strdup("");
+    if (out_text) *out_text = text ? text : coa_strdup("");
     else free(text);
     return 0;
 }
@@ -534,22 +534,22 @@ int ca_mcp_manager_call(ca_mcp_manager *m, const char *name,
 /* ---- dynamic tool registration ---- */
 
 typedef struct mcp_tool_ud {
-    ca_mcp_manager *mgr;
+    coa_mcp_manager *mgr;
     char server[128];
     char tool[256];
 } mcp_tool_ud;
 
-static ca_tool_result *mcp_remote_exec(const ca_tool *self, const ca_tool_ctx *ctx,
+static coa_tool_result *mcp_remote_exec(const coa_tool *self, const coa_tool_ctx *ctx,
                                        const char *args_json) {
     (void)ctx;
     mcp_tool_ud *ud = self ? (mcp_tool_ud *)self->ud : NULL;
     if (!ud || !ud->mgr)
-        return ca_tool_result_new(0, "mcp: broken dynamic tool binding");
+        return coa_tool_result_new(0, "mcp: broken dynamic tool binding");
     char *out = NULL, *err = NULL;
-    int rc = ca_mcp_manager_call(ud->mgr, ud->server, ud->tool, args_json, &out, &err);
-    ca_tool_result *r;
-    if (rc == 0) r = ca_tool_result_new(1, out ? out : "");
-    else r = ca_tool_result_new(0, err ? err : "mcp: call failed");
+    int rc = coa_mcp_manager_call(ud->mgr, ud->server, ud->tool, args_json, &out, &err);
+    coa_tool_result *r;
+    if (rc == 0) r = coa_tool_result_new(1, out ? out : "");
+    else r = coa_tool_result_new(0, err ? err : "mcp: call failed");
     free(out);
     free(err);
     return r;
@@ -563,10 +563,10 @@ static void mcp_server_slug(const char *server, char *out, size_t cap) {
     out[o] = '\0';
 }
 
-int ca_mcp_manager_sync_tools(ca_mcp_manager *m, struct ca_tool_registry *reg) {
+int coa_mcp_manager_sync_tools(coa_mcp_manager *m, struct coa_tool_registry *reg) {
     if (!m || !reg) return -1;
     int registered = 0;
-    ca_mutex_lock(&m->mtx);
+    coa_mutex_lock(&m->mtx);
     for (size_t i = 0; i < m->count; i++) {
         if (ensure_initialized(m, i) != 0) continue;
         const cJSON *tools = fetch_tools(m, i);
@@ -588,23 +588,23 @@ int ca_mcp_manager_sync_tools(ca_mcp_manager *m, struct ca_tool_registry *reg) {
                      (tdesc && cJSON_IsString(tdesc) && tdesc->valuestring)
                          ? tdesc->valuestring : "MCP tool");
 
-            ca_tool *t = (ca_tool *)calloc(1, sizeof(*t));
+            coa_tool *t = (coa_tool *)calloc(1, sizeof(*t));
             mcp_tool_ud *ud = (mcp_tool_ud *)calloc(1, sizeof(*ud));
             char *schema_str = tschema ? cJSON_PrintUnformatted(tschema) : NULL;
             if (!t || !ud) { free(t); free(ud); free(schema_str); continue; }
             ud->mgr = m;
             snprintf(ud->server, sizeof(ud->server), "%s", srv);
             snprintf(ud->tool, sizeof(ud->tool), "%s", tname->valuestring);
-            t->name = ca_strdup(full);
-            t->description = ca_strdup(desc);
+            t->name = coa_strdup(full);
+            t->description = coa_strdup(desc);
             t->json_schema = schema_str;      /* NULL ok (validation skipped) */
             t->is_write = 1;                  /* remote side effects unknown */
             t->execute = mcp_remote_exec;
             t->ud = ud;
-            if (ca_tool_register_ex(reg, t, 1) == 0) {
+            if (coa_tool_register_ex(reg, t, 1) == 0) {
                 if (m->n_owned == m->cap_owned) {
                     size_t nc = m->cap_owned ? m->cap_owned * 2 : 16;
-                    ca_tool **no = (ca_tool **)realloc(m->owned, nc * sizeof(*no));
+                    coa_tool **no = (coa_tool **)realloc(m->owned, nc * sizeof(*no));
                     if (!no) { free(schema_str); continue; }
                     m->owned = no;
                     m->cap_owned = nc;
@@ -613,7 +613,7 @@ int ca_mcp_manager_sync_tools(ca_mcp_manager *m, struct ca_tool_registry *reg) {
                 registered++;
             } else {
                 /* already registered and unchanged: replace in place */
-                ca_tool *prev = (ca_tool *)ca_tool_find(reg, full);
+                coa_tool *prev = (coa_tool *)coa_tool_find(reg, full);
                 if (prev && prev->ud && prev->execute == mcp_remote_exec) {
                     mcp_tool_ud *pud = (mcp_tool_ud *)prev->ud;
                     if (strcmp(pud->server, srv) == 0 && strcmp(pud->tool, tname->valuestring) == 0) {
@@ -624,8 +624,8 @@ int ca_mcp_manager_sync_tools(ca_mcp_manager *m, struct ca_tool_registry *reg) {
                                 free((void *)prev->description);
                                 free((void *)prev->json_schema);
                                 free(prev->ud);
-                                prev->name = ca_strdup(full);
-                                prev->description = ca_strdup(desc);
+                                prev->name = coa_strdup(full);
+                                prev->description = coa_strdup(desc);
                                 prev->json_schema = schema_str;
                                 prev->ud = ud;
                                 registered++;
@@ -643,13 +643,13 @@ int ca_mcp_manager_sync_tools(ca_mcp_manager *m, struct ca_tool_registry *reg) {
             }
         }
     }
-    ca_mutex_unlock(&m->mtx);
+    coa_mutex_unlock(&m->mtx);
     return registered;
 }
 
-int ca_mcp_manager_tool_count(ca_mcp_manager *m, const char *name) {
+int coa_mcp_manager_tool_count(coa_mcp_manager *m, const char *name) {
     if (!m || !name) return -1;
-    ca_mutex_lock(&m->mtx);
+    coa_mutex_lock(&m->mtx);
     int idx = find_conn(m, name);
     int n = -1;
     if (idx >= 0) {
@@ -658,16 +658,16 @@ int ca_mcp_manager_tool_count(ca_mcp_manager *m, const char *name) {
             n = tools ? cJSON_GetArraySize(tools) : -1;
         }
     }
-    ca_mutex_unlock(&m->mtx);
+    coa_mutex_unlock(&m->mtx);
     return n;
 }
 
-char *ca_mcp_manager_json(ca_mcp_manager *m) {
+char *coa_mcp_manager_json(coa_mcp_manager *m) {
     cJSON *arr = cJSON_CreateArray();
     if (!m) return cJSON_PrintUnformatted(arr);
-    ca_mutex_lock(&m->mtx);
+    coa_mutex_lock(&m->mtx);
     for (size_t i = 0; i < m->count; i++) {
-        ca_mcp_conn *e = &m->items[i];
+        coa_mcp_conn *e = &m->items[i];
         cJSON *o = cJSON_CreateObject();
         cJSON_AddStringToObject(o, "name", e->name);
         cJSON_AddStringToObject(o, "transport", e->transport ? e->transport : "http");
@@ -675,12 +675,12 @@ char *ca_mcp_manager_json(ca_mcp_manager *m) {
         cJSON_AddBoolToObject(o, "has_token", (e->token && *e->token) ? 1 : 0);
         if (e->command) cJSON_AddStringToObject(o, "command", e->command);
         if (e->args_csv) cJSON_AddStringToObject(o, "args", e->args_csv);
-        ca_mcp_session *s = &m->sess[i];
+        coa_mcp_session *s = &m->sess[i];
         cJSON_AddNumberToObject(o, "tools", s->tools ? cJSON_GetArraySize(s->tools) : 0);
         cJSON_AddBoolToObject(o, "connected", s->initialized ? 1 : 0);
         cJSON_AddItemToArray(arr, o);
     }
-    ca_mutex_unlock(&m->mtx);
+    coa_mutex_unlock(&m->mtx);
     char *s = cJSON_PrintUnformatted(arr);
     cJSON_Delete(arr);
     return s;
@@ -688,22 +688,22 @@ char *ca_mcp_manager_json(ca_mcp_manager *m) {
 
 /* ---- persistence ---- */
 
-int ca_mcp_manager_persist(ca_mcp_manager *m, const char *state_root) {
+int coa_mcp_manager_persist(coa_mcp_manager *m, const char *state_root) {
     if (!m || !state_root || !*state_root) return -1;
     char path[1024];
-    ca_path_join(path, sizeof(path), state_root, "mcp.json");
-    char *s = ca_mcp_manager_json(m);
+    coa_path_join(path, sizeof(path), state_root, "mcp.json");
+    char *s = coa_mcp_manager_json(m);
     if (!s) return -1;
-    int rc = ca_fs_write_file(path, s, strlen(s));
+    int rc = coa_fs_write_file(path, s, strlen(s));
     free(s);
     return rc;
 }
 
-int ca_mcp_manager_load(ca_mcp_manager *m, const char *state_root) {
+int coa_mcp_manager_load(coa_mcp_manager *m, const char *state_root) {
     if (!m || !state_root || !*state_root) return -1;
     char path[1024];
-    ca_path_join(path, sizeof(path), state_root, "mcp.json");
-    char *body = ca_fs_read_file(path);
+    coa_path_join(path, sizeof(path), state_root, "mcp.json");
+    char *body = coa_fs_read_file(path);
     if (!body) return -1;
     cJSON *arr = cJSON_Parse(body);
     free(body);
@@ -713,7 +713,7 @@ int ca_mcp_manager_load(ca_mcp_manager *m, const char *state_root) {
         if (!cJSON_IsObject(it)) continue;
         cJSON *jn = cJSON_GetObjectItemCaseSensitive(it, "name");
         if (!jn || !cJSON_IsString(jn)) continue;
-        ca_mcp_conn c;
+        coa_mcp_conn c;
         memset(&c, 0, sizeof(c));
         c.name = jn->valuestring;
         cJSON *jt = cJSON_GetObjectItemCaseSensitive(it, "transport");
@@ -726,7 +726,7 @@ int ca_mcp_manager_load(ca_mcp_manager *m, const char *state_root) {
         if (jk && cJSON_IsString(jk)) c.token = jk->valuestring;
         if (jc && cJSON_IsString(jc)) c.command = jc->valuestring;
         if (ja && cJSON_IsString(ja)) c.args_csv = ja->valuestring;
-        ca_mcp_manager_add_ex(m, &c);
+        coa_mcp_manager_add_ex(m, &c);
     }
     cJSON_Delete(arr);
     return 0;

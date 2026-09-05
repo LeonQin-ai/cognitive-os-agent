@@ -4,8 +4,8 @@
  * result as JSON. This is the "Wasm runner" the sandbox seam was designed for
  * (see sandbox.h); until this is registered, Wasm execution reports
  * "unsupported". */
-#include "cagent/plugin_runtime/wasm_runner.h"
-#include "cagent/infra/util.h"
+#include "cognitive-os-agent/plugin_runtime/wasm_runner.h"
+#include "cognitive-os-agent/infra/util.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -16,16 +16,16 @@
 
 #define MAX_ARGS 16
 
-int ca_wasm3_available(void) { return 1; }
+int coa_wasm3_available(void) { return 1; }
 
-char *ca_wasm3_run(const void *wasm, size_t wasm_len,
+char *coa_wasm3_run(const void *wasm, size_t wasm_len,
                    const char *fn_name, const char *args_json) {
-    if (!wasm || !fn_name) return ca_strdup("{\"ok\":false,\"error\":\"bad arguments\"}");
+    if (!wasm || !fn_name) return coa_strdup("{\"ok\":false,\"error\":\"bad arguments\"}");
 
     IM3Environment env = m3_NewEnvironment();
-    if (!env) return ca_strdup("{\"ok\":false,\"error\":\"m3 environment failed\"}");
+    if (!env) return coa_strdup("{\"ok\":false,\"error\":\"m3 environment failed\"}");
     IM3Runtime rt = m3_NewRuntime(env, 64 * 1024, NULL);
-    if (!rt) { m3_FreeEnvironment(env); return ca_strdup("{\"ok\":false,\"error\":\"m3 runtime failed\"}"); }
+    if (!rt) { m3_FreeEnvironment(env); return coa_strdup("{\"ok\":false,\"error\":\"m3 runtime failed\"}"); }
 
     IM3Module mod = NULL;
     int loaded = 0;
@@ -93,5 +93,5 @@ char *ca_wasm3_run(const void *wasm, size_t wasm_len,
     if (mod && !loaded) m3_FreeModule(mod);
     m3_FreeRuntime(rt);
     m3_FreeEnvironment(env);
-    return ca_strdup(out);
+    return coa_strdup(out);
 }

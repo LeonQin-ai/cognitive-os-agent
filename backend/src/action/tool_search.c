@@ -5,9 +5,9 @@
  * glob-filtered, head_limit capped). The pattern engine is a simplified
  * subset: glob supports *, ? and **; grep matches literal text (optionally
  * case-insensitive) instead of full ripgrep regex. */
-#include "cagent/action/tools.h"
-#include "cagent/os/os_fs.h"
-#include "cagent/infra/util.h"
+#include "cognitive-os-agent/action/tools.h"
+#include "cognitive-os-agent/os/os_fs.h"
+#include "cognitive-os-agent/infra/util.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -17,10 +17,10 @@
 
 /* ---------- shared path helpers ---------- */
 
-static void resolve_root(const ca_tool_ctx *ctx, const char *maybe_rel,
+static void resolve_root(const coa_tool_ctx *ctx, const char *maybe_rel,
                          char *out, size_t n) {
     if (maybe_rel && *maybe_rel)
-        ca_path_resolve(out, n, ctx ? ctx->workspace : NULL, maybe_rel);
+        coa_path_resolve(out, n, ctx ? ctx->workspace : NULL, maybe_rel);
     else if (ctx && ctx->workspace && *ctx->workspace)
         snprintf(out, n, "%s", ctx->workspace);
     else
@@ -119,7 +119,7 @@ static void found_push(found_list *fl, const char *rel, long long mt) {
         fl->items = ni;
         fl->cap = nc;
     }
-    fl->items[fl->count].path = ca_strdup(rel);
+    fl->items[fl->count].path = coa_strdup(rel);
     fl->items[fl->count].mtime = mt;
     fl->count++;
 }
@@ -134,10 +134,10 @@ static int cmp_mtime_desc(const void *a, const void *b) {
 static void walk_dir(const char *root, const char *rel, const char *pattern,
                      found_list *fl) {
     char full[2048];
-    ca_path_join(full, sizeof full, root, rel && *rel ? rel : "");
-    ca_dir_list dl;
+    coa_path_join(full, sizeof full, root, rel && *rel ? rel : "");
+    coa_dir_list dl;
     memset(&dl, 0, sizeof dl);
-    if (ca_fs_list_dir(full, &dl) != 0) return;
+    if (coa_fs_list_dir(full, &dl) != 0) return;
     for (size_t i = 0; i < dl.count; i++) {
         const char *name = dl.items[i].name;
         if (!name || !*name || strcmp(name, ".") == 0 || strcmp(name, "..") == 0)
@@ -152,29 +152,29 @@ static void walk_dir(const char *root, const char *rel, const char *pattern,
         } else {
             if (glob_match_segs((char *)pattern, child)) {
                 char child_full[2048];
-                ca_path_join(child_full, sizeof child_full, root, child);
+                coa_path_join(child_full, sizeof child_full, root, child);
                 found_push(fl, child, file_mtime(child_full));
             }
         }
     }
-    ca_fs_list_free(&dl);
+    coa_fs_list_free(&dl);
 }
 
-static ca_tool_result *glob_exec(const ca_tool *self, const ca_tool_ctx *ctx,
+static coa_tool_result *glob_exec(const coa_tool *self, const coa_tool_ctx *ctx,
                                  const char *args_json) {
     (void)self;
     cJSON *args = cJSON_Parse(args_json);
-    if (!args) return ca_tool_result_new(0, "glob: invalid args JSON");
+    if (!args) return coa_tool_result_new(0, "glob: invalid args JSON");
     cJSON *pat_j = cJSON_GetObjectItemCaseSensitive(args, "pattern");
     if (!pat_j || !cJSON_IsString(pat_j)) {
         cJSON_Delete(args);
-        return ca_tool_result_new(0, "glob: missing string arg 'pattern'");
+        return coa_tool_result_new(0, "glob: missing string arg 'pattern'");
     }
     cJSON *path_j = cJSON_GetObjectItemCaseSensitive(args, "path");
     char root[1024];
     resolve_root(ctx, (path_j && cJSON_IsString(path_j)) ? path_j->valuestring : NULL,
                  root, sizeof root);
-    char *pat = ca_strdup(pat_j->valuestring);
+    char *pat = coa_strdup(pat_j->valuestring);
     cJSON_Delete(args);
 
     /* normalize pattern separators to '/' */
@@ -190,20 +190,20 @@ static ca_tool_result *glob_exec(const ca_tool *self, const ca_tool_ctx *ctx,
     if (fl.count > 1) qsort(fl.items, fl.count, sizeof(found_entry), cmp_mtime_desc);
     const size_t LIMIT = 100;
     int truncated = fl.count > LIMIT;
-    ca_strbuf sb;
-    ca_strbuf_init(&sb);
-    if (fl.count == 0) ca_strbuf_append(&sb, "No files found");
+    coa_strbuf sb;
+    coa_strbuf_init(&sb);
+    if (fl.count == 0) coa_strbuf_append(&sb, "No files found");
     size_t shown = fl.count < LIMIT ? fl.count : LIMIT;
     for (size_t i = 0; i < shown; i++)
-        ca_strbuf_appendf(&sb, "%s\n", fl.items[i].path);
+        coa_strbuf_appendf(&sb, "%s\n", fl.items[i].path);
     if (truncated)
-        ca_strbuf_appendf(&sb,
+        coa_strbuf_appendf(&sb,
                           "(Results are truncated from %zu. Consider using a more specific path or pattern.)\n",
                           fl.count);
     for (size_t i = 0; i < fl.count; i++) free(fl.items[i].path);
     free(fl.items);
-    char *out = ca_strbuf_detach(&sb);
-    ca_tool_result *r = ca_tool_result_new(1, out ? out : "");
+    char *out = coa_strbuf_detach(&sb);
+    coa_tool_result *r = coa_tool_result_new(1, out ? out : "");
     free(out);
     return r;
 }
@@ -217,7 +217,7 @@ typedef struct {
     int ignore_case;
     int mode;                /* 0 files_with_matches, 1 content, 2 count */
     size_t head_limit;
-    ca_strbuf sb;            /* output */
+    coa_strbuf sb;            /* output */
     size_t out_n;            /* entries emitted */
     int truncated;
 } grep_state;
@@ -235,7 +235,7 @@ static int line_has_needle(const char *line, size_t len, const grep_state *g) {
 }
 
 static void grep_file(const char *rel, const char *full, grep_state *g) {
-    char *text = ca_fs_read_file(full);
+    char *text = coa_fs_read_file(full);
     if (!text) return;
     /* skip binary-looking files */
     if (memchr(text, '\0', strlen(text) < 8192 ? strlen(text) : 8192)) {
@@ -254,7 +254,7 @@ static void grep_file(const char *rel, const char *full, grep_state *g) {
             hits++;
             if (g->mode == 1) {
                 if (g->out_n < g->head_limit) {
-                    ca_strbuf_appendf(&g->sb, "%s:%zu:%s\n", rel, lineno, line);
+                    coa_strbuf_appendf(&g->sb, "%s:%zu:%s\n", rel, lineno, line);
                     g->out_n++;
                 } else g->truncated = 1;
             }
@@ -263,10 +263,10 @@ static void grep_file(const char *rel, const char *full, grep_state *g) {
     }
     if (hits > 0) {
         if (g->mode == 0) {
-            if (g->out_n < g->head_limit) { ca_strbuf_appendf(&g->sb, "%s\n", rel); g->out_n++; }
+            if (g->out_n < g->head_limit) { coa_strbuf_appendf(&g->sb, "%s\n", rel); g->out_n++; }
             else g->truncated = 1;
         } else if (g->mode == 2) {
-            if (g->out_n < g->head_limit) { ca_strbuf_appendf(&g->sb, "%s:%zu\n", rel, hits); g->out_n++; }
+            if (g->out_n < g->head_limit) { coa_strbuf_appendf(&g->sb, "%s:%zu\n", rel, hits); g->out_n++; }
             else g->truncated = 1;
         }
     }
@@ -282,11 +282,11 @@ static int name_glob_ok(const char *name, const char *glob_pat) {
 
 static void grep_walk(const char *root, const char *rel, grep_state *g) {
     char full[2048];
-    ca_path_join(full, sizeof full, root, rel && *rel ? rel : "");
-    if (ca_fs_is_dir(full)) {
-        ca_dir_list dl;
+    coa_path_join(full, sizeof full, root, rel && *rel ? rel : "");
+    if (coa_fs_is_dir(full)) {
+        coa_dir_list dl;
         memset(&dl, 0, sizeof dl);
-        if (ca_fs_list_dir(full, &dl) != 0) return;
+        if (coa_fs_list_dir(full, &dl) != 0) return;
         for (size_t i = 0; i < dl.count; i++) {
             const char *name = dl.items[i].name;
             if (!name || !*name || strcmp(name, ".") == 0 || strcmp(name, "..") == 0)
@@ -298,7 +298,7 @@ static void grep_walk(const char *root, const char *rel, grep_state *g) {
             else snprintf(child, sizeof child, "%s", name);
             grep_walk(root, child, g);
         }
-        ca_fs_list_free(&dl);
+        coa_fs_list_free(&dl);
     } else {
         /* file: apply the optional glob name filter */
         const char *base = strrchr(rel, '/');
@@ -308,15 +308,15 @@ static void grep_walk(const char *root, const char *rel, grep_state *g) {
     }
 }
 
-static ca_tool_result *grep_exec(const ca_tool *self, const ca_tool_ctx *ctx,
+static coa_tool_result *grep_exec(const coa_tool *self, const coa_tool_ctx *ctx,
                                  const char *args_json) {
     (void)self;
     cJSON *args = cJSON_Parse(args_json);
-    if (!args) return ca_tool_result_new(0, "grep: invalid args JSON");
+    if (!args) return coa_tool_result_new(0, "grep: invalid args JSON");
     cJSON *pat_j = cJSON_GetObjectItemCaseSensitive(args, "pattern");
     if (!pat_j || !cJSON_IsString(pat_j)) {
         cJSON_Delete(args);
-        return ca_tool_result_new(0, "grep: missing string arg 'pattern'");
+        return coa_tool_result_new(0, "grep: missing string arg 'pattern'");
     }
     cJSON *path_j = cJSON_GetObjectItemCaseSensitive(args, "path");
     cJSON *glob_j = cJSON_GetObjectItemCaseSensitive(args, "glob");
@@ -327,10 +327,10 @@ static ca_tool_result *grep_exec(const ca_tool *self, const ca_tool_ctx *ctx,
     grep_state g;
     memset(&g, 0, sizeof g);
     /* copy strings out before cJSON_Delete(args) frees the tree */
-    g.needle = ca_strdup(pat_j->valuestring);
+    g.needle = coa_strdup(pat_j->valuestring);
     g.needle_len = strlen(g.needle);
     g.file_glob = (glob_j && cJSON_IsString(glob_j) && *glob_j->valuestring)
-                      ? ca_strdup(glob_j->valuestring) : NULL;
+                      ? coa_strdup(glob_j->valuestring) : NULL;
     g.ignore_case = (ic_j && cJSON_IsTrue(ic_j)) ? 1 : 0;
     g.mode = 0;
     if (mode_j && cJSON_IsString(mode_j)) {
@@ -345,21 +345,21 @@ static ca_tool_result *grep_exec(const ca_tool *self, const ca_tool_ctx *ctx,
                  root, sizeof root);
     cJSON_Delete(args);
 
-    ca_strbuf_init(&g.sb);
+    coa_strbuf_init(&g.sb);
     grep_walk(root, NULL, &g);
-    if (g.out_n == 0) ca_strbuf_append(&g.sb, "No matches found");
+    if (g.out_n == 0) coa_strbuf_append(&g.sb, "No matches found");
     if (g.truncated)
-        ca_strbuf_appendf(&g.sb, "(Results are truncated. Consider using a more specific path, pattern or head_limit.)\n");
+        coa_strbuf_appendf(&g.sb, "(Results are truncated. Consider using a more specific path, pattern or head_limit.)\n");
     free((void *)g.needle);
     free((void *)g.file_glob);
-    char *out = ca_strbuf_detach(&g.sb);
-    ca_tool_result *r = ca_tool_result_new(1, out ? out : "");
+    char *out = coa_strbuf_detach(&g.sb);
+    coa_tool_result *r = coa_tool_result_new(1, out ? out : "");
     free(out);
     return r;
 }
 
-const ca_tool *ca_tool_glob(void) {
-    static const ca_tool t = {
+const coa_tool *coa_tool_glob(void) {
+    static const coa_tool t = {
         "glob",
         "Fast file pattern matching tool that works with any codebase size. Supports glob "
         "patterns like \"**/*.js\" or \"src/**/*.ts\" (** matches zero or more directories). "
@@ -374,8 +374,8 @@ const ca_tool *ca_tool_glob(void) {
     return &t;
 }
 
-const ca_tool *ca_tool_grep(void) {
-    static const ca_tool t = {
+const coa_tool *coa_tool_grep(void) {
+    static const coa_tool t = {
         "grep",
         "A powerful search tool for file contents. ALWAYS use this for search tasks instead of "
         "grep/rg shell commands. Supports literal text patterns (case-insensitive with "

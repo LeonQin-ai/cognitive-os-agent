@@ -1,64 +1,64 @@
 /* task.c — standalone task lifecycle helpers. */
-#include "cagent/runtime/task.h"
-#include "cagent/os/os_time.h"
-#include "cagent/infra/util.h"
+#include "cognitive-os-agent/runtime/task.h"
+#include "cognitive-os-agent/os/os_time.h"
+#include "cognitive-os-agent/infra/util.h"
 
 #include <stdlib.h>
 #include <string.h>
 #include "cJSON.h"
 
-ca_task *ca_task_new(int64_t id, int priority, const char *input, int64_t timeout_ms) {
-    ca_task *t = (ca_task *)calloc(1, sizeof(ca_task));
+coa_task *coa_task_new(int64_t id, int priority, const char *input, int64_t timeout_ms) {
+    coa_task *t = (coa_task *)calloc(1, sizeof(coa_task));
     if (!t) return NULL;
     t->id = id;
     t->priority = priority;
     t->timeout_ms = timeout_ms;
-    t->created_ms = ca_time_now_ms();
-    t->status = CA_TS_QUEUED;
-    t->input = input ? ca_strdup(input) : NULL;
+    t->created_ms = coa_time_now_ms();
+    t->status = COA_TS_QUEUED;
+    t->input = input ? coa_strdup(input) : NULL;
     return t;
 }
 
-void ca_task_free(ca_task *t) {
+void coa_task_free(coa_task *t) {
     if (!t) return;
     free(t->input);
     free(t->output);
     free(t);
 }
 
-void ca_task_transition(ca_task *t, ca_task_status st, int64_t now_ms) {
+void coa_task_transition(coa_task *t, coa_task_status st, int64_t now_ms) {
     if (!t) return;
-    if (now_ms == 0) now_ms = ca_time_now_ms();
-    if (st == CA_TS_RUNNING && t->started_ms == 0) t->started_ms = now_ms;
-    if ((st == CA_TS_DONE || st == CA_TS_FAILED || st == CA_TS_CANCELLED || st == CA_TS_TIMEOUT) &&
+    if (now_ms == 0) now_ms = coa_time_now_ms();
+    if (st == COA_TS_RUNNING && t->started_ms == 0) t->started_ms = now_ms;
+    if ((st == COA_TS_DONE || st == COA_TS_FAILED || st == COA_TS_CANCELLED || st == COA_TS_TIMEOUT) &&
         t->finished_ms == 0)
         t->finished_ms = now_ms;
     t->status = st;
 }
 
-const char *ca_task_status_name(ca_task_status st) {
+const char *coa_task_status_name(coa_task_status st) {
     switch (st) {
-        case CA_TS_QUEUED:    return "queued";
-        case CA_TS_RUNNING:   return "running";
-        case CA_TS_DONE:      return "done";
-        case CA_TS_FAILED:    return "failed";
-        case CA_TS_CANCELLED: return "cancelled";
-        case CA_TS_TIMEOUT:   return "timeout";
+        case COA_TS_QUEUED:    return "queued";
+        case COA_TS_RUNNING:   return "running";
+        case COA_TS_DONE:      return "done";
+        case COA_TS_FAILED:    return "failed";
+        case COA_TS_CANCELLED: return "cancelled";
+        case COA_TS_TIMEOUT:   return "timeout";
         default:              return "unknown";
     }
 }
 
-char *ca_task_to_json(const ca_task *t) {
-    if (!t) return ca_strdup("{}");
+char *coa_task_to_json(const coa_task *t) {
+    if (!t) return coa_strdup("{}");
     cJSON *o = cJSON_CreateObject();
-    if (!o) return ca_strdup("{}");
+    if (!o) return coa_strdup("{}");
     cJSON_AddNumberToObject(o, "id", (double)t->id);
     cJSON_AddNumberToObject(o, "priority", t->priority);
-    cJSON_AddStringToObject(o, "status", ca_task_status_name(t->status));
+    cJSON_AddStringToObject(o, "status", coa_task_status_name(t->status));
     cJSON_AddStringToObject(o, "input", t->input ? t->input : "");
     cJSON_AddStringToObject(o, "output", t->output ? t->output : "");
     cJSON_AddNumberToObject(o, "timeout_ms", (double)t->timeout_ms);
     char *s = cJSON_PrintUnformatted(o);
     cJSON_Delete(o);
-    return s ? s : ca_strdup("{}");
+    return s ? s : coa_strdup("{}");
 }

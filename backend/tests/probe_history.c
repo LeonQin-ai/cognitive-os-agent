@@ -4,11 +4,11 @@
  * fix the agent answered "already completed" citing history without acting;
  * after the fix it must plan and execute fresh actions.
  *
- * Build: see command in docs. Uses the user's LLM config from state/cagent.json
+ * Build: see command in docs. Uses the user's LLM config from state/cognitive-os-agent.json
  * (api_key is never printed). Temp state root: state-probe.
  */
-#include "cagent/cagent.h"
-#include "cagent/os/os_fs.h"
+#include "cognitive-os-agent/cognitive-os-agent.h"
+#include "cognitive-os-agent/os/os_fs.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -16,9 +16,9 @@
 #include "cJSON.h"
 
 int main(void) {
-    /* read the user's live LLM config (state/cagent.json) */
-    char *cfgtxt = ca_fs_read_file("state/cagent.json");
-    if (!cfgtxt) { printf("no state/cagent.json\n"); return 1; }
+    /* read the user's live LLM config (state/cognitive-os-agent.json) */
+    char *cfgtxt = coa_fs_read_file("state/cognitive-os-agent.json");
+    if (!cfgtxt) { printf("no state/cognitive-os-agent.json\n"); return 1; }
     cJSON *root = cJSON_Parse(cfgtxt);
     free(cfgtxt);
     if (!root) { printf("bad config json\n"); return 1; }
@@ -31,8 +31,8 @@ int main(void) {
     }
     printf("provider=%s model=%s (key hidden)\n", provider, model);
 
-    cagent_ctx ctx;
-    cagent_config cfg;
+    coa_ctx ctx;
+    coa_config cfg;
     memset(&cfg, 0, sizeof(cfg));
     cfg.state_root = "state-probe";
     cfg.workspace = "state-probe/w";
@@ -43,24 +43,24 @@ int main(void) {
     cfg.http_port = 0;
     cfg.workers = 1;
 
-    if (cagent_init(&ctx, &cfg) != 0) { printf("init failed\n"); return 1; }
+    if (coa_init(&ctx, &cfg) != 0) { printf("init failed\n"); return 1; }
 
     /* run 1: a real task that completes (creates a file) */
     char *a1 = NULL;
-    int rc1 = cagent_run(&ctx, "在 state-probe/w 目录创建 probe-a.txt，内容写 probe-run-one", &a1);
+    int rc1 = coa_run(&ctx, "在 state-probe/w 目录创建 probe-a.txt，内容写 probe-run-one", &a1);
     printf("\n=== RUN1 rc=%d ===\n%s\n", rc1, a1 ? a1 : "(null)");
     free(a1);
 
     /* run 2: a similar-but-NEW request — must not be skipped via history */
     char *a2 = NULL;
-    int rc2 = cagent_run(&ctx, "查看 state-probe/w 目录下 probe-a.txt 的内容并告诉我", &a2);
+    int rc2 = coa_run(&ctx, "查看 state-probe/w 目录下 probe-a.txt 的内容并告诉我", &a2);
     printf("\n=== RUN2 rc=%d ===\n%s\n", rc2, a2 ? a2 : "(null)");
 
     int acted = a2 && strstr(a2, "[file_read]") != NULL;
     printf("\nRUN2 acted=%s\n", acted ? "YES (fresh actions executed)" : "NO (may still be skipping)");
     free(a2);
 
-    cagent_shutdown(&ctx);
+    coa_shutdown(&ctx);
     cJSON_Delete(root);
     return acted ? 0 : 2;
 }

@@ -4,11 +4,11 @@
  * topological layer runs in parallel via threads, mirroring the orchestrator's
  * per-agent isolation (independent history/session notes, shared locked
  * infra, no shared code index / snapshot). */
-#include "cagent/runtime/flow.h"
+#include "cognitive-os-agent/runtime/flow.h"
 
-#include "cagent/infra/util.h"
-#include "cagent/infra/logging.h"
-#include "cagent/os/os_thread.h"
+#include "cognitive-os-agent/infra/util.h"
+#include "cognitive-os-agent/infra/logging.h"
+#include "cognitive-os-agent/os/os_thread.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -20,7 +20,7 @@
 #define FLOW_MAX_TASKLEN 2048
 #define FLOW_SUBST_CAP   4096   /* max chars substituted per {{ref}} */
 
-static void flow_event(cagent_ctx *ctx, const char *stage, const char *id,
+static void flow_event(coa_ctx *ctx, const char *stage, const char *id,
                        const char *agent, const char *detail) {
     if (!ctx || !ctx->bus) return;
     cJSON *o = cJSON_CreateObject();
@@ -32,7 +32,7 @@ static void flow_event(cagent_ctx *ctx, const char *stage, const char *id,
     char *js = cJSON_PrintUnformatted(o);
     cJSON_Delete(o);
     if (js) {
-        ca_event_bus_publish_json(ctx->bus, CA_EV_SYSTEM, "flow", js);
+        coa_event_bus_publish_json(ctx->bus, COA_EV_SYSTEM, "flow", js);
         free(js);
     }
 }
@@ -44,7 +44,7 @@ static void flow_err(char **err, const char *fmt, ...) {
     char buf[512];
     vsnprintf(buf, sizeof(buf), fmt, ap);
     va_end(ap);
-    *err = ca_strdup(buf);
+    *err = coa_strdup(buf);
 }
 
 /* ---------- DAG parsing ---------- */
@@ -186,7 +186,7 @@ static int flow_layer(flow_dag *d) {
 /* ---------- execution ---------- */
 
 typedef struct flow_job {
-    cagent_ctx *ctx;
+    coa_ctx *ctx;
     flow_node *nd;
     char task[FLOW_MAX_TASKLEN];     /* after {{ref}} substitution */
     char *out;
@@ -194,8 +194,8 @@ typedef struct flow_job {
 } flow_job;
 
 /* Same isolation rules as the orchestrator's per-agent instances. */
-static ca_reasoning *flow_reasoning_new(cagent_ctx *ctx) {
-    ca_reasoning_config rc;
+static coa_reasoning *flow_reasoning_new(coa_ctx *ctx) {
+    coa_reasoning_config rc;
     memset(&rc, 0, sizeof(rc));
     rc.llm = ctx->llm;
     rc.tools = ctx->tools;
@@ -208,24 +208,24 @@ static ca_reasoning *flow_reasoning_new(cagent_ctx *ctx) {
     rc.mcp = ctx->mcp;
     rc.state_root = ctx->state_root;
     rc.max_rounds = ctx->config
-        ? (int)ca_config_get_int(ctx->config, "reasoning.max_rounds", 8) : 8;
-    return ca_reasoning_new(&rc);
+        ? (int)coa_config_get_int(ctx->config, "reasoning.max_rounds", 8) : 8;
+    return coa_reasoning_new(&rc);
 }
 
 static void flow_worker(void *arg) {
     flow_job *j = (flow_job *)arg;
     flow_event(j->ctx, "execute", j->nd->id, j->nd->agent, j->task);
-    ca_reasoning *r = flow_reasoning_new(j->ctx);
+    coa_reasoning *r = flow_reasoning_new(j->ctx);
     if (r) {
-        j->rc = ca_reasoning_run(r, j->task, &j->out);
-        ca_reasoning_free(r);
+        j->rc = coa_reasoning_run(r, j->task, &j->out);
+        coa_reasoning_free(r);
     } else {
         j->rc = -1;
     }
     const char *result = j->out && *j->out ? j->out : "";
     char key[96];
     snprintf(key, sizeof(key), "flow/%s/result", j->nd->id);
-    ca_blackboard_put(j->ctx->blackboard, key, result);
+    coa_blackboard_put(j->ctx->blackboard, key, result);
     flow_event(j->ctx, "done", j->nd->id, j->nd->agent,
                j->rc == 0 ? "ok" : "error");
 }
@@ -267,7 +267,7 @@ static void flow_substitute(flow_dag *d, flow_node *nd, char **results,
     out[o] = '\0';
 }
 
-int ca_flow_validate(const char *dag_json, char **err) {
+int coa_flow_validate(const char *dag_json, char **err) {
     if (err) *err = NULL;
     if (!dag_json || !*dag_json) {
         flow_err(err, "empty flow document");
@@ -282,7 +282,7 @@ int ca_flow_validate(const char *dag_json, char **err) {
     return 0;
 }
 
-int ca_flow_run(cagent_ctx *ctx, const char *dag_json, char **answer,
+int coa_flow_run(coa_ctx *ctx, const char *dag_json, char **answer,
                 char **trace_json) {
     if (answer) *answer = NULL;
     if (trace_json) *trace_json = NULL;
@@ -291,18 +291,18 @@ int ca_flow_run(cagent_ctx *ctx, const char *dag_json, char **answer,
     flow_dag d;
     char *err = NULL;
     if (flow_parse(dag_json, &d, &err) != 0) {
-        ca_log_warn("flow: parse failed: %s", err ? err : "?");
+        coa_log_warn("flow: parse failed: %s", err ? err : "?");
         free(err);
         return -1;
     }
     if (flow_layer(&d) < d.n) {
-        ca_log_warn("flow: cycle detected");
+        coa_log_warn("flow: cycle detected");
         return -1;
     }
     /* every node's agent must be registered */
     for (int i = 0; i < d.n; i++) {
-        if (ca_agent_pool_find(ctx->agents, d.nodes[i].agent) < 0) {
-            ca_log_warn("flow: node '%s' references unregistered agent '%s'",
+        if (coa_agent_pool_find(ctx->agents, d.nodes[i].agent) < 0) {
+            coa_log_warn("flow: node '%s' references unregistered agent '%s'",
                         d.nodes[i].id, d.nodes[i].agent);
             return -1;
         }
@@ -330,7 +330,7 @@ int ca_flow_run(cagent_ctx *ctx, const char *dag_json, char **answer,
             tasks[i] = (char *)malloc(FLOW_MAX_TASKLEN);
             if (tasks[i]) flow_substitute(&d, &d.nodes[i], results, tasks[i],
                                           FLOW_MAX_TASKLEN);
-            else tasks[i] = ca_strdup(d.nodes[i].task);
+            else tasks[i] = coa_strdup(d.nodes[i].task);
             jobs[i].ctx = ctx;
             jobs[i].nd = &d.nodes[i];
             snprintf(jobs[i].task, FLOW_MAX_TASKLEN, "%s",
@@ -339,24 +339,24 @@ int ca_flow_run(cagent_ctx *ctx, const char *dag_json, char **answer,
             jobs[i].rc = -1;
         }
         /* parallel within the layer */
-        ca_thread *threads[FLOW_MAX_NODES];
+        coa_thread *threads[FLOW_MAX_NODES];
         memset(threads, 0, sizeof(threads));
         for (int k = 0; k < layern; k++) {
             int i = runidx[k];
-            threads[k] = ca_thread_create(flow_worker, &jobs[i]);
+            threads[k] = coa_thread_create(flow_worker, &jobs[i]);
             if (!threads[k]) flow_worker(&jobs[i]); /* spawn failed → inline */
         }
         for (int k = 0; k < layern; k++) {
             int i = runidx[k];
-            if (threads[k]) ca_thread_join(threads[k]);
+            if (threads[k]) coa_thread_join(threads[k]);
             results[i] = jobs[i].out; /* may be NULL on failure */
         }
     }
 
     /* trace + answer (sink nodes = no outgoing edges) */
     cJSON *trace = cJSON_CreateArray();
-    ca_strbuf fin;
-    ca_strbuf_init(&fin);
+    coa_strbuf fin;
+    coa_strbuf_init(&fin);
     for (int i = 0; i < d.n; i++) {
         const char *result = results[i] ? results[i] : "";
         cJSON *st = cJSON_CreateObject();
@@ -370,19 +370,19 @@ int ca_flow_run(cagent_ctx *ctx, const char *dag_json, char **answer,
             cJSON_AddItemToArray(trace, st);
         }
         if (d.nodes[i].nadj == 0 && *result)
-            ca_strbuf_appendf(&fin, "%s: %s\n", d.nodes[i].id, result);
+            coa_strbuf_appendf(&fin, "%s: %s\n", d.nodes[i].id, result);
         /* publish per-node result to the agent pool like agent runs do */
         if (jobs[i].rc == 0 && results[i] && *results[i]) {
             char rk[160];
             snprintf(rk, sizeof(rk), "result:%s", d.nodes[i].agent);
-            ca_agent_post(ctx->agents, d.nodes[i].agent, rk, results[i]);
+            coa_agent_post(ctx->agents, d.nodes[i].agent, rk, results[i]);
         }
     }
 
     char *trace_str = cJSON_PrintUnformatted(trace);
     if (trace_str) {
-        ca_blackboard_put(ctx->blackboard, "flow/trace", trace_str);
-        if (trace_json) *trace_json = ca_strdup(trace_str);
+        coa_blackboard_put(ctx->blackboard, "flow/trace", trace_str);
+        if (trace_json) *trace_json = coa_strdup(trace_str);
         free(trace_str);
     }
     cJSON_Delete(trace);
@@ -392,6 +392,6 @@ int ca_flow_run(cagent_ctx *ctx, const char *dag_json, char **answer,
     free(tasks);
     free(jobs);
 
-    *answer = fin.len > 0 ? fin.buf : ca_strdup("(flow produced no output)");
+    *answer = fin.len > 0 ? fin.buf : coa_strdup("(flow produced no output)");
     return 0;
 }

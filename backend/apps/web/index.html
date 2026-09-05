@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark light">
-<title>c-agent — Cognitive OS Console</title>
+<title>cognitive-os-agent — Cognitive OS Console</title>
 <style>
   /* ---------- design tokens ---------- */
   :root{
@@ -276,7 +276,7 @@
   <div class="brand">
     <div class="logo" aria-hidden="true">c</div>
     <div>
-      <h1>c-agent</h1>
+      <h1>cognitive-os-agent</h1>
       <div class="sub">Cognitive OS Runtime</div>
     </div>
   </div>
@@ -834,7 +834,7 @@ panels.models = `
   </div>
   <div class="card">
     <h2>Model routes</h2>
-    <div class="hint">管理 LLM 路由：点 <b>Set active</b> 把某条路由设为当前活跃模型（实时切换并持久化到 state/cagent.json）；<b>Delete</b> 移除一条路由。</div>
+    <div class="hint">管理 LLM 路由：点 <b>Set active</b> 把某条路由设为当前活跃模型（实时切换并持久化到 state/cognitive-os-agent.json）；<b>Delete</b> 移除一条路由。</div>
     <div class="row" style="margin-top:6px">
       <button onclick="loadModels()">Refresh</button>
       <span id="models-stat" class="muted"></span>
@@ -1337,7 +1337,7 @@ function channelRemove(name){
 }
 
 function channelSendTest(name){
-  call('POST', '/v1/im/channels/' + encodeURIComponent(name) + '/send', {text: '测试消息 来自 c-agent 控制台'})
+  call('POST', '/v1/im/channels/' + encodeURIComponent(name) + '/send', {text: '测试消息 来自 cognitive-os-agent 控制台'})
     .then(() => toast('✉️ 已发送测试消息到 ' + name));
 }
 
@@ -2111,11 +2111,11 @@ const THEMES = ['dark', 'light', 'ocean', 'forest', 'sunset'];
 function applyTheme(t){
   if(!THEMES.includes(t)) t = 'dark';
   document.body.dataset.theme = t;
-  try { localStorage.setItem('cagent-theme', t); } catch(e) {}
+  try { localStorage.setItem('cognitive-os-agent-theme', t); } catch(e) {}
   const sel = $('theme'); if(sel) sel.value = t;
 }
 $('theme').addEventListener('change', e => applyTheme(e.target.value));
-applyTheme(localStorage.getItem('cagent-theme') || 'dark');
+applyTheme(localStorage.getItem('cognitive-os-agent-theme') || 'dark');
 
 /* ================= 连接状态 ================= */
 

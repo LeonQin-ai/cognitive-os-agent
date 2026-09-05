@@ -3,14 +3,14 @@
  * write a slot when seq == enqueue_pos; consumers only read when
  * seq == dequeue_pos + 1. Sequence numbers grow monotonically, which makes
  * the full/empty distinction unambiguous and the algorithm ABA-safe. */
-#include "cagent/infra/ringbuf.h"
+#include "cognitive-os-agent/infra/ringbuf.h"
 
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
 #include <stdatomic.h>
 
-struct ca_ringbuf {
+struct coa_ringbuf {
     _Atomic(void *) *data; /* slot payloads */
     _Atomic(size_t) *seq; /* per-slot sequence numbers */
     size_t capacity;  /* power of two */
@@ -19,9 +19,9 @@ struct ca_ringbuf {
     _Atomic size_t dequeue_pos;
 };
 
-ca_ringbuf *ca_ringbuf_new(size_t capacity) {
+coa_ringbuf *coa_ringbuf_new(size_t capacity) {
     if (capacity < 2 || (capacity & (capacity - 1)) != 0) return NULL;
-    ca_ringbuf *r = (ca_ringbuf *)calloc(1, sizeof(*r));
+    coa_ringbuf *r = (coa_ringbuf *)calloc(1, sizeof(*r));
     if (!r) return NULL;
     r->data = (_Atomic(void *) *)calloc(capacity, sizeof(_Atomic(void *)));
     r->seq  = (_Atomic(size_t) *)malloc(capacity * sizeof(_Atomic(size_t)));
@@ -39,18 +39,18 @@ ca_ringbuf *ca_ringbuf_new(size_t capacity) {
     return r;
 }
 
-void ca_ringbuf_free(ca_ringbuf *r) {
+void coa_ringbuf_free(coa_ringbuf *r) {
     if (!r) return;
     free(r->data);
     free(r->seq);
     free(r);
 }
 
-size_t ca_ringbuf_capacity(ca_ringbuf *r) {
+size_t coa_ringbuf_capacity(coa_ringbuf *r) {
     return r ? r->capacity : 0;
 }
 
-int ca_ringbuf_push(ca_ringbuf *r, void *item) {
+int coa_ringbuf_push(coa_ringbuf *r, void *item) {
     if (!r || !item) return -1;
     const size_t mask = r->mask;
     size_t pos = atomic_load_explicit(&r->enqueue_pos, memory_order_relaxed);
@@ -74,7 +74,7 @@ int ca_ringbuf_push(ca_ringbuf *r, void *item) {
     }
 }
 
-int ca_ringbuf_pop(ca_ringbuf *r, void **out) {
+int coa_ringbuf_pop(coa_ringbuf *r, void **out) {
     if (!r || !out) return -1;
     const size_t mask = r->mask;
     size_t pos = atomic_load_explicit(&r->dequeue_pos, memory_order_relaxed);

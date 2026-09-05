@@ -8,16 +8,16 @@
 extern "C" {
 #endif
 
-typedef struct ca_cow ca_cow;
+typedef struct coa_cow coa_cow;
 
 /* Open the store rooted at blocks_dir (created if missing). NULL on failure. */
-ca_cow *ca_cow_open(const char *blocks_dir);
-void ca_cow_close(ca_cow *c);
+coa_cow *coa_cow_open(const char *blocks_dir);
+void coa_cow_close(coa_cow *c);
 
 /* Store a blob. Returns a pointer to the hash string (static, valid until next call). */
-const char *ca_cow_put(ca_cow *c, const void *data, size_t len);
+const char *coa_cow_put(coa_cow *c, const void *data, size_t len);
 /* Fetch a blob by 16-char hex hash. Returns malloc'd data (caller frees) or NULL. */
-char *ca_cow_get(ca_cow *c, const char *hash, size_t *len);
+char *coa_cow_get(coa_cow *c, const char *hash, size_t *len);
 
 #ifdef __cplusplus
 }

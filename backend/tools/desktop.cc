@@ -1,8 +1,8 @@
-// desktop.cc — native WebView2 shell for the c-agent desktop edition.
+// desktop.cc — native WebView2 shell for the cognitive-os-agent desktop edition.
 //
 // The installed app is a single window (no console, no separate browser). On
 // launch it:
-//   1. spawns  cagent.exe serve 18300  (hidden, output to c-agent-server.log)
+//   1. spawns  cognitive-os-agent.exe serve 18300  (hidden, output to cognitive-os-agent-server.log)
 //   2. waits for the HTTP server to accept connections on 127.0.0.1:18300
 //   3. opens a native WebView2 window pointed at http://localhost:18300/
 //   4. terminates the server when the window is closed
@@ -13,7 +13,7 @@
 //
 // Build (package.sh does this). --subsystem=windows links the shell as a GUI
 // binary so double-clicking it never pops a console window:
-//   zig c++ -std=c++17 -O1 -I third_party/webview -o c-agent-desktop.exe tools/desktop.cc \
+//   zig c++ -std=c++17 -O1 -I third_party/webview -o cognitive-os-agent-desktop.exe tools/desktop.cc \
 //     -Wl,--subsystem=windows -lole32 -loleaut32 -luuid -lshlwapi -luser32 -lgdi32 -lws2_32 -lshell32
 
 #define WIN32_LEAN_AND_MEAN
@@ -65,8 +65,8 @@ static bool wait_server(int port, int timeout_ms) {
 
 int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
     std::wstring dir = exe_dir();
-    std::wstring exe = dir + L"\\cagent.exe";
-    std::wstring log = dir + L"\\c-agent-server.log";
+    std::wstring exe = dir + L"\\cognitive-os-agent.exe";
+    std::wstring log = dir + L"\\cognitive-os-agent-server.log";
 
     SECURITY_ATTRIBUTES sa;
     sa.nLength = sizeof(sa);
@@ -95,21 +95,21 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
     delete[] cmd;
     if (logf) CloseHandle(logf);
     if (!ok) {
-        MessageBoxW(nullptr, L"Failed to start the c-agent server.",
-                    L"c-agent", MB_ICONERROR);
+        MessageBoxW(nullptr, L"Failed to start the cognitive-os-agent server.",
+                    L"cognitive-os-agent", MB_ICONERROR);
         return 1;
     }
     CloseHandle(pi.hThread);
 
     if (!wait_server(kPort, 10000)) {
         MessageBoxW(nullptr,
-                    L"The c-agent server did not start in time.\n\n"
-                    L"See c-agent-server.log in the install folder for details.",
-                    L"c-agent", MB_ICONWARNING);
+                    L"The cognitive-os-agent server did not start in time.\n\n"
+                    L"See cognitive-os-agent-server.log in the install folder for details.",
+                    L"cognitive-os-agent", MB_ICONWARNING);
     }
 
     webview::webview w(false, nullptr);
-    w.set_title("c-agent");
+    w.set_title("cognitive-os-agent");
     w.set_size(1280, 800, WEBVIEW_HINT_NONE);
     w.navigate("http://localhost:" + std::to_string(kPort) + "/");
     w.run();

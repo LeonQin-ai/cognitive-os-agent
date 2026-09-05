@@ -1,11 +1,11 @@
-/* http_winhttp.c — Windows HTTPS backend for the ca_http_* API.
+/* http_winhttp.c — Windows HTTPS backend for the coa_http_* API.
  * The default os/http.c only speaks plaintext http:// (and refuses https://).
  * Real LLM providers (OpenAI/DeepSeek/Anthropic) are HTTPS-only, so on Windows
  * we implement the same API over WinHTTP, which handles TLS via the system
  * crypto stack. This file is compiled only on Windows (_WIN32); on other
  * platforms os/http.c provides these symbols instead. */
-#include "cagent/os/http.h"
-#include "cagent/infra/util.h"
+#include "cognitive-os-agent/os/http.h"
+#include "cognitive-os-agent/infra/util.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -17,7 +17,7 @@
 #include <winhttp.h>
 #pragma comment(lib, "winhttp.lib")
 
-struct ca_http_stream {
+struct coa_http_stream {
     char *body;
     size_t len;
     size_t pos;
@@ -64,9 +64,9 @@ static int parse_url(const char *url, char *host, size_t hostsz, int *port,
     return https;
 }
 
-static ca_http_response *do_request(const char *method, const char *base_url, const char *path,
+static coa_http_response *do_request(const char *method, const char *base_url, const char *path,
                                     const char *body, const char *content_type,
-                                    ca_strmap *extra_headers, int timeout_ms) {
+                                    coa_strmap *extra_headers, int timeout_ms) {
     char host[256], basepath[1024];
     int port;
     int https = parse_url(base_url, host, sizeof(host), &port, basepath, sizeof(basepath));
@@ -90,7 +90,7 @@ static ca_http_response *do_request(const char *method, const char *base_url, co
         return NULL;
     }
 
-    HINTERNET hSess = WinHttpOpen(L"c-agent/0.1", WINHTTP_ACCESS_TYPE_NO_PROXY,
+    HINTERNET hSess = WinHttpOpen(L"cognitive-os-agent/0.1", WINHTTP_ACCESS_TYPE_NO_PROXY,
                                   WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!hSess) { free(whost); free(wpath); free(wmethod); return NULL; }
 
@@ -109,16 +109,16 @@ static ca_http_response *do_request(const char *method, const char *base_url, co
     if (!hReq) { WinHttpCloseHandle(hConn); WinHttpCloseHandle(hSess); free(whost); free(wpath); free(wmethod); return NULL; }
 
     /* build headers (Content-Type + any extra) */
-    ca_strbuf hdr;
-    ca_strbuf_init(&hdr);
+    coa_strbuf hdr;
+    coa_strbuf_init(&hdr);
     if (content_type && body && *body)
-        ca_strbuf_appendf(&hdr, "Content-Type: %s\r\n", content_type);
+        coa_strbuf_appendf(&hdr, "Content-Type: %s\r\n", content_type);
     if (extra_headers) {
         for (size_t i = 0; i < extra_headers->count; i++)
-            ca_strbuf_appendf(&hdr, "%s: %s\r\n", extra_headers->items[i].key, extra_headers->items[i].val);
+            coa_strbuf_appendf(&hdr, "%s: %s\r\n", extra_headers->items[i].key, extra_headers->items[i].val);
     }
     wchar_t *whdr = to_wide(hdr.buf && hdr.len ? hdr.buf : "");
-    if (!whdr) { WinHttpCloseHandle(hReq); WinHttpCloseHandle(hConn); WinHttpCloseHandle(hSess); ca_strbuf_free(&hdr); free(whost); free(wpath); free(wmethod); return NULL; }
+    if (!whdr) { WinHttpCloseHandle(hReq); WinHttpCloseHandle(hConn); WinHttpCloseHandle(hSess); coa_strbuf_free(&hdr); free(whost); free(wpath); free(wmethod); return NULL; }
 
     BOOL ok = WinHttpSendRequest(hReq, hdr.len ? whdr : WINHTTP_NO_ADDITIONAL_HEADERS,
                                  hdr.len ? (DWORD)-1L : 0,
@@ -126,7 +126,7 @@ static ca_http_response *do_request(const char *method, const char *base_url, co
                                  body ? (DWORD)strlen(body) : 0,
                                  body ? (DWORD)strlen(body) : 0, 0);
     free(whdr);
-    ca_strbuf_free(&hdr);
+    coa_strbuf_free(&hdr);
     if (!ok) { WinHttpCloseHandle(hReq); WinHttpCloseHandle(hConn); WinHttpCloseHandle(hSess); free(whost); free(wpath); free(wmethod); return NULL; }
 
     if (WinHttpReceiveResponse(hReq, NULL) == FALSE) {
@@ -138,8 +138,8 @@ static ca_http_response *do_request(const char *method, const char *base_url, co
     WinHttpQueryHeaders(hReq, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
                         NULL, &dwStatus, &dwSize, NULL);
 
-    ca_strbuf body_buf;
-    ca_strbuf_init(&body_buf);
+    coa_strbuf body_buf;
+    coa_strbuf_init(&body_buf);
     DWORD available = 0;
     do {
         if (WinHttpQueryDataAvailable(hReq, &available) == FALSE) break;
@@ -148,13 +148,13 @@ static ca_http_response *do_request(const char *method, const char *base_url, co
         if (!tmp) break;
         DWORD downloaded = 0;
         if (WinHttpReadData(hReq, tmp, available, &downloaded) && downloaded > 0)
-            ca_strbuf_append_n(&body_buf, tmp, (size_t)downloaded);
+            coa_strbuf_append_n(&body_buf, tmp, (size_t)downloaded);
         free(tmp);
     } while (available > 0);
 
-    ca_http_response *r = (ca_http_response *)calloc(1, sizeof(*r));
+    coa_http_response *r = (coa_http_response *)calloc(1, sizeof(*r));
     r->status = (int)dwStatus;
-    r->body = ca_strbuf_detach(&body_buf);
+    r->body = coa_strbuf_detach(&body_buf);
     r->body_len = r->body ? strlen(r->body) : 0;
 
     WinHttpCloseHandle(hReq);
@@ -164,29 +164,29 @@ static ca_http_response *do_request(const char *method, const char *base_url, co
     return r;
 }
 
-ca_http_response *ca_http_post(const char *base_url, const char *path, const char *body,
-                               const char *content_type, ca_strmap *extra_headers, int timeout_ms) {
+coa_http_response *coa_http_post(const char *base_url, const char *path, const char *body,
+                               const char *content_type, coa_strmap *extra_headers, int timeout_ms) {
     return do_request("POST", base_url, path, body, content_type, extra_headers, timeout_ms);
 }
 
-void ca_http_response_free(ca_http_response *r) {
+void coa_http_response_free(coa_http_response *r) {
     if (!r) return;
     free(r->body);
-    ca_strmap_free(&r->headers);
+    coa_strmap_free(&r->headers);
     free(r);
 }
 
-ca_http_response *ca_http_get(const char *base_url, const char *path, ca_strmap *extra_headers,
+coa_http_response *coa_http_get(const char *base_url, const char *path, coa_strmap *extra_headers,
                               int timeout_ms) {
     return do_request("GET", base_url, path, NULL, NULL, extra_headers, timeout_ms);
 }
 
-ca_http_stream *ca_http_stream_open(const char *base_url, const char *method, const char *path,
+coa_http_stream *coa_http_stream_open(const char *base_url, const char *method, const char *path,
                                     const char *body, const char *content_type,
-                                    ca_strmap *extra_headers, int timeout_ms) {
-    ca_http_response *r = do_request(method, base_url, path, body, content_type, extra_headers, timeout_ms);
+                                    coa_strmap *extra_headers, int timeout_ms) {
+    coa_http_response *r = do_request(method, base_url, path, body, content_type, extra_headers, timeout_ms);
     if (!r) return NULL;
-    ca_http_stream *h = (ca_http_stream *)calloc(1, sizeof(*h));
+    coa_http_stream *h = (coa_http_stream *)calloc(1, sizeof(*h));
     h->body = r->body;   /* transfer ownership */
     h->len = r->body_len;
     h->pos = 0;
@@ -195,9 +195,9 @@ ca_http_stream *ca_http_stream_open(const char *base_url, const char *method, co
     return h;
 }
 
-int ca_http_stream_status(ca_http_stream *h) { return h ? h->status : 0; }
+int coa_http_stream_status(coa_http_stream *h) { return h ? h->status : 0; }
 
-int ca_http_stream_read(ca_http_stream *h, char *out, size_t cap) {
+int coa_http_stream_read(coa_http_stream *h, char *out, size_t cap) {
     if (!h) return -1;
     size_t avail = h->len - h->pos;
     if (avail == 0) return 0;
@@ -207,7 +207,7 @@ int ca_http_stream_read(ca_http_stream *h, char *out, size_t cap) {
     return (int)n;
 }
 
-int ca_http_stream_read_line(ca_http_stream *h, char *out, size_t cap) {
+int coa_http_stream_read_line(coa_http_stream *h, char *out, size_t cap) {
     if (!h) return -1;
     size_t n = 0;
     while (h->pos < h->len && n + 1 < cap) {
@@ -220,7 +220,7 @@ int ca_http_stream_read_line(ca_http_stream *h, char *out, size_t cap) {
     return (int)n;
 }
 
-void ca_http_stream_close(ca_http_stream *h) {
+void coa_http_stream_close(coa_http_stream *h) {
     if (!h) return;
     free(h->body);
     free(h);

@@ -1,6 +1,6 @@
 /* architect.c — plugin architecture design. */
-#include "cagent/plugin_intelligence/architect.h"
-#include "cagent/infra/util.h"
+#include "cognitive-os-agent/plugin_intelligence/architect.h"
+#include "cognitive-os-agent/infra/util.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -21,7 +21,7 @@ static void add_interface(cJSON *arr, const char *from, const char *to, const ch
     cJSON_AddItemToArray(arr, o);
 }
 
-char *ca_architect_design(const char *goal) {
+char *coa_architect_design(const char *goal) {
     cJSON *out = cJSON_CreateObject();
     if (out) {
         cJSON_AddStringToObject(out, "goal", goal ? goal : "");
@@ -43,5 +43,5 @@ char *ca_architect_design(const char *goal) {
     }
     char *s = out ? cJSON_PrintUnformatted(out) : NULL;
     if (out) cJSON_Delete(out);
-    return s ? s : ca_strdup("{}");
+    return s ? s : coa_strdup("{}");
 }

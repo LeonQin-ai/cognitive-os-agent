@@ -1,18 +1,18 @@
 /* generator.c — AI plugin generation pipeline (self-evolution loop). */
-#include "cagent/plugin_intelligence/generator.h"
-#include "cagent/plugin_intelligence/analyzer.h"
-#include "cagent/plugin_intelligence/architect.h"
-#include "cagent/plugin_intelligence/codegen.h"
-#include "cagent/plugin_intelligence/testing.h"
-#include "cagent/plugin_intelligence/security.h"
-#include "cagent/plugin_runtime/sandbox.h"
-#include "cagent/plugin_runtime/registry.h"
-#include "cagent/action/skill.h"
-#include "cagent/llm/llm.h"
-#include "cagent/os/os_fs.h"
-#include "cagent/infra/util.h"
-#include "cagent/infra/logging.h"
-#include "cagent/cagent.h"
+#include "cognitive-os-agent/plugin_intelligence/generator.h"
+#include "cognitive-os-agent/plugin_intelligence/analyzer.h"
+#include "cognitive-os-agent/plugin_intelligence/architect.h"
+#include "cognitive-os-agent/plugin_intelligence/codegen.h"
+#include "cognitive-os-agent/plugin_intelligence/testing.h"
+#include "cognitive-os-agent/plugin_intelligence/security.h"
+#include "cognitive-os-agent/plugin_runtime/sandbox.h"
+#include "cognitive-os-agent/plugin_runtime/registry.h"
+#include "cognitive-os-agent/action/skill.h"
+#include "cognitive-os-agent/llm/llm.h"
+#include "cognitive-os-agent/os/os_fs.h"
+#include "cognitive-os-agent/infra/util.h"
+#include "cognitive-os-agent/infra/logging.h"
+#include "cognitive-os-agent/cognitive-os-agent.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -132,8 +132,8 @@ static int design_ok(const cJSON *root, char *name_out, size_t name_cap,
 /* 1 if the script passes the security review (no high-severity findings and
  * not on the sandbox forbidden list). */
 static int security_ok(const char *script) {
-    if (!script || ca_sandbox_forbidden(script)) return 0;
-    char *audit = ca_security_audit(script);
+    if (!script || coa_sandbox_forbidden(script)) return 0;
+    char *audit = coa_security_audit(script);
     if (!audit) return 0;
     cJSON *root = cJSON_Parse(audit);
     free(audit);
@@ -159,16 +159,16 @@ static cJSON *stage_obj(const char *json_text) {
 /* Join a JSON array of strings into a comma-separated csv (caller frees). */
 static char *caps_csv_from(cJSON *arr) {
     if (!arr || !cJSON_IsArray(arr)) return NULL;
-    ca_strbuf sb;
-    ca_strbuf_init(&sb);
+    coa_strbuf sb;
+    coa_strbuf_init(&sb);
     cJSON *it;
     cJSON_ArrayForEach(it, arr) {
         if (!cJSON_IsString(it) || !it->valuestring || !*it->valuestring) continue;
-        if (sb.len > 0) ca_strbuf_append(&sb, ",");
-        ca_strbuf_append(&sb, it->valuestring);
+        if (sb.len > 0) coa_strbuf_append(&sb, ",");
+        coa_strbuf_append(&sb, it->valuestring);
     }
-    if (sb.len == 0) { ca_strbuf_free(&sb); return NULL; }
-    return ca_strbuf_detach(&sb);
+    if (sb.len == 0) { coa_strbuf_free(&sb); return NULL; }
+    return coa_strbuf_detach(&sb);
 }
 
 /* Smoke-test the generated script once via the sandboxed test runner.
@@ -176,7 +176,7 @@ static char *caps_csv_from(cJSON *arr) {
 static int smoke_test(const char *path, char **report_out) {
     char cmd[1200];
     snprintf(cmd, sizeof(cmd), "sh \"%s\"", path);
-    char *report = ca_testing_run(cmd, 5000);
+    char *report = coa_testing_run(cmd, 5000);
     if (report_out) *report_out = report;
     else free(report);
     cJSON *r = cJSON_Parse(report ? report : "{}");
@@ -191,9 +191,9 @@ static int smoke_test(const char *path, char **report_out) {
     return pass;
 }
 
-char *ca_plugin_generate_deps(const ca_plugin_gen_deps *deps, const char *description) {
+char *coa_plugin_generate_deps(const coa_plugin_gen_deps *deps, const char *description) {
     if (!deps || !description || !*description)
-        return ca_strdup("{\"ok\":false,\"error\":\"missing description\"}");
+        return coa_strdup("{\"ok\":false,\"error\":\"missing description\"}");
 
     const char *provider = (deps->provider && *deps->provider)
         ? deps->provider
@@ -209,32 +209,32 @@ char *ca_plugin_generate_deps(const ca_plugin_gen_deps *deps, const char *descri
         cJSON_AddStringToObject(spec, "description", description);
         char *spec_s = cJSON_PrintUnformatted(spec);
         cJSON_Delete(spec);
-        analysis_s = ca_analyzer_analyze(spec_s ? spec_s : "{}");
+        analysis_s = coa_analyzer_analyze(spec_s ? spec_s : "{}");
         free(spec_s);
         analysis = stage_obj(analysis_s);
     }
 
     /* --- stage 2: architect (component/interface plan) --- */
-    arch_s = ca_architect_design(description);
+    arch_s = coa_architect_design(description);
     arch = stage_obj(arch_s);
 
     /* --- stage 3: code design via LLM (or deterministic mock template) --- */
-    ca_strbuf pb;
-    ca_strbuf_init(&pb);
-    ca_strbuf_append(&pb, ARCH_PROMPT);
+    coa_strbuf pb;
+    coa_strbuf_init(&pb);
+    coa_strbuf_append(&pb, ARCH_PROMPT);
     if (analysis_s && *analysis_s && strcmp(analysis_s, "{}") != 0)
-        ca_strbuf_appendf(&pb, "\n\nRequirement analysis: %s", analysis_s);
+        coa_strbuf_appendf(&pb, "\n\nRequirement analysis: %s", analysis_s);
     if (arch_s && *arch_s && strcmp(arch_s, "{}") != 0)
-        ca_strbuf_appendf(&pb, "\n\nArchitecture plan: %s", arch_s);
+        coa_strbuf_appendf(&pb, "\n\nArchitecture plan: %s", arch_s);
 
     cJSON *design = NULL;
     if (real && deps->llm) {
-        char *resp = ca_llm_chat_simple(deps->llm, pb.buf ? pb.buf : ARCH_PROMPT,
+        char *resp = coa_llm_chat_simple(deps->llm, pb.buf ? pb.buf : ARCH_PROMPT,
                                         description);
         design = parse_design(resp);
         free(resp);
     }
-    ca_strbuf_free(&pb);
+    coa_strbuf_free(&pb);
     if (!design) {
         /* fallback: mock template (also used when the LLM returns garbage) */
         char *js = mock_design(description);
@@ -244,7 +244,7 @@ char *ca_plugin_generate_deps(const ca_plugin_gen_deps *deps, const char *descri
             free(analysis_s); free(arch_s);
             if (analysis) cJSON_Delete(analysis);
             if (arch) cJSON_Delete(arch);
-            return ca_strdup("{\"ok\":false,\"error\":\"pipeline failed\"}");
+            return coa_strdup("{\"ok\":false,\"error\":\"pipeline failed\"}");
         }
     }
 
@@ -254,7 +254,7 @@ char *ca_plugin_generate_deps(const ca_plugin_gen_deps *deps, const char *descri
         free(analysis_s); free(arch_s);
         if (analysis) cJSON_Delete(analysis);
         if (arch) cJSON_Delete(arch);
-        return ca_strdup("{\"ok\":false,\"error\":\"LLM design invalid (missing name/script)\"}");
+        return coa_strdup("{\"ok\":false,\"error\":\"LLM design invalid (missing name/script)\"}");
     }
 
     cJSON *desc_j = cJSON_GetObjectItemCaseSensitive(design, "description");
@@ -267,13 +267,13 @@ char *ca_plugin_generate_deps(const ca_plugin_gen_deps *deps, const char *descri
         free(analysis_s); free(arch_s);
         if (analysis) cJSON_Delete(analysis);
         if (arch) cJSON_Delete(arch);
-        return ca_strdup("{\"ok\":false,\"error\":\"security review rejected the generated script\"}");
+        return coa_strdup("{\"ok\":false,\"error\":\"security review rejected the generated script\"}");
     }
 
     /* --- content signature --- */
-    uint64_t h = ca_hash64(script, strlen(script));
+    uint64_t h = coa_hash64(script, strlen(script));
     char signature[32];
-    ca_hash_hex(signature, h);
+    coa_hash_hex(signature, h);
 
     /* --- register as a versioned plugin --- */
     char **caps = NULL;
@@ -297,13 +297,13 @@ char *ca_plugin_generate_deps(const ca_plugin_gen_deps *deps, const char *descri
     char version[32];
     snprintf(version, sizeof(version), "%s", PLUGIN_VERSION);
     if (deps->registry) {
-        const ca_plugin_meta *prev = ca_plugin_registry_find(deps->registry, name);
+        const coa_plugin_meta *prev = coa_plugin_registry_find(deps->registry, name);
         if (prev && prev->version) {
             int a = 0, b = 0, c = 0;
             if (sscanf(prev->version, "%d.%d.%d", &a, &b, &c) == 3)
                 snprintf(version, sizeof(version), "%d.%d.%d", a, b, c + 1);
         }
-        ca_plugin_meta meta;
+        coa_plugin_meta meta;
         memset(&meta, 0, sizeof(meta));
         meta.name = name;
         meta.version = version;
@@ -313,38 +313,38 @@ char *ca_plugin_generate_deps(const ca_plugin_gen_deps *deps, const char *descri
         meta.n_caps = n_caps;
         meta.enabled = 1;
         meta.built_ms = 0;
-        reg_ok = ca_plugin_registry_register(deps->registry, &meta) == 0;
+        reg_ok = coa_plugin_registry_register(deps->registry, &meta) == 0;
     }
 
     /* --- register as a runnable skill carrying the granted caps --- */
     int skill_ok = 0;
     char *caps_csv = caps_csv_from(caps_j);
     if (deps->skills) {
-        const ca_skill sk = { name, desc, "shell", script, caps_csv };
-        skill_ok = ca_skill_register_ex(deps->skills, &sk, 1) == 0;
+        const coa_skill sk = { name, desc, "shell", script, caps_csv };
+        skill_ok = coa_skill_register_ex(deps->skills, &sk, 1) == 0;
     }
 
     /* --- persist registries so the capability survives a restart --- */
     if (reg_ok && deps->registry && deps->state_root)
-        ca_plugin_registry_persist(deps->registry, deps->state_root);
+        coa_plugin_registry_persist(deps->registry, deps->state_root);
     if (skill_ok && deps->skills && deps->state_root)
-        ca_skill_registry_persist(deps->skills, deps->state_root);
+        coa_skill_registry_persist(deps->skills, deps->state_root);
 
     /* --- persist under <state_root>/plugins/<name>.sh --- */
     char dir[600], path[700];
     snprintf(dir, sizeof(dir), "%s", deps->state_root ? deps->state_root : "state");
     snprintf(path, sizeof(path), "%s/plugins", dir);
-    ca_fs_mkdirs(path);
+    coa_fs_mkdirs(path);
     snprintf(path, sizeof(path), "%s/plugins/%s.sh", dir, name);
-    ca_fs_write_file(path, script, (size_t)strlen(script));
+    coa_fs_write_file(path, script, (size_t)strlen(script));
 
     /* --- stage 5: automated smoke test through the sandbox --- */
     char *test_report = NULL;
     int test_ok = smoke_test(path, &test_report);
-    if (!test_ok) ca_log_warn("plugin %s failed its smoke test", name);
+    if (!test_ok) coa_log_warn("plugin %s failed its smoke test", name);
 
     /* --- native C skeleton for the .so/.dll loader path --- */
-    char *c_skeleton = ca_codegen_plugin(name, desc);
+    char *c_skeleton = coa_codegen_plugin(name, desc);
 
     cJSON *out = cJSON_CreateObject();
     cJSON_AddBoolToObject(out, "ok", 1);
@@ -382,18 +382,18 @@ char *ca_plugin_generate_deps(const ca_plugin_gen_deps *deps, const char *descri
     char *js = cJSON_PrintUnformatted(out);
     cJSON_Delete(out);
 
-    ca_log_info("plugin generated name=%s real=%d registered=%d skill=%d test_ok=%d",
+    coa_log_info("plugin generated name=%s real=%d registered=%d skill=%d test_ok=%d",
                 name, real, reg_ok, skill_ok, test_ok);
-    return js ? js : ca_strdup("{\"ok\":false,\"error\":\"json build failed\"}");
+    return js ? js : coa_strdup("{\"ok\":false,\"error\":\"json build failed\"}");
 }
 
-char *ca_plugin_generate(cagent_ctx *ctx, const char *description) {
-    ca_plugin_gen_deps deps;
+char *coa_plugin_generate(coa_ctx *ctx, const char *description) {
+    coa_plugin_gen_deps deps;
     memset(&deps, 0, sizeof(deps));
     deps.llm = ctx ? ctx->llm : NULL;
     deps.provider = ctx ? ctx->provider : NULL;
     deps.registry = ctx ? ctx->registry : NULL;
     deps.skills = ctx ? ctx->skills : NULL;
     deps.state_root = ctx ? ctx->state_root : NULL;
-    return ca_plugin_generate_deps(&deps, description);
+    return coa_plugin_generate_deps(&deps, description);
 }

@@ -1,20 +1,20 @@
 /* registry.c — versioned plugin metadata registry. */
-#include "cagent/plugin_runtime/registry.h"
-#include "cagent/os/os_thread.h"
-#include "cagent/infra/util.h"
+#include "cognitive-os-agent/plugin_runtime/registry.h"
+#include "cognitive-os-agent/os/os_thread.h"
+#include "cognitive-os-agent/infra/util.h"
 
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
 #include "cJSON.h"
 
-struct ca_plugin_registry {
-    ca_mutex mtx;
-    ca_plugin_meta *items;
+struct coa_plugin_registry {
+    coa_mutex mtx;
+    coa_plugin_meta *items;
     size_t count, cap;
 };
 
-static void meta_free(ca_plugin_meta *m) {
+static void meta_free(coa_plugin_meta *m) {
     if (!m) return;
     free(m->name); free(m->version); free(m->signature); free(m->description);
     for (size_t i = 0; i < m->n_caps; i++) free(m->caps[i]);
@@ -24,86 +24,86 @@ static void meta_free(ca_plugin_meta *m) {
     memset(m, 0, sizeof(*m));
 }
 
-static ca_plugin_meta meta_copy(const ca_plugin_meta *src) {
-    ca_plugin_meta m;
+static coa_plugin_meta meta_copy(const coa_plugin_meta *src) {
+    coa_plugin_meta m;
     memset(&m, 0, sizeof(m));
-    m.name = ca_strdup(src->name ? src->name : "");
-    m.version = ca_strdup(src->version ? src->version : "0.0.0");
-    m.signature = src->signature ? ca_strdup(src->signature) : NULL;
-    m.description = src->description ? ca_strdup(src->description) : NULL;
+    m.name = coa_strdup(src->name ? src->name : "");
+    m.version = coa_strdup(src->version ? src->version : "0.0.0");
+    m.signature = src->signature ? coa_strdup(src->signature) : NULL;
+    m.description = src->description ? coa_strdup(src->description) : NULL;
     m.enabled = src->enabled;
     m.built_ms = src->built_ms;
     m.n_caps = src->n_caps;
     m.caps = (char **)calloc(m.n_caps ? m.n_caps : 1, sizeof(char *));
     for (size_t i = 0; i < m.n_caps; i++)
-        m.caps[i] = ca_strdup(src->caps[i]);
+        m.caps[i] = coa_strdup(src->caps[i]);
     m.n_deps = src->n_deps;
     m.deps = (char **)calloc(m.n_deps ? m.n_deps : 1, sizeof(char *));
     for (size_t i = 0; i < m.n_deps; i++)
-        m.deps[i] = ca_strdup(src->deps[i]);
+        m.deps[i] = coa_strdup(src->deps[i]);
     return m;
 }
 
-ca_plugin_registry *ca_plugin_registry_new(void) {
-    ca_plugin_registry *r = (ca_plugin_registry *)calloc(1, sizeof(ca_plugin_registry));
+coa_plugin_registry *coa_plugin_registry_new(void) {
+    coa_plugin_registry *r = (coa_plugin_registry *)calloc(1, sizeof(coa_plugin_registry));
     if (!r) return NULL;
-    ca_mutex_init(&r->mtx);
+    coa_mutex_init(&r->mtx);
     return r;
 }
 
-void ca_plugin_registry_free(ca_plugin_registry *r) {
+void coa_plugin_registry_free(coa_plugin_registry *r) {
     if (!r) return;
-    ca_mutex_lock(&r->mtx);
+    coa_mutex_lock(&r->mtx);
     for (size_t i = 0; i < r->count; i++) meta_free(&r->items[i]);
     free(r->items);
-    ca_mutex_unlock(&r->mtx);
-    ca_mutex_destroy(&r->mtx);
+    coa_mutex_unlock(&r->mtx);
+    coa_mutex_destroy(&r->mtx);
     free(r);
 }
 
-int ca_plugin_registry_register(ca_plugin_registry *r, const ca_plugin_meta *meta) {
+int coa_plugin_registry_register(coa_plugin_registry *r, const coa_plugin_meta *meta) {
     if (!r || !meta || !meta->name || !meta->version) return -1;
-    ca_mutex_lock(&r->mtx);
+    coa_mutex_lock(&r->mtx);
     /* reject exact duplicate (same name+version) */
     for (size_t i = 0; i < r->count; i++)
         if (strcmp(r->items[i].name, meta->name) == 0 &&
             strcmp(r->items[i].version, meta->version) == 0) {
-            ca_mutex_unlock(&r->mtx);
+            coa_mutex_unlock(&r->mtx);
             return -1;
         }
     if (r->count == r->cap) {
         size_t ncap = r->cap ? r->cap * 2 : 8;
-        ca_plugin_meta *ni = (ca_plugin_meta *)realloc(r->items, ncap * sizeof(ca_plugin_meta));
-        if (!ni) { ca_mutex_unlock(&r->mtx); return -1; }
+        coa_plugin_meta *ni = (coa_plugin_meta *)realloc(r->items, ncap * sizeof(coa_plugin_meta));
+        if (!ni) { coa_mutex_unlock(&r->mtx); return -1; }
         r->items = ni;
         r->cap = ncap;
     }
     r->items[r->count++] = meta_copy(meta);
-    ca_mutex_unlock(&r->mtx);
+    coa_mutex_unlock(&r->mtx);
     return 0;
 }
 
-int ca_plugin_registry_unregister(ca_plugin_registry *r, const char *name) {
+int coa_plugin_registry_unregister(coa_plugin_registry *r, const char *name) {
     if (!r || !name) return -1;
-    ca_mutex_lock(&r->mtx);
+    coa_mutex_lock(&r->mtx);
     int found = 0;
     for (size_t i = 0; i < r->count; i++) {
         if (strcmp(r->items[i].name, name) == 0) {
             meta_free(&r->items[i]);
             if (r->count - i - 1 > 0)
-                memmove(&r->items[i], &r->items[i + 1], (r->count - i - 1) * sizeof(ca_plugin_meta));
+                memmove(&r->items[i], &r->items[i + 1], (r->count - i - 1) * sizeof(coa_plugin_meta));
             r->count--;
             i--;
             found = 1;
         }
     }
-    ca_mutex_unlock(&r->mtx);
+    coa_mutex_unlock(&r->mtx);
     return found ? 0 : -1;
 }
 
-int ca_plugin_registry_set_enabled(ca_plugin_registry *r, const char *name, int enabled) {
+int coa_plugin_registry_set_enabled(coa_plugin_registry *r, const char *name, int enabled) {
     if (!r || !name) return -1;
-    ca_mutex_lock(&r->mtx);
+    coa_mutex_lock(&r->mtx);
     int rc = -1;
     for (size_t i = r->count; i-- > 0; ) {
         if (strcmp(r->items[i].name, name) == 0) { /* latest first */
@@ -112,40 +112,40 @@ int ca_plugin_registry_set_enabled(ca_plugin_registry *r, const char *name, int 
             break;
         }
     }
-    ca_mutex_unlock(&r->mtx);
+    coa_mutex_unlock(&r->mtx);
     return rc;
 }
 
-const ca_plugin_meta *ca_plugin_registry_find(ca_plugin_registry *r, const char *name) {
+const coa_plugin_meta *coa_plugin_registry_find(coa_plugin_registry *r, const char *name) {
     if (!r || !name) return NULL;
-    ca_mutex_lock(&r->mtx);
-    const ca_plugin_meta *m = NULL;
+    coa_mutex_lock(&r->mtx);
+    const coa_plugin_meta *m = NULL;
     for (size_t i = r->count; i-- > 0; )
         if (strcmp(r->items[i].name, name) == 0) { m = &r->items[i]; break; }
-    ca_mutex_unlock(&r->mtx);
+    coa_mutex_unlock(&r->mtx);
     return m;
 }
 
-int ca_plugin_registry_count(ca_plugin_registry *r) {
+int coa_plugin_registry_count(coa_plugin_registry *r) {
     if (!r) return 0;
-    ca_mutex_lock(&r->mtx);
+    coa_mutex_lock(&r->mtx);
     int n = (int)r->count;
-    ca_mutex_unlock(&r->mtx);
+    coa_mutex_unlock(&r->mtx);
     return n;
 }
 
-const ca_plugin_meta *ca_plugin_registry_get(ca_plugin_registry *r, size_t i) {
+const coa_plugin_meta *coa_plugin_registry_get(coa_plugin_registry *r, size_t i) {
     if (!r) return NULL;
-    ca_mutex_lock(&r->mtx);
-    const ca_plugin_meta *m = (i < r->count) ? &r->items[i] : NULL;
-    ca_mutex_unlock(&r->mtx);
+    coa_mutex_lock(&r->mtx);
+    const coa_plugin_meta *m = (i < r->count) ? &r->items[i] : NULL;
+    coa_mutex_unlock(&r->mtx);
     return m;
 }
 
-int ca_plugin_registry_deps_met(ca_plugin_registry *r, const char *name) {
+int coa_plugin_registry_deps_met(coa_plugin_registry *r, const char *name) {
     if (!r || !name) return 0;
-    ca_mutex_lock(&r->mtx);
-    const ca_plugin_meta *m = NULL;
+    coa_mutex_lock(&r->mtx);
+    const coa_plugin_meta *m = NULL;
     for (size_t i = r->count; i-- > 0; )
         if (strcmp(r->items[i].name, name) == 0) { m = &r->items[i]; break; }
     int ok = 1;
@@ -159,11 +159,11 @@ int ca_plugin_registry_deps_met(ca_plugin_registry *r, const char *name) {
     } else {
         ok = 0;
     }
-    ca_mutex_unlock(&r->mtx);
+    coa_mutex_unlock(&r->mtx);
     return ok;
 }
 
-static void add_meta_json(cJSON *arr, const ca_plugin_meta *m) {
+static void add_meta_json(cJSON *arr, const coa_plugin_meta *m) {
     cJSON *o = cJSON_CreateObject();
     cJSON_AddStringToObject(o, "version", m->version);
     if (m->signature) cJSON_AddStringToObject(o, "signature", m->signature);
@@ -179,12 +179,12 @@ static void add_meta_json(cJSON *arr, const ca_plugin_meta *m) {
     cJSON_AddItemToArray(arr, o);
 }
 
-char *ca_plugin_registry_json(ca_plugin_registry *r) {
+char *coa_plugin_registry_json(coa_plugin_registry *r) {
     cJSON *root = cJSON_CreateObject();
     if (!r) return cJSON_PrintUnformatted(root);
-    ca_mutex_lock(&r->mtx);
+    coa_mutex_lock(&r->mtx);
     for (size_t i = 0; i < r->count; i++) {
-        ca_plugin_meta *m = &r->items[i];
+        coa_plugin_meta *m = &r->items[i];
         cJSON *node = cJSON_GetObjectItemCaseSensitive(root, m->name);
         if (!node) {
             node = cJSON_CreateObject();
@@ -197,7 +197,7 @@ char *ca_plugin_registry_json(ca_plugin_registry *r) {
         }
         add_meta_json(vers, m);
     }
-    ca_mutex_unlock(&r->mtx);
+    coa_mutex_unlock(&r->mtx);
     char *js = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
     return js;
@@ -226,14 +226,14 @@ static int dump_file(const char *path, const char *text) {
     return 0;
 }
 
-int ca_plugin_registry_persist(ca_plugin_registry *r, const char *state_root) {
+int coa_plugin_registry_persist(coa_plugin_registry *r, const char *state_root) {
     if (!r || !state_root) return -1;
     char path[1024];
-    ca_path_join(path, sizeof(path), state_root, "plugins.json");
+    coa_path_join(path, sizeof(path), state_root, "plugins.json");
     cJSON *arr = cJSON_CreateArray();
-    ca_mutex_lock(&r->mtx);
+    coa_mutex_lock(&r->mtx);
     for (size_t i = 0; i < r->count; i++) {
-        ca_plugin_meta *m = &r->items[i];
+        coa_plugin_meta *m = &r->items[i];
         cJSON *o = cJSON_CreateObject();
         cJSON_AddStringToObject(o, "name", m->name);
         cJSON_AddStringToObject(o, "version", m->version);
@@ -249,7 +249,7 @@ int ca_plugin_registry_persist(ca_plugin_registry *r, const char *state_root) {
         cJSON_AddItemToObject(o, "dependencies", deps);
         cJSON_AddItemToArray(arr, o);
     }
-    ca_mutex_unlock(&r->mtx);
+    coa_mutex_unlock(&r->mtx);
     char *s = cJSON_PrintUnformatted(arr);
     cJSON_Delete(arr);
     int rc = dump_file(path, s ? s : "[]");
@@ -257,10 +257,10 @@ int ca_plugin_registry_persist(ca_plugin_registry *r, const char *state_root) {
     return rc;
 }
 
-int ca_plugin_registry_load(ca_plugin_registry *r, const char *state_root) {
+int coa_plugin_registry_load(coa_plugin_registry *r, const char *state_root) {
     if (!r || !state_root) return -1;
     char path[1024];
-    ca_path_join(path, sizeof(path), state_root, "plugins.json");
+    coa_path_join(path, sizeof(path), state_root, "plugins.json");
     char *txt = slurp_file(path);
     if (!txt) return 0;
     cJSON *arr = cJSON_Parse(txt);
@@ -272,7 +272,7 @@ int ca_plugin_registry_load(ca_plugin_registry *r, const char *state_root) {
         cJSON *n = cJSON_GetObjectItemCaseSensitive(o, "name");
         cJSON *v = cJSON_GetObjectItemCaseSensitive(o, "version");
         if (!n || !cJSON_IsString(n) || !v || !cJSON_IsString(v)) continue;
-        ca_plugin_meta m;
+        coa_plugin_meta m;
         memset(&m, 0, sizeof(m));
         m.name = n->valuestring;
         m.version = v->valuestring;
@@ -288,10 +288,10 @@ int ca_plugin_registry_load(ca_plugin_registry *r, const char *state_root) {
             m.caps = (char **)calloc(m.n_caps ? m.n_caps : 1, sizeof(char *));
             for (size_t c = 0; c < m.n_caps; c++) {
                 cJSON *ci = cJSON_GetArrayItem(caps, c);
-                m.caps[c] = (ci && cJSON_IsString(ci)) ? ca_strdup(ci->valuestring) : ca_strdup("");
+                m.caps[c] = (ci && cJSON_IsString(ci)) ? coa_strdup(ci->valuestring) : coa_strdup("");
             }
         }
-        ca_plugin_registry_register(r, &m);
+        coa_plugin_registry_register(r, &m);
         for (size_t c = 0; c < m.n_caps; c++) free(m.caps[c]);
         free(m.caps);
     }

@@ -1,7 +1,7 @@
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
-#include "cagent/os/os_time.h"
+#include "cognitive-os-agent/os/os_time.h"
 
 #include <stdio.h>
 #include <time.h>
@@ -11,8 +11,8 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
-int64_t ca_time_now_ms(void) { return (int64_t)GetTickCount64(); }
-int64_t ca_time_now_us(void) {
+int64_t coa_time_now_ms(void) { return (int64_t)GetTickCount64(); }
+int64_t coa_time_now_us(void) {
     LARGE_INTEGER f, c;
     QueryPerformanceFrequency(&f);
     QueryPerformanceCounter(&c);
@@ -61,7 +61,7 @@ static void fill_utc(struct tm *out) {
 #endif
 }
 
-void ca_time_now_str(char *out, size_t n) {
+void coa_time_now_str(char *out, size_t n) {
     struct tm tmv;
     fill_utc(&tmv);
     snprintf(out, n, "%04d-%02d-%02d %02d:%02d:%02d",
@@ -69,7 +69,7 @@ void ca_time_now_str(char *out, size_t n) {
              tmv.tm_hour, tmv.tm_min, tmv.tm_sec);
 }
 
-void ca_time_now_iso(char *out, size_t n) {
+void coa_time_now_iso(char *out, size_t n) {
     struct tm tmv;
     fill_utc(&tmv);
     snprintf(out, n, "%04d-%02d-%02dT%02d:%02d:%02d.000Z",
@@ -82,12 +82,12 @@ void ca_time_now_iso(char *out, size_t n) {
 #include <sys/time.h>
 #include <unistd.h>
 
-int64_t ca_time_now_ms(void) {
+int64_t coa_time_now_ms(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
-int64_t ca_time_now_us(void) {
+int64_t coa_time_now_us(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (int64_t)ts.tv_sec * 1000000 + ts.tv_nsec / 1000;
@@ -98,7 +98,7 @@ static void fill_utc(struct tm *out) {
     gmtime_r(&now, out);
 }
 
-void ca_time_now_str(char *out, size_t n) {
+void coa_time_now_str(char *out, size_t n) {
     struct tm tmv;
     fill_utc(&tmv);
     snprintf(out, n, "%04d-%02d-%02d %02d:%02d:%02d",
@@ -106,7 +106,7 @@ void ca_time_now_str(char *out, size_t n) {
              tmv.tm_hour, tmv.tm_min, tmv.tm_sec);
 }
 
-void ca_time_now_iso(char *out, size_t n) {
+void coa_time_now_iso(char *out, size_t n) {
     struct tm tmv;
     fill_utc(&tmv);
     snprintf(out, n, "%04d-%02d-%02dT%02d:%02d:%02d.000Z",
@@ -116,7 +116,7 @@ void ca_time_now_iso(char *out, size_t n) {
 
 #endif
 
-void ca_time_sleep_ms(int ms) {
+void coa_time_sleep_ms(int ms) {
 #if defined(_WIN32)
     Sleep((DWORD)ms);
 #else

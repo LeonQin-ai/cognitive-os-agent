@@ -2,10 +2,10 @@
  * Everything that enters the LLM prompt passes through here, so sizes are
  * capped per item and for the whole section, and stored episodes carry an
  * age annotation (stale memories are flagged, not asserted as fact). */
-#include "cagent/retrieval/context_builder.h"
-#include "cagent/memory/memory.h"
-#include "cagent/infra/util.h"
-#include "cagent/os/os_time.h"
+#include "cognitive-os-agent/retrieval/context_builder.h"
+#include "cognitive-os-agent/memory/memory.h"
+#include "cognitive-os-agent/infra/util.h"
+#include "cognitive-os-agent/os/os_time.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -17,14 +17,14 @@
 #define CTX_FACTS_MAX 20   /* max long-term facts injected per query */
 
 /* Append s to sb, truncating at a UTF-8 boundary and marking the cut. */
-static void append_capped(ca_strbuf *sb, const char *s, size_t cap) {
+static void append_capped(coa_strbuf *sb, const char *s, size_t cap) {
     if (!s) return;
     size_t n = strlen(s);
     int trunc = n > cap;
     if (trunc) n = cap;
     while (trunc && n > 0 && ((unsigned char)s[n] & 0xC0) == 0x80) n--;
-    ca_strbuf_append_n(sb, s, n);
-    if (trunc) ca_strbuf_append(sb, "…");
+    coa_strbuf_append_n(sb, s, n);
+    if (trunc) coa_strbuf_append(sb, "…");
 }
 
 /* Append {kind,text,result,score,ts} if `text` is not already present. */
@@ -46,18 +46,18 @@ static int append_unique(cJSON *arr, const char *kind, const char *text,
     return 1;
 }
 
-char *ca_context_build(ca_memory *m, const char *query, int max_items) {
+char *coa_context_build(coa_memory *m, const char *query, int max_items) {
     if (max_items <= 0) max_items = 8;
-    char *search = m ? ca_memory_search(m, query ? query : "", max_items) : ca_strdup("[]");
+    char *search = m ? coa_memory_search(m, query ? query : "", max_items) : coa_strdup("[]");
     /* two-stage retrieval: hybrid recall -> rerank -> blended top-k */
-    char *retr   = m ? ca_memory_retrieve_ex(m, query ? query : "", max_items, 0.7f) : ca_strdup("[]");
+    char *retr   = m ? coa_memory_retrieve_ex(m, query ? query : "", max_items, 0.7f) : coa_strdup("[]");
 
     cJSON *arr = cJSON_CreateArray();
-    if (!arr) { free(search); free(retr); return ca_strdup("[]"); }
+    if (!arr) { free(search); free(retr); return coa_strdup("[]"); }
 
     /* long-term facts first (always relevant, small, explicitly stored) */
     if (m) {
-        char *facts = ca_memory_longterm_json(m);
+        char *facts = coa_memory_longterm_json(m);
         cJSON *root = cJSON_Parse(facts);
         if (root && cJSON_IsObject(root)) {
             int added = 0;
@@ -117,7 +117,7 @@ char *ca_context_build(ca_memory *m, const char *query, int max_items) {
 
     /* knowledge-graph associations distilled at LEARN (task→tool→file edges) */
     if (m) {
-        char *rel = ca_memory_graph_related(m, query ? query : "", 4);
+        char *rel = coa_memory_graph_related(m, query ? query : "", 4);
         if (rel) {
             cJSON *rroot = cJSON_Parse(rel);
             if (rroot && cJSON_IsArray(rroot)) {
@@ -138,18 +138,18 @@ char *ca_context_build(ca_memory *m, const char *query, int max_items) {
     free(retr);
     char *s = cJSON_PrintUnformatted(arr);
     cJSON_Delete(arr);
-    return s ? s : ca_strdup("[]");
+    return s ? s : coa_strdup("[]");
 }
 
-char *ca_context_render_text(const char *context_json) {
-    ca_strbuf sb;
-    ca_strbuf_init(&sb);
+char *coa_context_render_text(const char *context_json) {
+    coa_strbuf sb;
+    coa_strbuf_init(&sb);
     cJSON *root = cJSON_Parse(context_json ? context_json : "[]");
     if (root && cJSON_IsArray(root)) {
         cJSON *it;
         cJSON_ArrayForEach(it, root) {
             if (sb.len > CTX_TOTAL_CAP) {
-                ca_strbuf_append(&sb, "…[context truncated]\n");
+                coa_strbuf_append(&sb, "…[context truncated]\n");
                 break;
             }
             cJSON *kind = cJSON_GetObjectItemCaseSensitive(it, "kind");
@@ -160,25 +160,25 @@ char *ca_context_render_text(const char *context_json) {
             const char *t = text && cJSON_IsString(text) ? text->valuestring : "";
             const char *r = result && cJSON_IsString(result) ? result->valuestring : "";
             if (r && *r) {
-                ca_strbuf_appendf(&sb, "[%s] ", k);
+                coa_strbuf_appendf(&sb, "[%s] ", k);
                 append_capped(&sb, t, CTX_ITEM_CAP);
-                ca_strbuf_append(&sb, " -> ");
+                coa_strbuf_append(&sb, " -> ");
                 append_capped(&sb, r, CTX_ITEM_CAP);
-                ca_strbuf_append(&sb, "\n");
+                coa_strbuf_append(&sb, "\n");
             } else {
-                ca_strbuf_appendf(&sb, "[%s] ", k);
+                coa_strbuf_appendf(&sb, "[%s] ", k);
                 append_capped(&sb, t, CTX_ITEM_CAP);
-                ca_strbuf_append(&sb, "\n");
+                coa_strbuf_append(&sb, "\n");
             }
             /* freshness: old memories are annotated, not presented as fact */
             if (tsj && cJSON_IsNumber(tsj) && tsj->valuedouble > 0) {
-                double age_days = (ca_time_now_ms() - tsj->valuedouble) / 86400000.0;
+                double age_days = (coa_time_now_ms() - tsj->valuedouble) / 86400000.0;
                 if (age_days >= 1.0)
-                    ca_strbuf_appendf(&sb, "  (%d天前记录，可能过时)\n", (int)age_days);
+                    coa_strbuf_appendf(&sb, "  (%d天前记录，可能过时)\n", (int)age_days);
             }
         }
     }
     if (root) cJSON_Delete(root);
-    if (sb.len == 0) ca_strbuf_append(&sb, "(no relevant memory)\n");
-    return ca_strbuf_detach(&sb);
+    if (sb.len == 0) coa_strbuf_append(&sb, "(no relevant memory)\n");
+    return coa_strbuf_detach(&sb);
 }

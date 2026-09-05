@@ -2,9 +2,9 @@
  * Produces a deterministic plan (JSON array of tool actions) for simple file
  * tasks so the full pipeline runs end-to-end without a model server. For any
  * other request it answers in plain text. Useful for demos and tests. */
-#include "cagent/llm/llm.h"
-#include "cagent/infra/util.h"
-#include "cagent/infra/logging.h"
+#include "cognitive-os-agent/llm/llm.h"
+#include "cognitive-os-agent/infra/util.h"
+#include "cognitive-os-agent/infra/logging.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -16,9 +16,9 @@ typedef struct {
     char *model;
 } mock_impl;
 
-static mock_impl *impl_of(ca_llm *llm) { return (mock_impl *)llm->impl; }
+static mock_impl *impl_of(coa_llm *llm) { return (mock_impl *)llm->impl; }
 
-static void mock_destroy(ca_llm *llm) {
+static void mock_destroy(coa_llm *llm) {
     mock_impl *im = impl_of(llm);
     free(im->model);
     free(im);
@@ -87,7 +87,7 @@ static char *extract_content(const char *msg) {
     while (*best == ' ' || *best == '\t' || *best == '\n' || *best == '\r' ||
            *best == '"' || *best == '\'')
         best++;
-    char *out = ca_strdup(best);
+    char *out = coa_strdup(best);
     /* stop at a task connector so multi-step prompts don't pollute the content */
     char *cut = strstr(out, "，");
     if (!cut) cut = strstr(out, "然后");
@@ -116,7 +116,7 @@ static char *extract_command(const char *msg) {
     }
     if (!best) return NULL;
     while (*best == ' ' || *best == '\t') best++;
-    char *out = ca_strdup(best);
+    char *out = coa_strdup(best);
     size_t n = strlen(out);
     while (n > 0 && (out[n - 1] == ' ' || out[n - 1] == '\t' ||
                      out[n - 1] == '\n' || out[n - 1] == '\r'))
@@ -126,16 +126,16 @@ static char *extract_command(const char *msg) {
 
 /* Build the mock response for a user message. */
 static char *mock_respond(const char *msg) {
-    if (!msg) return ca_strdup("[]");
+    if (!msg) return coa_strdup("[]");
 
     /* multi-agent orchestration: the decompose prompt lists the roster under
      * "可用 agent"; the merge prompt aggregates under "各 agent 结果" */
     if (has_substr(msg, "可用 agent") || has_substr(msg, "可用agent")) {
-        return ca_strdup("[{\"agent\":\"alpha\","
+        return coa_strdup("[{\"agent\":\"alpha\","
                          "\"task\":\"创建 orch.txt 写入内容为 orch-ok\"}]");
     }
     if (has_substr(msg, "各 agent 结果"))
-        return ca_strdup("综合完成：子任务已由各 agent 协作处理完毕。");
+        return coa_strdup("综合完成：子任务已由各 agent 协作处理完毕。");
 
     /* When driven through the full reasoning runtime the "message" is the
      * whole augmented planner prompt (session notes, history, journal).
@@ -172,10 +172,10 @@ static char *mock_respond(const char *msg) {
             char *out = cJSON_PrintUnformatted(arr);
             cJSON_Delete(arr);
             free(path);
-            return out ? out : ca_strdup("[]");
+            return out ? out : coa_strdup("[]");
         }
         free(path);
-        return ca_strdup("任务完成。"); /* plain text = final answer */
+        return coa_strdup("任务完成。"); /* plain text = final answer */
     }
 
     /* auto-evolution drill: plan a tool that is NOT in the registry so the
@@ -190,7 +190,7 @@ static char *mock_respond(const char *msg) {
         cJSON_AddItemToArray(arr, a);
         char *out = cJSON_PrintUnformatted(arr);
         cJSON_Delete(arr);
-        return out ? out : ca_strdup("[]");
+        return out ? out : coa_strdup("[]");
     }
 
     int want_write = has_substr(msg, "文件") || has_substr(msg, "file") ||
@@ -219,7 +219,7 @@ static char *mock_respond(const char *msg) {
         char *out = cJSON_PrintUnformatted(arr);
         cJSON_Delete(arr);
         free(path);
-        return out ? out : ca_strdup("[]");
+        return out ? out : coa_strdup("[]");
     }
 
     /* file_edit: replace OLD with NEW in a file (deterministic mock strings) */
@@ -237,7 +237,7 @@ static char *mock_respond(const char *msg) {
         char *out = cJSON_PrintUnformatted(arr);
         cJSON_Delete(arr);
         free(path);
-        return out ? out : ca_strdup("[]");
+        return out ? out : coa_strdup("[]");
     }
 
     /* grep: search file contents for the text after the marker */
@@ -254,7 +254,7 @@ static char *mock_respond(const char *msg) {
         char *out = cJSON_PrintUnformatted(arr);
         cJSON_Delete(arr);
         free(pat);
-        return out ? out : ca_strdup("[]");
+        return out ? out : coa_strdup("[]");
     }
 
     /* glob: find files matching the pattern after the marker */
@@ -270,7 +270,7 @@ static char *mock_respond(const char *msg) {
         char *out = cJSON_PrintUnformatted(arr);
         cJSON_Delete(arr);
         free(pat);
-        return out ? out : ca_strdup("[]");
+        return out ? out : coa_strdup("[]");
     }
 
     /* shell: run a command when no file operation is requested (an explicit
@@ -287,7 +287,7 @@ static char *mock_respond(const char *msg) {
         char *out = cJSON_PrintUnformatted(arr);
         cJSON_Delete(arr);
         free(cmd);
-        return out ? out : ca_strdup("[]");
+        return out ? out : coa_strdup("[]");
     }
 
     if (want_write || want_read) {
@@ -317,23 +317,23 @@ static char *mock_respond(const char *msg) {
         char *out = cJSON_PrintUnformatted(arr);
         cJSON_Delete(arr);
         free(path);
-        return out ? out : ca_strdup("[]");
+        return out ? out : coa_strdup("[]");
     }
 
-    ca_strbuf b;
-    ca_strbuf_init(&b);
-    ca_strbuf_appendf(&b, "已收到请求：%s（mock 离线模式，未调用工具）", msg);
-    return ca_strbuf_detach(&b);
+    coa_strbuf b;
+    coa_strbuf_init(&b);
+    coa_strbuf_appendf(&b, "已收到请求：%s（mock 离线模式，未调用工具）", msg);
+    return coa_strbuf_detach(&b);
 }
 
-static int mock_chat(ca_llm *llm, const ca_llm_request *req, ca_llm_response *resp) {
+static int mock_chat(coa_llm *llm, const coa_llm_request *req, coa_llm_response *resp) {
     (void)llm;
     const char *last = req->num_messages ? req->messages[req->num_messages - 1].content : "";
     resp->content = mock_respond(last);
     return 0;
 }
 
-static int mock_stream(ca_llm *llm, const ca_llm_request *req, ca_llm_stream_cb cb, void *ud) {
+static int mock_stream(coa_llm *llm, const coa_llm_request *req, coa_llm_stream_cb cb, void *ud) {
     const char *last = req->num_messages ? req->messages[req->num_messages - 1].content : "";
     char *text = mock_respond(last);
     if (!text) return -1;
@@ -346,16 +346,16 @@ static int mock_stream(ca_llm *llm, const ca_llm_request *req, ca_llm_stream_cb 
     return 0;
 }
 
-ca_llm *ca_mock_create(const char *model) {
-    ca_llm *llm = calloc(1, sizeof(ca_llm));
+coa_llm *coa_mock_create(const char *model) {
+    coa_llm *llm = calloc(1, sizeof(coa_llm));
     mock_impl *im = calloc(1, sizeof(mock_impl));
     if (!llm || !im) { free(llm); free(im); return NULL; }
-    static const ca_llm_vtable vt = {mock_destroy, mock_chat, mock_stream};
+    static const coa_llm_vtable vt = {mock_destroy, mock_chat, mock_stream};
     llm->vt = &vt;
-    llm->provider = ca_strdup("mock");
-    llm->model = ca_strdup(model ? model : "mock");
+    llm->provider = coa_strdup("mock");
+    llm->model = coa_strdup(model ? model : "mock");
     llm->impl = im;
-    im->model = ca_strdup(llm->model);
-    ca_log_info("mock llm provider ready (model=%s)", im->model);
+    im->model = coa_strdup(llm->model);
+    coa_log_info("mock llm provider ready (model=%s)", im->model);
     return llm;
 }

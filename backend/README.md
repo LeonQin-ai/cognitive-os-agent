@@ -1,4 +1,4 @@
-# c-agent — Cognitive OS Runtime
+# cognitive-os-agent — Cognitive OS Runtime
 
 A small, self-contained "cognitive OS runtime" written in C11. It wires together a
 cognitive kernel (event bus, scheduler, state machine, policy engine), a reasoning
@@ -42,7 +42,7 @@ The repo bundles a portable **Zig** toolchain under `tools/zig/` so `zig cc` act
 gcc-compatible C compiler with no system compiler required.
 
 - **Windows / MSYS2-Git-Bash**: `./build.sh` (or `build.bat`)
-- **Linux**: `gcc -D_GNU_SOURCE -std=c11 -Wall -Wextra -O1 -g -Iinclude -Ithird_party/cJSON $(find src third_party/cJSON -name "*.c") cli/main.c -lpthread -ldl -lm -o build/cagent`
+- **Linux**: `gcc -D_GNU_SOURCE -std=c11 -Wall -Wextra -O1 -g -Iinclude -Ithird_party/cJSON $(find src third_party/cJSON -name "*.c") cli/main.c -lpthread -ldl -lm -o build/cognitive-os-agent`
 - `CMakeLists.txt` is provided as an alternative if you have CMake.
 
 `build.sh` targets: `all` (default), `cli`, `test`, `mock`, `e2e`, `bench`, `clean`.
@@ -52,15 +52,15 @@ gcc-compatible C compiler with no system compiler required.
 The scheduler is **M:N**: M coroutine tasks run cooperatively on a pool of N OS
 threads. Tasks are cheap (a coroutine is lazily created only when a worker first
 dequeues it, with a 256 KB stack), and a task can yield back to the scheduler with
-`ca_scheduler_yield()` to let another task run. Stack-switching is implemented in
+`coa_scheduler_yield()` to let another task run. Stack-switching is implemented in
 `src/os/os_coro.c` — `ucontext` on Linux, `Fiber` on Windows — behind a single
-`ca_coro` primitive. The reasoning pipeline yields between tool actions for a
+`coa_coro` primitive. The reasoning pipeline yields between tool actions for a
 fine-grained cancellation/timeout checkpoint.
 
 ## Usage
 
 ```
-./build/cagent                      # interactive CLI
+./build/cognitive-os-agent                      # interactive CLI
 run 创建 note.txt 写入内容为 hello   # run a task through the full pipeline
 tools                              # list registered tools
 memory                             # show memory state
@@ -71,7 +71,7 @@ events                             # print event bus traffic
 help / exit
 ```
 
-`./build/cagent serve 8080` then `curl`:
+`./build/cognitive-os-agent serve 8080` then `curl`:
 
 ```
 curl -X POST localhost:8080/v1/tasks -d '{"prompt":"创建 a.txt 写入 hi"}'
@@ -114,14 +114,14 @@ GitHub 条目带 `repo` 字段（仓库 URL），Web 控制台渲染为可点击
 配置方式（任选其一）：
 
 ```
-# 配置文件 state/<name>/cagent.json
+# 配置文件 state/<name>/cognitive-os-agent.json
 { "market.url": "http://market.example.com:9000" }
 
 # 环境变量
-CA_MARKET_URL=http://market.example.com:9000
+COA_MARKET_URL=http://market.example.com:9000
 
 # CLI / 编程接口
-cagent_config.market_url = "http://market.example.com:9000"
+coa_config.market_url = "http://market.example.com:9000"
 ```
 
 未配置时本地广场保持纯离线（`market_online=false`、`configured=false`），行为与之前一致。
@@ -129,15 +129,15 @@ cagent_config.market_url = "http://market.example.com:9000"
 
 ### Auth
 
-If an API key is configured (`CA_AUTH_KEY=<secret>` or `auth.key` in config),
+If an API key is configured (`COA_AUTH_KEY=<secret>` or `auth.key` in config),
 the `/v1/*` routes require `Authorization: Bearer <secret>`. Without a key the
-API is open (the default). The `ca_auth` module also provides standalone
-`ca_auth_check` / `ca_auth_check_header` for use outside the HTTP layer.
+API is open (the default). The `coa_auth` module also provides standalone
+`coa_auth_check` / `coa_auth_check_header` for use outside the HTTP layer.
 
 ## LLM providers
 
-Configure via JSON config (`state/<name>/cagent.json`), CLI flags, or env vars with a
-`CA_` prefix (e.g. `CA_LLM_PROVIDER=openai`, `CA_LLM_BASE_URL=http://localhost:11434`).
+Configure via JSON config (`state/<name>/cognitive-os-agent.json`), CLI flags, or env vars with a
+`COA_` prefix (e.g. `COA_LLM_PROVIDER=openai`, `COA_LLM_BASE_URL=http://localhost:11434`).
 
 - `mock` — offline fake provider (end-to-end tests, no network)
 - `openai` — OpenAI-compatible endpoints (also Ollama / llama.cpp / vLLM / DeepSeek…)
@@ -165,16 +165,16 @@ POST /v1/local/start             # body {"engine":"ollama"} 或 {"engine":"llama
   `ollama serve` 后台拉起（非阻塞，立即返回，UI 轮询状态）。
 - **llama.cpp / vLLM**：默认不自动启动，需在配置里给出启动命令
   `local.llamacpp_cmd`（如你的 server 可执行文件路径）；配置后同样后台拉起。
-- 底层使用 `ca_proc_spawn_detached`（Windows `CreateProcess` 分离进程组 / POSIX
+- 底层使用 `coa_proc_spawn_detached`（Windows `CreateProcess` 分离进程组 / POSIX
   `fork+setsid`），不会占用当前会话或阻塞 HTTP 服务。
 
 ## Tests
 
 ```
 ./build/mock-llm-server 9000 &       # start the mock LLM server
-./build/cagent-test                  # unit suite (util/core/coro/M:N/snapshot/llm/…)
+./build/cognitive-os-agent-test                  # unit suite (util/core/coro/M:N/snapshot/llm/…)
 ./build/test-adapters                # both adapters, chat + SSE stream
-./build/cagent-e2e                   # full pipeline, both providers
+./build/cognitive-os-agent-e2e                   # full pipeline, both providers
 ```
 
 Current results (verified on Windows + Linux):
@@ -188,14 +188,14 @@ bench:      --mock tool-selection accuracy 100%
 
 ## Agent + LLM benchmark
 
-`./build/cagent-bench` measures agent capability against ground-truth tasks
+`./build/cognitive-os-agent-bench` measures agent capability against ground-truth tasks
 (tool selection, end-to-end success, file side effects, multi-step completion,
 and latency).
 
 ```
-./build/cagent-bench --mock          # offline, deterministic mock planner
-CA_LLM_PROVIDER=openai CA_LLM_BASE_URL=… CA_LLM_MODEL=… CA_LLM_API_KEY=… \
-  ./build/cagent-bench --real        # real endpoint: accuracy + latency + success
+./build/cognitive-os-agent-bench --mock          # offline, deterministic mock planner
+COA_LLM_PROVIDER=openai COA_LLM_BASE_URL=… COA_LLM_MODEL=… COA_LLM_API_KEY=… \
+  ./build/cognitive-os-agent-bench --real        # real endpoint: accuracy + latency + success
 ```
 
 `--mock` exercises the offline planner (tool-selection accuracy 100%).
@@ -210,8 +210,8 @@ endpoint can be reached through a local TLS-terminating proxy (see
 
 ```
 node build/llm_proxy.js &             # 127.0.0.1:8000 -> api.deepseek.com/anthropic
-CA_LLM_PROVIDER=anthropic CA_LLM_BASE_URL=http://127.0.0.1:8000 \
-  CA_LLM_MODEL=deepseek-v4-pro CA_LLM_API_KEY=dummy ./build/cagent-bench --real
+COA_LLM_PROVIDER=anthropic COA_LLM_BASE_URL=http://127.0.0.1:8000 \
+  COA_LLM_MODEL=deepseek-v4-pro COA_LLM_API_KEY=dummy ./build/cognitive-os-agent-bench --real
 ```
 
 Verified against the DeepSeek Anthropic-compatible endpoint (`deepseek-v4-pro`):
@@ -221,7 +221,7 @@ tool-selection 5/5, end-to-end 5/5, side-effect 2/2, multi-step 1/1, avg latency
 ## Layout
 
 ```
-include/cagent/      public headers (one per module, by layer)
+include/cognitive-os-agent/      public headers (one per module, by layer)
 src/runtime/         event bus · scheduler · state machine · policy · agent · task
 src/cognition/       reasoning · planner · evaluator · blackboard · attention
 src/memory/          facade + kv (facts) · vector · graph · episode sub-stores
@@ -239,7 +239,7 @@ src/infra/           logging · config · metrics · audit · persist · ringbuf
 cli/main.c           interactive CLI
 tests/               unit + adapter + e2e + benchmark
 tools/               mock-llm-server · desktop shell (WebView2) · cov_rt/cov_resolve/coverage.sh
-apps/web/            embedded web UI (regenerated into include/cagent/api/web_ui.h)
+apps/web/            embedded web UI (regenerated into include/cognitive-os-agent/api/web_ui.h)
 third_party/         cJSON (MIT) · wasm3 (MIT)
 state/               runtime data (generated): logs, memory, snapshots, audit, skills, plugins
 ```

@@ -1,6 +1,6 @@
 /* security.c — static security audit. */
-#include "cagent/plugin_intelligence/security.h"
-#include "cagent/infra/util.h"
+#include "cognitive-os-agent/plugin_intelligence/security.h"
+#include "cognitive-os-agent/infra/util.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -48,7 +48,7 @@ static int ci_strstr(const char *hay, const char *needle) {
     return 0;
 }
 
-char *ca_security_audit(const char *text) {
+char *coa_security_audit(const char *text) {
     cJSON *out = cJSON_CreateObject();
     if (out) {
         cJSON *findings = cJSON_CreateArray();
@@ -65,5 +65,5 @@ char *ca_security_audit(const char *text) {
     }
     char *s = out ? cJSON_PrintUnformatted(out) : NULL;
     if (out) cJSON_Delete(out);
-    return s ? s : ca_strdup("{}");
+    return s ? s : coa_strdup("{}");
 }

@@ -11,20 +11,20 @@
 extern "C" {
 #endif
 
-typedef struct ca_ringbuf ca_ringbuf;
+typedef struct coa_ringbuf coa_ringbuf;
 
 /* Create a ring buffer with the given capacity (must be a power of two >= 2).
  * Returns NULL on invalid capacity / allocation failure. */
-ca_ringbuf *ca_ringbuf_new(size_t capacity);
-void ca_ringbuf_free(ca_ringbuf *r);
+coa_ringbuf *coa_ringbuf_new(size_t capacity);
+void coa_ringbuf_free(coa_ringbuf *r);
 
 /* Lock-free enqueue. Returns 1 ok, 0 buffer full, -1 bad arguments. */
-int ca_ringbuf_push(ca_ringbuf *r, void *item);
+int coa_ringbuf_push(coa_ringbuf *r, void *item);
 
 /* Lock-free dequeue. Returns 1 ok (*item set), 0 buffer empty, -1 bad args. */
-int ca_ringbuf_pop(ca_ringbuf *r, void **item);
+int coa_ringbuf_pop(coa_ringbuf *r, void **item);
 
-size_t ca_ringbuf_capacity(ca_ringbuf *r);
+size_t coa_ringbuf_capacity(coa_ringbuf *r);
 
 #ifdef __cplusplus
 }

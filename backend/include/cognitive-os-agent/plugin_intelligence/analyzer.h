@@ -9,7 +9,7 @@ extern "C" {
 
 /* Analyze a JSON spec object. Returns a JSON report object
  * {name, complexity, capabilities[], tools[]} (malloc'd; caller frees). */
-char *ca_analyzer_analyze(const char *spec_json);
+char *coa_analyzer_analyze(const char *spec_json);
 
 #ifdef __cplusplus
 }

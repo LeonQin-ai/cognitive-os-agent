@@ -1,6 +1,6 @@
-#include "cagent/infra/logging.h"
-#include "cagent/os/os_thread.h"
-#include "cagent/os/os_time.h"
+#include "cognitive-os-agent/infra/logging.h"
+#include "cognitive-os-agent/os/os_thread.h"
+#include "cognitive-os-agent/os/os_time.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -8,10 +8,10 @@
 #include <stdarg.h>
 
 typedef struct {
-    ca_loglevel level;
+    coa_loglevel level;
     int color;
     FILE *file;
-    ca_mutex mtx;
+    coa_mutex mtx;
     int inited;
 } logger;
 
@@ -21,8 +21,8 @@ static const char *level_names[] = {
     "TRACE", "DEBUG", "INFO", "WARN", "ERROR", "FATAL",
 };
 
-const char *ca_log_level_name(ca_loglevel lvl) {
-    if (lvl < CA_LOG_TRACE || lvl > CA_LOG_FATAL) return "?";
+const char *coa_log_level_name(coa_loglevel lvl) {
+    if (lvl < COA_LOG_TRACE || lvl > COA_LOG_FATAL) return "?";
     return level_names[lvl];
 }
 
@@ -30,10 +30,10 @@ static const char *level_colors[] = {
     "\x1b[90m", "\x1b[36m", "\x1b[32m", "\x1b[33m", "\x1b[31m", "\x1b[35m",
 };
 
-int ca_log_init(const ca_log_opts *opts) {
-    if (g_log.inited) ca_log_shutdown();
-    ca_mutex_init(&g_log.mtx);
-    g_log.level = opts ? opts->level : CA_LOG_INFO;
+int coa_log_init(const coa_log_opts *opts) {
+    if (g_log.inited) coa_log_shutdown();
+    coa_mutex_init(&g_log.mtx);
+    g_log.level = opts ? opts->level : COA_LOG_INFO;
     g_log.file = NULL;
     g_log.color = opts ? opts->color : 1;
     if (opts && opts->file) {
@@ -44,19 +44,19 @@ int ca_log_init(const ca_log_opts *opts) {
     return 0;
 }
 
-void ca_log_shutdown(void) {
+void coa_log_shutdown(void) {
     if (!g_log.inited) return;
     if (g_log.file) { fclose(g_log.file); g_log.file = NULL; }
-    ca_mutex_destroy(&g_log.mtx);
+    coa_mutex_destroy(&g_log.mtx);
     memset(&g_log, 0, sizeof(g_log));
 }
 
-ca_loglevel ca_log_get_level(void) { return g_log.level; }
-void ca_log_set_level(ca_loglevel lvl) { g_log.level = lvl; }
+coa_loglevel coa_log_get_level(void) { return g_log.level; }
+void coa_log_set_level(coa_loglevel lvl) { g_log.level = lvl; }
 
-static void log_line_to(FILE *f, int color, ca_loglevel lvl, const char *text) {
+static void log_line_to(FILE *f, int color, coa_loglevel lvl, const char *text) {
     char ts[32];
-    ca_time_now_str(ts, sizeof(ts));
+    coa_time_now_str(ts, sizeof(ts));
     if (color) {
         fprintf(f, "%s %s%-5s\x1b[0m %s\n", ts, level_colors[lvl], level_names[lvl], text);
     } else {
@@ -64,17 +64,17 @@ static void log_line_to(FILE *f, int color, ca_loglevel lvl, const char *text) {
     }
 }
 
-void ca_log_write(ca_loglevel lvl, const char *fmt, ...) {
-    if (lvl < g_log.level || lvl > CA_LOG_FATAL) return;
+void coa_log_write(coa_loglevel lvl, const char *fmt, ...) {
+    if (lvl < g_log.level || lvl > COA_LOG_FATAL) return;
     char text[2048];
     va_list ap;
     va_start(ap, fmt);
     vsnprintf(text, sizeof(text), fmt, ap);
     va_end(ap);
 
-    ca_mutex_lock(&g_log.mtx);
+    coa_mutex_lock(&g_log.mtx);
     int use_color = g_log.color && !g_log.file;
     log_line_to(stderr, use_color, lvl, text);
     if (g_log.file) log_line_to(g_log.file, 0, lvl, text);
-    ca_mutex_unlock(&g_log.mtx);
+    coa_mutex_unlock(&g_log.mtx);
 }

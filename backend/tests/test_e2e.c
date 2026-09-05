@@ -5,10 +5,10 @@
  *
  * Requires: ./build/mock-llm-server 9000  (running first)
  * Build:    zig cc -Iinclude -Ithird_party/cJSON $(find src third_party -name '*.c') \
- *               tests/test_e2e.c -o build/cagent-e2e
+ *               tests/test_e2e.c -o build/cognitive-os-agent-e2e
  */
-#include "cagent/cagent.h"
-#include "cagent/os/os_fs.h"
+#include "cognitive-os-agent/cognitive-os-agent.h"
+#include "cognitive-os-agent/os/os_fs.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -34,8 +34,8 @@ int main(void) {
         snprintf(workspace, sizeof(workspace), "%s/w", root);
         snprintf(file, sizeof(file), "%s/note.txt", workspace);
 
-        cagent_ctx ctx;
-        cagent_config cfg;
+        coa_ctx ctx;
+        coa_config cfg;
         memset(&cfg, 0, sizeof(cfg));
         cfg.state_root = root;
         cfg.workspace = workspace;
@@ -46,10 +46,10 @@ int main(void) {
         cfg.http_port = 0;         /* no HTTP API in this test */
         cfg.workers = 1;
 
-        CHECK(cagent_init(&ctx, &cfg) == 0);
+        CHECK(coa_init(&ctx, &cfg) == 0);
 
         char *answer = NULL;
-        int rc = cagent_run(&ctx, "创建 note.txt 写入内容为 hello-e2e", &answer);
+        int rc = coa_run(&ctx, "创建 note.txt 写入内容为 hello-e2e", &answer);
         CHECK(rc == 0);
         if (answer) {
             printf("  answer: %s\n", answer);
@@ -58,7 +58,7 @@ int main(void) {
         }
 
         /* the tool should have created the file via the LLM adapter */
-        char *data = ca_fs_read_file(file);
+        char *data = coa_fs_read_file(file);
         CHECK(data != NULL);
         if (data) {
             CHECK(strstr(data, "hello-e2e") != NULL);
@@ -66,7 +66,7 @@ int main(void) {
         }
 
         /* snapshot should list the captured (resolved) path */
-        char *list = ca_snapshot_list(ctx.snapshot);
+        char *list = coa_snapshot_list(ctx.snapshot);
         CHECK(list != NULL);
         if (list) {
             printf("  snapshots: %s\n", list);
@@ -74,12 +74,12 @@ int main(void) {
             free(list);
         }
 
-        cagent_shutdown(&ctx);
+        coa_shutdown(&ctx);
 
         /* cleanup */
-        ca_fs_remove(file);
-        ca_fs_remove(workspace);
-        ca_fs_remove(root);
+        coa_fs_remove(file);
+        coa_fs_remove(workspace);
+        coa_fs_remove(root);
     }
 
     printf(g_fail == 0 ? "E2E PASS\n" : "E2E FAIL\n");

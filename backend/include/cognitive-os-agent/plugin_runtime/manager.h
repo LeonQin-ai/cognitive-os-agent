@@ -5,15 +5,15 @@
 extern "C" {
 #endif
 
-typedef struct ca_plugin ca_plugin;
+typedef struct coa_plugin coa_plugin;
 
-/* Load a shared library (.so/.dll). NULL on failure (see ca_plugin_error). */
-ca_plugin *ca_plugin_load(const char *path);
+/* Load a shared library (.so/.dll). NULL on failure (see coa_plugin_error). */
+coa_plugin *coa_plugin_load(const char *path);
 /* Look up an exported symbol. NULL if not found. */
-void *ca_plugin_symbol(ca_plugin *p, const char *name);
+void *coa_plugin_symbol(coa_plugin *p, const char *name);
 /* Last error message (static buffer). */
-const char *ca_plugin_error(void);
-void ca_plugin_unload(ca_plugin *p);
+const char *coa_plugin_error(void);
+void coa_plugin_unload(coa_plugin *p);
 
 #ifdef __cplusplus
 }

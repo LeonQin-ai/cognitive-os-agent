@@ -1,10 +1,10 @@
 /* planner.c — LLM plan generation. */
-#include "cagent/cognition/planner.h"
-#include "cagent/llm/llm.h"
-#include "cagent/action/tools.h"
-#include "cagent/action/skill.h"
-#include "cagent/runtime/policy_engine.h"
-#include "cagent/infra/util.h"
+#include "cognitive-os-agent/cognition/planner.h"
+#include "cognitive-os-agent/llm/llm.h"
+#include "cognitive-os-agent/action/tools.h"
+#include "cognitive-os-agent/action/skill.h"
+#include "cognitive-os-agent/runtime/policy_engine.h"
+#include "cognitive-os-agent/infra/util.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -67,58 +67,58 @@ static const char *SYS_PROMPT_TAIL =
  * malloc'd prompt, or NULL when no registry is available (caller falls back
  * to the static catalog). Tools denied by `policy` are hidden entirely
  * (Claude Code: deny rules both block calls AND remove from the tool pool). */
-static char *build_catalog_prompt(const ca_tool_registry *tools,
-                                  struct ca_skill_registry *skills,
-                                  struct ca_policy_engine *policy) {
+static char *build_catalog_prompt(const coa_tool_registry *tools,
+                                  struct coa_skill_registry *skills,
+                                  struct coa_policy_engine *policy) {
     if (!tools) return NULL;
-    ca_strbuf b;
-    ca_strbuf_init(&b);
-    ca_strbuf_append(&b, SYS_PROMPT_HEAD);
+    coa_strbuf b;
+    coa_strbuf_init(&b);
+    coa_strbuf_append(&b, SYS_PROMPT_HEAD);
     int have_skill_tool = 0;
-    for (size_t i = 0; i < (size_t)ca_tool_registry_count(tools); i++) {
-        const ca_tool *t = ca_tool_registry_get(tools, i);
+    for (size_t i = 0; i < (size_t)coa_tool_registry_count(tools); i++) {
+        const coa_tool *t = coa_tool_registry_get(tools, i);
         if (!t || !t->name) continue;
-        if (policy && ca_policy_check(policy, t->name, "{}", NULL) == CA_POLICY_DENY)
+        if (policy && coa_policy_check(policy, t->name, "{}", NULL) == COA_POLICY_DENY)
             continue;
         if (strcmp(t->name, "skill") == 0) {
             have_skill_tool = 1;
-            ca_strbuf_append(&b,
+            coa_strbuf_append(&b,
                 "- skill:      args {\"name\": string}  # run a REGISTERED SKILL by name (list below)\n");
         } else {
-            ca_strbuf_appendf(&b, "- %s: %s\n",
+            coa_strbuf_appendf(&b, "- %s: %s\n",
                               t->name, t->description ? t->description : "");
             if (t->json_schema && *t->json_schema) {
-                ca_strbuf_append(&b, "  args schema: ");
+                coa_strbuf_append(&b, "  args schema: ");
                 if (strlen(t->json_schema) > 200)
-                    ca_strbuf_append_n(&b, t->json_schema, 200);
+                    coa_strbuf_append_n(&b, t->json_schema, 200);
                 else
-                    ca_strbuf_append(&b, t->json_schema);
-                ca_strbuf_append(&b, "\n");
+                    coa_strbuf_append(&b, t->json_schema);
+                coa_strbuf_append(&b, "\n");
             }
         }
     }
-    if (have_skill_tool && skills && ca_skill_count(skills) > 0) {
-        ca_strbuf_append(&b,
+    if (have_skill_tool && skills && coa_skill_count(skills) > 0) {
+        coa_strbuf_append(&b,
             "Registered skills (capabilities you can RUN via the skill tool):\n");
-        for (int i = 0; i < ca_skill_count(skills); i++) {
-            const ca_skill *s = ca_skill_get(skills, (size_t)i);
+        for (int i = 0; i < coa_skill_count(skills); i++) {
+            const coa_skill *s = coa_skill_get(skills, (size_t)i);
             if (!s) continue;
-            ca_strbuf_appendf(&b, "  * %s (%s): %s\n",
+            coa_strbuf_appendf(&b, "  * %s (%s): %s\n",
                               s->name, s->kind ? s->kind : "",
                               s->description ? s->description : "");
         }
-        ca_strbuf_append(&b,
+        coa_strbuf_append(&b,
             "When the user ASKS what skills/tools you have (e.g. \"你有哪些skills\", "
             "\"list your skills\"), answer in PLAIN TEXT listing these skill names and "
             "their use. Do NOT call any tool or skill to answer such a question.\n");
     }
-    ca_strbuf_append(&b, SYS_PROMPT_TAIL);
-    return ca_strbuf_detach(&b);
+    coa_strbuf_append(&b, SYS_PROMPT_TAIL);
+    return coa_strbuf_detach(&b);
 }
 
 /* Shared planning core. Takes ownership of nothing; frees sys_prompt. */
-static int plan_with(ca_llm *llm, char *sys_prompt, const char *prompt,
-                     ca_planned_action **actions, int *n_actions,
+static int plan_with(coa_llm *llm, char *sys_prompt, const char *prompt,
+                     coa_planned_action **actions, int *n_actions,
                      char **raw_out, char **err_out) {
     if (actions) *actions = NULL;
     if (n_actions) *n_actions = 0;
@@ -126,25 +126,25 @@ static int plan_with(ca_llm *llm, char *sys_prompt, const char *prompt,
     if (err_out) *err_out = NULL;
     if (!llm || !prompt) {
         free(sys_prompt);
-        if (err_out) *err_out = ca_strdup("no LLM configured");
+        if (err_out) *err_out = coa_strdup("no LLM configured");
         return -1;
     }
 
-    ca_llm_message msgs[2] = {
+    coa_llm_message msgs[2] = {
         {"system", sys_prompt ? sys_prompt : SYS_PROMPT},
         {"user", prompt},
     };
-    ca_llm_request req = {0};
+    coa_llm_request req = {0};
     req.messages = msgs;
     req.num_messages = 2;
     req.temperature = 0.2;
     req.max_tokens = 2048;  /* thinking models spend reasoning tokens from the
                              * same budget; 1024 risked empty-content replies */
-    ca_llm_response resp = {0};
-    int rc = ca_llm_chat(llm, &req, &resp);
+    coa_llm_response resp = {0};
+    int rc = coa_llm_chat(llm, &req, &resp);
     free(sys_prompt);
     if (rc != 0) {
-        if (err_out) *err_out = ca_strdup(resp.error ? resp.error : "LLM call failed");
+        if (err_out) *err_out = coa_strdup(resp.error ? resp.error : "LLM call failed");
         free(resp.content);
         free(resp.error);
         return -1;
@@ -153,7 +153,7 @@ static int plan_with(ca_llm *llm, char *sys_prompt, const char *prompt,
     resp.content = NULL;
     free(resp.error);
     if (!plan) {
-        if (err_out) *err_out = ca_strdup("LLM returned an empty response");
+        if (err_out) *err_out = coa_strdup("LLM returned an empty response");
         return -1;
     }
     if (raw_out) *raw_out = plan;
@@ -186,7 +186,7 @@ static int plan_with(ca_llm *llm, char *sys_prompt, const char *prompt,
         root = arr;
     }
     if (root && cJSON_IsArray(root)) {
-        ca_planned_action *a = NULL;
+        coa_planned_action *a = NULL;
         int n = 0;
         cJSON *it;
         cJSON_ArrayForEach(it, root) {
@@ -195,13 +195,13 @@ static int plan_with(ca_llm *llm, char *sys_prompt, const char *prompt,
             if (!tool || !cJSON_IsString(tool)) continue;
             cJSON *args = cJSON_GetObjectItemCaseSensitive(it, "args");
             char *args_json = (args && cJSON_IsObject(args))
-                ? cJSON_PrintUnformatted(args) : ca_strdup("{}");
-            if (!args_json) args_json = ca_strdup("{}");
-            ca_planned_action *na =
-                (ca_planned_action *)realloc(a, (size_t)(n + 1) * sizeof(ca_planned_action));
+                ? cJSON_PrintUnformatted(args) : coa_strdup("{}");
+            if (!args_json) args_json = coa_strdup("{}");
+            coa_planned_action *na =
+                (coa_planned_action *)realloc(a, (size_t)(n + 1) * sizeof(coa_planned_action));
             if (!na) { free(args_json); break; }
             a = na;
-            a[n].tool = ca_strdup(tool->valuestring);
+            a[n].tool = coa_strdup(tool->valuestring);
             a[n].args_json = args_json;
             n++;
         }
@@ -215,22 +215,22 @@ static int plan_with(ca_llm *llm, char *sys_prompt, const char *prompt,
     return 0;
 }
 
-void ca_planner_actions_free(ca_planned_action *a, int n) {
+void coa_planner_actions_free(coa_planned_action *a, int n) {
     for (int i = 0; i < n; i++) { free(a[i].tool); free(a[i].args_json); }
     free(a);
 }
 
-int ca_planner_plan(ca_llm *llm, const char *prompt,
-                    ca_planned_action **actions, int *n_actions,
+int coa_planner_plan(coa_llm *llm, const char *prompt,
+                    coa_planned_action **actions, int *n_actions,
                     char **raw_out, char **err_out) {
     return plan_with(llm, NULL, prompt, actions, n_actions, raw_out, err_out);
 }
 
-int ca_planner_plan_ex(ca_llm *llm, const struct ca_tool_registry *tools,
-                       struct ca_skill_registry *skills,
-                       struct ca_policy_engine *policy,
+int coa_planner_plan_ex(coa_llm *llm, const struct coa_tool_registry *tools,
+                       struct coa_skill_registry *skills,
+                       struct coa_policy_engine *policy,
                        const char *prompt,
-                       ca_planned_action **actions, int *n_actions,
+                       coa_planned_action **actions, int *n_actions,
                        char **raw_out, char **err_out) {
     char *sys = build_catalog_prompt(tools, skills, policy);
     return plan_with(llm, sys, prompt, actions, n_actions, raw_out, err_out);

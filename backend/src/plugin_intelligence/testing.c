@@ -1,13 +1,13 @@
 /* testing.c — plugin test planning + smoke execution. */
-#include "cagent/plugin_intelligence/testing.h"
-#include "cagent/plugin_runtime/sandbox.h"
-#include "cagent/infra/util.h"
+#include "cognitive-os-agent/plugin_intelligence/testing.h"
+#include "cognitive-os-agent/plugin_runtime/sandbox.h"
+#include "cognitive-os-agent/infra/util.h"
 
 #include <stdlib.h>
 #include <string.h>
 #include "cJSON.h"
 
-char *ca_testing_plan(const char *spec_json) {
+char *coa_testing_plan(const char *spec_json) {
     cJSON *root = cJSON_Parse(spec_json ? spec_json : "{}");
     cJSON *name = root ? cJSON_GetObjectItemCaseSensitive(root, "name") : NULL;
     const char *n = name && cJSON_IsString(name) ? name->valuestring : "plugin";
@@ -29,15 +29,15 @@ char *ca_testing_plan(const char *spec_json) {
     if (root) cJSON_Delete(root);
     char *s = out ? cJSON_PrintUnformatted(out) : NULL;
     if (out) cJSON_Delete(out);
-    return s ? s : ca_strdup("{}");
+    return s ? s : coa_strdup("{}");
 }
 
-char *ca_testing_run(const char *cmd, int timeout_ms) {
-    ca_sandbox *sb = ca_sandbox_new(timeout_ms);
+char *coa_testing_run(const char *cmd, int timeout_ms) {
+    coa_sandbox *sb = coa_sandbox_new(timeout_ms);
     /* track file accesses of the tested command (cwd scan + cmd reads) */
-    ca_sandbox_set_workspace(sb, ".");
-    ca_sandbox_result *r = ca_sandbox_run(sb, cmd);
-    ca_sandbox_free(sb);
+    coa_sandbox_set_workspace(sb, ".");
+    coa_sandbox_result *r = coa_sandbox_run(sb, cmd);
+    coa_sandbox_free(sb);
 
     cJSON *out = cJSON_CreateObject();
     if (out) {
@@ -58,8 +58,8 @@ char *ca_testing_run(const char *cmd, int timeout_ms) {
             cJSON_AddStringToObject(out, "output", "(forbidden or spawn failed)");
         }
     }
-    if (r) ca_sandbox_result_free(r);
+    if (r) coa_sandbox_result_free(r);
     char *s = out ? cJSON_PrintUnformatted(out) : NULL;
     if (out) cJSON_Delete(out);
-    return s ? s : ca_strdup("{}");
+    return s ? s : coa_strdup("{}");
 }

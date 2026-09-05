@@ -5,27 +5,27 @@
  * {"server","tool","args"} for servers that were added after tool sync.
  * If unreachable, the tool returns an informative error rather than failing
  * the whole task. */
-#include "cagent/action/tools.h"
-#include "cagent/action/mcp_conn.h"
-#include "cagent/infra/util.h"
+#include "cognitive-os-agent/action/tools.h"
+#include "cognitive-os-agent/action/mcp_conn.h"
+#include "cognitive-os-agent/infra/util.h"
 
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
 #include "cJSON.h"
 
-static ca_tool_result *mcp_exec(const ca_tool *self, const ca_tool_ctx *ctx, const char *args_json) {
+static coa_tool_result *mcp_exec(const coa_tool *self, const coa_tool_ctx *ctx, const char *args_json) {
     (void)self;
     if (!ctx || !ctx->mcp)
-        return ca_tool_result_new(0, "mcp: no MCP manager available");
+        return coa_tool_result_new(0, "mcp: no MCP manager available");
     cJSON *args = cJSON_Parse(args_json);
-    if (!args) return ca_tool_result_new(0, "mcp: invalid args JSON");
+    if (!args) return coa_tool_result_new(0, "mcp: invalid args JSON");
 
     cJSON *srv_j = cJSON_GetObjectItemCaseSensitive(args, "server");
     cJSON *tool_j = cJSON_GetObjectItemCaseSensitive(args, "tool");
     if (!srv_j || !cJSON_IsString(srv_j) || !tool_j || !cJSON_IsString(tool_j)) {
         cJSON_Delete(args);
-        return ca_tool_result_new(0,
+        return coa_tool_result_new(0,
             "mcp: required string args 'server' (connection name) and 'tool'; "
             "see the MCP connection list for available servers");
     }
@@ -37,20 +37,20 @@ static ca_tool_result *mcp_exec(const ca_tool *self, const ca_tool_ctx *ctx, con
     if (a_j && cJSON_IsObject(a_j)) args_out = cJSON_PrintUnformatted(a_j);
 
     char *out = NULL, *err = NULL;
-    int rc = ca_mcp_manager_call(ctx->mcp, server, tool,
+    int rc = coa_mcp_manager_call(ctx->mcp, server, tool,
                                  args_out ? args_out : "{}", &out, &err);
     free(args_out);
     cJSON_Delete(args);
-    ca_tool_result *r = (rc == 0)
-        ? ca_tool_result_new(1, out ? out : "")
-        : ca_tool_result_new(0, err ? err : "mcp: call failed");
+    coa_tool_result *r = (rc == 0)
+        ? coa_tool_result_new(1, out ? out : "")
+        : coa_tool_result_new(0, err ? err : "mcp: call failed");
     free(out);
     free(err);
     return r;
 }
 
-const ca_tool *ca_tool_mcp(void) {
-    static const ca_tool t = {
+const coa_tool *coa_tool_mcp(void) {
+    static const coa_tool t = {
         "mcp",
         "Call a tool on a REGISTERED MCP server by connection name. Discovered "
         "tools are also exposed directly as mcp__<server>__<tool> entries.",

@@ -1,6 +1,6 @@
 /* analyzer.c — plugin spec analysis. */
-#include "cagent/plugin_intelligence/analyzer.h"
-#include "cagent/infra/util.h"
+#include "cognitive-os-agent/plugin_intelligence/analyzer.h"
+#include "cognitive-os-agent/infra/util.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -19,7 +19,7 @@ static int has_kw(const char *s, const char *kw) {
     return 0;
 }
 
-char *ca_analyzer_analyze(const char *spec_json) {
+char *coa_analyzer_analyze(const char *spec_json) {
     cJSON *root = cJSON_Parse(spec_json ? spec_json : "{}");
     cJSON *name = root ? cJSON_GetObjectItemCaseSensitive(root, "name") : NULL;
     cJSON *desc = root ? cJSON_GetObjectItemCaseSensitive(root, "description") : NULL;
@@ -68,5 +68,5 @@ char *ca_analyzer_analyze(const char *spec_json) {
     if (root) cJSON_Delete(root);
     char *s = out ? cJSON_PrintUnformatted(out) : NULL;
     if (out) cJSON_Delete(out);
-    return s ? s : ca_strdup("{}");
+    return s ? s : coa_strdup("{}");
 }

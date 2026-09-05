@@ -9,7 +9,7 @@ extern "C" {
 
 /* Design an architecture for `goal`. Returns a JSON object
  * {goal, components[], interfaces[]} (malloc'd; caller frees). */
-char *ca_architect_design(const char *goal);
+char *coa_architect_design(const char *goal);
 
 #ifdef __cplusplus
 }

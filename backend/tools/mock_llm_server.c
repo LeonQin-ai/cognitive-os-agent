@@ -1,16 +1,16 @@
 /* mock_llm_server.c — standalone OpenAI-compatible mock LLM HTTP server.
  * Serves POST /v1/chat/completions (chat + SSE streaming) with a deterministic
- * plan derived from the last user message, so the full c-agent pipeline can be
+ * plan derived from the last user message, so the full cognitive-os-agent pipeline can be
  * exercised end-to-end against a *real* HTTP LLM endpoint.
  *
  *   ./build/mock-llm-server 9000          (or tools/mock_llm_server on Linux)
  *
- * Then run:  cagent run "创建 test/a.txt 写入内容为 hello"  with provider=openai
+ * Then run:  cognitive-os-agent run "创建 test/a.txt 写入内容为 hello"  with provider=openai
  *            base_url=http://localhost:9000
  */
-#include "cagent/api/http_server.h"
-#include "cagent/os/os_socket.h"
-#include "cagent/infra/util.h"
+#include "cognitive-os-agent/api/http_server.h"
+#include "cognitive-os-agent/os/os_socket.h"
+#include "cognitive-os-agent/infra/util.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -64,7 +64,7 @@ static char *extract_content(const char *msg) {
     if (!best) return NULL;
     while (*best == ' ' || *best == '\t' || *best == '\n' || *best == '\r')
         best++;
-    char *out = ca_strdup(best);
+    char *out = coa_strdup(best);
     size_t n = strlen(out);
     while (n > 0 && (out[n - 1] == ' ' || out[n - 1] == '\t' || out[n - 1] == '\n' ||
                      out[n - 1] == '\r'))
@@ -78,7 +78,7 @@ static char *extract_content(const char *msg) {
  * back under "## 之前轮次的动作结果"; round >= 2 finishes with a prose answer
  * unless a 修复 request has not yet seen its file_edit applied. */
 static char *plan_for(const char *msg) {
-    if (!msg) return ca_strdup("[]");
+    if (!msg) return coa_strdup("[]");
     const char *cur = strstr(msg, "## Current request\n");
     const char *req = cur ? cur + strlen("## Current request\n") : msg;
     const char *loop_sec = strstr(msg, "## 之前轮次的动作结果");
@@ -100,10 +100,10 @@ static char *plan_for(const char *msg) {
             char *out = cJSON_PrintUnformatted(arr);
             cJSON_Delete(arr);
             free(fpath);
-            return out ? out : ca_strdup("[]");
+            return out ? out : coa_strdup("[]");
         }
         /* plain-text answer; contains "ok" so the e2e assertion keeps passing */
-        return ca_strdup("ok: task complete / 任务完成。");
+        return coa_strdup("ok: task complete / 任务完成。");
     }
     int want_write = strstr(msg, "文件") || strstr(msg, "file") ||
                      strstr(msg, "写") || strstr(msg, "创建") || strstr(msg, "生成");
@@ -120,7 +120,7 @@ static char *plan_for(const char *msg) {
         char *out = cJSON_PrintUnformatted(arr);
         cJSON_Delete(arr);
         free(path);
-        return out ? out : ca_strdup("[]");
+        return out ? out : coa_strdup("[]");
     }
     if (want_write || want_read) {
         cJSON *arr = cJSON_CreateArray();
@@ -141,15 +141,15 @@ static char *plan_for(const char *msg) {
         char *out = cJSON_PrintUnformatted(arr);
         cJSON_Delete(arr);
         free(path);
-        return out ? out : ca_strdup("[]");
+        return out ? out : coa_strdup("[]");
     }
     free(path);
-    return ca_strdup("{\"answer\":\"ok\"}");
+    return coa_strdup("{\"answer\":\"ok\"}");
 }
 
 /* ---------- HTTP handler ---------- */
-static char *body_str(const ca_http_request *req) {
-    if (!req->body || req->body_len == 0) return ca_strdup("");
+static char *body_str(const coa_http_request *req) {
+    if (!req->body || req->body_len == 0) return coa_strdup("");
     char *s = malloc(req->body_len + 1);
     if (!s) return NULL;
     memcpy(s, req->body, req->body_len);
@@ -157,7 +157,7 @@ static char *body_str(const ca_http_request *req) {
     return s;
 }
 
-static int h_chat(const ca_http_request *req, ca_http_response *resp, void *ud) {
+static int h_chat(const coa_http_request *req, coa_http_response *resp, void *ud) {
     (void)ud;
     char *b = body_str(req);
     cJSON *root = b ? cJSON_Parse(b) : NULL;
@@ -193,20 +193,20 @@ static int h_chat(const ca_http_request *req, ca_http_response *resp, void *ud) 
 
     if (stream) {
         /* SSE stream: one complete delta frame + done terminator */
-        ca_strbuf body;
-        ca_strbuf_init(&body);
+        coa_strbuf body;
+        coa_strbuf_init(&body);
         char buf[8192];
         snprintf(buf, sizeof(buf),
                  "data: {\"choices\":[{\"delta\":{\"content\":%s}}]}\n\n"
                  "data: [DONE]\n\n",
                  escaped ? escaped : "\"\"");
-        ca_strbuf_append(&body, buf);
+        coa_strbuf_append(&body, buf);
         snprintf(resp->content_type, sizeof(resp->content_type), "text/event-stream");
-        /* Content-Length + Connection: close still works with ca_sse's line reader */
-        ca_http_resp_append(resp, body.buf);
-        ca_strbuf_free(&body);
+        /* Content-Length + Connection: close still works with coa_sse's line reader */
+        coa_http_resp_append(resp, body.buf);
+        coa_strbuf_free(&body);
     } else {
-        ca_http_resp_appendf(resp,
+        coa_http_resp_appendf(resp,
             "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":%s}}]}",
             escaped ? escaped : "\"[]\"");
     }
@@ -218,7 +218,7 @@ static int h_chat(const ca_http_request *req, ca_http_response *resp, void *ud) 
 static volatile int g_stop = 0;
 
 /* Anthropic-style response: {"content":[{"type":"text","text":<plan>}]} */
-static int h_messages(const ca_http_request *req, ca_http_response *resp, void *ud) {
+static int h_messages(const coa_http_request *req, coa_http_response *resp, void *ud) {
     (void)ud;
     char *b = body_str(req);
     cJSON *root = b ? cJSON_Parse(b) : NULL;
@@ -253,20 +253,20 @@ static int h_messages(const ca_http_request *req, ca_http_response *resp, void *
 
     if (stream) {
         /* SSE with content_block_delta frames (what anthropic_stream expects) */
-        ca_strbuf body;
-        ca_strbuf_init(&body);
+        coa_strbuf body;
+        coa_strbuf_init(&body);
         char buf[8192];
         snprintf(buf, sizeof(buf),
                  "event: content_block_delta\n"
                  "data: {\"delta\":{\"type\":\"text_delta\",\"text\":%s}}\n\n"
                  "data: [DONE]\n\n",
                  escaped ? escaped : "\"\"");
-        ca_strbuf_append(&body, buf);
+        coa_strbuf_append(&body, buf);
         snprintf(resp->content_type, sizeof(resp->content_type), "text/event-stream");
-        ca_http_resp_append(resp, body.buf);
-        ca_strbuf_free(&body);
+        coa_http_resp_append(resp, body.buf);
+        coa_strbuf_free(&body);
     } else {
-        ca_http_resp_appendf(resp,
+        coa_http_resp_appendf(resp,
             "{\"content\":[{\"type\":\"text\",\"text\":%s}]}", escaped ? escaped : "\"[]\"");
     }
     free(escaped);
@@ -276,20 +276,20 @@ static int h_messages(const ca_http_request *req, ca_http_response *resp, void *
 
 int main(int argc, char **argv) {
     uint16_t port = (uint16_t)(argc > 1 ? atoi(argv[1]) : 9000);
-    if (ca_sock_init() != 0) { fprintf(stderr, "sock init failed\n"); return 1; }
-    ca_http_server *s = ca_http_server_new(port);
+    if (coa_sock_init() != 0) { fprintf(stderr, "sock init failed\n"); return 1; }
+    coa_http_server *s = coa_http_server_new(port);
     if (!s) { fprintf(stderr, "listen failed on %u\n", (unsigned)port); return 1; }
-    ca_http_server_route(s, "POST", "/v1/chat/completions", h_chat, NULL);
-    ca_http_server_route(s, "POST", "/v1/messages", h_messages, NULL);
+    coa_http_server_route(s, "POST", "/v1/chat/completions", h_chat, NULL);
+    coa_http_server_route(s, "POST", "/v1/messages", h_messages, NULL);
     /* Volcengine Ark Coding Plan style paths (base_url already ends in /vN,
      * so the adapter appends only /chat/completions). */
-    ca_http_server_route(s, "POST", "/api/coding/v3/chat/completions", h_chat, NULL);
-    ca_http_server_route(s, "POST", "/api/coding/v1/messages", h_messages, NULL);
+    coa_http_server_route(s, "POST", "/api/coding/v3/chat/completions", h_chat, NULL);
+    coa_http_server_route(s, "POST", "/api/coding/v1/messages", h_messages, NULL);
     printf("mock LLM server on http://localhost:%u/v1/chat/completions\n", (unsigned)port);
     fflush(stdout);
     (void)g_stop;
-    ca_http_server_serve(s);
-    ca_http_server_free(s);
-    ca_sock_cleanup();
+    coa_http_server_serve(s);
+    coa_http_server_free(s);
+    coa_sock_cleanup();
     return 0;
 }

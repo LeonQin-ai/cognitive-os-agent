@@ -1,6 +1,6 @@
 <div align="center">
 
-# c-agent — Cognitive OS Runtime
+# cognitive-os-agent — Cognitive OS Runtime
 
 **A complete "Cognitive Operating System" written in pure C11 — where the LLM is the accelerator, not the OS.**
 
@@ -16,13 +16,13 @@
 
 ---
 
-## Why c-agent?
+## Why cognitive-os-agent?
 
-Most "agent frameworks" glue an LLM to a loop and hope for the best. **c-agent takes the operating-system view**: an agent runtime should have the same bones as an OS — a scheduler, a state machine, a policy/security layer, memory management, a transactional filesystem, and a process model — with the LLM plugged in as a *cognitive accelerator* that only runs when generalization is needed.
+Most "agent frameworks" glue an LLM to a loop and hope for the best. **cognitive-os-agent takes the operating-system view**: an agent runtime should have the same bones as an OS — a scheduler, a state machine, a policy/security layer, memory management, a transactional filesystem, and a process model — with the LLM plugged in as a *cognitive accelerator* that only runs when generalization is needed.
 
 The result is a runtime that is:
 
-| | Traditional agent framework | c-agent |
+| | Traditional agent framework | cognitive-os-agent |
 |---|---|---|
 | Control flow | LLM decides everything, every step | **State machine + rule engine drive; LLM fills the gaps** |
 | Memory | Chat log in a context window | **Memory OS with lifecycle: encode → consolidate → reinforce → decay → archive** |
@@ -31,6 +31,26 @@ The result is a runtime that is:
 | Binary | node_modules + runtime | **A single static C binary with an embedded web console** |
 
 One person can read the whole codebase. No Python. No Node. No Docker required. **Zero external dependencies** (only two vendored MIT libraries).
+
+## What cognitive-os-agent Does That Other Agents Don't
+
+Frameworks like LangChain, AutoGPT, MetaGPT or Open Interpreter are great at *chaining LLM calls*. cognitive-os-agent is built to *run* — closer to what you'd expect from an operating system or a database engine than from a prompt pipeline:
+
+| Capability | LangChain / AutoGPT class | cognitive-os-agent |
+|---|---|---|
+| **Undo for agent actions** | ❌ Once the agent deletes/overwrites, it's gone | ✅ COW snapshot transactions — `BEGIN → execute → verify → COMMIT / ROLLBACK`, file-level undo, 64 MB capture guard, git-workspace aware |
+| **Enforceable safety** | ⚠️ Prompt-level guardrails the LLM can talk itself out of | ✅ Policy engine **hard-intercepts** before execution (exact-rule > wildcard priority), hooks can veto `agent.before_run` / `exec.before_execute`, every violation is counted and audited |
+| **Memory that behaves like memory** | Vector store = a bag of chunks | ✅ Working / episodic / semantic / procedural with **consolidation, reinforcement, half-life decay, threshold eviction, archiving** — plus a vtable-based service interface to swap backends |
+| **Context management** | "Stuff everything into the prompt" | ✅ Context MMU: hot/warm/cold budget tiers with automatic degradation, hybrid vector+keyword retrieval, batch rerank, optional HyDE |
+| **Concurrency** | Sequential tool loop (async I/O at best) | ✅ **M:N coroutine scheduler** (ucontext/Fiber) — cheap tasks on a thread pool; Flow DAG compiles agent graphs into layers that execute **in parallel** with `{{upstream}}` result substitution |
+| **Scheduling fairness** | Single-threaded loop per agent | ✅ Event bus, per-agent isolated reasoning instances, lock-free MPMC ring buffers in the infra layer |
+| **Observability** | Print logs | ✅ Every stage of `RECEIVE→…→LEARN` publishes events; JSONL audit trail; Prometheus-style gauges; WebSocket push to the console |
+| **Untrusted code** | Runs with your privileges | ✅ wasm3 WASM sandbox, capability tokens, native plugin loader, **FileTracker** that snapshots and diffs the filesystem around every execution |
+| **Self-improvement** | Static toolset | ✅ Successful tool sequences are distilled into **generated skills** (persisted, re-bound at startup); AI plugin generator with built-in security-audit stage |
+| **Ship it** | `pip install` a 200-dependency tree, then glue a UI | ✅ One 2.4 MB Windows installer (or one binary) with the **web console compiled in** — desktop app, REST API, WebSocket, CLI, all in the same executable |
+| **Footprint** | Python + venv + Node for the UI | ✅ Pure C11, ~40 K LOC, builds with `gcc` or the bundled Zig in seconds; runs on Windows and Linux from the same source |
+
+And unlike most "OS-like" agent research projects, this one is **verified**: 1236 unit checks + 85 scenario checks + dual-provider E2E, run on Windows and Linux on every change, AddressSanitizer-clean.
 
 ## Architecture at a Glance
 
@@ -136,7 +156,7 @@ The web console (React-free vanilla JS, ~100 KB) is **compiled into the binary**
 
 ```bash
 git clone https://github.com/LeonQin-ai/cognitive-os-agent.git
-cd c-agent/backend
+cd cognitive-os-agent/backend
 
 # Windows (MSYS2 / Git Bash) — bundled Zig toolchain, no system compiler needed
 ./build.sh
@@ -145,13 +165,13 @@ cd c-agent/backend
 make
 
 # Run the interactive CLI
-./build/cagent
+./build/cognitive-os-agent
 ```
 
 Start the server and open the console:
 
 ```bash
-./build/cagent serve 8080
+./build/cognitive-os-agent serve 8080
 # → http://localhost:8080/  (embedded web console)
 ```
 
@@ -195,7 +215,7 @@ Benchmark reports: [`backend/docs/benchmark-report-2026-08-31.md`](backend/docs/
 
 ```
 backend/
-├── include/cagent/     public headers — one per module, organized by layer
+├── include/cognitive-os-agent/     public headers — one per module, organized by layer
 ├── src/
 │   ├── runtime/        event bus · M:N scheduler · state machine · policy · hooks
 │   │                   flow compiler (DAG) · orchestrator · state store · agent pool

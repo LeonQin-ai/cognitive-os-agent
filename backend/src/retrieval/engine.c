@@ -1,6 +1,6 @@
-#include "cagent/retrieval/engine.h"
-#include "cagent/infra/util.h"
-#include "cagent/os/os_fs.h"
+#include "cognitive-os-agent/retrieval/engine.h"
+#include "cognitive-os-agent/infra/util.h"
+#include "cognitive-os-agent/os/os_fs.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -19,14 +19,14 @@ typedef struct term {
     size_t count, cap;
 } term;
 
-struct ca_index {
+struct coa_index {
     term *terms;
     size_t count, cap;
 };
 
-ca_index *ca_index_new(void) { return calloc(1, sizeof(ca_index)); }
+coa_index *coa_index_new(void) { return calloc(1, sizeof(coa_index)); }
 
-void ca_index_free(ca_index *idx) {
+void coa_index_free(coa_index *idx) {
     if (!idx) return;
     for (size_t i = 0; i < idx->count; i++) {
         free(idx->terms[i].word);
@@ -37,7 +37,7 @@ void ca_index_free(ca_index *idx) {
     free(idx);
 }
 
-static term *find_term(ca_index *idx, const char *word, size_t wlen) {
+static term *find_term(coa_index *idx, const char *word, size_t wlen) {
     for (size_t i = 0; i < idx->count; i++) {
         if (strlen(idx->terms[i].word) == wlen && strncmp(idx->terms[i].word, word, wlen) == 0)
             return &idx->terms[i];
@@ -45,7 +45,7 @@ static term *find_term(ca_index *idx, const char *word, size_t wlen) {
     return NULL;
 }
 
-static term *get_or_add(ca_index *idx, const char *word, size_t wlen) {
+static term *get_or_add(coa_index *idx, const char *word, size_t wlen) {
     term *t = find_term(idx, word, wlen);
     if (t) return t;
     if (idx->count == idx->cap) {
@@ -70,14 +70,14 @@ static void add_occ(term *t, const char *file, int line) {
         t->occs = realloc(t->occs, cap * sizeof(occ));
         t->cap = cap;
     }
-    t->occs[t->count].file = ca_strdup(file);
+    t->occs[t->count].file = coa_strdup(file);
     t->occs[t->count].line = line;
     t->count++;
 }
 
 static int is_word_char(int c) { return isalnum(c) || c == '_'; }
 
-int ca_index_add_file(ca_index *idx, const char *path, const char *content) {
+int coa_index_add_file(coa_index *idx, const char *path, const char *content) {
     const char *p = content;
     int line = 1;
     char word[128];
@@ -106,35 +106,35 @@ static int has_source_ext(const char *name) {
     return 0;
 }
 
-static void scan_dir(ca_index *idx, const char *dir) {
-    ca_dir_list dl;
-    if (ca_fs_list_dir(dir, &dl) != 0) return;
+static void scan_dir(coa_index *idx, const char *dir) {
+    coa_dir_list dl;
+    if (coa_fs_list_dir(dir, &dl) != 0) return;
     for (size_t i = 0; i < dl.count; i++) {
         char full[2048];
-        ca_path_join(full, sizeof(full), dir, dl.items[i].name);
+        coa_path_join(full, sizeof(full), dir, dl.items[i].name);
         if (dl.items[i].is_dir) {
             if (strcmp(dl.items[i].name, "state") == 0 || strcmp(dl.items[i].name, "build") == 0 ||
                 strcmp(dl.items[i].name, "node_modules") == 0 || strcmp(dl.items[i].name, ".git") == 0)
                 continue;
             scan_dir(idx, full);
         } else if (has_source_ext(dl.items[i].name)) {
-            char *content = ca_fs_read_file(full);
+            char *content = coa_fs_read_file(full);
             if (content) {
-                ca_index_add_file(idx, full, content);
+                coa_index_add_file(idx, full, content);
                 free(content);
             }
         }
     }
-    ca_fs_list_free(&dl);
+    coa_fs_list_free(&dl);
 }
 
-int ca_index_build_dir(ca_index *idx, const char *dir) {
-    if (!ca_fs_is_dir(dir)) return -1;
+int coa_index_build_dir(coa_index *idx, const char *dir) {
+    if (!coa_fs_is_dir(dir)) return -1;
     scan_dir(idx, dir);
     return 0;
 }
 
-char *ca_index_search(ca_index *idx, const char *query, int limit) {
+char *coa_index_search(coa_index *idx, const char *query, int limit) {
     /* tokenize query with the same rule as indexing (alnum + underscore) */
     const char *tokens[32];
     int ntok = 0;
@@ -163,5 +163,5 @@ char *ca_index_search(ca_index *idx, const char *query, int limit) {
     }
     char *out = cJSON_PrintUnformatted(arr);
     cJSON_Delete(arr);
-    return out ? out : ca_strdup("[]");
+    return out ? out : coa_strdup("[]");
 }
