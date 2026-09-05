@@ -1,4 +1,5 @@
 #include "cognitive-os-agent/llm/llm.h"
+#include "cognitive-os-agent/infra/logging.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -65,7 +66,10 @@ char *coa_llm_chat_simple(coa_llm *llm, const char *system_prompt, const char *u
     req.max_tokens = 1024;
     coa_llm_response resp = {0};
     if (coa_llm_chat(llm, &req, &resp) != 0) {
-        if (resp.error) { char *e = resp.error; resp.error = NULL; free(e); }
+        if (resp.error) {
+            coa_log_warn("llm: chat_simple failed: %s", resp.error);
+            char *e = resp.error; resp.error = NULL; free(e);
+        }
         return NULL;
     }
     char *out = resp.content;

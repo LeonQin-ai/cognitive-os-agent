@@ -59,9 +59,11 @@ static char *roster_text(coa_ctx *ctx) {
 }
 
 /* Parse the LLM's plan output into steps. Only entries whose agent is
- * registered are kept. Returns the number of valid steps (0 = parse fail). */
+ * registered are kept. `after[][ORCH_MAX_STEPS]` receives 0-based prerequisite
+ * step indices per step (1-based "after" in the plan text, converted here).
+ * Returns the number of valid steps (0 = parse fail). */
 static int parse_plan(coa_ctx *ctx, const char *raw, char agents[][64],
-                      char tasks[][512]) {
+                      char tasks[][512], int after[][ORCH_MAX_STEPS]) {
     if (!raw) return 0;
     const char *lb = strchr(raw, '[');
     const char *rb = strrchr(raw, ']');
@@ -86,18 +88,50 @@ static int parse_plan(coa_ctx *ctx, const char *raw, char agents[][64],
         if (coa_agent_pool_find(ctx->agents, a->valuestring) < 0) continue; /* unknown */
         snprintf(agents[n], 64, "%s", a->valuestring);
         snprintf(tasks[n], 512, "%s", t->valuestring);
+        /* "after": [1-based step indices] → 0-based, forward-only, deduped;
+         * -1 terminated (calloc'd 0xFF == -1) */
+        memset(after[n], 0xFF, sizeof(after[n]));
+        cJSON *jaf = cJSON_GetObjectItemCaseSensitive(it, "after");
+        if (jaf && cJSON_IsArray(jaf)) {
+            cJSON *jd;
+            cJSON_ArrayForEach(jd, jaf) {
+                if (!cJSON_IsNumber(jd)) continue;
+                int idx = (int)jd->valuedouble - 1; /* 1-based → 0-based */
+                if (idx < 0 || idx >= n) continue;  /* only earlier steps */
+                int dup = 0;
+                for (int k = 0; k < ORCH_MAX_STEPS && after[n][k] >= 0; k++)
+                    if (after[n][k] == idx) { dup = 1; break; }
+                if (!dup) {
+                    for (int k = 0; k < ORCH_MAX_STEPS; k++) {
+                        if (after[n][k] < 0) { after[n][k] = idx; break; }
+                    }
+                }
+            }
+        }
         n++;
     }
     cJSON_Delete(arr);
     return n;
 }
 
-/* Compile a parsed plan into a Flow DAG JSON document (nodes in parallel,
- * no edges — the merge happens after the run). Returns malloc'd JSON. */
-static char *build_dag_json(char agents[][64], char tasks[][512], int n) {
+/* Compile a parsed plan into a Flow DAG JSON document. Edges come from the
+ * per-step prerequisite lists; if no step declared any dependency and n > 1,
+ * the steps are chained sequentially (i-1 → i) so analyze → fix → verify
+ * always flows. Returns malloc'd JSON. */
+static char *build_dag_json(char agents[][64], char tasks[][512],
+                            int after[][ORCH_MAX_STEPS], int n) {
+    int any_dep = 0;
+    for (int i = 0; i < n && !any_dep; i++)
+        for (int k = 0; k < ORCH_MAX_STEPS; k++)
+            if (after[i][k] >= 0) { any_dep = 1; break; }
+
     cJSON *root = cJSON_CreateObject();
     cJSON *nodes = cJSON_CreateArray();
-    if (!root || !nodes) { cJSON_Delete(root); cJSON_Delete(nodes); return NULL; }
+    cJSON *edges = cJSON_CreateArray();
+    if (!root || !nodes || !edges) {
+        cJSON_Delete(root); cJSON_Delete(nodes); cJSON_Delete(edges);
+        return NULL;
+    }
     for (int i = 0; i < n; i++) {
         cJSON *nd = cJSON_CreateObject();
         char id[16];
@@ -106,9 +140,26 @@ static char *build_dag_json(char agents[][64], char tasks[][512], int n) {
         cJSON_AddStringToObject(nd, "agent", agents[i]);
         cJSON_AddStringToObject(nd, "task", tasks[i]);
         cJSON_AddItemToArray(nodes, nd);
+        if (any_dep) {
+            for (int k = 0; k < ORCH_MAX_STEPS && after[i][k] >= 0; k++) {
+                cJSON *e = cJSON_CreateObject();
+                char from[16];
+                snprintf(from, sizeof(from), "step%d", after[i][k] + 1);
+                cJSON_AddStringToObject(e, "from", from);
+                cJSON_AddStringToObject(e, "to", id);
+                cJSON_AddItemToArray(edges, e);
+            }
+        } else if (i > 0) {
+            cJSON *e = cJSON_CreateObject();
+            char from[16];
+            snprintf(from, sizeof(from), "step%d", i); /* step(i) = previous */
+            cJSON_AddStringToObject(e, "from", from);
+            cJSON_AddStringToObject(e, "to", id);
+            cJSON_AddItemToArray(edges, e);
+        }
     }
     cJSON_AddItemToObject(root, "nodes", nodes);
-    cJSON_AddItemToObject(root, "edges", cJSON_CreateArray());
+    cJSON_AddItemToObject(root, "edges", edges);
     char *s = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
     return s;
@@ -117,15 +168,21 @@ static char *build_dag_json(char agents[][64], char tasks[][512], int n) {
 /* LLM decomposition: roster + task in, parsed plan out. Returns the number of
  * valid steps (0 = no roster / no parseable plan). */
 static int decompose_task(coa_ctx *ctx, const char *task,
-                          char (*agents)[64], char (*tasks)[512]) {
+                          char (*agents)[64], char (*tasks)[512],
+                          int (*after)[ORCH_MAX_STEPS]) {
     char *roster = ctx->llm && ctx->agents && coa_agent_pool_count(ctx->agents) > 0
                        ? roster_text(ctx) : NULL;
     int nsteps = 0;
     if (roster && *roster) {
         char sys[] =
-            "你是多 agent 编排器。把用户任务分解为 2-4 个子任务并分配给可用的 agent。"
-            "只输出 JSON 数组，格式：[{\"agent\":\"agent 名\",\"task\":\"子任务描述\"}]，"
-            "不要输出任何其他文字。";
+            "你是多 agent 编排器。把用户任务分解为 2-4 个有依赖关系的子任务并分配给可用的 agent。"
+            "只输出 JSON 数组，格式：[{\"agent\":\"agent 名\",\"task\":\"子任务描述\","
+            "\"after\":[1,2]}]。"
+            "\"after\" 是本步骤依赖的前置步骤编号（从 1 开始，按数组顺序编号），"
+            "没有依赖的步骤可省略。分析类步骤在前，修复/执行类步骤必须声明依赖分析步骤，"
+            "验证类步骤必须声明依赖修复步骤。"
+            "子任务描述中可用 {{stepN}} 占位符引用第 N 步的输出结果"
+            "（如 {{step1}} 运行时会替换为步骤 1 的结果）。不要输出任何其他文字。";
         size_t ulen = strlen(roster) + strlen(task) + 64;
         char *user = (char *)malloc(ulen);
         if (user) {
@@ -133,7 +190,9 @@ static int decompose_task(coa_ctx *ctx, const char *task,
             char *raw = coa_llm_chat_simple(ctx->llm, sys, user);
             free(user);
             if (raw) {
-                nsteps = parse_plan(ctx, raw, agents, tasks);
+                coa_log_info("orchestrator: decompose raw: %s", raw);
+                nsteps = parse_plan(ctx, raw, agents, tasks, after);
+                coa_log_info("orchestrator: parsed %d steps", nsteps);
                 free(raw);
             }
         }
@@ -149,16 +208,22 @@ int coa_flow_decompose(coa_ctx *ctx, const char *task, char **dag_json) {
     *dag_json = NULL;
     char (*agents)[64] = calloc(ORCH_MAX_STEPS, sizeof(*agents));
     char (*tasks)[512] = calloc(ORCH_MAX_STEPS, sizeof(*tasks));
-    if (!agents || !tasks) { free(agents); free(tasks); return -1; }
-    int nsteps = decompose_task(ctx, task, agents, tasks);
+    int (*after)[ORCH_MAX_STEPS] = calloc(ORCH_MAX_STEPS, sizeof(*after));
+    if (!agents || !tasks || !after) {
+        free(agents); free(tasks); free(after);
+        return -1;
+    }
+    int nsteps = decompose_task(ctx, task, agents, tasks, after);
     if (nsteps == 0) {
         free(agents);
         free(tasks);
+        free(after);
         return -1;
     }
-    *dag_json = build_dag_json(agents, tasks, nsteps);
+    *dag_json = build_dag_json(agents, tasks, after, nsteps);
     free(agents);
     free(tasks);
+    free(after);
     return *dag_json ? 0 : -1;
 }
 
@@ -171,19 +236,25 @@ int coa_orchestrate(coa_ctx *ctx, const char *task, char **answer,
     /* ---- DECOMPOSE (skipped with no roster) ---- */
     char (*agents)[64] = calloc(ORCH_MAX_STEPS, sizeof(*agents));
     char (*tasks)[512] = calloc(ORCH_MAX_STEPS, sizeof(*tasks));
-    if (!agents || !tasks) { free(agents); free(tasks); return -1; }
-    int nsteps = decompose_task(ctx, task, agents, tasks);
+    int (*after)[ORCH_MAX_STEPS] = calloc(ORCH_MAX_STEPS, sizeof(*after));
+    if (!agents || !tasks || !after) {
+        free(agents); free(tasks); free(after);
+        return -1;
+    }
+    int nsteps = decompose_task(ctx, task, agents, tasks, after);
 
     if (nsteps == 0) {
         /* fallback: no agents / no parseable plan → plain single-agent run */
         free(agents);
         free(tasks);
+        free(after);
         coa_log_info("orchestrator: no multi-agent plan, running single-agent");
         return coa_run(ctx, task, answer);
     }
-    char *dag = build_dag_json(agents, tasks, nsteps);
+    char *dag = build_dag_json(agents, tasks, after, nsteps);
     free(agents);
     free(tasks);
+    free(after);
     if (!dag) return -1;
 
     /* ---- EXECUTE through the Flow engine (parallel, isolated per node) ---- */

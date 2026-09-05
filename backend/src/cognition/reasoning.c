@@ -382,9 +382,15 @@ static char *build_context(coa_reasoning *r, const char *prompt) {
     if (r->round_log_len > 0) {
         coa_strbuf_appendf(&b, "## 之前轮次的动作结果 (第 %d/%d 轮)\n", r->round_idx - 1, r->max_rounds);
         coa_strbuf_append(&b, r->round_log);
-        coa_strbuf_append(&b,
-            "\n你是多轮 agent 循环：根据以上动作结果，(a) 任务已完成 → 直接用纯文本回答；"
-            "(b) 未完成 → 给出下一批 JSON 动作。不要重复已成功的动作。\n\n");
+        if (r->round_idx >= r->max_rounds)
+            coa_strbuf_append(&b,
+                "\n这是最后一轮。不要再调用任何工具，也不要输出 JSON 动作；"
+                "直接基于以上动作结果用纯文本给出最终答案（说明完成了什么、"
+                "或还缺什么信息）。\n\n");
+        else
+            coa_strbuf_append(&b,
+                "\n你是多轮 agent 循环：根据以上动作结果，(a) 任务已完成 → 直接用纯文本回答；"
+                "(b) 未完成 → 给出下一批 JSON 动作。不要重复已成功的动作。\n\n");
     }
 
     /* anti-pollution caution: history/notes/retrieved context are reference
