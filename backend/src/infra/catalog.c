@@ -50,6 +50,43 @@ static const model_entry MODELS[] = {
 };
 #define N_MODELS (int)(sizeof(MODELS) / sizeof(MODELS[0]))
 
+/* Copy src into dst as a JSON string body: escape ", \ and control chars
+ * (prompt-skill templates contain newlines — raw bytes would produce
+ * invalid JSON that the browser can't parse). */
+static void json_esc(char *dst, size_t cap, const char *src) {
+    size_t o = 0;
+    if (!dst || cap == 0) return;
+    dst[0] = '\0';
+    if (!src) return;
+    for (const char *p = src; *p; p++) {
+        char tmp[8];
+        const char *rep = NULL;
+        switch (*p) {
+            case '"':  rep = "\\\""; break;
+            case '\\': rep = "\\\\"; break;
+            case '\n': rep = "\\n";  break;
+            case '\r': rep = "\\r";  break;
+            case '\t': rep = "\\t";  break;
+            default:
+                if ((unsigned char)*p < 0x20) {
+                    snprintf(tmp, sizeof(tmp), "\\u%04x", (unsigned char)*p);
+                    rep = tmp;
+                }
+                break;
+        }
+        if (rep) {
+            size_t rl = strlen(rep);
+            if (o + rl >= cap - 1) break;
+            memcpy(dst + o, rep, rl);
+            o += rl;
+        } else {
+            if (o + 1 >= cap - 1) break;
+            dst[o++] = *p;
+        }
+    }
+    dst[o] = '\0';
+}
+
 typedef struct mcp_entry {
     const char *id;
     const char *name;
@@ -133,20 +170,22 @@ char *coa_catalog_models_json(void) {
     for (int i = 0; i < N_MODELS; i++) {
         char buf[1600];
         const model_entry *m = &MODELS[i];
-        /* JSON-escape the note (simple: strip double quotes) */
-        char note[600];
-        snprintf(note, sizeof(note), "%s", m->note ? m->note : "");
-        for (char *p = note; *p; p++) if (*p == '"') *p = '\'';
-        char kh[256];
-        snprintf(kh, sizeof(kh), "%s", m->key_hint ? m->key_hint : "");
-        for (char *p = kh; *p; p++) if (*p == '"') *p = '\'';
+        char id[64], name[128], prov[32], base[256], model[128], kh[256], note[600], su[256];
+        json_esc(id, sizeof(id), m->id);
+        json_esc(name, sizeof(name), m->name);
+        json_esc(prov, sizeof(prov), m->provider);
+        json_esc(base, sizeof(base), m->base_url);
+        json_esc(model, sizeof(model), m->model);
+        json_esc(kh, sizeof(kh), m->key_hint ? m->key_hint : "");
+        json_esc(note, sizeof(note), m->note ? m->note : "");
+        json_esc(su, sizeof(su), m->signup_url ? m->signup_url : "");
         snprintf(buf, sizeof(buf),
                  "%s{\"id\":\"%s\",\"name\":\"%s\",\"provider\":\"%s\","
                  "\"base_url\":\"%s\",\"model\":\"%s\",\"key_hint\":\"%s\",\"note\":\"%s\","
                  "\"signup_url\":\"%s\",\"local\":%s}",
-                 i ? "," : "", m->id, m->name, m->provider, m->base_url,
-                 m->model, kh, note,
-                 m->signup_url ? m->signup_url : "",
+                 i ? "," : "", id, name, prov, base,
+                 model, kh, note,
+                 su,
                  m->local ? "true" : "false");
         size_t cur = strlen(out), blen = strlen(buf);
         char *no = realloc(out, cur + blen + 2);
@@ -165,23 +204,26 @@ char *coa_catalog_mcp_json(void) {
     for (int i = 0; i < N_MCPS; i++) {
         char buf[1400];
         const mcp_entry *m = &MCPS[i];
-        char desc[600], kh[256];
-        snprintf(desc, sizeof(desc), "%s", m->description ? m->description : "");
-        for (char *p = desc; *p; p++) if (*p == '"') *p = '\'';
-        snprintf(kh, sizeof(kh), "%s", m->key_hint ? m->key_hint : "");
-        for (char *p = kh; *p; p++) if (*p == '"') *p = '\'';
-        char repo[300];
-        snprintf(repo, sizeof(repo), "%s", m->repo ? m->repo : "");
-        for (char *p = repo; *p; p++) if (*p == '"') *p = '\'';
+        char id[64], name[128], url[256], desc[600], cat[64], kh[256], repo[300],
+             cmd[256], args[512];
+        json_esc(id, sizeof(id), m->id);
+        json_esc(name, sizeof(name), m->name);
+        json_esc(url, sizeof(url), m->url ? m->url : "");
+        json_esc(desc, sizeof(desc), m->description ? m->description : "");
+        json_esc(cat, sizeof(cat), m->category ? m->category : "");
+        json_esc(kh, sizeof(kh), m->key_hint ? m->key_hint : "");
+        json_esc(repo, sizeof(repo), m->repo ? m->repo : "");
+        json_esc(cmd, sizeof(cmd), m->command ? m->command : "");
+        json_esc(args, sizeof(args), m->args ? m->args : "");
         snprintf(buf, sizeof(buf),
                  "%s{\"id\":\"%s\",\"name\":\"%s\",\"url\":\"%s\",\"description\":\"%s\","
                  "\"category\":\"%s\",\"needs_local\":%s,\"key_hint\":\"%s\",\"repo\":\"%s\","
                  "\"transport\":\"%s\",\"command\":\"%s\",\"args\":\"%s\",\"needs_token\":%s}",
-                 i ? "," : "", m->id, m->name, m->url, desc,
-                 m->category, m->needs_local ? "true" : "false", kh, repo,
+                 i ? "," : "", id, name, url, desc,
+                 cat, m->needs_local ? "true" : "false", kh, repo,
                  (m->command && *m->command) ? "stdio"
                    : ((m->url && *m->url) ? "http" : "reference"),
-                 m->command ? m->command : "", m->args ? m->args : "",
+                 cmd, args,
                  m->needs_token ? "true" : "false");
         size_t cur = strlen(out), blen = strlen(buf);
         char *no = realloc(out, cur + blen + 2);
@@ -268,21 +310,24 @@ const catalog_skill *coa_catalog_skill_at(int i) {
 char *coa_catalog_skills_json(void) {
     char *out = coa_strdup("[");
     for (int i = 0; i < N_SKILLS; i++) {
-        char buf[1200];
+        char buf[1800];
         const catalog_skill *s = &SKILLS[i];
-        char desc[600], src[300];
-        snprintf(desc, sizeof(desc), "%s", s->description ? s->description : "");
-        for (char *p = desc; *p; p++) if (*p == '"') *p = '\'';
-        snprintf(src, sizeof(src), "%s", s->source ? s->source : "");
-        for (char *p = src; *p; p++) if (*p == '"') *p = '\'';
+        char id[64], name[128], desc[600], kind[32], body[1200], ta[512], src[300];
+        json_esc(id, sizeof(id), s->id);
+        json_esc(name, sizeof(name), s->name);
+        json_esc(desc, sizeof(desc), s->description ? s->description : "");
+        json_esc(kind, sizeof(kind), s->kind ? s->kind : "");
+        json_esc(body, sizeof(body), s->body ? s->body : "");
+        json_esc(ta, sizeof(ta), s->test_args ? s->test_args : "");
+        json_esc(src, sizeof(src), s->source ? s->source : "");
         const char *type = strcmp(s->kind, "reference") == 0 ? "reference" : "skill";
         snprintf(buf, sizeof(buf),
                  "%s{\"id\":\"%s\",\"name\":\"%s\",\"description\":\"%s\","
                  "\"kind\":\"%s\",\"body\":\"%s\",\"test_args\":\"%s\","
                  "\"source\":\"%s\",\"type\":\"%s\"}",
-                 i ? "," : "", s->id, s->name, desc,
-                 s->kind, s->body ? s->body : "",
-                 s->test_args ? s->test_args : "", src, type);
+                 i ? "," : "", id, name, desc,
+                 kind, body,
+                 ta, src, type);
         size_t cur = strlen(out), blen = strlen(buf);
         char *no = realloc(out, cur + blen + 2);
         if (!no) break;

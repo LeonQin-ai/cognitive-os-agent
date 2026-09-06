@@ -3466,7 +3466,15 @@ static void test_catalog(void) {
         CHECK(strstr(sc, "github.com/danielmiessler/fabric") != NULL);
         CHECK(strstr(sc, "github.com/thinkany-ai/skillhub") != NULL);
         CHECK(strstr(sc, "github.com/PatrickJS/awesome-cursorrules") != NULL);
-        free(sc);
+        /* regression: prompt-skill bodies contain newlines — all three catalog
+         * JSON payloads must be fully parseable, not just substring-matchable */
+        char *cats[3] = { coa_catalog_models_json(), coa_catalog_mcp_json(), sc };
+        for (int ci = 0; ci < 3; ci++) {
+            cJSON *parsed = cJSON_Parse(cats[ci]);
+            CHECK(parsed != NULL && cJSON_IsArray(parsed));
+            cJSON_Delete(parsed);
+            free(cats[ci]);
+        }
     }
     /* 迭代器一致性 */
     CHECK(coa_catalog_skill_count() >= 10);
