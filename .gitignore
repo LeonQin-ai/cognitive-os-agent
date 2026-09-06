@@ -25,3 +25,6 @@ Thumbs.db
 # Windows reserved device name — must never be committed
 nul
 backend/caps_gate_out.txt
+
+# local design notes (not part of the open-source repo)
+/docs/
