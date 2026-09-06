@@ -54,6 +54,13 @@ int coa_mcp_manager_call(coa_mcp_manager *m, const char *name,
  * tools registered, or -1 on fatal error. */
 int coa_mcp_manager_sync_tools(coa_mcp_manager *m, struct coa_tool_registry *reg);
 
+/* Like coa_mcp_manager_sync_tools, but probes only the named connection with
+ * a bounded bootstrap timeout — used when adding one server so the request
+ * doesn't block on every other server's handshake. Returns the number of
+ * tools registered, or -1 if the name is unknown. */
+int coa_mcp_manager_sync_tools_one(coa_mcp_manager *m, struct coa_tool_registry *reg,
+                                   const char *name);
+
 /* Number of discovered tools for a connection (-1 if unknown). */
 int coa_mcp_manager_tool_count(coa_mcp_manager *m, const char *name);
 

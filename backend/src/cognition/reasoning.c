@@ -124,7 +124,8 @@ static void clear_actions(coa_reasoning *r) {
 #define HIST_BUDGET 8192      /* total chars of history injected per run */
 #define LEARN_RESULT_CAP 300  /* chars of a result kept as a memory episode */
 #define COMPACT_SUMMARY_CAP 2000 /* rolling compaction summary cap */
-#define AGENT_LOOP_MAX_ROUNDS 8  /* default rounds when config does not set it */
+#define AGENT_LOOP_MAX_ROUNDS 32 /* default rounds when config does not set it;
+                                    config "reasoning.max_rounds" < 0 = unlimited */
 #define ROUND_LOG_CAP 16384       /* tail-keep cap for accumulated round results */
 
 /* Append text to the round log, tail-keeping: once past ROUND_LOG_CAP the
@@ -786,7 +787,10 @@ coa_reasoning *coa_reasoning_new(const coa_reasoning_config *cfg) {
     r->index = cfg->index;
     r->plugin_registry = cfg->plugin_registry;
     r->state_root = cfg->state_root ? coa_strdup(cfg->state_root) : NULL;
-    r->max_rounds = cfg->max_rounds > 0 ? cfg->max_rounds : AGENT_LOOP_MAX_ROUNDS;
+    /* 0 = use default; negative = unlimited (loop guards on round_idx only
+     * hitting INT_MAX, so clamp to a practical upper bound) */
+    r->max_rounds = cfg->max_rounds != 0 ? cfg->max_rounds : AGENT_LOOP_MAX_ROUNDS;
+    if (r->max_rounds < 0) r->max_rounds = 1000000;
     r->hooks = cfg->hooks;
     if (r->hooks) coa_state_machine_set_hooks(r->sm, r->hooks);
     r->txm = coa_tx_manager_new();

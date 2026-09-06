@@ -1735,9 +1735,11 @@ static int h_mcp_add(const coa_http_request *req, coa_http_response *resp, void 
             "'command' (stdio), and a valid transport\"}");
         return 0;
     }
-    /* re-discover tools for the (possibly new) server and persist */
+    /* re-discover tools for the (possibly new) server and persist. Only the
+     * new server is probed (short bootstrap timeout) — a full sync here would
+     * block the single-threaded HTTP server on every other cold npx server. */
     if (ctx->mcp) {
-        if (ctx->tools) coa_mcp_manager_sync_tools(ctx->mcp, ctx->tools);
+        if (ctx->tools) coa_mcp_manager_sync_tools_one(ctx->mcp, ctx->tools, name_buf);
         coa_mcp_manager_persist(ctx->mcp, ctx->state_root);
     }
     char *s = ctx->mcp ? coa_mcp_manager_json(ctx->mcp) : coa_strdup("[]");
@@ -2267,6 +2269,80 @@ static int h_skill_install_remote(const coa_http_request *req, coa_http_response
     cJSON_AddStringToObject(o, "name", e->id);
     cJSON_AddStringToObject(o, "kind", "prompt");
     cJSON_AddStringToObject(o, "repo", e->repo);
+    char *s = cJSON_PrintUnformatted(o);
+    cJSON_Delete(o);
+    coa_http_resp_json(resp, s ? s : "{\"ok\":true}");
+    free(s);
+    return 0;
+}
+
+/* ================= skillhub.cn live skills ================= */
+
+/* Live listing from api.skillhub.cn (first page of the skill-package
+ * catalog). Blocking network I/O (~seconds) on the single-threaded server —
+ * same tradeoff as /v1/skills/install-remote. */
+static int h_catalog_skillhub(const coa_http_request *req, coa_http_response *resp, void *ud) {
+    (void)req;
+    (void)ud;
+    char *s = coa_catalog_skillhub_list_json();
+    if (!s) {
+        resp->status = 502;
+        coa_http_resp_json(resp,
+            "{\"error\":\"skillhub.cn list fetch failed (check network)\"}");
+        return 0;
+    }
+    coa_http_resp_json(resp, s);
+    free(s);
+    return 0;
+}
+
+/* Install a skillhub.cn skill: download SKILL.md for the given slug and
+ * register it as a prompt-kind skill (same persistence flow as install-remote). */
+static int h_skill_install_skillhub(const coa_http_request *req, coa_http_response *resp, void *ud) {
+    coa_ctx *ctx = (coa_ctx *)ud;
+    if (!authz_ok(ctx, req, resp)) return 0;
+    char *b = body_str(req);
+    cJSON *root = b ? cJSON_Parse(b) : NULL;
+    free(b);
+    const char *slug = json_str(root, "slug");
+    char slug_buf[128] = "";
+    if (slug && *slug) snprintf(slug_buf, sizeof(slug_buf), "%s", slug);
+    cJSON_Delete(root);
+    if (!slug_buf[0]) {
+        resp->status = 400;
+        coa_http_resp_json(resp, "{\"error\":\"need 'slug' string\"}");
+        return 0;
+    }
+    char *content = coa_catalog_skillhub_fetch_skill(slug_buf);
+    if (!content) {
+        resp->status = 502;
+        coa_http_resp_json(resp,
+            "{\"error\":\"fetch failed: cannot download SKILL.md from api.skillhub.cn\"}");
+        return 0;
+    }
+    char name[160], desc[256];
+    snprintf(name, sizeof(name), "skh_%s", slug_buf);
+    snprintf(desc, sizeof(desc), "SkillHub 技能（skillhub.cn/skills/%s）", slug_buf);
+    coa_skill sk;
+    memset(&sk, 0, sizeof(sk));
+    sk.name = name;
+    sk.description = desc;
+    sk.kind = "prompt";
+    sk.body = content;
+    sk.caps = "";
+    int rc = coa_skill_register_ex(ctx->skills, &sk, 1);
+    free(content);
+    if (rc != 0) {
+        resp->status = 400;
+        coa_http_resp_json(resp, "{\"error\":\"register failed\"}");
+        return 0;
+    }
+    if (ctx->state_root) coa_skill_registry_persist(ctx->skills, ctx->state_root);
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddBoolToObject(o, "ok", 1);
+    cJSON_AddStringToObject(o, "name", name);
+    cJSON_AddStringToObject(o, "kind", "prompt");
+    cJSON_AddStringToObject(o, "slug", slug_buf);
     char *s = cJSON_PrintUnformatted(o);
     cJSON_Delete(o);
     coa_http_resp_json(resp, s ? s : "{\"ok\":true}");
@@ -2825,6 +2901,8 @@ int coa_api_attach(coa_ctx *ctx) {
     coa_http_server_route(ctx->http, "GET", "/v1/catalog/models", h_catalog_models, ctx);
     coa_http_server_route(ctx->http, "GET", "/v1/catalog/skills", h_catalog_skills, ctx);
     coa_http_server_route(ctx->http, "GET", "/v1/catalog/github-skills", h_catalog_github_skills, ctx);
+    coa_http_server_route(ctx->http, "GET", "/v1/catalog/skillhub", h_catalog_skillhub, ctx);
+    coa_http_server_route(ctx->http, "POST", "/v1/skills/install-skillhub", h_skill_install_skillhub, ctx);
     coa_http_server_route(ctx->http, "GET", "/", h_index, ctx);
     coa_http_server_route(ctx->http, "GET", "/favicon.ico", h_favicon, ctx);
     return 0;

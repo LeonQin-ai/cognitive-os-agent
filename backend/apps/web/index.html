@@ -667,6 +667,8 @@ panels.skills = `
     <pre id="skill-test-out" style="display:none"></pre>
     <div class="sub" style="margin-top:12px">GitHub 仓库技能（展开仓库 → 安装时拉取原文）</div>
     <div id="gh-skill-catalog">加载中…</div>
+    <div class="sub" style="margin-top:12px">SkillHub 技能市场（skillhub.cn，安装时拉取 SKILL.md 原文）</div>
+    <div id="skh-skill-catalog">加载中…</div>
   </div>
   <div class="card">
     <h2>⭐ 技能市场 / 发布</h2>
@@ -1218,6 +1220,7 @@ async function loadSkillsCatalog(){
       : '<span class="muted">（空）</span>');
   box.innerHTML = html;
   loadGhSkills();
+  loadSkillhubList();
 }
 
 /* GitHub 仓库真实技能：按仓库分组折叠展示，安装时后端实时拉取文件原文 */
@@ -1261,6 +1264,34 @@ async function ghSkillInstall(i){
   toast('从 GitHub 拉取 ' + x.id + ' …（首次需下载，稍候）');
   const r = await call('POST', '/v1/skills/install-remote', {repo: x.repo, id: x.id});
   if(r.obj && r.obj.ok) toast('✔ 已安装 ' + x.id + '（内容来自仓库原文）');
+  else toast('安装失败: ' + ((r.obj && r.obj.error) || ('HTTP ' + r.status)));
+  loadSkillsMarket();
+}
+
+/* SkillHub（skillhub.cn）在线技能：列表实时来自 api.skillhub.cn，安装时后端拉取 SKILL.md 原文 */
+let SKH_SKILLS = [];
+
+async function loadSkillhubList(){
+  const box = $('skh-skill-catalog'); if(!box) return;
+  box.innerHTML = '<span class="muted">加载中…（访问 api.skillhub.cn）</span>';
+  const r = await call('GET', '/v1/catalog/skillhub');
+  SKH_SKILLS = Array.isArray(r.obj) ? r.obj : [];
+  if(!SKH_SKILLS.length){
+    box.innerHTML = '<span class="muted">（加载失败：无法从 skillhub.cn 获取列表，检查网络）</span>';
+    return;
+  }
+  box.innerHTML = SKH_SKILLS.map((x, i) =>
+    '<div class="item"><b>' + esc(x.name || x.id) + '</b> <span class="muted">' + (x.skill_count || 0) + ' 技能</span>' +
+    '<div class="hint">' + esc(x.description || '') + '</div>' +
+    '<a class="sec sm" href="' + esc(x.source) + '" target="_blank" rel="noopener">详情</a> ' +
+    '<button class="sec sm" onclick="skillhubInstall(' + i + ')">安装</button></div>').join('');
+}
+
+async function skillhubInstall(i){
+  const x = SKH_SKILLS[i]; if(!x) return;
+  toast('从 skillhub.cn 拉取 ' + x.id + ' 的 SKILL.md …');
+  const r = await call('POST', '/v1/skills/install-skillhub', {slug: x.id});
+  if(r.obj && r.obj.ok) toast('✔ 已安装 ' + r.obj.name + '（SKILL.md 原文）');
   else toast('安装失败: ' + ((r.obj && r.obj.error) || ('HTTP ' + r.status)));
   loadSkillsMarket();
 }

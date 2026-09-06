@@ -63,6 +63,20 @@ char *coa_catalog_remote_skills_json(void);
  * Blocking network I/O — call from a worker, not the HTTP thread. */
 char *coa_catalog_remote_skill_fetch(const catalog_remote_skill *e);
 
+/* skillhub.cn (技能市场) live catalog. Both do blocking network I/O against
+ * api.skillhub.cn — call from a worker, not the HTTP thread. */
+
+/* Fetch the skillhub skill-package listing (first page, 40 entries) and
+ * return a normalized JSON array:
+ *   [{id,name,description,skill_count}]
+ * Returns NULL on network/parse failure. */
+char *coa_catalog_skillhub_list_json(void);
+
+/* Download SKILL.md content for a skillhub slug. Slug is validated against
+ * [A-Za-z0-9._-]. Returns the malloc'd markdown (truncated to 64 KB) or
+ * NULL on failure / bad slug. */
+char *coa_catalog_skillhub_fetch_skill(const char *slug);
+
 #ifdef __cplusplus
 }
 #endif

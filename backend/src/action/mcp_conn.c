@@ -330,7 +330,7 @@ static cJSON *rpc_http(const coa_mcp_conn *c, const char *method, cJSON *params,
 }
 
 static cJSON *rpc_stdio(coa_mcp_manager *m, size_t idx, const char *method,
-                        cJSON *params, long id, char **err) {
+                        cJSON *params, long id, char **err, int tmo) {
     coa_mcp_conn *c = &m->items[idx];
     coa_mcp_session *s = &m->sess[idx];
     (void)c;
@@ -362,8 +362,7 @@ static cJSON *rpc_stdio(coa_mcp_manager *m, size_t idx, const char *method,
         return NULL;
     }
 
-    int timeout = s->initialized ? MCP_STDIO_TIMEOUT_MS : MCP_STDIO_TIMEOUT_MS;
-    int64_t deadline = coa_time_now_ms() + timeout;
+    int64_t deadline = coa_time_now_ms() + (tmo > 0 ? tmo : MCP_STDIO_TIMEOUT_MS);
     while (coa_time_now_ms() < deadline && coa_proc_popen_alive(s->proc)) {
         coa_proc_popen_read(s->proc, 100);
         char *line = stdio_take_response(s->proc, id);
@@ -392,9 +391,9 @@ static cJSON *rpc_stdio(coa_mcp_manager *m, size_t idx, const char *method,
 }
 
 static cJSON *rpc(coa_mcp_manager *m, size_t idx, const char *method,
-                  cJSON *params, long id, char **err) {
+                  cJSON *params, long id, char **err, int tmo) {
     if (strcmp(m->items[idx].transport ? m->items[idx].transport : "http", "stdio") == 0)
-        return rpc_stdio(m, idx, method, params, id, err);
+        return rpc_stdio(m, idx, method, params, id, err, tmo);
     return rpc_http(&m->items[idx], method, params, id, err);
 }
 
@@ -418,7 +417,7 @@ static void send_notification_stdio(coa_mcp_manager *m, size_t idx, const char *
 }
 
 /* Ensure the session completed the MCP handshake. 0 ok. */
-static int ensure_initialized(coa_mcp_manager *m, size_t idx) {
+static int ensure_initialized(coa_mcp_manager *m, size_t idx, int tmo) {
     coa_mcp_session *s = &m->sess[idx];
     if (strcmp(m->items[idx].transport ? m->items[idx].transport : "http", "stdio") == 0
         && stdio_ensure(m, idx) != 0) return -1;
@@ -433,7 +432,7 @@ static int ensure_initialized(coa_mcp_manager *m, size_t idx) {
     cJSON_AddStringToObject(ci, "name", MCP_CLIENT_NAME);
     cJSON_AddStringToObject(ci, "version", MCP_CLIENT_VERSION);
     char *err = NULL;
-    cJSON *result = rpc(m, idx, "initialize", params, id, &err);
+    cJSON *result = rpc(m, idx, "initialize", params, id, &err, tmo);
     if (!result) {
         fprintf(stderr, "mcp: initialize %s failed: %s\n", m->items[idx].name,
                 err ? err : "?");
@@ -448,13 +447,13 @@ static int ensure_initialized(coa_mcp_manager *m, size_t idx) {
 }
 
 /* Fetch (and cache) the tools/list array. Borrowed pointer, NULL on error. */
-static const cJSON *fetch_tools(coa_mcp_manager *m, size_t idx) {
+static const cJSON *fetch_tools(coa_mcp_manager *m, size_t idx, int tmo) {
     coa_mcp_session *s = &m->sess[idx];
     if (s->tools) return s->tools;
     long id = g_jsonrpc_id++;
     char *err = NULL;
     cJSON *params = cJSON_CreateObject();
-    cJSON *result = rpc(m, idx, "tools/list", params, id, &err);
+    cJSON *result = rpc(m, idx, "tools/list", params, id, &err, tmo);
     if (!result) { free(err); return NULL; }
     cJSON *tools = cJSON_DetachItemFromObjectCaseSensitive(result, "tools");
     cJSON_Delete(result);
@@ -479,7 +478,7 @@ int coa_mcp_manager_call(coa_mcp_manager *m, const char *name,
         if (err_text) *err_text = coa_strdup("mcp: unknown server");
         return -1;
     }
-    if (ensure_initialized(m, (size_t)idx) != 0) {
+    if (ensure_initialized(m, (size_t)idx, MCP_STDIO_TIMEOUT_MS) != 0) {
         coa_mutex_unlock(&m->mtx);
         if (err_text) *err_text = coa_strdup("mcp: handshake failed");
         return -1;
@@ -493,7 +492,8 @@ int coa_mcp_manager_call(coa_mcp_manager *m, const char *name,
 
     long id = g_jsonrpc_id++;
     char *err = NULL;
-    cJSON *result = rpc(m, (size_t)idx, "tools/call", params, id, &err);
+    cJSON *result = rpc(m, (size_t)idx, "tools/call", params, id, &err,
+                        MCP_STDIO_TIMEOUT_MS);
     if (!result) {
         coa_mutex_unlock(&m->mtx);
         if (err_text) *err_text = err ? err : coa_strdup("mcp: call failed");
@@ -565,14 +565,19 @@ static void mcp_server_slug(const char *server, char *out, size_t cap) {
     out[o] = '\0';
 }
 
-int coa_mcp_manager_sync_tools(coa_mcp_manager *m, struct coa_tool_registry *reg) {
-    if (!m || !reg) return -1;
+/* Eager discovery budget: bounds boot and the POST /v1/mcp add request even
+ * when npx must cold-download. Servers that miss it register their tools on
+ * a later sync / agent call and can be re-checked from the UI test button. */
+#define MCP_BOOTSTRAP_TIMEOUT_MS 15000
+
+/* Discover and register tools for ONE connection. Caller holds m->mtx.
+ * Returns the number of tools registered. */
+static int sync_server(coa_mcp_manager *m, struct coa_tool_registry *reg,
+                       size_t i, int tmo) {
     int registered = 0;
-    coa_mutex_lock(&m->mtx);
-    for (size_t i = 0; i < m->count; i++) {
-        if (ensure_initialized(m, i) != 0) continue;
-        const cJSON *tools = fetch_tools(m, i);
-        if (!tools) continue;
+    if (ensure_initialized(m, i, tmo) != 0) return 0;
+    const cJSON *tools = fetch_tools(m, i, tmo);
+    if (!tools) return 0;
         const char *srv = m->items[i].name;
         char slug[128];
         mcp_server_slug(srv, slug, sizeof(slug));
@@ -644,7 +649,32 @@ int coa_mcp_manager_sync_tools(coa_mcp_manager *m, struct coa_tool_registry *reg
                 free(t);
             }
         }
+    return registered;
+}
+
+int coa_mcp_manager_sync_tools(coa_mcp_manager *m, struct coa_tool_registry *reg) {
+    if (!m || !reg) return -1;
+    int registered = 0;
+    coa_mutex_lock(&m->mtx);
+    for (size_t i = 0; i < m->count; i++)
+        registered += sync_server(m, reg, i, MCP_BOOTSTRAP_TIMEOUT_MS);
+    coa_mutex_unlock(&m->mtx);
+    return registered;
+}
+
+/* Discover tools for a single named connection only (used by POST /v1/mcp so
+ * adding one server doesn't pay the handshake cost of every other server).
+ * Returns registered tool count, or -1 when the name is unknown. */
+int coa_mcp_manager_sync_tools_one(coa_mcp_manager *m, struct coa_tool_registry *reg,
+                                   const char *name) {
+    if (!m || !reg || !name) return -1;
+    coa_mutex_lock(&m->mtx);
+    int idx = find_conn(m, name);
+    if (idx < 0) {
+        coa_mutex_unlock(&m->mtx);
+        return -1;
     }
+    int registered = sync_server(m, reg, (size_t)idx, MCP_BOOTSTRAP_TIMEOUT_MS);
     coa_mutex_unlock(&m->mtx);
     return registered;
 }
@@ -655,8 +685,8 @@ int coa_mcp_manager_tool_count(coa_mcp_manager *m, const char *name) {
     int idx = find_conn(m, name);
     int n = -1;
     if (idx >= 0) {
-        if (ensure_initialized(m, (size_t)idx) == 0) {
-            const cJSON *tools = fetch_tools(m, (size_t)idx);
+        if (ensure_initialized(m, (size_t)idx, MCP_BOOTSTRAP_TIMEOUT_MS) == 0) {
+            const cJSON *tools = fetch_tools(m, (size_t)idx, MCP_BOOTSTRAP_TIMEOUT_MS);
             n = tools ? cJSON_GetArraySize(tools) : -1;
         }
     }

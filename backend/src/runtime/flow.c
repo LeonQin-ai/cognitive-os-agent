@@ -208,7 +208,7 @@ static coa_reasoning *flow_reasoning_new(coa_ctx *ctx) {
     rc.mcp = ctx->mcp;
     rc.state_root = ctx->state_root;
     rc.max_rounds = ctx->config
-        ? (int)coa_config_get_int(ctx->config, "reasoning.max_rounds", 8) : 8;
+        ? (int)coa_config_get_int(ctx->config, "reasoning.max_rounds", 32) : 32;
     return coa_reasoning_new(&rc);
 }
 

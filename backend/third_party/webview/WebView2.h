@@ -39281,10 +39281,17 @@ EXTERN_C __declspec(selectany) const IID IID_ICoreWebView2Controller = {0x4d00c0
         virtual HRESULT STDMETHODCALLTYPE NotifyParentWindowPositionChanged( void) = 0;
         
         virtual HRESULT STDMETHODCALLTYPE Close( void) = 0;
-        
-        virtual /* [propget] */ HRESULT STDMETHODCALLTYPE get_CoreWebView2( 
+
+        virtual /* [propget] */ HRESULT STDMETHODCALLTYPE get_CoreWebView2(
             /* [retval][out] */ ICoreWebView2 **coreWebView2) = 0;
-        
+
+        /* Vendored-header omission fixed: TranslateAccelerator is part of the
+         * real ICoreWebView2Controller vtable (declared after
+         * get_CoreWebView2). Without it the host cannot forward keyboard
+         * accelerators (Ctrl+C/V/X...) to the browser. */
+        virtual HRESULT STDMETHODCALLTYPE TranslateAccelerator(
+            /* [in] */ MSG *message) = 0;
+
     };
     
     

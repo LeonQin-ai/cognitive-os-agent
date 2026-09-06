@@ -2260,6 +2260,13 @@ public:
     BOOL res;
     while ((res = GetMessage(&msg, nullptr, 0, 0)) != -1) {
       if (msg.hwnd) {
+        // Forward keyboard accelerators (Ctrl+C/V/X/A/Z, F5, ...) to the
+        // WebView2 controller. Without this the hosted browser never sees
+        // them, so e.g. paste into the page's inputs silently does nothing.
+        if (m_controller &&
+            m_controller->TranslateAccelerator(&msg) == S_OK) {
+          continue;
+        }
         TranslateMessage(&msg);
         DispatchMessage(&msg);
         continue;
