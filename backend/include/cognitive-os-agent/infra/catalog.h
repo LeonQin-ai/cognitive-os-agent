@@ -37,6 +37,32 @@ const catalog_skill *coa_catalog_skill_at(int i);
  *   [{id,name,description,kind,body,test_args,source,type}] */
 char *coa_catalog_skills_json(void);
 
+/* GitHub remote skill: a real file in a live upstream repo, fetched over
+ * HTTPS at install time and registered as a prompt-kind skill. */
+typedef struct catalog_remote_skill {
+    const char *repo;         /* grouping key shown in the UI ("fabric"…) */
+    const char *id;           /* runtime skill name (ascii) */
+    const char *name;         /* display name */
+    const char *description;
+    const char *raw_url;      /* direct https URL to the skill file */
+    const char *fallback_url; /* mirror (ghproxy) tried when direct fails */
+} catalog_remote_skill;
+
+int coa_catalog_remote_skill_count(void);
+const catalog_remote_skill *coa_catalog_remote_skill_at(int i);
+/* Find by repo+id (either may be NULL = wildcard). NULL when not found. */
+const catalog_remote_skill *coa_catalog_remote_skill_find(const char *repo,
+                                                          const char *id);
+
+/* JSON array of remote skill entries:
+ *   [{repo,id,name,description,raw_url,fallback_url}] */
+char *coa_catalog_remote_skills_json(void);
+
+/* Download the skill file for `e` (direct first, then fallback mirror).
+ * Returns the malloc'd text (truncated to 64 KB) or NULL on failure.
+ * Blocking network I/O — call from a worker, not the HTTP thread. */
+char *coa_catalog_remote_skill_fetch(const catalog_remote_skill *e);
+
 #ifdef __cplusplus
 }
 #endif

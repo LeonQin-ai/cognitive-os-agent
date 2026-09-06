@@ -4,6 +4,7 @@
  * flagged so the UI can guide the user. */
 #include "cognitive-os-agent/infra/catalog.h"
 #include "cognitive-os-agent/infra/util.h"
+#include "cognitive-os-agent/os/http.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -292,14 +293,193 @@ static const catalog_skill SKILLS[] = {
     { "fabric",     "Fabric（提示词技能框架）",
       "danielmiessler/fabric 模块化 LLM 技能（patterns）精选", "reference", "", "",
       "https://github.com/danielmiessler/fabric" },
-    { "skillhub",   "SkillHub（社区技能底座）",
-      "thinkany-ai/skillhub 开源技能社区底座", "reference", "", "",
-      "https://github.com/thinkany-ai/skillhub" },
+    { "anthropics-skills", "Anthropic Skills（官方技能库）",
+      "anthropics/skills 官方 Claude 技能合集（docx/pdf/前端设计等）", "reference", "", "",
+      "https://github.com/anthropics/skills" },
     { "awesome-cursorrules", "Awesome CursorRules",
       "PatrickJS/awesome-cursorrules 规则/技能精选列表", "reference", "", "",
       "https://github.com/PatrickJS/awesome-cursorrules" },
 };
 #define N_SKILLS (int)(sizeof(SKILLS) / sizeof(SKILLS[0]))
+
+/* ---------------- GitHub remote skills ----------------
+ * Real skill files in live upstream repos, fetched over HTTPS when the user
+ * clicks install. Each entry carries a direct raw.githubusercontent.com URL
+ * plus a ghproxy mirror (direct raw access is unreliable in some regions).
+ * skillhub (thinkany-ai) was removed: the repo was deleted upstream. */
+static const catalog_remote_skill REMOTE_SKILLS[] = {
+    /* ---- danielmiessler/fabric — data/patterns/<name>/system.md ---- */
+    { "fabric", "fab_summarize", "Fabric: Summarize（内容摘要）",
+      "fabric patterns 原版摘要技能（安装时从仓库拉取 system.md）",
+      "https://raw.githubusercontent.com/danielmiessler/fabric/main/data/patterns/summarize/system.md",
+      "https://ghproxy.net/https://raw.githubusercontent.com/danielmiessler/fabric/main/data/patterns/summarize/system.md" },
+    { "fabric", "fab_extract_wisdom", "Fabric: Extract Wisdom（要点提炼）",
+      "fabric 最出名的 pattern：提炼观点/洞见/事实/引用",
+      "https://raw.githubusercontent.com/danielmiessler/fabric/main/data/patterns/extract_wisdom/system.md",
+      "https://ghproxy.net/https://raw.githubusercontent.com/danielmiessler/fabric/main/data/patterns/extract_wisdom/system.md" },
+    { "fabric", "fab_improve_writing", "Fabric: Improve Writing（润色）",
+      "fabric patterns 原版写作润色技能",
+      "https://raw.githubusercontent.com/danielmiessler/fabric/main/data/patterns/improve_writing/system.md",
+      "https://ghproxy.net/https://raw.githubusercontent.com/danielmiessler/fabric/main/data/patterns/improve_writing/system.md" },
+    { "fabric", "fab_analyze_claims", "Fabric: Analyze Claims（论断核查）",
+      "逐条分析论断的真值与依据",
+      "https://raw.githubusercontent.com/danielmiessler/fabric/main/data/patterns/analyze_claims/system.md",
+      "https://ghproxy.net/https://raw.githubusercontent.com/danielmiessler/fabric/main/data/patterns/analyze_claims/system.md" },
+    { "fabric", "fab_create_quiz", "Fabric: Create Quiz（出题）",
+      "根据给定内容生成测验题",
+      "https://raw.githubusercontent.com/danielmiessler/fabric/main/data/patterns/create_quiz/system.md",
+      "https://ghproxy.net/https://raw.githubusercontent.com/danielmiessler/fabric/main/data/patterns/create_quiz/system.md" },
+    { "fabric", "fab_rate_content", "Fabric: Rate Content（内容评分）",
+      "多维打分并给出改进建议",
+      "https://raw.githubusercontent.com/danielmiessler/fabric/main/data/patterns/rate_content/system.md",
+      "https://ghproxy.net/https://raw.githubusercontent.com/danielmiessler/fabric/main/data/patterns/rate_content/system.md" },
+    { "fabric", "fab_explain_code", "Fabric: Explain Code（代码讲解）",
+      "逐步解释代码功能与风险",
+      "https://raw.githubusercontent.com/danielmiessler/fabric/main/data/patterns/explain_code/system.md",
+      "https://ghproxy.net/https://raw.githubusercontent.com/danielmiessler/fabric/main/data/patterns/explain_code/system.md" },
+    /* ---- anthropics/skills — skills/<name>/SKILL.md（官方 Claude 技能库） ---- */
+    { "anthropics", "ant_docx", "Anthropic: Docx（Word 文档）",
+      "创建/编辑/分析 Word 文档的官方技能（SKILL.md 原文）",
+      "https://raw.githubusercontent.com/anthropics/skills/main/skills/docx/SKILL.md",
+      "https://ghproxy.net/https://raw.githubusercontent.com/anthropics/skills/main/skills/docx/SKILL.md" },
+    { "anthropics", "ant_pdf", "Anthropic: Pdf（PDF 处理）",
+      "PDF 表单填写/文本提取/拆分合并的官方技能",
+      "https://raw.githubusercontent.com/anthropics/skills/main/skills/pdf/SKILL.md",
+      "https://ghproxy.net/https://raw.githubusercontent.com/anthropics/skills/main/skills/pdf/SKILL.md" },
+    { "anthropics", "ant_frontend_design", "Anthropic: Frontend Design（前端设计）",
+      "官方前端设计品味技能",
+      "https://raw.githubusercontent.com/anthropics/skills/main/skills/frontend-design/SKILL.md",
+      "https://ghproxy.net/https://raw.githubusercontent.com/anthropics/skills/main/skills/frontend-design/SKILL.md" },
+    { "anthropics", "ant_brand_guidelines", "Anthropic: Brand Guidelines（品牌规范）",
+      "官方品牌规范应用技能",
+      "https://raw.githubusercontent.com/anthropics/skills/main/skills/brand-guidelines/SKILL.md",
+      "https://ghproxy.net/https://raw.githubusercontent.com/anthropics/skills/main/skills/brand-guidelines/SKILL.md" },
+    { "anthropics", "ant_internal_comms", "Anthropic: Internal Comms（内部通讯）",
+      "官方内部通讯写作技能",
+      "https://raw.githubusercontent.com/anthropics/skills/main/skills/internal-comms/SKILL.md",
+      "https://ghproxy.net/https://raw.githubusercontent.com/anthropics/skills/main/skills/internal-comms/SKILL.md" },
+    { "anthropics", "ant_canvas_design", "Anthropic: Canvas Design（视觉设计）",
+      "官方画布/海报视觉设计技能",
+      "https://raw.githubusercontent.com/anthropics/skills/main/skills/canvas-design/SKILL.md",
+      "https://ghproxy.net/https://raw.githubusercontent.com/anthropics/skills/main/skills/canvas-design/SKILL.md" },
+    /* ---- PatrickJS/awesome-cursorrules — rules/<name>.mdc ---- */
+    { "cursorrules", "cr_ts_vuejs", "CursorRules: TypeScript + Vue.js",
+      "awesome-cursorrules 精选规则原文（.mdc）",
+      "https://raw.githubusercontent.com/PatrickJS/awesome-cursorrules/main/rules/typescript-vuejs-cursorrules-prompt-file.mdc",
+      "https://ghproxy.net/https://raw.githubusercontent.com/PatrickJS/awesome-cursorrules/main/rules/typescript-vuejs-cursorrules-prompt-file.mdc" },
+    { "cursorrules", "cr_angular_ts", "CursorRules: Angular + TypeScript",
+      "Angular 开发规范规则原文",
+      "https://raw.githubusercontent.com/PatrickJS/awesome-cursorrules/main/rules/angular-typescript-cursorrules-prompt-file.mdc",
+      "https://ghproxy.net/https://raw.githubusercontent.com/PatrickJS/awesome-cursorrules/main/rules/angular-typescript-cursorrules-prompt-file.mdc" },
+    { "cursorrules", "cr_cpp", "CursorRules: C++ 编程规范",
+      "C++ 编码指南规则原文",
+      "https://raw.githubusercontent.com/PatrickJS/awesome-cursorrules/main/rules/cpp-programming-guidelines-cursorrules-prompt-file.mdc",
+      "https://ghproxy.net/https://raw.githubusercontent.com/PatrickJS/awesome-cursorrules/main/rules/cpp-programming-guidelines-cursorrules-prompt-file.mdc" },
+    { "cursorrules", "cr_code_guidelines", "CursorRules: 通用代码规范",
+      "通用代码质量规则原文",
+      "https://raw.githubusercontent.com/PatrickJS/awesome-cursorrules/main/rules/code-guidelines-cursorrules-prompt-file.mdc",
+      "https://ghproxy.net/https://raw.githubusercontent.com/PatrickJS/awesome-cursorrules/main/rules/code-guidelines-cursorrules-prompt-file.mdc" },
+    { "cursorrules", "cr_anti_overeng", "CursorRules: 反过度工程",
+      "约束 AI 生成代码不过度设计的规则原文",
+      "https://raw.githubusercontent.com/PatrickJS/awesome-cursorrules/main/rules/anti-overengineering.mdc",
+      "https://ghproxy.net/https://raw.githubusercontent.com/PatrickJS/awesome-cursorrules/main/rules/anti-overengineering.mdc" },
+    { "cursorrules", "cr_android_compose", "CursorRules: Android Jetpack Compose",
+      "Compose 开发规范规则原文",
+      "https://raw.githubusercontent.com/PatrickJS/awesome-cursorrules/main/rules/android-jetpack-compose-cursorrules-prompt-file.mdc",
+      "https://ghproxy.net/https://raw.githubusercontent.com/PatrickJS/awesome-cursorrules/main/rules/android-jetpack-compose-cursorrules-prompt-file.mdc" },
+};
+#define N_REMOTE (int)(sizeof(REMOTE_SKILLS) / sizeof(REMOTE_SKILLS[0]))
+
+int coa_catalog_remote_skill_count(void) { return N_REMOTE; }
+
+const catalog_remote_skill *coa_catalog_remote_skill_at(int i) {
+    return (i >= 0 && i < N_REMOTE) ? &REMOTE_SKILLS[i] : NULL;
+}
+
+const catalog_remote_skill *coa_catalog_remote_skill_find(const char *repo,
+                                                          const char *id) {
+    for (int i = 0; i < N_REMOTE; i++) {
+        const catalog_remote_skill *e = &REMOTE_SKILLS[i];
+        if (repo && strcmp(e->repo, repo) != 0) continue;
+        if (id && strcmp(e->id, id) != 0) continue;
+        return e;
+    }
+    return NULL;
+}
+
+char *coa_catalog_remote_skills_json(void) {
+    char *out = coa_strdup("[");
+    for (int i = 0; i < N_REMOTE; i++) {
+        char buf[900];
+        const catalog_remote_skill *e = &REMOTE_SKILLS[i];
+        char repo[64], id[64], name[128], desc[600], raw[400], fb[400];
+        json_esc(repo, sizeof(repo), e->repo);
+        json_esc(id, sizeof(id), e->id);
+        json_esc(name, sizeof(name), e->name);
+        json_esc(desc, sizeof(desc), e->description);
+        json_esc(raw, sizeof(raw), e->raw_url);
+        json_esc(fb, sizeof(fb), e->fallback_url ? e->fallback_url : "");
+        snprintf(buf, sizeof(buf),
+                 "%s{\"repo\":\"%s\",\"id\":\"%s\",\"name\":\"%s\","
+                 "\"description\":\"%s\",\"raw_url\":\"%s\",\"fallback_url\":\"%s\"}",
+                 i ? "," : "", repo, id, name, desc, raw, fb);
+        size_t cur = strlen(out), blen = strlen(buf);
+        char *no = realloc(out, cur + blen + 2);
+        if (!no) break;
+        out = no;
+        memcpy(out + cur, buf, blen + 1);
+    }
+    size_t cur = strlen(out);
+    char *no = realloc(out, cur + 2);
+    if (no) { out = no; memcpy(out + cur, "]", 2); }
+    return out;
+}
+
+/* Split "https://host/path" into malloc'd base ("https://host") and path
+ * ("/path"). Returns 0 ok, -1 malformed. */
+static int split_url(const char *url, char **base_out, char **path_out) {
+    const char *scheme = strstr(url, "://");
+    if (!scheme) return -1;
+    const char *host = scheme + 3;
+    const char *slash = strchr(host, '/');
+    if (!slash || slash == host) return -1;
+    size_t blen = (size_t)(slash - url);
+    *base_out = (char *)malloc(blen + 1);
+    *path_out = coa_strdup(slash);
+    if (!*base_out || !*path_out) { free(*base_out); free(*path_out); return -1; }
+    memcpy(*base_out, url, blen);
+    (*base_out)[blen] = '\0';
+    return 0;
+}
+
+#define REMOTE_SKILL_MAX 65536
+
+char *coa_catalog_remote_skill_fetch(const catalog_remote_skill *e) {
+    if (!e || !e->raw_url || !*e->raw_url) return NULL;
+    /* one shot: try direct raw URL, then the ghproxy mirror */
+    const char *urls[2] = { e->raw_url, (e->fallback_url && *e->fallback_url) ? e->fallback_url : NULL };
+    for (int u = 0; u < 2; u++) {
+        if (!urls[u]) continue;
+        char *base = NULL, *path = NULL;
+        if (split_url(urls[u], &base, &path) != 0) continue;
+        coa_http_response *r = coa_http_get(base, path, NULL, 10000);
+        free(base);
+        free(path);
+        if (r && r->status == 200 && r->body && r->body_len > 0) {
+            size_t n = r->body_len;
+            if (n > REMOTE_SKILL_MAX) n = REMOTE_SKILL_MAX;
+            char *text = (char *)malloc(n + 1);
+            if (text) {
+                memcpy(text, r->body, n);
+                text[n] = '\0';
+            }
+            coa_http_response_free(r);
+            return text;
+        }
+        if (r) coa_http_response_free(r);
+    }
+    return NULL;
+}
 
 int coa_catalog_skill_count(void) { return N_SKILLS; }
 

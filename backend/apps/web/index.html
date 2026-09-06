@@ -665,6 +665,8 @@ panels.skills = `
     <div class="hint">精选可运行技能（shell/python，一键安装并测试）与来自 fabric / SkillHub / awesome-cursorrules 生态的参考仓库。</div>
     <div id="skill-catalog">加载中…</div>
     <pre id="skill-test-out" style="display:none"></pre>
+    <div class="sub" style="margin-top:12px">GitHub 仓库技能（展开仓库 → 安装时拉取原文）</div>
+    <div id="gh-skill-catalog">加载中…</div>
   </div>
   <div class="card">
     <h2>⭐ 技能市场 / 发布</h2>
@@ -1179,6 +1181,7 @@ async function runSkill(){
 
 /* ================= 技能广场（精选目录） ================= */
 let SKILL_CATALOG = [];
+let GH_SKILLS = [];
 
 async function loadSkillsCatalog(){
   const box = $('skill-catalog'); if(!box) return;
@@ -1201,6 +1204,52 @@ async function loadSkillsCatalog(){
       '<a class="sec sm" href="' + esc(x.source) + '" target="_blank" rel="noopener">查看仓库</a></div>').join('')
       : '<span class="muted">（空）</span>');
   box.innerHTML = html;
+  loadGhSkills();
+}
+
+/* GitHub 仓库真实技能：按仓库分组折叠展示，安装时后端实时拉取文件原文 */
+const GH_REPO_LABELS = {
+  'fabric': '⭐ Fabric（danielmiessler/fabric 提示词技能）',
+  'anthropics': 'Anthropic 官方技能库（anthropics/skills）',
+  'cursorrules': 'CursorRules 规则库（PatrickJS/awesome-cursorrules）'
+};
+
+async function loadGhSkills(){
+  const box = $('gh-skill-catalog'); if(!box) return;
+  box.innerHTML = '<span class="muted">加载中…</span>';
+  const r = await call('GET', '/v1/catalog/github-skills');
+  GH_SKILLS = Array.isArray(r.obj) ? r.obj : [];
+  const groups = {};
+  GH_SKILLS.forEach(x => { (groups[x.repo] = groups[x.repo] || []).push(x); });
+  let html = '';
+  for (const repo of Object.keys(groups)) {
+    const items = groups[repo];
+    html += '<details class="card" style="margin:6px 0"' + (repo === 'fabric' ? ' open' : '') + '>' +
+      '<summary style="cursor:pointer;font-weight:bold">' + esc(GH_REPO_LABELS[repo] || repo) +
+      ' <span class="muted">(' + items.length + ')</span></summary>' +
+      items.map(x => {
+        const i = GH_SKILLS.indexOf(x);
+        return '<div class="item"><b>' + esc(x.name) + '</b>' +
+          '<div class="hint">' + esc(x.description || '') + '</div>' +
+          '<a class="sec sm" href="https://github.com/' +
+            (x.repo === 'fabric' ? 'danielmiessler/fabric' :
+             x.repo === 'anthropics' ? 'anthropics/skills' :
+             'PatrickJS/awesome-cursorrules') + '" target="_blank" rel="noopener">仓库</a> ' +
+          '<button class="sec sm" onclick="ghSkillInstall(' + i + ')">安装</button></div>';
+      }).join('') +
+      '</details>';
+  }
+  if (!html) html = '<span class="muted">（加载失败）</span>';
+  box.innerHTML = html;
+}
+
+async function ghSkillInstall(i){
+  const x = GH_SKILLS[i]; if(!x) return;
+  toast('从 GitHub 拉取 ' + x.id + ' …（首次需下载，稍候）');
+  const r = await call('POST', '/v1/skills/install-remote', {repo: x.repo, id: x.id});
+  if(r.obj && r.obj.ok) toast('✔ 已安装 ' + x.id + '（内容来自仓库原文）');
+  else toast('安装失败: ' + ((r.obj && r.obj.error) || ('HTTP ' + r.status)));
+  loadSkillsMarket();
 }
 
 async function catalogSkillInstall(i){

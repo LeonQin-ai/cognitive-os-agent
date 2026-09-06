@@ -2181,6 +2181,77 @@ static int h_skill_install(const coa_http_request *req, coa_http_response *resp,
     return 0;
 }
 
+static int h_catalog_github_skills(const coa_http_request *req, coa_http_response *resp, void *ud) {
+    (void)req;
+    (void)ud;
+    char *s = coa_catalog_remote_skills_json();
+    coa_http_resp_json(resp, s ? s : "[]");
+    free(s);
+    return 0;
+}
+
+/* Install a GitHub remote skill: fetch the real file from the upstream repo
+ * (direct URL, then ghproxy mirror) and register it as a prompt-kind skill
+ * with the fetched content as body. Blocking network I/O (up to ~20s) — same
+ * tradeoff as /v1/mcp/test on the single-threaded server. */
+static int h_skill_install_remote(const coa_http_request *req, coa_http_response *resp, void *ud) {
+    coa_ctx *ctx = (coa_ctx *)ud;
+    if (!authz_ok(ctx, req, resp)) return 0;
+    char *b = body_str(req);
+    cJSON *root = b ? cJSON_Parse(b) : NULL;
+    free(b);
+    const char *repo = json_str(root, "repo");
+    const char *id = json_str(root, "id");
+    char repo_buf[64] = "", id_buf[128] = "";
+    if (repo && *repo) snprintf(repo_buf, sizeof(repo_buf), "%s", repo);
+    if (id && *id) snprintf(id_buf, sizeof(id_buf), "%s", id);
+    cJSON_Delete(root);
+    if (!repo_buf[0] || !id_buf[0]) {
+        resp->status = 400;
+        coa_http_resp_json(resp, "{\"error\":\"need 'repo' and 'id' strings\"}");
+        return 0;
+    }
+    const catalog_remote_skill *e = coa_catalog_remote_skill_find(repo_buf, id_buf);
+    if (!e || strcmp(e->id, id_buf) != 0) {
+        resp->status = 404;
+        coa_http_resp_json(resp, "{\"error\":\"unknown remote skill (repo/id)\"}");
+        return 0;
+    }
+    char *content = coa_catalog_remote_skill_fetch(e);
+    if (!content) {
+        resp->status = 502;
+        coa_http_resp_json(resp,
+            "{\"error\":\"fetch failed: cannot download from raw.githubusercontent.com "
+            "or mirror (check network)\"}");
+        return 0;
+    }
+    coa_skill sk;
+    memset(&sk, 0, sizeof(sk));
+    sk.name = e->id;
+    sk.description = e->description;
+    sk.kind = "prompt";
+    sk.body = content;
+    sk.caps = "";
+    int rc = coa_skill_register_ex(ctx->skills, &sk, 1);
+    free(content);
+    if (rc != 0) {
+        resp->status = 400;
+        coa_http_resp_json(resp, "{\"error\":\"register failed\"}");
+        return 0;
+    }
+    if (ctx->state_root) coa_skill_registry_persist(ctx->skills, ctx->state_root);
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddBoolToObject(o, "ok", 1);
+    cJSON_AddStringToObject(o, "name", e->id);
+    cJSON_AddStringToObject(o, "kind", "prompt");
+    cJSON_AddStringToObject(o, "repo", e->repo);
+    char *s = cJSON_PrintUnformatted(o);
+    cJSON_Delete(o);
+    coa_http_resp_json(resp, s ? s : "{\"ok\":true}");
+    free(s);
+    return 0;
+}
+
 /* ================= IM (instant messaging) ================= */
 
 /* Push a new IM message to every WebSocket client + record an experience. */
@@ -2701,6 +2772,7 @@ int coa_api_attach(coa_ctx *ctx) {
     coa_http_server_route(ctx->http, "GET", "/v1/skills", h_skills, ctx);
     coa_http_server_route(ctx->http, "POST", "/v1/skills/run", h_skill_run, ctx);
     coa_http_server_route(ctx->http, "POST", "/v1/skills/install", h_skill_install, ctx);
+    coa_http_server_route(ctx->http, "POST", "/v1/skills/install-remote", h_skill_install_remote, ctx);
     coa_http_server_route(ctx->http, "GET", "/v1/skills/market", h_skills_market, ctx);
     coa_http_server_route(ctx->http, "POST", "/v1/skills/publish", h_skills_publish, ctx);
     coa_http_server_route(ctx->http, "POST", "/v1/tools/gh-install", h_gh_install, NULL);
@@ -2729,6 +2801,7 @@ int coa_api_attach(coa_ctx *ctx) {
     coa_http_server_route(ctx->http, "GET", "/v1/catalog/mcp", h_catalog_mcp, ctx);
     coa_http_server_route(ctx->http, "GET", "/v1/catalog/models", h_catalog_models, ctx);
     coa_http_server_route(ctx->http, "GET", "/v1/catalog/skills", h_catalog_skills, ctx);
+    coa_http_server_route(ctx->http, "GET", "/v1/catalog/github-skills", h_catalog_github_skills, ctx);
     coa_http_server_route(ctx->http, "GET", "/", h_index, ctx);
     coa_http_server_route(ctx->http, "GET", "/favicon.ico", h_favicon, ctx);
     return 0;

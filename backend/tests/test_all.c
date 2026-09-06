@@ -3464,7 +3464,7 @@ static void test_catalog(void) {
         CHECK(strstr(sc, "\"type\":\"skill\"") != NULL);
         CHECK(strstr(sc, "\"type\":\"reference\"") != NULL);
         CHECK(strstr(sc, "github.com/danielmiessler/fabric") != NULL);
-        CHECK(strstr(sc, "github.com/thinkany-ai/skillhub") != NULL);
+        CHECK(strstr(sc, "github.com/anthropics/skills") != NULL);
         CHECK(strstr(sc, "github.com/PatrickJS/awesome-cursorrules") != NULL);
         /* regression: prompt-skill bodies contain newlines — all three catalog
          * JSON payloads must be fully parseable, not just substring-matchable */
@@ -3476,6 +3476,23 @@ static void test_catalog(void) {
             free(cats[ci]);
         }
     }
+    /* GitHub remote skills: JSON validity + lookup + fetch plumbing */
+    char *rs = coa_catalog_remote_skills_json();
+    CHECK(rs != NULL);
+    if (rs) {
+        cJSON *arr = cJSON_Parse(rs);
+        CHECK(arr != NULL && cJSON_IsArray(arr));
+        CHECK(cJSON_GetArraySize(arr) >= 15);
+        cJSON_Delete(arr);
+        CHECK(strstr(rs, "\"fabric\"") != NULL && strstr(rs, "anthropics") != NULL &&
+              strstr(rs, "cursorrules") != NULL);
+        CHECK(strstr(rs, "ghproxy.net") != NULL);
+        free(rs);
+    }
+    CHECK(coa_catalog_remote_skill_find("fabric", "fab_summarize") != NULL);
+    CHECK(coa_catalog_remote_skill_find(NULL, "ant_pdf") != NULL);
+    CHECK(coa_catalog_remote_skill_find("fabric", "nope") == NULL);
+    CHECK(coa_catalog_remote_skill_find("skillhub", NULL) == NULL);
     /* 迭代器一致性 */
     CHECK(coa_catalog_skill_count() >= 10);
     CHECK(coa_catalog_skill_at(0) != NULL && coa_catalog_skill_at(-1) == NULL &&
@@ -3771,6 +3788,25 @@ static void test_http_api(void) {
                            &r) == 0 && r.status == 200);
     CHECK(strstr(r.body, "\"ok\":true") != NULL &&
           strstr(r.body, "\"output\"") != NULL);
+
+    /* GitHub remote skills: catalog + validation paths (real fetch is
+     * network-dependent: assert 200 or 502, log which, no hard CHECK) */
+    CHECK(raw_http_request(18211, "GET", "/v1/catalog/github-skills", NULL, &r) == 0 && r.status == 200);
+    CHECK(strstr(r.body, "fab_summarize") != NULL);
+    CHECK(raw_http_request(18211, "POST", "/v1/skills/install-remote", "{}", &r) == 0 && r.status == 400);
+    CHECK(raw_http_request(18211, "POST", "/v1/skills/install-remote",
+                           "{\"repo\":\"fabric\",\"id\":\"nope\"}", &r) == 0 && r.status == 404);
+    int fetched = 0;
+    if (raw_http_request(18211, "POST", "/v1/skills/install-remote",
+                         "{\"repo\":\"fabric\",\"id\":\"fab_summarize\"}", &r) == 0 &&
+        (r.status == 200 || r.status == 502)) {
+        if (r.status == 200 && strstr(r.body, "\"ok\":true") != NULL) fetched = 1;
+        /* fetch failed (offline/blocked): 502, acceptable in this suite */
+    } else {
+        CHECK(0); /* unexpected status/transport error */
+    }
+    printf("  remote skill fetch: %s\n", fetched ? "ok (installed from GitHub)"
+                                               : "skipped (network unavailable)");
 
     CHECK(raw_http_request(18211, "GET", "/v1/skills/market", NULL, &r) == 0 && r.status == 200);
     CHECK(strstr(r.body, "templates") != NULL);
