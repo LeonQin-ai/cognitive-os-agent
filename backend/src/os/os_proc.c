@@ -33,15 +33,24 @@ static void to_posix_dir(const char *win, char *out, size_t cap) {
     snprintf(out, cap, "%s", win);
 }
 
+/* Which quoting style the chosen backend needs for the embedded command. */
+typedef enum { SH_QUOTED = 0,   /* command sits inside a "..." argument
+                                 * (bash -c "...", custom override) — inner
+                                 * quotes need \" escaping */
+               SH_CMDLINE = 1   /* cmd.exe /s /c "..." — /s strips ONLY the
+                                 * outer quotes, inner quotes pass through */
+} sh_kind;
+
 /* Choose the shell invocation format string (single %s = the command).
  * Honors COA_SHELL override (e.g. "C:\\...\\bash.exe -c"), then probes for a
  * POSIX shell so POSIX commands (mkdir -p, cp, ls) work on Windows, and
  * finally falls back to cmd.exe. */
-static const char *shell_fmt(void) {
+static const char *shell_fmt_kind(sh_kind *kind) {
     static char buf[768];
     static int done = 0;
-    if (done) return buf;
+    if (done) { *kind = (strstr(buf, "cmd.exe /s /c") == buf) ? SH_CMDLINE : SH_QUOTED; return buf; }
     done = 1;
+    *kind = SH_QUOTED;
     const char *override = getenv("COA_SHELL");
     if (override && *override) {
         snprintf(buf, sizeof(buf), "%s \"%%s\"", override);
@@ -88,8 +97,54 @@ static const char *shell_fmt(void) {
             }
         }
     }
-    snprintf(buf, sizeof(buf), "cmd.exe /c \"%%s\"");
+    /* /s makes cmd strip ONLY the outer quotes of the /c argument, so inner
+     * quotes in the command survive (plain /c mangles multi-quoted lines). */
+    *kind = SH_CMDLINE;
+    snprintf(buf, sizeof(buf), "cmd.exe /s /c \"%%s\"");
     return buf;
+}
+
+/* Compose the full CreateProcess command line for `cmd` according to the
+ * chosen backend's quoting style. */
+static void compose_shell_command(const char *cmd, char *full, size_t cap) {
+    sh_kind kind = SH_QUOTED;
+    const char *fmt = shell_fmt_kind(&kind);
+    if (kind == SH_QUOTED) {
+        /* the command is embedded inside a double-quoted argument: escape
+         * inner quotes so e.g. python -c "import pptx; ..." reaches the
+         * shell intact */
+        char *esc = (char *)malloc(strlen(cmd) * 2 + 1);
+        if (esc) {
+            char *o = esc;
+            for (const char *p = cmd; *p; p++) {
+                if (*p == '"') *o++ = '\\';
+                *o++ = *p;
+            }
+            *o = '\0';
+            snprintf(full, cap, fmt, esc);
+            free(esc);
+            return;
+        }
+    }
+    snprintf(full, cap, fmt, cmd);
+}
+
+/* UTF-8 -> UTF-16 (malloc'd). CreateProcessA treats the command line in the
+ * system ANSI code page (GBK on Chinese Windows), so UTF-8 command text with
+ * non-ASCII characters reaches the child mangled — LLM-planned shell commands
+ * containing Chinese then fail inside python/bash. All process creation in
+ * this file therefore goes through the W API with an explicit CP_UTF8
+ * conversion. Returns NULL on conversion failure. */
+static wchar_t *utf8_to_wide(const char *s) {
+    int n = MultiByteToWideChar(CP_UTF8, 0, s, -1, NULL, 0);
+    if (n <= 0) return NULL;
+    wchar_t *w = (wchar_t *)malloc((size_t)n * sizeof(wchar_t));
+    if (!w) return NULL;
+    if (MultiByteToWideChar(CP_UTF8, 0, s, -1, w, n) <= 0) {
+        free(w);
+        return NULL;
+    }
+    return w;
 }
 
 coa_proc_result *coa_proc_run_in(const char *cmd, int timeout_ms, const char *cwd) {
@@ -112,22 +167,32 @@ coa_proc_result *coa_proc_run_in(const char *cmd, int timeout_ms, const char *cw
     si.dwFlags |= STARTF_USESTDHANDLES;
 
     char full[4096];
-    snprintf(full, sizeof(full), shell_fmt(), cmd);
+    compose_shell_command(cmd, full, sizeof(full));
+    wchar_t *wfull = utf8_to_wide(full);
 
     /* lpCurrentDirectory must be a FULL path; a relative one makes
      * CreateProcess fail (or behave nondeterministically). Resolve first. */
-    char abs_cwd[1024];
-    const char *cwd_arg = NULL;
+    wchar_t wabs_cwd[1024];
+    wchar_t *cwd_heap = NULL;   /* allocation to free after CreateProcess */
+    const wchar_t *cwd_arg = NULL;
     if (cwd && *cwd) {
-        if (GetFullPathNameA(cwd, sizeof(abs_cwd), abs_cwd, NULL) && abs_cwd[0])
-            cwd_arg = abs_cwd;
-        else
-            cwd_arg = cwd;
+        wchar_t *wcwd = utf8_to_wide(cwd);
+        if (wcwd) {
+            if (GetFullPathNameW(wcwd, 1024, wabs_cwd, NULL) && wabs_cwd[0])
+                cwd_arg = wabs_cwd;
+            else
+                cwd_arg = wcwd;
+            cwd_heap = wcwd;    /* wcwd is always heap — free it either way */
+        }
     }
 
-    BOOL ok = CreateProcessA(NULL, full, NULL, NULL, TRUE,
-                             CREATE_NO_WINDOW, NULL,
-                             cwd_arg, &si, &pi);
+    BOOL ok = FALSE;
+    if (wfull)
+        ok = CreateProcessW(NULL, wfull, NULL, NULL, TRUE,
+                            CREATE_NO_WINDOW, NULL,
+                            cwd_arg, &si, &pi);
+    free(wfull);
+    free(cwd_heap);
     CloseHandle(wr);
     if (!ok) {
         CloseHandle(rd);
@@ -205,7 +270,9 @@ coa_proc_result *coa_proc_run(const char *cmd, int timeout_ms) {
 int coa_proc_spawn_detached(const char *cmd) {
     if (!cmd || !*cmd) return -1;
     char full[4096];
-    snprintf(full, sizeof(full), shell_fmt(), cmd);
+    compose_shell_command(cmd, full, sizeof(full));
+    wchar_t *wfull = utf8_to_wide(full);
+    if (!wfull) return -1;
     STARTUPINFOA si;
     PROCESS_INFORMATION pi;
     memset(&si, 0, sizeof(si));
@@ -213,9 +280,10 @@ int coa_proc_spawn_detached(const char *cmd) {
     si.cb = sizeof(si);
     si.dwFlags |= STARTF_USESHOWWINDOW;
     si.wShowWindow = SW_HIDE;
-    BOOL ok = CreateProcessA(NULL, full, NULL, NULL, FALSE,
+    BOOL ok = CreateProcessW(NULL, wfull, NULL, NULL, FALSE,
                              CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP,
                              NULL, NULL, &si, &pi);
+    free(wfull);
     if (!ok) return -1;
     CloseHandle(pi.hProcess);
     CloseHandle(pi.hThread);
@@ -285,8 +353,15 @@ coa_proc_popen *coa_proc_popen_new(char *const argv[]) {
     si.hStdOutput = out_wr;
     si.hStdError = nul ? nul : out_wr;
 
-    BOOL ok = CreateProcessA(NULL, cmdline, NULL, NULL, TRUE,
-                             CREATE_NO_WINDOW, NULL, NULL, &si, &pi);
+    BOOL ok = FALSE;
+    {
+        wchar_t *wcmdline = utf8_to_wide(cmdline);
+        if (wcmdline) {
+            ok = CreateProcessW(NULL, wcmdline, NULL, NULL, TRUE,
+                                CREATE_NO_WINDOW, NULL, NULL, &si, &pi);
+            free(wcmdline);
+        }
+    }
     CloseHandle(in_rd);
     CloseHandle(out_wr);
     if (nul) CloseHandle(nul);
