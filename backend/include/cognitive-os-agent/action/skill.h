@@ -13,8 +13,9 @@ extern "C" {
 typedef struct coa_skill {
     const char *name;
     const char *description;
-    const char *kind;      /* "shell" or "python" */
-    const char *body;      /* shell command, or python source for kind=python */
+    const char *kind;      /* "shell" | "python" | "prompt" (LLM template) */
+    const char *body;      /* shell command, python source, or prompt template
+                            * with {{placeholder}} args for kind=prompt */
     const char *caps;      /* granted capability tokens, csv (e.g. "fs.read,net");
                             * NULL = unrestricted legacy skill */
 } coa_skill;
@@ -42,11 +43,19 @@ const coa_skill *coa_skill_get(coa_skill_registry *r, size_t i);
 /* Execute a skill through the sandbox with the workspace as the working
  * directory. Returns a malloc'd result (never NULL on lookup success; NULL if
  * the skill is unknown or its command is forbidden). Caller frees with
- * coa_skill_result_free. args_json is reserved for future parameter binding. */
+ * coa_skill_result_free. args_json is reserved for future parameter binding.
+ * kind="prompt" skills need an LLM and are NOT executed here — the caller
+ * gets ok=0 with a hint to run them via coa_skill_render_prompt + LLM. */
 coa_skill_result *coa_skill_execute(coa_skill_registry *r, const char *name,
                                   const char *args_json, const char *workspace,
                                   int timeout_ms);
 void coa_skill_result_free(coa_skill_result *res);
+
+/* Render a kind="prompt" skill: substitute {{placeholders}} from args_json and
+ * return the final prompt text (malloc'd; caller frees). NULL when the skill
+ * is unknown or its kind is not "prompt". */
+char *coa_skill_render_prompt(coa_skill_registry *r, const char *name,
+                              const char *args_json);
 
 /* JSON array of skills {name,description,kind} (malloc'd; caller frees). */
 char *coa_skill_list_json(coa_skill_registry *r);

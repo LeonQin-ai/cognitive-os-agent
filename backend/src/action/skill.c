@@ -55,7 +55,8 @@ int coa_skill_register(coa_skill_registry *r, const coa_skill *s) {
 int coa_skill_register_ex(coa_skill_registry *r, const coa_skill *s, int replace) {
     if (!r || !s || !s->name || !*s->name) return -1;
     const char *kind = (s->kind && *s->kind) ? s->kind : "shell";
-    if (strcmp(kind, "shell") != 0 && strcmp(kind, "python") != 0) return -1;
+    if (strcmp(kind, "shell") != 0 && strcmp(kind, "python") != 0 &&
+        strcmp(kind, "prompt") != 0) return -1;
     coa_mutex_lock(&r->mtx);
     int i = find_skill(r, s->name);
     if (i >= 0 && !replace) { coa_mutex_unlock(&r->mtx); return -1; }
@@ -215,6 +216,17 @@ coa_skill_result *coa_skill_execute(coa_skill_registry *r, const char *name,
 
     char *bound = bind_args(s->body, args_json);
     char *cmd = NULL;
+    if (strcmp(s->kind, "prompt") == 0) {
+        /* prompt skills need an LLM backend — not runnable as a process */
+        free(bound);
+        coa_skill_result *res = (coa_skill_result *)calloc(1, sizeof(*res));
+        if (res) {
+            res->ok = 0;
+            res->output = coa_strdup(
+                "prompt skill: run via /v1/skills/run (needs an LLM backend)");
+        }
+        return res;
+    }
     char pyfile[1024] = "";
     if (strcmp(s->kind, "python") == 0) {
         /* Write the substituted source to a temp file instead of a fragile
@@ -278,6 +290,14 @@ void coa_skill_result_free(coa_skill_result *res) {
     if (!res) return;
     free(res->output);
     free(res);
+}
+
+char *coa_skill_render_prompt(coa_skill_registry *r, const char *name,
+                              const char *args_json) {
+    if (!r || !name) return NULL;
+    const coa_skill *s = coa_skill_find(r, name);
+    if (!s || !s->kind || strcmp(s->kind, "prompt") != 0) return NULL;
+    return bind_args(s->body, args_json);
 }
 
 char *coa_skill_list_json(coa_skill_registry *r) {

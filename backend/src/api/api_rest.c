@@ -1231,6 +1231,38 @@ static int h_skill_run(const coa_http_request *req, coa_http_response *resp, voi
         coa_http_resp_json(resp, "{\"error\":\"missing 'name' string\"}");
         return 0;
     }
+    /* kind="prompt" skills run through the LLM (fabric-style patterns) */
+    const coa_skill *sk = ctx->skills ? coa_skill_find(ctx->skills, name) : NULL;
+    if (sk && sk->kind && strcmp(sk->kind, "prompt") == 0) {
+        char *prompt_text = coa_skill_render_prompt(ctx->skills, name, args);
+        cJSON_Delete(root);
+        if (!prompt_text) {
+            coa_http_resp_json(resp, "{\"ok\":false,\"output\":\"prompt skill render failed\"}");
+            return 0;
+        }
+        char *answer = ctx->llm
+            ? coa_llm_chat_simple(ctx->llm,
+                                  "You are a precise assistant. Follow the instruction "
+                                  "in the user message exactly.",
+                                  prompt_text)
+            : NULL;
+        free(prompt_text);
+        cJSON *o = cJSON_CreateObject();
+        if (answer) {
+            cJSON_AddBoolToObject(o, "ok", 1);
+            cJSON_AddStringToObject(o, "output", answer);
+        } else {
+            cJSON_AddBoolToObject(o, "ok", 0);
+            cJSON_AddStringToObject(o, "output",
+                                    "LLM unavailable (configure a provider first)");
+        }
+        free(answer);
+        char *s = cJSON_PrintUnformatted(o);
+        cJSON_Delete(o);
+        coa_http_resp_json(resp, s ? s : "{\"ok\":false}");
+        free(s);
+        return 0;
+    }
     coa_skill_result *r = ctx->skills
         ? coa_skill_execute(ctx->skills, name, args, ctx->workspace, 10000) : NULL;
     cJSON_Delete(root);

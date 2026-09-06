@@ -3493,6 +3493,12 @@ static void test_catalog_skills_run(void) {
             CHECK(cs->source && strstr(cs->source, "https://github.com/") == cs->source);
             continue;
         }
+        if (strcmp(cs->kind, "prompt") == 0) {
+            /* prompt skills are LLM templates: validate shape, don't execute */
+            CHECK(cs->body && cs->body[0]);
+            CHECK(strstr(cs->body, "{{") != NULL);
+            continue;
+        }
         if (strcmp(cs->kind, "python") == 0 && !py_ok) continue;
         CHECK(cs->body && cs->body[0]);
         coa_skill sk;
@@ -3747,6 +3753,16 @@ static void test_http_api(void) {
                            "{\"name\":\"greet\",\"args\":\"{\\\"who\\\":\\\"plaza\\\"}\"}",
                            &r) == 0 && r.status == 200);
     CHECK(strstr(r.body, "\"ok\":true") != NULL && strstr(r.body, "plaza") != NULL);
+
+    /* prompt-kind skills run through the LLM backend (mock provider at 18211) */
+    CHECK(raw_http_request(18211, "POST", "/v1/skills/install",
+                           "{\"id\":\"summarize\"}", &r) == 0 && r.status == 200);
+    CHECK(strstr(r.body, "\"ok\":true") != NULL);
+    CHECK(raw_http_request(18211, "POST", "/v1/skills/run",
+                           "{\"name\":\"summarize\",\"args\":\"{\\\"content\\\":\\\"hello world\\\"}\"}",
+                           &r) == 0 && r.status == 200);
+    CHECK(strstr(r.body, "\"ok\":true") != NULL &&
+          strstr(r.body, "\"output\"") != NULL);
 
     CHECK(raw_http_request(18211, "GET", "/v1/skills/market", NULL, &r) == 0 && r.status == 200);
     CHECK(strstr(r.body, "templates") != NULL);

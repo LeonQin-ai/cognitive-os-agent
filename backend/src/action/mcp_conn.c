@@ -847,6 +847,24 @@ char *coa_mcp_test_json(const coa_mcp_conn *conn) {
                 cJSON_Delete(result);
             }
         }
+        /* surface the server's own stdout/stderr tail so first-run failures
+         * (npx downloads, missing runtimes) are diagnosable from the UI */
+        if (count < 0) {
+            const char *out = coa_proc_popen_buffer(proc);
+            if (out && *out) {
+                char tail[260];
+                size_t len = strlen(out);
+                size_t start = len >= sizeof(tail) - 1 ? len - (sizeof(tail) - 1) : 0;
+                snprintf(tail, sizeof(tail), "%s", out + start);
+                for (char *p = tail; *p; p++)
+                    if (*p == '\n' || *p == '\r' || *p == '\t') *p = ' ';
+                char merged[640];
+                snprintf(merged, sizeof(merged), "%s | server output: %s",
+                         err ? err : "connection test failed", tail);
+                free(err);
+                err = coa_strdup(merged);
+            }
+        }
         coa_proc_popen_free(proc);
     } else {
         cJSON *result = rpc_http(conn, "initialize", params, g_jsonrpc_id++, &err);
