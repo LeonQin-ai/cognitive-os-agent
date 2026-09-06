@@ -1013,7 +1013,17 @@ int coa_reasoning_run(coa_reasoning *r, const char *prompt, char **answer) {
         free(result);
         result = NULL;
         st = coa_state_machine_run(r->sm, prompt, &result);
-        if (st != COA_ST_DONE) break;
+        if (st != COA_ST_DONE) {
+            /* Stage failure (planner LLM error, VERIFY gate, …): the failed
+             * stage's diagnostic is an observation the agent must see, not a
+             * reason to die silently. Feed it back and keep looping while
+             * round budget remains — the next round can self-correct (e.g.
+             * retry with a fixed path). Terminal only when the budget is
+             * exhausted, and the report stays in the answer either way. */
+            round_log_append(r, result && *result ? result : "(run failed)");
+            if (r->round_idx >= r->max_rounds) break;
+            continue;
+        }
         if (!r->had_plan) { /* no actions planned → this is the final answer */
             final_text = coa_strdup(result ? result : "");
             break;

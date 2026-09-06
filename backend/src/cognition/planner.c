@@ -5,6 +5,7 @@
 #include "cognitive-os-agent/action/skill.h"
 #include "cognitive-os-agent/runtime/policy_engine.h"
 #include "cognitive-os-agent/infra/util.h"
+#include "cognitive-os-agent/infra/logging.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -116,6 +117,90 @@ static char *build_catalog_prompt(const coa_tool_registry *tools,
     return coa_strbuf_detach(&b);
 }
 
+/* Extract the first balanced JSON array/object span from a reply, honoring
+ * string literals and escapes. The naive "first '[' .. last ']'" heuristic
+ * breaks when the payload itself contains ']' (e.g. file_write content with
+ * python list literals), slicing out invalid JSON and silently demoting a
+ * real tool plan to a plain-text answer. Returns malloc'd span or NULL. */
+static char *extract_json_span(const char *plan) {
+    const char *start = NULL;
+    for (const char *p = plan; *p; p++) {
+        if (*p == '[' || *p == '{') { start = p; break; }
+    }
+    if (!start) return NULL;
+    int depth = 0, in_str = 0, esc = 0;
+    for (const char *p = start; *p; p++) {
+        if (in_str) {
+            if (esc) esc = 0;
+            else if (*p == '\\') esc = 1;
+            else if (*p == '"') in_str = 0;
+        } else if (*p == '"') {
+            in_str = 1;
+        } else if (*p == '[' || *p == '{') {
+            depth++;
+        } else if (*p == ']' || *p == '}') {
+            if (--depth == 0) {
+                size_t n = (size_t)(p - start) + 1;
+                char *slice = (char *)malloc(n + 1);
+                if (slice) {
+                    memcpy(slice, start, n);
+                    slice[n] = '\0';
+                }
+                return slice;
+            }
+        }
+    }
+    return NULL; /* unbalanced (likely truncated reply) */
+}
+
+/* Try to parse a reply into tool actions. Returns 1 when actions were built
+ * (possibly zero if the array was empty), 0 when the reply is prose without
+ * any tool plan. */
+static int parse_plan_actions(const char *plan, coa_planned_action **actions,
+                              int *n_actions) {
+    *actions = NULL;
+    *n_actions = 0;
+    cJSON *root = cJSON_Parse(plan);
+    if (!root) {
+        char *slice = extract_json_span(plan);
+        if (slice) {
+            root = cJSON_Parse(slice);
+            free(slice);
+        }
+    }
+    if (!root) return 0;
+    /* also accept a single tool object (not wrapped in an array) */
+    if (cJSON_IsObject(root) && cJSON_GetObjectItemCaseSensitive(root, "tool")) {
+        cJSON *arr = cJSON_CreateArray();
+        cJSON_AddItemToArray(arr, root);
+        root = arr;
+    }
+    if (!cJSON_IsArray(root)) { cJSON_Delete(root); return 0; }
+    coa_planned_action *a = NULL;
+    int n = 0;
+    cJSON *it;
+    cJSON_ArrayForEach(it, root) {
+        if (!cJSON_IsObject(it)) continue;
+        cJSON *tool = cJSON_GetObjectItemCaseSensitive(it, "tool");
+        if (!tool || !cJSON_IsString(tool)) continue;
+        cJSON *args = cJSON_GetObjectItemCaseSensitive(it, "args");
+        char *args_json = (args && cJSON_IsObject(args))
+            ? cJSON_PrintUnformatted(args) : coa_strdup("{}");
+        if (!args_json) args_json = coa_strdup("{}");
+        coa_planned_action *na =
+            (coa_planned_action *)realloc(a, (size_t)(n + 1) * sizeof(coa_planned_action));
+        if (!na) { free(args_json); break; }
+        a = na;
+        a[n].tool = coa_strdup(tool->valuestring);
+        a[n].args_json = args_json;
+        n++;
+    }
+    cJSON_Delete(root);
+    *actions = a;
+    *n_actions = n;
+    return 1;
+}
+
 /* Shared planning core. Takes ownership of nothing; frees sys_prompt. */
 static int plan_with(coa_llm *llm, char *sys_prompt, const char *prompt,
                      coa_planned_action **actions, int *n_actions,
@@ -138,8 +223,11 @@ static int plan_with(coa_llm *llm, char *sys_prompt, const char *prompt,
     req.messages = msgs;
     req.num_messages = 2;
     req.temperature = 0.2;
-    req.max_tokens = 2048;  /* thinking models spend reasoning tokens from the
-                             * same budget; 1024 risked empty-content replies */
+    req.max_tokens = 8192;  /* tool plans carrying file_write content (whole
+                             * scripts) need real headroom; 2048 truncated the
+                             * JSON mid-string and the plan was lost. Thinking
+                             * models spend reasoning tokens from the same
+                             * budget; 1024 risked empty-content replies */
     coa_llm_response resp = {0};
     int rc = coa_llm_chat(llm, &req, &resp);
     free(sys_prompt);
@@ -156,62 +244,47 @@ static int plan_with(coa_llm *llm, char *sys_prompt, const char *prompt,
         if (err_out) *err_out = coa_strdup("LLM returned an empty response");
         return -1;
     }
-    if (raw_out) *raw_out = plan;
-    else free(plan);
+    if (raw_out) *raw_out = plan; /* ownership moves to the caller */
+    if (!actions || !n_actions) { if (!raw_out) free(plan); return 0; }
 
-    if (!actions || !n_actions) return 0;
-
-    cJSON *root = cJSON_Parse(plan);
-    if (!root) {
-        /* Real LLMs often wrap the JSON array in markdown fences or prose.
-         * Extract the first '[' .. last ']' span and retry so tool plans are
-         * still honoured. */
-        const char *start = strchr(plan, '[');
-        const char *end = start ? strrchr(plan, ']') : NULL;
-        if (start && end && end > start) {
-            size_t n = (size_t)(end - start) + 1;
-            char *slice = (char *)malloc(n + 1);
-            if (slice) {
-                memcpy(slice, start, n);
-                slice[n] = '\0';
-                root = cJSON_Parse(slice);
-                free(slice);
+    /* Parse the reply into tool actions. Real LLMs wrap JSON in fences or
+     * prose, and sometimes emit structurally invalid JSON (mis-ordered
+     * brackets), which used to silently demote a real plan to a plain-text
+     * answer — the agent then "answered" instead of acting. */
+    int looks_like_plan = strstr(plan, "\"tool\"") != NULL ||
+                          strstr(plan, "'tool'") != NULL;
+    int have = parse_plan_actions(plan, actions, n_actions);
+    if (!have && looks_like_plan) {
+        const char *epos = cJSON_GetErrorPtr();
+        size_t off = (epos && epos >= plan && epos < plan + strlen(plan))
+                         ? (size_t)(epos - plan) : 0;
+        coa_log_warn("planner: invalid plan JSON (byte %zu / len %zu) — requesting repair",
+                     off, strlen(plan));
+        /* one repair round-trip: the model re-emits its own plan as clean JSON */
+        size_t plen = strlen(plan);
+        char *user = (char *)malloc(plen + 512);
+        if (user) {
+            snprintf(user, plen + 512,
+                     "The following reply was meant to be a JSON array of tool actions "
+                     "but is not valid JSON (bad bracket order or truncation). "
+                     "Re-emit it as ONE valid JSON array. Output ONLY the JSON, no "
+                     "markdown fences, no prose:\n\n%s", plan);
+        }
+        char *fixed = user ? coa_llm_chat_simple_ex(llm,
+            "You repair broken JSON. Output ONLY the corrected JSON array.",
+            user, 8192) : NULL;
+        if (fixed) {
+            if (parse_plan_actions(fixed, actions, n_actions)) {
+                if (raw_out) { free(*raw_out); *raw_out = fixed; }
+                else free(fixed);
+                coa_log_info("planner: repaired plan JSON accepted (%d actions)", *n_actions);
+            } else {
+                free(fixed);
             }
         }
+        free(user);
     }
-    /* Also accept a single tool object (not wrapped in array). */
-    if (root && cJSON_IsObject(root) && cJSON_GetObjectItemCaseSensitive(root, "tool")) {
-        cJSON *arr = cJSON_CreateArray();
-        cJSON_AddItemToArray(arr, root);
-        root = arr;
-    }
-    if (root && cJSON_IsArray(root)) {
-        coa_planned_action *a = NULL;
-        int n = 0;
-        cJSON *it;
-        cJSON_ArrayForEach(it, root) {
-            if (!cJSON_IsObject(it)) continue;
-            cJSON *tool = cJSON_GetObjectItemCaseSensitive(it, "tool");
-            if (!tool || !cJSON_IsString(tool)) continue;
-            cJSON *args = cJSON_GetObjectItemCaseSensitive(it, "args");
-            char *args_json = (args && cJSON_IsObject(args))
-                ? cJSON_PrintUnformatted(args) : coa_strdup("{}");
-            if (!args_json) args_json = coa_strdup("{}");
-            coa_planned_action *na =
-                (coa_planned_action *)realloc(a, (size_t)(n + 1) * sizeof(coa_planned_action));
-            if (!na) { free(args_json); break; }
-            a = na;
-            a[n].tool = coa_strdup(tool->valuestring);
-            a[n].args_json = args_json;
-            n++;
-        }
-        cJSON_Delete(root);
-        *actions = a;
-        *n_actions = n;
-    } else {
-        if (root) cJSON_Delete(root);
-        /* plain text answer: no tool plan */
-    }
+    if (!raw_out) free(plan);
     return 0;
 }
 

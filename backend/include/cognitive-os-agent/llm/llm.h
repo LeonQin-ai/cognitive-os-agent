@@ -79,6 +79,11 @@ const coa_llm_caps *coa_llm_capabilities(coa_llm *llm);
 /* Convenience one-shot chat. Returns malloc'd string (NULL on error). */
 char *coa_llm_chat_simple(coa_llm *llm, const char *system_prompt, const char *user_prompt);
 
+/* Same, with an explicit max_tokens budget (needed when the reply embeds
+ * long content, e.g. JSON plans carrying whole scripts — 1024 truncates). */
+char *coa_llm_chat_simple_ex(coa_llm *llm, const char *system_prompt,
+                             const char *user_prompt, int max_tokens);
+
 #ifdef __cplusplus
 }
 #endif

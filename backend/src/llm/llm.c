@@ -55,6 +55,11 @@ const coa_llm_caps *coa_llm_capabilities(coa_llm *llm) {
 }
 
 char *coa_llm_chat_simple(coa_llm *llm, const char *system_prompt, const char *user_prompt) {
+    return coa_llm_chat_simple_ex(llm, system_prompt, user_prompt, 1024);
+}
+
+char *coa_llm_chat_simple_ex(coa_llm *llm, const char *system_prompt,
+                             const char *user_prompt, int max_tokens) {
     coa_llm_message msgs[2] = {
         {"system", system_prompt ? system_prompt : ""},
         {"user", user_prompt ? user_prompt : ""},
@@ -63,7 +68,7 @@ char *coa_llm_chat_simple(coa_llm *llm, const char *system_prompt, const char *u
     req.messages = msgs;
     req.num_messages = 2;
     req.temperature = 0.2;
-    req.max_tokens = 1024;
+    req.max_tokens = max_tokens > 0 ? max_tokens : 1024;
     coa_llm_response resp = {0};
     if (coa_llm_chat(llm, &req, &resp) != 0) {
         if (resp.error) {

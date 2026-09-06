@@ -17,7 +17,9 @@
 #include "cJSON.h"
 
 #define FLOW_MAX_NODES   16
-#define FLOW_MAX_TASKLEN 2048
+#define FLOW_MAX_TASKLEN 8192   /* after {{ref}} substitution — a distilled
+                                 * upstream answer + the node instruction must
+                                 * both fit (2048 truncated real plans) */
 #define FLOW_SUBST_CAP   4096   /* max chars substituted per {{ref}} */
 
 static void flow_event(coa_ctx *ctx, const char *stage, const char *id,
@@ -247,14 +249,40 @@ static void flow_substitute(flow_dag *d, flow_node *nd, char **results,
                     ref[idlen] = '\0';
                     int ri = flow_node_index(d, ref);
                     if (ri >= 0 && results[ri]) {
+                        const char *src = results[ri];
+                        /* Prefer the agent's distilled final answer over the
+                         * raw round log: a completed agent run embeds kilobytes
+                         * of tool dumps BEFORE "\n回答: <answer>" — head-capping
+                         * those injects source-code dumps into the downstream
+                         * prompt and the instruction gets lost/drowned. */
+                        const char *ans = NULL;
+                        const char *p = src, *last = NULL;
+                        while ((p = strstr(p, "\n回答: ")) != NULL) {
+                            last = p;
+                            p += 1;
+                        }
+                        if (last) ans = last + strlen("\n回答: ");
                         size_t cap = outsz - o - 1;
-                        size_t len = strlen(results[ri]);
+                        char hdr[96];
+                        int hl = snprintf(hdr, sizeof(hdr), "「上游 %s 结果开始」\n", ref);
+                        if (hl > 0 && (size_t)hl < cap) {
+                            memcpy(out + o, hdr, (size_t)hl); o += (size_t)hl; cap -= (size_t)hl;
+                        }
+                        const char *body = ans && *ans ? ans : src;
+                        size_t len = strlen(body);
                         if (len > FLOW_SUBST_CAP) len = FLOW_SUBST_CAP;
                         if (len > cap) len = cap;
                         /* strncat would scan for a NUL that is not written
                          * at out+o — copy directly instead. */
-                        memcpy(out + o, results[ri], len);
+                        memcpy(out + o, body, len);
                         o += len;
+                        cap -= len;
+                        size_t room = outsz - o - 1;
+                        const char *ftr = "\n「上游结果结束」";
+                        size_t fl = strlen(ftr);
+                        if (fl > room) fl = room;
+                        memcpy(out + o, ftr, fl);
+                        o += fl;
                         out[o] = '\0';
                         t = close + 2;
                         continue;
@@ -368,6 +396,13 @@ int coa_flow_run(coa_ctx *ctx, const char *dag_json, char **answer,
             cJSON_AddStringToObject(st, "status", jobs[i].rc == 0 ? "ok" : "error");
             cJSON_AddStringToObject(st, "result", result);
             cJSON_AddItemToArray(trace, st);
+        }
+        if (jobs[i].rc != 0) {
+            /* failed node: surface the failure explicitly so the merge LLM
+             * reports it instead of inventing content around an empty slot */
+            coa_strbuf_appendf(&fin, "%s: [节点执行失败] %s\n", d.nodes[i].id,
+                               result && *result ? result : "(agent run failed)");
+            continue;
         }
         if (d.nodes[i].nadj == 0 && *result)
             coa_strbuf_appendf(&fin, "%s: %s\n", d.nodes[i].id, result);

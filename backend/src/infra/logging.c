@@ -66,7 +66,8 @@ static void log_line_to(FILE *f, int color, coa_loglevel lvl, const char *text) 
 
 void coa_log_write(coa_loglevel lvl, const char *fmt, ...) {
     if (lvl < g_log.level || lvl > COA_LOG_FATAL) return;
-    char text[2048];
+    char text[16384];  /* tool plans embed whole file bodies; 2048 cut them
+                        * off mid-JSON and made LLM-plan diagnostics useless */
     va_list ap;
     va_start(ap, fmt);
     vsnprintf(text, sizeof(text), fmt, ap);
