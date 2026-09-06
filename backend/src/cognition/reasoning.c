@@ -1025,6 +1025,31 @@ int coa_reasoning_run(coa_reasoning *r, const char *prompt, char **answer) {
         }
     }
 
+    /* Budget exhausted (or stalled) without a plain-text answer: force one
+     * final tool-free LLM call to synthesize the gathered observations, so a
+     * big task ends with a real answer instead of "(已达到最大轮数…)". */
+    if (st == COA_ST_DONE && !final_text && r->round_log_len > 0 && r->llm) {
+        char sys[320];
+        snprintf(sys, sizeof(sys),
+                 "You are finalizing an agent run. Based on the original request and the "
+                 "action observations gathered below, produce the final answer in the "
+                 "user's language. Do not propose any further tool calls. If the task is "
+                 "incomplete, summarize what was accomplished and what remains.");
+        char tail[12288];
+        size_t loglen = r->round_log ? strlen(r->round_log) : 0;
+        size_t start = loglen >= sizeof(tail) - 1 ? loglen - (sizeof(tail) - 1) : 0;
+        snprintf(tail, sizeof(tail), "%s", r->round_log + start);
+        char *user = (char *)malloc(strlen(prompt) + sizeof(tail) + 64);
+        if (user) {
+            snprintf(user, strlen(prompt) + sizeof(tail) + 64,
+                     "任务: %s\n\n已执行动作的观察记录（末段）:\n%s", prompt, tail);
+            char *ans = coa_llm_chat_simple(r->llm, sys, user);
+            if (ans && *ans) final_text = ans;
+            else free(ans);
+            free(user);
+        }
+    }
+
     /* compose the answer: everything that happened + the final reply */
     coa_strbuf out;
     coa_strbuf_init(&out);

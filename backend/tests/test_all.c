@@ -2153,7 +2153,8 @@ static void test_agent_loop(void) {
         char *ans = NULL;
         CHECK(coa_reasoning_run(ctx.reasoning, "分析 b.txt 并修复其中的 OLD", &ans) == 0);
         CHECK(ans && strstr(ans, "[file_read]") != NULL);
-        CHECK(ans && strstr(ans, "未完全完成") != NULL); /* budget note */
+        /* budget exhausted → forced tool-free synthesis instead of a dead note */
+        CHECK(ans && strstr(ans, "综合回答") != NULL);
         free(ans);
         char *content = coa_fs_read_file(f);
         CHECK(content && strstr(content, "OLD") != NULL); /* untouched */

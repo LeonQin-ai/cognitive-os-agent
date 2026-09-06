@@ -178,6 +178,12 @@ static char *mock_respond(const char *msg) {
         return coa_strdup("任务完成。"); /* plain text = final answer */
     }
 
+    /* forced final synthesis after budget exhaustion (reasoning.c): the user
+     * message embeds the observation log tail — reply with a synthesis, not a
+     * new plan */
+    if (strstr(msg, "已执行动作的观察记录"))
+        return coa_strdup("综合回答：基于已收集的观察信息，任务已部分完成。");
+
     /* auto-evolution drill: plan a tool that is NOT in the registry so the
      * reasoning layer exercises the missing-capability generation loop */
     if (has_substr(msg, "天气")) {
