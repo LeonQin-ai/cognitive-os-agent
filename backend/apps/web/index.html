@@ -393,7 +393,7 @@ async function call(method, path, body) {
   }
 }
 
-function esc(s){ return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function esc(s){ return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
 function renderPre(obj){ return jsonHighlight(obj); }
 
@@ -605,7 +605,7 @@ panels.flow = `
 panels.mcp = `
   <div class="card">
     <h2>MCP 广场</h2>
-    <div class="hint">精选 MCP 服务器，一键添加连接。标"需本地运行"的条目要先启动对应服务（见提示）。</div>
+    <div class="hint">精选 MCP 服务器，一键添加连接。标"需本地运行"的条目要先启动对应服务（见提示）。更多服务器： <a href="https://modelscope.cn/mcp" target="_blank" rel="noopener">ModelScope MCP 广场（modelscope.cn/mcp）</a></div>
     <div id="mcp-plaza" class="plaza">加载中…</div>
   </div>
   <div class="card">
@@ -903,6 +903,14 @@ const fetchers = {
 
 /* ================= 数据加载 ================= */
 
+/* fetch one fetchers[] entry into its <pre> (used by panels that need both
+ * a raw endpoint dump and a custom-rendered section) */
+async function loadFetcher(key){
+  const f = fetchers[key]; if(!f) return;
+  const r = await call('GET', f.path);
+  const el = $(f.out); if(el) renderJSON(r.obj, el);
+}
+
 async function load(panel){
   if(panel === 'models') return loadModels();
   if(panel === 'dashboard') return loadDashboard();
@@ -910,7 +918,7 @@ async function load(panel){
   if(panel === 'agents') return loadAgents();
   if(panel === 'mcp') return loadMcp();
   if(panel === 'skills') return (loadSkillsMarket(), loadSkillsCatalog());
-  if(panel === 'plugins') return loadPluginMarket();
+  if(panel === 'plugins') return (loadFetcher('plugins'), loadPluginMarket());
   if(panel === 'snapshots') return loadSnapshots();
   if(panel === 'chat') return loadChat();
   if(panel === 'policy') return loadPolicy();
@@ -920,10 +928,7 @@ async function load(panel){
     const el = $('metrics-out'); if(el) el.textContent = r.text;
     return;
   }
-  const f = fetchers[panel];
-  if(!f) return;
-  const r = await call('GET', f.path);
-  const el = $(f.out); if(el) renderJSON(r.obj, el);
+  return loadFetcher(panel);
 }
 
 /* ================= Snapshots ================= */
@@ -961,11 +966,12 @@ async function loadAgents(){
   if(!box) return;
   const obj = (r.obj && typeof r.obj === 'object') ? r.obj : {};
   AGENTS = Array.isArray(obj.agents) ? obj.agents : [];
-  let html = '<div class="table-wrap"><table><thead><tr><th>Agent</th><th>Role</th><th>Model</th></tr></thead><tbody>';
-  if(!AGENTS.length) html += '<tr><td colspan="3" class="muted">（暂无 agent，先创建一个）</td></tr>';
+  let html = '<div class="table-wrap"><table><thead><tr><th>Agent</th><th>Role</th><th>Model</th><th>操作</th></tr></thead><tbody>';
+  if(!AGENTS.length) html += '<tr><td colspan="4" class="muted">（暂无 agent，先创建一个）</td></tr>';
   AGENTS.forEach(a => {
     const model = [a.provider, a.model].filter(Boolean).join(' / ') || '（当前激活）';
-    html += '<tr><td>' + esc(a.name || '') + '</td><td>' + esc(a.role || '') + '</td><td class="muted">' + esc(model) + '</td></tr>';
+    html += '<tr><td>' + esc(a.name || '') + '</td><td>' + esc(a.role || '') + '</td><td class="muted">' + esc(model) + '</td>' +
+      '<td><button class="sec sm danger" onclick="agentDelete(\'' + esc(a.name || '') + '\')">删除</button></td></tr>';
   });
   html += '</tbody></table></div>';
   html += '<div class="hint" style="margin-top:8px">共享黑板 facts:</div><pre>' + esc(JSON.stringify(obj.facts || {}, null, 2)) + '</pre>';
@@ -986,6 +992,13 @@ function agentAdd(){
     if(st) st.textContent = (r.status < 300) ? '✔ 已创建' : ((r.obj && r.obj.error) ? 'error: ' + r.obj.error : 'error ' + r.status);
     if(r.status < 300){ $('agent-name').value = ''; $('agent-role').value = ''; $('agent-provider').value = ''; $('agent-model').value = ''; loadAgents(); }
   });
+}
+
+async function agentDelete(name){
+  if(!name) return;
+  if(!confirm('删除 agent "' + name + '"？')) return;
+  await call('DELETE', '/v1/agents/' + encodeURIComponent(name));
+  loadAgents();
 }
 
 function agentPost(){

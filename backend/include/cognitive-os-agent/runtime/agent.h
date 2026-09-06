@@ -24,6 +24,9 @@ int coa_agent_pool_add_model(coa_agent_pool *p, const char *name, const char *ro
                             const char *provider, const char *model);
 int coa_agent_pool_count(coa_agent_pool *p);
 
+/* Remove a registered agent by name. Returns 0 ok, -1 if unknown/bad args. */
+int coa_agent_pool_remove(coa_agent_pool *p, const char *name);
+
 /* Swap in an externally owned blackboard (caller keeps ownership and frees
  * it; the pool borrows it). Used to share one blackboard between the runtime
  * context and the agent pool. */

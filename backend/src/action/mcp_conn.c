@@ -201,7 +201,7 @@ static char **stdio_argv(const coa_mcp_conn *c) {
     if (c->args_csv) {
         char *copy = coa_strdup(c->args_csv);
         char *save = NULL;
-        for (char *tok = strtok_r(copy, " \t", &save); tok; tok = strtok_r(NULL, " \t", &save))
+        for (char *tok = strtok_r(copy, " \t,", &save); tok; tok = strtok_r(NULL, " \t,", &save))
             argv[n++] = coa_strdup(tok);
         free(copy);
     }
@@ -813,7 +813,7 @@ char *coa_mcp_test_json(const coa_mcp_conn *conn) {
 
     if (is_stdio) {
         char **argv = stdio_argv(conn);
-        coa_proc_popen *proc = argv ? coa_proc_popen_new(argv) : NULL;
+        coa_proc_popen *proc = argv ? coa_proc_popen_new_ex(argv, 1) : NULL;
         free_argv(argv);
         if (!proc) {
             cJSON_AddBoolToObject(o, "ok", 0);

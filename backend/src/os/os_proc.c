@@ -313,17 +313,37 @@ static void quote_arg(const char *a, char *out, size_t cap) {
 }
 
 coa_proc_popen *coa_proc_popen_new(char *const argv[]) {
+    return coa_proc_popen_new_ex(argv, 0);
+}
+
+coa_proc_popen *coa_proc_popen_new_ex(char *const argv[], int merge_stderr) {
     if (!argv || !argv[0]) return NULL;
 
     /* Build "cmd.exe /s /c "<argv0> <argv1> ..."" so batch shims like npx.cmd
      * also work. /s makes cmd strip ONLY the outer quotes, preserving the
-     * per-argument quotes (plain /c mangles multi-quoted command lines). */
+     * per-argument quotes (plain /c mangles multi-quoted command lines).
+     * argv[0] stays bare when it has no spaces: quoting a bare command name
+     * breaks cmd's PATH-search semantics (%~dp0 inside the resolved .cmd
+     * shim then resolves to the CWD instead of the shim's directory, which
+     * crashes nvm4w/npm shims instantly). */
     char cmdline[4096];
     size_t off = (size_t)snprintf(cmdline, sizeof(cmdline), "cmd.exe /s /c \"");
     for (int i = 0; argv[i] && off < sizeof(cmdline); i++) {
         char q[800];
-        quote_arg(argv[i], q, sizeof(q));
-        int wr = snprintf(cmdline + off, sizeof(cmdline) - off, " %s", q);
+        if (i == 0 && !strchr(argv[i], ' ') && !strchr(argv[i], '"'))
+            snprintf(q, sizeof(q), "%s", argv[i]);
+        else
+            quote_arg(argv[i], q, sizeof(q));
+        int wr;
+        if (i == 0) {
+            /* argv[0] must be the FIRST character after the opening quote:
+             * cmd /s only strips the outer quotes when a quote (not space)
+             * directly follows /c — a leading space leaves the quotes intact
+             * and cmd falls back to interactive stdin-eating. */
+            wr = snprintf(cmdline + off, sizeof(cmdline) - off, "%s", q);
+        } else {
+            wr = snprintf(cmdline + off, sizeof(cmdline) - off, " %s", q);
+        }
         if (wr < 0 || (size_t)wr >= sizeof(cmdline) - off) break;
         off += (size_t)wr;
     }
@@ -351,7 +371,7 @@ coa_proc_popen *coa_proc_popen_new(char *const argv[]) {
     si.dwFlags = STARTF_USESTDHANDLES;
     si.hStdInput = in_rd;
     si.hStdOutput = out_wr;
-    si.hStdError = nul ? nul : out_wr;
+    si.hStdError = merge_stderr ? out_wr : (nul ? nul : out_wr);
 
     BOOL ok = FALSE;
     {
@@ -606,6 +626,10 @@ struct coa_proc_popen {
 };
 
 coa_proc_popen *coa_proc_popen_new(char *const argv[]) {
+    return coa_proc_popen_new_ex(argv, 0);
+}
+
+coa_proc_popen *coa_proc_popen_new_ex(char *const argv[], int merge_stderr) {
     if (!argv || !argv[0]) return NULL;
     int in_p[2], out_p[2];
     if (pipe(in_p) != 0) return NULL;
@@ -622,8 +646,12 @@ coa_proc_popen *coa_proc_popen_new(char *const argv[]) {
     if (pid == 0) {
         dup2(in_p[0], STDIN_FILENO);
         dup2(out_p[1], STDOUT_FILENO);
-        int devnull = open("/dev/null", O_WRONLY);
-        if (devnull >= 0) dup2(devnull, STDERR_FILENO);
+        if (merge_stderr) {
+            dup2(out_p[1], STDERR_FILENO);
+        } else {
+            int devnull = open("/dev/null", O_WRONLY);
+            if (devnull >= 0) dup2(devnull, STDERR_FILENO);
+        }
         close(in_p[0]); close(in_p[1]);
         close(out_p[0]); close(out_p[1]);
         execvp(argv[0], argv);

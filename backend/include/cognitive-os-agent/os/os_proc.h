@@ -37,6 +37,11 @@ typedef struct coa_proc_popen coa_proc_popen;
 
 /* Spawn argv[0] with argv. Returns NULL on spawn failure. */
 coa_proc_popen *coa_proc_popen_new(char *const argv[]);
+/* Same, but when merge_stderr is non-zero the child's stderr is captured into
+ * the same output buffer as stdout. Use for one-shot diagnostics (e.g. MCP
+ * connection tests) where error text is more valuable than a clean stream;
+ * keep 0 for protocol sessions where stderr noise would corrupt parsing. */
+coa_proc_popen *coa_proc_popen_new_ex(char *const argv[], int merge_stderr);
 
 /* Write bytes to the child's stdin. Returns 0 ok, -1 error/pipe closed. */
 int coa_proc_popen_write(coa_proc_popen *p, const char *data, size_t len);

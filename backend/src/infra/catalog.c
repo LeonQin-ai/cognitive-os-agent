@@ -299,6 +299,9 @@ static const catalog_skill SKILLS[] = {
     { "awesome-cursorrules", "Awesome CursorRules",
       "PatrickJS/awesome-cursorrules 规则/技能精选列表", "reference", "", "",
       "https://github.com/PatrickJS/awesome-cursorrules" },
+    { "skillhub-cn", "SkillHub（skillhub.cn 技能市场）",
+      "skillhub.cn 中文 MCP/技能市场 — 浏览后可将技能手动导入本运行时", "reference", "", "",
+      "https://skillhub.cn" },
 };
 #define N_SKILLS (int)(sizeof(SKILLS) / sizeof(SKILLS[0]))
 

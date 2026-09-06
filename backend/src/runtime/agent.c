@@ -103,6 +103,27 @@ int coa_agent_pool_add_model(coa_agent_pool *p, const char *name, const char *ro
     return idx;
 }
 
+/* Remove a registered agent by name (frees its strings, shifts the tail).
+ * Returns 0 on success, -1 when the pool or name is unknown. */
+int coa_agent_pool_remove(coa_agent_pool *p, const char *name) {
+    if (!p || !name || !*name) return -1;
+    coa_mutex_lock(&p->mtx);
+    int idx = find_agent(p, name);
+    if (idx < 0) {
+        coa_mutex_unlock(&p->mtx);
+        return -1;
+    }
+    free(p->agents[idx].name);
+    free(p->agents[idx].role);
+    free(p->agents[idx].provider);
+    free(p->agents[idx].model);
+    memmove(&p->agents[idx], &p->agents[idx + 1],
+            (p->count - (size_t)idx - 1) * sizeof(coa_agent_entry));
+    p->count--;
+    coa_mutex_unlock(&p->mtx);
+    return 0;
+}
+
 int coa_agent_pool_count(coa_agent_pool *p) {
     if (!p) return 0;
     coa_mutex_lock(&p->mtx);

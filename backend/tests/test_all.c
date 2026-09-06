@@ -942,6 +942,13 @@ static void test_agent_pool(void) {
     char *snap = coa_agent_pool_snapshot_json(p);
     CHECK(snap && strstr(snap, "planner") != NULL && strstr(snap, "step1") != NULL);
     free(snap);
+    /* removal: unknown name fails, known name removes, remaining agent intact */
+    CHECK(coa_agent_pool_remove(p, "ghost") == -1);
+    CHECK(coa_agent_pool_remove(p, "planner") == 0);
+    CHECK(coa_agent_pool_count(p) == 1);
+    CHECK(coa_agent_pool_find(p, "planner") == -1);
+    CHECK(coa_agent_pool_find(p, "executor") >= 0);
+    CHECK(coa_agent_post(p, "executor", "act", "done") == 0);
     coa_agent_pool_free(p);
 }
 
@@ -3467,6 +3474,7 @@ static void test_catalog(void) {
         CHECK(strstr(sc, "github.com/danielmiessler/fabric") != NULL);
         CHECK(strstr(sc, "github.com/anthropics/skills") != NULL);
         CHECK(strstr(sc, "github.com/PatrickJS/awesome-cursorrules") != NULL);
+        CHECK(strstr(sc, "skillhub.cn") != NULL);
         /* regression: prompt-skill bodies contain newlines — all three catalog
          * JSON payloads must be fully parseable, not just substring-matchable */
         char *cats[3] = { coa_catalog_models_json(), coa_catalog_mcp_json(), sc };
@@ -3515,8 +3523,8 @@ static void test_catalog_skills_run(void) {
         CHECK(cs != NULL && cs->id && cs->name && cs->kind);
         if (!cs) continue;
         if (strcmp(cs->kind, "reference") == 0) {
-            /* reference entries point at upstream repos, nothing to run */
-            CHECK(cs->source && strstr(cs->source, "https://github.com/") == cs->source);
+            /* reference entries point at upstream repos/marketplaces, nothing to run */
+            CHECK(cs->source && cs->source[0] == 'h' && strstr(cs->source, "://") != NULL);
             continue;
         }
         if (strcmp(cs->kind, "prompt") == 0) {

@@ -726,6 +726,28 @@ static int h_agent_add(const coa_http_request *req, coa_http_response *resp, voi
 
 static int h_agent_run(const coa_http_request *req, coa_http_response *resp, void *ud);
 
+/* DELETE /v1/agents/<name> — remove a registered agent from the pool and
+ * persist the roster. 404 when the name is unknown. */
+static int h_agent_delete(const coa_http_request *req, coa_http_response *resp, void *ud) {
+    coa_ctx *ctx = (coa_ctx *)ud;
+    if (!authz_ok(ctx, req, resp)) return 0;
+    const char *name = req->path + strlen("/v1/agents/");
+    if (!*name) {
+        resp->status = 400;
+        coa_http_resp_json(resp, "{\"error\":\"need agent name in path\"}");
+        return 0;
+    }
+    int rc = ctx->agents ? coa_agent_pool_remove(ctx->agents, name) : -1;
+    if (rc != 0) {
+        resp->status = 404;
+        coa_http_resp_json(resp, "{\"error\":\"unknown agent\"}");
+        return 0;
+    }
+    coa_agent_pool_save(ctx->agents, ctx->state_root);
+    coa_http_resp_json(resp, "{\"ok\":true}");
+    return 0;
+}
+
 static int h_agent_post(const coa_http_request *req, coa_http_response *resp, void *ud) {
     coa_ctx *ctx = (coa_ctx *)ud;
     if (!authz_ok(ctx, req, resp)) return 0;
@@ -2726,6 +2748,7 @@ int coa_api_attach(coa_ctx *ctx) {
     coa_http_server_route(ctx->http, "GET", "/v1/agents", h_agents, ctx);
     coa_http_server_route(ctx->http, "POST", "/v1/agents", h_agent_add, ctx);
     coa_http_server_route(ctx->http, "POST", "/v1/agents/", h_agent_post, ctx);
+    coa_http_server_route(ctx->http, "DELETE", "/v1/agents/", h_agent_delete, ctx);
     coa_http_server_route(ctx->http, "GET", "/v1/snapshots", h_snapshots, ctx);
     coa_http_server_route(ctx->http, "POST", "/v1/snapshots/rollback", h_snapshot_rollback, ctx);
     coa_http_server_route(ctx->http, "GET", "/v1/trace", h_trace, ctx);
