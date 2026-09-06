@@ -8,6 +8,7 @@
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey.svg)](#快速开始)
 [![Dependencies](https://img.shields.io/badge/external%20deps-0-green.svg)](#项目结构)
 [![Tests](https://img.shields.io/badge/tests-1236%20passing-brightgreen.svg)](#测试与验证)
+[![CI](https://github.com/LeonQin-ai/cognitive-os-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/LeonQin-ai/cognitive-os-agent/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
 
 **[English](README.md)**
@@ -381,6 +382,47 @@ bench:     BFCL 风格 22 条          （simple / multiple / parallel / irrelev
 ASAN:      0 内存错误
 ```
 
+### 自己动手跑测试
+
+所有测试套件自包含，**不需要 API key、不需要外网、不需要任何外部服务**（LLM 用 mock）。所有测试二进制失败时都以非零码退出。
+
+**Linux（gcc）：**
+
+```bash
+cd backend
+make                # 构建全部测试二进制（或 make test / make scenario 构建并运行单项）
+make test           # 单元测试            → "1236 passed, 0 failed"
+make scenario       # 场景检查            → "SCENARIO PASS"
+./build/test-adapters            # 适配器检查          → "ADAPTER PASS"
+./build/cognitive-os-agent-bench --mock   # 基准 sanity（离线 mock）
+./build/mock-llm-server 9000 &    # e2e 需要先启动 mock LLM 服务器
+./build/cognitive-os-agent-e2e   #                      → "E2E PASS"
+```
+
+**Windows（MSYS2 / Git Bash，捆绑 Zig 工具链）：**
+
+```bash
+cd backend
+./build.sh                               # 全量构建
+./build/cognitive-os-agent-test.exe      # 单元测试
+./build/cognitive-os-agent-scenario.exe  # 场景检查
+./build/test-adapters.exe                # 适配器检查
+./build/cognitive-os-agent-bench.exe --mock
+./build/mock-llm-server.exe 9000 & ./build/cognitive-os-agent-e2e.exe
+```
+
+| 套件 | 二进制 | 验证内容 |
+|---|---|---|
+| unit | `cognitive-os-agent-test` | 全部 43 个模块：状态机、事件总线、调度器、记忆生命周期、Context MMU、事务、策略、Hook、Flow…… |
+| scenario | `cognitive-os-agent-scenario` | 端到端场景：HTTP API、插件、MCP stdio、Flow、大文件快照保护 |
+| adapters | `test-adapters` | LLM 提供方协议：chat + SSE 流式（openai + anthropic，真实 HTTP） |
+| e2e | `cognitive-os-agent-e2e` | 对 mock LLM 服务器（`mock-llm-server 9000`）的完整 agent 运行 |
+| bench | `cognitive-os-agent-bench --mock` | BFCL 风格基准 harness 离线 sanity |
+
+> bench-real / bench-bfcl 用 `--mock` 也是离线的；`--real` 会通过 `COA_LLM_*` 环境变量（provider / base_url / model / api_key）访问真实 LLM——仅在你有 API key 时使用。
+
+**CI** 在每次 push 和 pull request 时运行同样的套件——Linux（gcc）、Linux（AddressSanitizer）、Windows（zig cc）。见 [`.github/workflows/ci.yml`](.github/workflows/ci.yml)。
+
 基准评测方法与真实 LLM 结果：[`backend/docs/benchmark-report-2026-08-31.md`](backend/docs/benchmark-report-2026-08-31.md)。
 
 ## 文档
@@ -458,7 +500,7 @@ Prompt / Chain              │ 状态 / 调度 / 事件                 │
 
 代码库刻意保持小而分层——新贡献者每次研读一层即可。尤其有价值的方向：调度器 / 协程 / 事件总线（运行时）、规划器 / 评估器 / 反思（认知）、记忆服务 / 检索 / Context MMU（记忆）、沙箱 / VM / 远程执行器 / 快照（执行）、多智能体 / DAG / 隔离（Agent）、可观测性 / 分布式控制面（基础设施）。
 
-欢迎 PR：选一个模块，遵守 C11 + 零依赖纪律，保持核心架构模块化、守住运行时边界，并在双平台跑通测试套件。
+欢迎 PR：选一个模块，遵守 C11 + 零依赖纪律，保持核心架构模块化、守住运行时边界，并让测试套件通过——本地运行方式见[测试与验证](#测试与验证)（无需 API key）。
 
 ## 许可证
 

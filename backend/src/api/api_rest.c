@@ -686,6 +686,7 @@ static int h_agent_add(const coa_http_request *req, coa_http_response *resp, voi
     cJSON *root = b ? cJSON_Parse(b) : NULL;
     free(b);
     const char *name = NULL, *role = NULL, *provider = NULL, *model = NULL;
+    char name_buf[128], role_buf[256], prov_buf[128], model_buf[128];
     if (root && cJSON_IsObject(root)) {
         cJSON *n = cJSON_GetObjectItemCaseSensitive(root, "name");
         cJSON *r = cJSON_GetObjectItemCaseSensitive(root, "role");
@@ -697,6 +698,15 @@ static int h_agent_add(const coa_http_request *req, coa_http_response *resp, voi
         model = (mod && cJSON_IsString(mod)) ? mod->valuestring : NULL;
         if (provider && !*provider) provider = NULL;
         if (model && !*model) model = NULL;
+        /* copy out of the cJSON tree — the borrowed valuestrings must stay
+         * valid after cJSON_Delete below */
+        snprintf(name_buf, sizeof(name_buf), "%s", name ? name : "");
+        snprintf(role_buf, sizeof(role_buf), "%s", role ? role : "");
+        snprintf(prov_buf, sizeof(prov_buf), "%s", provider ? provider : "");
+        snprintf(model_buf, sizeof(model_buf), "%s", model ? model : "");
+        name = name_buf; role = role_buf;
+        provider = *prov_buf ? prov_buf : NULL;
+        model = *model_buf ? model_buf : NULL;
     }
     if (root) cJSON_Delete(root);
     if (!name || !*name) {
@@ -734,11 +744,16 @@ static int h_agent_post(const coa_http_request *req, coa_http_response *resp, vo
     cJSON *root = b ? cJSON_Parse(b) : NULL;
     free(b);
     const char *key = NULL, *val = NULL;
+    char key_buf[160], val_buf[2048];
     if (root && cJSON_IsObject(root)) {
         cJSON *k = cJSON_GetObjectItemCaseSensitive(root, "key");
         cJSON *v = cJSON_GetObjectItemCaseSensitive(root, "value");
         if (k && cJSON_IsString(k)) key = k->valuestring;
         if (v && cJSON_IsString(v)) val = v->valuestring;
+        /* copy out before cJSON_Delete — borrowed valuestrings */
+        snprintf(key_buf, sizeof(key_buf), "%s", key ? key : "");
+        snprintf(val_buf, sizeof(val_buf), "%s", val ? val : "");
+        key = key_buf; val = val_buf;
     }
     if (root) cJSON_Delete(root);
     if (!key || !*key || !val) {

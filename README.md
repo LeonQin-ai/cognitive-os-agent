@@ -8,6 +8,7 @@
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey.svg)](#quick-start)
 [![Dependencies](https://img.shields.io/badge/external%20deps-0-green.svg)](#project-structure)
 [![Tests](https://img.shields.io/badge/tests-1236%20passing-brightgreen.svg)](#testing)
+[![CI](https://github.com/LeonQin-ai/cognitive-os-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/LeonQin-ai/cognitive-os-agent/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
 
 **[中文文档](README.zh-CN.md)**
@@ -381,6 +382,47 @@ bench:     BFCL-style 22 cases     (simple / multiple / parallel / irrelevance /
 ASAN:      0 memory errors
 ```
 
+### Running the tests yourself
+
+All suites are self-contained and need **no API key, no network, no external services** (the LLM is mocked). Every binary exits non-zero on failure.
+
+**Linux / macOS (gcc):**
+
+```bash
+cd backend
+make                # builds all test binaries (or: make test/scenario to build+run one)
+make test           # unit tests          → "1236 passed, 0 failed"
+make scenario       # scenario checks     → "SCENARIO PASS"
+./build/test-adapters            # adapter checks      → "ADAPTER PASS"
+./build/cognitive-os-agent-bench --mock   # benchmark sanity (offline mock)
+./build/mock-llm-server 9000 &    # e2e needs the mock LLM server running first
+./build/cognitive-os-agent-e2e   #                      → "E2E PASS"
+```
+
+**Windows (MSYS2 / Git Bash, bundled Zig toolchain):**
+
+```bash
+cd backend
+./build.sh                               # builds everything
+./build/cognitive-os-agent-test.exe      # unit tests
+./build/cognitive-os-agent-scenario.exe  # scenario checks
+./build/test-adapters.exe                # adapter checks
+./build/cognitive-os-agent-bench.exe --mock
+./build/mock-llm-server.exe 9000 & ./build/cognitive-os-agent-e2e.exe
+```
+
+| Suite | Binary | What it verifies |
+|---|---|---|
+| unit | `cognitive-os-agent-test` | All 43 modules: state machine, event bus, scheduler, memory lifecycle, Context MMU, transactions, policy, hooks, flow, … |
+| scenario | `cognitive-os-agent-scenario` | End-to-end scenarios: HTTP API, plugins, MCP stdio, flows, huge-file snapshot guards |
+| adapters | `test-adapters` | LLM provider protocols: chat + SSE streaming (openai + anthropic, real HTTP) |
+| e2e | `cognitive-os-agent-e2e` | Full agent runs against a mock LLM server (`mock-llm-server 9000`) |
+| bench | `cognitive-os-agent-bench --mock` | BFCL-style benchmark harness sanity (offline) |
+
+> The bench-real / bench-bfcl binaries also run offline with `--mock`. With `--real` they hit a real LLM via `COA_LLM_*` environment variables (provider / base_url / model / api_key) — use them only when you have an API key.
+
+**CI** runs the same suites on every push and pull request — Linux (gcc), Linux (AddressSanitizer) and Windows (zig cc). See [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
+
 Benchmark methodology and real-LLM results: [`backend/docs/benchmark-report-2026-08-31.md`](backend/docs/benchmark-report-2026-08-31.md).
 
 ## Documentation
@@ -458,7 +500,7 @@ The current implementation establishes the runtime primitives first.
 
 The codebase is deliberately small and layered — a new contributor can read one layer per sitting. Particularly interesting areas: scheduler / coroutine / event bus (runtime), planner / evaluator / reflection (cognition), memory service / retrieval / Context MMU (memory), sandbox / VM / remote executor / snapshot (execution), multi-agent / DAG / isolation (agent), observability / distributed control plane (infrastructure).
 
-PRs welcome: pick a module, keep the C11 + zero-dependency discipline, keep the core architecture modular, preserve the runtime boundary, and run the test suite on both platforms.
+PRs welcome: pick a module, keep the C11 + zero-dependency discipline, keep the core architecture modular, preserve the runtime boundary, and make the test suite pass — see [Testing](#testing) for how to run it locally (no API key needed).
 
 ## License
 

@@ -6,7 +6,7 @@ LDLIBS  := $(shell uname | grep -qi 'mingw\|msys\|cygwin' && echo '-lws2_32 -lwi
 
 SRCS := $(shell find src third_party/cJSON -name '*.c' | sort) third_party/wasm3/wasm3_all.c
 
-all: build/cognitive-os-agent build/cognitive-os-agent-test build/mock-llm-server build/test-adapters build/cognitive-os-agent-e2e build/cognitive-os-agent-bench
+all: build/cognitive-os-agent build/cognitive-os-agent-test build/cognitive-os-agent-scenario build/mock-llm-server build/test-adapters build/cognitive-os-agent-e2e build/cognitive-os-agent-bench
 
 build/cognitive-os-agent: $(SRCS) cli/main.c
 	@mkdir -p build
@@ -36,10 +36,20 @@ build/cognitive-os-agent-bench-real: $(SRCS) tests/bench_real.c
 	@mkdir -p build
 	$(CC) $(CFLAGS) -o $@ $(SRCS) tests/bench_real.c $(LDLIBS)
 
+build/cognitive-os-agent-scenario: $(SRCS) tests/test_scenario.c
+	@mkdir -p build
+	$(CC) $(CFLAGS) -o $@ $(SRCS) tests/test_scenario.c $(LDLIBS)
+
+test: build/cognitive-os-agent-test
+	./build/cognitive-os-agent-test
+
+scenario: build/cognitive-os-agent-scenario
+	./build/cognitive-os-agent-scenario
+
 bench: build/cognitive-os-agent-bench
 	./build/cognitive-os-agent-bench --mock
 
 clean:
 	rm -rf build
 
-.PHONY: all clean bench
+.PHONY: all test scenario clean bench
