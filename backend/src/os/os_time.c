@@ -11,7 +11,18 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
-int64_t coa_time_now_ms(void) { return (int64_t)GetTickCount64(); }
+/* Wall-clock epoch ms — NOT uptime. Persisted timestamps (episodes, audit,
+ * state) must stay meaningful across reboots, and callers compute ages
+ * against real-world day offsets. */
+int64_t coa_time_now_ms(void) {
+    FILETIME ft;
+    GetSystemTimeAsFileTime(&ft);
+    ULARGE_INTEGER u;
+    u.LowPart = ft.dwLowDateTime;
+    u.HighPart = ft.dwHighDateTime;
+    /* 100ns ticks since 1601-01-01 → ms since unix epoch */
+    return (int64_t)(u.QuadPart / 10000ULL - 11644473600000ULL);
+}
 int64_t coa_time_now_us(void) {
     LARGE_INTEGER f, c;
     QueryPerformanceFrequency(&f);
@@ -82,9 +93,10 @@ void coa_time_now_iso(char *out, size_t n) {
 #include <sys/time.h>
 #include <unistd.h>
 
+/* Wall-clock epoch ms — NOT uptime (see the Windows side comment). */
 int64_t coa_time_now_ms(void) {
     struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
+    clock_gettime(CLOCK_REALTIME, &ts);
     return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
 int64_t coa_time_now_us(void) {

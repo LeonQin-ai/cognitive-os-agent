@@ -66,7 +66,7 @@ typedef struct mcp_entry {
 
 static const mcp_entry MCPS[] = {
     { "mock-echo", "Mock Echo（演示）", "http://127.0.0.1:9000",
-      "JSON-RPC echo 服务器，验证 MCP 通路", "本地", 1, "node build/mock_mcp_server.js", "",
+      "JSON-RPC echo 服务器，验证 MCP 通路", "本地", 1, "node tools/mock_mcp_server.js", "",
       "", "", 0 },
     { "filesystem", "FileSystem（本地文件）", "",
       "读取/写入本地目录（filesystem MCP，stdio）", "本地", 1, "npx @modelcontextprotocol/server-filesystem", "",

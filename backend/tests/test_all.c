@@ -2541,7 +2541,7 @@ static void test_mcp_standard(void) {
     section("mcp standard protocol (http)");
     if (!node_available()) { printf("  (node not available, skipped)\n"); return; }
     /* spawn detached so it survives this call */
-    CHECK(coa_proc_spawn_detached("node build/mock_mcp_server.js --port 9321") == 0);
+    CHECK(coa_proc_spawn_detached("node tools/mock_mcp_server.js --port 9321") == 0);
 
     coa_mcp_manager *m = coa_mcp_manager_new();
     CHECK(m != NULL);
@@ -2616,7 +2616,7 @@ static void test_mcp_stdio(void) {
     c.name = (char *)"mocks";
     c.transport = (char *)"stdio";
     c.command = (char *)"node";
-    c.args_csv = (char *)"build/mock_mcp_server.js --stdio";
+    c.args_csv = (char *)"tools/mock_mcp_server.js --stdio";
     CHECK(coa_mcp_manager_add_ex(m, &c) == 0);
 
     /* first call spawns the child lazily and runs the handshake */

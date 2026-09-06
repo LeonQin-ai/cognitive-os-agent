@@ -390,7 +390,7 @@ static void s4_http_api(void) {
         P("POST /v1/mcp (stdio)");
         CHECK(raw_http_request(18251, "POST", "/v1/mcp",
                                "{\"name\":\"mocksapi\",\"transport\":\"stdio\","
-                               "\"command\":\"node\",\"args\":\"build/mock_mcp_server.js --stdio\"}",
+                               "\"command\":\"node\",\"args\":\"tools/mock_mcp_server.js --stdio\"}",
                                &r) == 0);
         CHECK(r.status == 200);
         int found = 0;

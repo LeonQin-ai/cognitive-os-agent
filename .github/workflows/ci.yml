@@ -14,7 +14,7 @@ jobs:
       run:
         working-directory: backend
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Build
         run: make -j"$(nproc)"
       - name: Unit tests
@@ -39,7 +39,7 @@ jobs:
       run:
         working-directory: backend
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Build with ASAN
         run: make CFLAGS="-std=c11 -O1 -g -fsanitize=address -fno-omit-frame-pointer -Iinclude -Ithird_party/cJSON -Ithird_party/wasm3"
       - name: Unit tests under ASAN
@@ -54,11 +54,11 @@ jobs:
         working-directory: backend
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Set up Zig
         uses: mlugg/setup-zig@v1
         with:
-          version: "0.16.0"
+          version: "0.14.1"
       - name: Build
         run: ./build.sh
       - name: Unit tests
