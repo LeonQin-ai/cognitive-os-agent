@@ -1707,6 +1707,56 @@ static int h_mcp_sync(const coa_http_request *req, coa_http_response *resp, void
     return 0;
 }
 
+/* POST /v1/mcp/test — one-shot connection check (handshake + tools/list)
+ * WITHOUT registering the connection. Body: {transport,url,token,command,args}.
+ * Response: {"ok":true,"transport":"...","count":N,"tools":[...]} or
+ * {"ok":false,"error":"..."}; 400 when the request is malformed. */
+static int h_mcp_test(const coa_http_request *req, coa_http_response *resp, void *ud) {
+    (void)ud;
+    if (!authz_ok((coa_ctx *)ud, req, resp)) return 0;
+    char *b = body_str(req);
+    cJSON *root = b ? cJSON_Parse(b) : NULL;
+    free(b);
+    /* copy before cJSON_Delete — borrowed valuestrings */
+    char tr_buf[32] = "", url_buf[512] = "", tok_buf[512] = "",
+         cmd_buf[256] = "", args_buf[512] = "";
+    if (root && cJSON_IsObject(root)) {
+        cJSON *tr = cJSON_GetObjectItemCaseSensitive(root, "transport");
+        cJSON *u = cJSON_GetObjectItemCaseSensitive(root, "url");
+        cJSON *t = cJSON_GetObjectItemCaseSensitive(root, "token");
+        cJSON *cmd = cJSON_GetObjectItemCaseSensitive(root, "command");
+        cJSON *a = cJSON_GetObjectItemCaseSensitive(root, "args");
+        if (tr && cJSON_IsString(tr)) snprintf(tr_buf, sizeof(tr_buf), "%s", tr->valuestring);
+        if (u && cJSON_IsString(u)) snprintf(url_buf, sizeof(url_buf), "%s", u->valuestring);
+        if (t && cJSON_IsString(t)) snprintf(tok_buf, sizeof(tok_buf), "%s", t->valuestring);
+        if (cmd && cJSON_IsString(cmd)) snprintf(cmd_buf, sizeof(cmd_buf), "%s", cmd->valuestring);
+        if (a && cJSON_IsString(a)) snprintf(args_buf, sizeof(args_buf), "%s", a->valuestring);
+    }
+    if (root) cJSON_Delete(root);
+    coa_mcp_conn c;
+    memset(&c, 0, sizeof(c));
+    c.name = (char *)"mcp-test";
+    c.transport = *tr_buf ? tr_buf : (char *)"http";
+    c.url = url_buf;
+    c.token = tok_buf;
+    c.command = cmd_buf;
+    c.args_csv = args_buf;
+    if (strcmp(c.transport, "http") == 0 && !*c.url) {
+        resp->status = 400;
+        coa_http_resp_json(resp, "{\"ok\":false,\"error\":\"http transport needs 'url'\"}");
+        return 0;
+    }
+    if (strcmp(c.transport, "stdio") == 0 && !*c.command) {
+        resp->status = 400;
+        coa_http_resp_json(resp, "{\"ok\":false,\"error\":\"stdio transport needs 'command'\"}");
+        return 0;
+    }
+    char *s = coa_mcp_test_json(&c);
+    coa_http_resp_json(resp, s ? s : "{\"ok\":false,\"error\":\"test failed\"}");
+    free(s);
+    return 0;
+}
+
 static int h_mcp_delete(const coa_http_request *req, coa_http_response *resp, void *ud) {
     coa_ctx *ctx = (coa_ctx *)ud;
     if (!authz_ok(ctx, req, resp)) return 0;
@@ -2625,6 +2675,7 @@ int coa_api_attach(coa_ctx *ctx) {
     coa_http_server_route(ctx->http, "DELETE", "/v1/skills/", h_skill_delete, ctx);
     coa_http_server_route(ctx->http, "GET", "/v1/mcp", h_mcp, ctx);
     coa_http_server_route(ctx->http, "POST", "/v1/mcp", h_mcp_add, ctx);
+    coa_http_server_route(ctx->http, "POST", "/v1/mcp/test", h_mcp_test, ctx);
     coa_http_server_route(ctx->http, "POST", "/v1/mcp/sync", h_mcp_sync, ctx);
     coa_http_server_route(ctx->http, "DELETE", "/v1/mcp/", h_mcp_delete, ctx);
     coa_http_server_route(ctx->http, "GET", "/v1/cluster", h_cluster, ctx);

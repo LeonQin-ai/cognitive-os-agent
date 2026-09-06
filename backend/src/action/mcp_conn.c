@@ -731,3 +731,154 @@ int coa_mcp_manager_load(coa_mcp_manager *m, const char *state_root) {
     cJSON_Delete(arr);
     return 0;
 }
+
+/* ---- one-shot connection test (plaza "Test" button) ---- */
+
+/* Wait for the JSON-RPC response with `want_id` on a fresh stdio child.
+ * Returns the parsed "result" object (owned) or NULL with *err set. */
+static cJSON *test_stdio_roundtrip(coa_proc_popen *proc, const char *method,
+                                   cJSON *params, long want_id, char **err) {
+    cJSON *rpc = cJSON_CreateObject();
+    cJSON_AddStringToObject(rpc, "jsonrpc", "2.0");
+    cJSON_AddNumberToObject(rpc, "id", (double)want_id);
+    cJSON_AddStringToObject(rpc, "method", method);
+    if (params) cJSON_AddItemToObject(rpc, "params", params);
+    char *body = cJSON_PrintUnformatted(rpc);
+    cJSON_Delete(rpc);
+    if (!body) { if (err) *err = coa_strdup("rpc: build request failed"); return NULL; }
+    coa_strbuf wire;
+    coa_strbuf_init(&wire);
+    coa_strbuf_append(&wire, body);
+    coa_strbuf_append(&wire, "\n");
+    free(body);
+    int wrc = coa_proc_popen_write(proc, wire.buf ? wire.buf : "", wire.len);
+    coa_strbuf_free(&wire);
+    if (wrc != 0) { if (err) *err = coa_strdup("stdio: write failed (server died?)"); return NULL; }
+
+    int64_t deadline = coa_time_now_ms() + MCP_STDIO_TIMEOUT_MS;
+    while (coa_time_now_ms() < deadline && coa_proc_popen_alive(proc)) {
+        coa_proc_popen_read(proc, 100);
+        char *line = stdio_take_response(proc, want_id);
+        if (line) {
+            cJSON *resp = cJSON_Parse(line);
+            free(line);
+            if (!resp) { if (err) *err = coa_strdup("stdio: invalid JSON response"); return NULL; }
+            cJSON *jerr = cJSON_GetObjectItemCaseSensitive(resp, "error");
+            if (jerr) {
+                if (err) {
+                    char *es = cJSON_PrintUnformatted(jerr);
+                    *err = coa_strdup(es ? es : "json-rpc error");
+                    free(es);
+                }
+                cJSON_Delete(resp);
+                return NULL;
+            }
+            cJSON *result = cJSON_DetachItemFromObjectCaseSensitive(resp, "result");
+            cJSON_Delete(resp);
+            if (!result) { if (err) *err = coa_strdup("response has no result"); return NULL; }
+            return result;
+        }
+    }
+    if (err) *err = coa_strdup("stdio: timeout waiting for response");
+    return NULL;
+}
+
+char *coa_mcp_test_json(const coa_mcp_conn *conn) {
+    const char *transport = (conn && conn->transport && *conn->transport) ? conn->transport : "http";
+    cJSON *o = cJSON_CreateObject();
+    int is_stdio = strcmp(transport, "stdio") == 0;
+    if (!conn || (!is_stdio && (!conn->url || !*conn->url)) ||
+        (is_stdio && (!conn->command || !*conn->command))) {
+        cJSON_AddBoolToObject(o, "ok", 0);
+        cJSON_AddStringToObject(o, "error", "need 'command' (stdio) or 'url' (http)");
+        char *s = cJSON_PrintUnformatted(o);
+        cJSON_Delete(o);
+        return s;
+    }
+
+    char *err = NULL;
+    int count = -1;
+    cJSON *tools = NULL; /* owned array of tool-name strings */
+
+    /* handshake params shared by both transports */
+    cJSON *params = cJSON_CreateObject();
+    cJSON_AddStringToObject(params, "protocolVersion", MCP_PROTO_VERSION);
+    cJSON *caps = cJSON_AddObjectToObject(params, "capabilities");
+    (void)caps;
+    cJSON *ci = cJSON_AddObjectToObject(params, "clientInfo");
+    cJSON_AddStringToObject(ci, "name", MCP_CLIENT_NAME);
+    cJSON_AddStringToObject(ci, "version", MCP_CLIENT_VERSION);
+
+    if (is_stdio) {
+        char **argv = stdio_argv(conn);
+        coa_proc_popen *proc = argv ? coa_proc_popen_new(argv) : NULL;
+        free_argv(argv);
+        if (!proc) {
+            cJSON_AddBoolToObject(o, "ok", 0);
+            cJSON_AddStringToObject(o, "error", "stdio: failed to spawn server process");
+            char *s = cJSON_PrintUnformatted(o);
+            cJSON_Delete(o);
+            cJSON_Delete(params);
+            return s;
+        }
+        cJSON *result = test_stdio_roundtrip(proc, "initialize", params, g_jsonrpc_id++, &err);
+        if (result) {
+            cJSON_Delete(result);
+            /* notifications/initialized (no id, no response) */
+            cJSON *note = cJSON_CreateObject();
+            cJSON_AddStringToObject(note, "jsonrpc", "2.0");
+            cJSON_AddStringToObject(note, "method", "notifications/initialized");
+            char *nb = cJSON_PrintUnformatted(note);
+            cJSON_Delete(note);
+            if (nb) {
+                coa_strbuf w2;
+                coa_strbuf_init(&w2);
+                coa_strbuf_append(&w2, nb);
+                coa_strbuf_append(&w2, "\n");
+                coa_proc_popen_write(proc, w2.buf ? w2.buf : "", w2.len);
+                coa_strbuf_free(&w2);
+                free(nb);
+            }
+            result = test_stdio_roundtrip(proc, "tools/list", NULL, g_jsonrpc_id++, &err);
+            if (result) {
+                cJSON *arr = cJSON_GetObjectItemCaseSensitive(result, "tools");
+                tools = (arr && cJSON_IsArray(arr)) ? cJSON_Duplicate(arr, 1) : cJSON_CreateArray();
+                count = cJSON_GetArraySize(tools);
+                cJSON_Delete(result);
+            }
+        }
+        coa_proc_popen_free(proc);
+    } else {
+        cJSON *result = rpc_http(conn, "initialize", params, g_jsonrpc_id++, &err);
+        if (result) {
+            cJSON_Delete(result);
+            result = rpc_http(conn, "tools/list", NULL, g_jsonrpc_id++, &err);
+            if (result) {
+                cJSON *arr = cJSON_GetObjectItemCaseSensitive(result, "tools");
+                tools = (arr && cJSON_IsArray(arr)) ? cJSON_Duplicate(arr, 1) : cJSON_CreateArray();
+                count = cJSON_GetArraySize(tools);
+                cJSON_Delete(result);
+            }
+        }
+    }
+
+    if (count < 0) {
+        cJSON_AddBoolToObject(o, "ok", 0);
+        cJSON_AddStringToObject(o, "error", err ? err : "connection test failed");
+    } else {
+        cJSON_AddBoolToObject(o, "ok", 1);
+        cJSON_AddStringToObject(o, "transport", transport);
+        cJSON_AddNumberToObject(o, "count", (double)count);
+        cJSON *names = cJSON_AddArrayToObject(o, "tools");
+        cJSON *t;
+        cJSON_ArrayForEach(t, tools) {
+            cJSON *nm = cJSON_GetObjectItemCaseSensitive(t, "name");
+            if (nm && cJSON_IsString(nm)) cJSON_AddItemToArray(names, cJSON_CreateString(nm->valuestring));
+        }
+    }
+    free(err);
+    if (tools) cJSON_Delete(tools);
+    char *s = cJSON_PrintUnformatted(o);
+    cJSON_Delete(o);
+    return s;
+}

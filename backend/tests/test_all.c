@@ -3717,6 +3717,21 @@ static void test_http_api(void) {
     CHECK(strstr(r.body, "\"browserbase\"") != NULL);
     CHECK(strstr(r.body, "\"transport\":\"reference\"") != NULL);
 
+    /* MCP one-shot test endpoint: handshake + tools/list without registering */
+    if (node_available()) {
+        CHECK(raw_http_request(18211, "POST", "/v1/mcp/test",
+                               "{\"transport\":\"stdio\",\"command\":\"node\","
+                               "\"args\":\"tools/mock_mcp_server.js --stdio\"}",
+                               &r) == 0 && r.status == 200);
+        CHECK(strstr(r.body, "\"ok\":true") != NULL &&
+              strstr(r.body, "\"echo\"") != NULL);
+    }
+    CHECK(raw_http_request(18211, "POST", "/v1/mcp/test",
+                           "{\"transport\":\"stdio\",\"command\":\"definitely-not-a-real-cmd\"}",
+                           &r) == 0 && r.status == 200);
+    CHECK(strstr(r.body, "\"ok\":false") != NULL);
+    CHECK(raw_http_request(18211, "POST", "/v1/mcp/test", "{}", &r) == 0 && r.status == 400);
+
     /* skills plaza: catalog listing + one-click install + run */
     CHECK(raw_http_request(18211, "GET", "/v1/catalog/skills", NULL, &r) == 0 && r.status == 200);
     CHECK(strstr(r.body, "\"greet\"") != NULL);

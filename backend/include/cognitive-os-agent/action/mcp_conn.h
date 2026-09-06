@@ -60,6 +60,13 @@ int coa_mcp_manager_tool_count(coa_mcp_manager *m, const char *name);
 /* JSON array of connections {name,transport,url,has_token,command,args,tools}. */
 char *coa_mcp_manager_json(coa_mcp_manager *m);
 
+/* One-shot connection test for the plaza "Test" button: performs the MCP
+ * handshake (initialize -> notifications/initialized -> tools/list) against
+ * `conn` WITHOUT registering it in any manager. Returns malloc'd JSON:
+ *   {"ok":true,"transport":"stdio","count":N,"tools":["a","b"]}
+ *   {"ok":false,"error":"..."} */
+char *coa_mcp_test_json(const coa_mcp_conn *conn);
+
 /* Persist / restore connections to <state_root>/mcp.json. */
 int coa_mcp_manager_persist(coa_mcp_manager *m, const char *state_root);
 int coa_mcp_manager_load(coa_mcp_manager *m, const char *state_root);

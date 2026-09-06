@@ -658,6 +658,15 @@ panels.skills = `
     <pre id="skills-out">加载中…</pre>
   </div>
   <div class="card">
+    <div class="card-head">
+      <h2>⭐ 技能广场（精选目录）</h2>
+      <button class="sec sm" onclick="loadSkillsCatalog()">Refresh</button>
+    </div>
+    <div class="hint">精选可运行技能（shell/python，一键安装并测试）与来自 fabric / SkillHub / awesome-cursorrules 生态的参考仓库。</div>
+    <div id="skill-catalog">加载中…</div>
+    <pre id="skill-test-out" style="display:none"></pre>
+  </div>
+  <div class="card">
     <h2>⭐ 技能市场 / 发布</h2>
     <div class="hint">从市场模板一键安装，或发布你自己创建的标准化技能（持久化到 state/skills.json，重启不丢）。</div>
     <div id="skill-market">加载中…</div>
@@ -898,7 +907,7 @@ async function load(panel){
   if(panel === 'im') return renderIm();
   if(panel === 'agents') return loadAgents();
   if(panel === 'mcp') return loadMcp();
-  if(panel === 'skills') return loadSkillsMarket();
+  if(panel === 'skills') return (loadSkillsMarket(), loadSkillsCatalog());
   if(panel === 'plugins') return loadPluginMarket();
   if(panel === 'snapshots') return loadSnapshots();
   if(panel === 'chat') return loadChat();
@@ -1004,7 +1013,8 @@ async function loadMcp(){
         '<td class="muted">' + esc((c.transport === 'stdio') ? ((c.command || '') + ' ' + (c.args || '')) : c.url) + '</td>' +
         '<td>' + (typeof c.tools === 'number' ? c.tools : '—') + '</td>' +
         '<td>' + (c.has_token ? '已设置' : '—') + '</td>' +
-        '<td><button class="sec sm danger" onclick="mcpDelete(' + i + ')">Delete</button> ' +
+        '<td><button class="sec sm" onclick="mcpConnTest(' + i + ')">测试</button> ' +
+        '<button class="sec sm danger" onclick="mcpDelete(' + i + ')">Delete</button> ' +
         '<button class="sec sm" onclick="mcpSync()">Sync</button></td></tr>').join('') +
       '</tbody></table></div>';
   }
@@ -1019,12 +1029,38 @@ async function loadMcpPlaza(){
   const r = await call('GET', '/v1/catalog/mcp');
   MCP_PLAZA = Array.isArray(r.obj) ? r.obj : [];
   if(!MCP_PLAZA.length){ box.innerHTML = '<span class="muted" style="font-size:12px">（目录为空）</span>'; return; }
-  box.innerHTML = MCP_PLAZA.map((m, i) =>
-    '<div class="item"><h3>' + esc(m.name) + (m.repo ? ' <a class="tag" href="' + esc(m.repo) + '" target="_blank" rel="noopener">GitHub</a>' : '') + '</h3><p>' + esc(m.description) + '</p>' +
-    '<div class="url">' + esc(m.transport === 'stdio' ? ((m.command || '') + ' ' + (m.args || '')) : m.url) + '</div>' +
-    '<div class="hint">' + (m.needs_local ? '需本地运行 · ' : '') + esc(m.key_hint || '') + '</div>' +
-    '<button class="sec sm" onclick="mcpPlazaUse(' + i + ')">添加连接</button></div>'
-  ).join('');
+  box.innerHTML = MCP_PLAZA.map((m, i) => {
+    const isRef = m.transport === 'reference';
+    const target = isRef ? esc(m.repo || '')
+      : esc(m.transport === 'stdio' ? ((m.command || '') + ' ' + (m.args || '')) : (m.url || ''));
+    let btns = '';
+    if(isRef){
+      btns = '<a class="sec sm" href="' + esc(m.repo) + '" target="_blank" rel="noopener">查看仓库</a>';
+    } else {
+      btns = '<button class="sec sm" onclick="mcpPlazaTest(' + i + ')">测试</button> ' +
+             '<button class="sec sm" onclick="mcpPlazaUse(' + i + ')">添加连接</button>';
+    }
+    return '<div class="item"><h3>' + esc(m.name) + (m.repo ? ' <a class="tag" href="' + esc(m.repo) + '" target="_blank" rel="noopener">GitHub</a>' : '') + (isRef ? ' <span class="tag">参考仓库</span>' : '') + '</h3><p>' + esc(m.description) + '</p>' +
+      '<div class="url">' + target + '</div>' +
+      '<div class="hint">' + (isRef ? '' : (m.needs_local ? '需本地运行 · ' : '')) + esc(m.key_hint || '') + '</div>' +
+      btns + '</div>';
+  }).join('');
+}
+
+async function mcpPlazaTest(i){
+  const m = MCP_PLAZA[i]; if(!m) return;
+  if(m.transport === 'reference'){ toast('参考仓库条目无需测试，请到仓库查看'); return; }
+  toast('测试 MCP 连接 ' + m.id + ' …');
+  const body = {transport: m.transport || 'http'};
+  if(body.transport === 'stdio'){ body.command = m.command || ''; body.args = m.args || ''; }
+  else body.url = m.url;
+  if(m.needs_token && !body.token){
+    const tok = prompt('该 MCP 服务器需要凭据，请输入 ' + (m.key_hint || 'token') + '（留空则不带 token 测试）：');
+    if(tok && tok.trim()) body.token = tok.trim();
+  }
+  const r = await call('POST', '/v1/mcp/test', body);
+  if(r.obj && r.obj.ok) toast('✔ 连接成功：' + (r.obj.count || 0) + ' 个工具');
+  else toast('✘ 测试失败: ' + ((r.obj && r.obj.error) || ('HTTP ' + r.status)));
 }
 
 async function mcpPlazaUse(i){
@@ -1069,6 +1105,17 @@ function mcpAdd(){
     if(st) st.textContent = (r.status < 300) ? '✔ 已添加' : ((r.obj && r.obj.error) ? 'error: ' + r.obj.error : 'error ' + r.status);
     if(r.status < 300){ $('mcp-name').value = ''; $('mcp-url').value = ''; $('mcp-command').value = ''; $('mcp-args').value = ''; $('mcp-token').value = ''; loadMcp(); }
   });
+}
+
+async function mcpConnTest(i){
+  const c = MCP_CONNS[i]; if(!c) return;
+  toast('测试 MCP 连接 ' + c.name + ' …');
+  const body = {transport: c.transport || 'http'};
+  if(body.transport === 'stdio'){ body.command = c.command || ''; body.args = c.args || ''; }
+  else body.url = c.url;
+  const r = await call('POST', '/v1/mcp/test', body);
+  if(r.obj && r.obj.ok) toast('✔ ' + c.name + ' 连接成功：' + (r.obj.count || 0) + ' 个工具');
+  else toast('✘ ' + c.name + ' 测试失败: ' + ((r.obj && r.obj.error) || ('HTTP ' + r.status)));
 }
 
 async function mcpSync(){
@@ -1128,6 +1175,58 @@ async function runSkill(){
   if(!name) return;
   const r = await call('POST', '/v1/skills/run', {name});
   renderJSON(r.obj, $('skills-out'));
+}
+
+/* ================= 技能广场（精选目录） ================= */
+let SKILL_CATALOG = [];
+
+async function loadSkillsCatalog(){
+  const box = $('skill-catalog'); if(!box) return;
+  const r = await call('GET', '/v1/catalog/skills');
+  SKILL_CATALOG = Array.isArray(r.obj) ? r.obj : [];
+  const run = [], refs = [];
+  SKILL_CATALOG.forEach(x => (x.type === 'reference' ? refs : run).push(x));
+  let html = '<div class="sub">可安装技能（安装 → 测试运行）</div>' +
+    (run.length ? run.map(x => {
+      const i = SKILL_CATALOG.indexOf(x);
+      return '<div class="item"><b>' + esc(x.id) + '</b> <span class="muted">' + esc(x.kind) + '</span>' +
+        '<div class="hint">' + esc(x.description || '') + '</div>' +
+        '<button class="sec sm" onclick="catalogSkillTest(' + i + ')">测试</button> ' +
+        '<button class="sec sm" onclick="catalogSkillInstall(' + i + ')">安装</button></div>';
+    }).join('') : '<span class="muted">（空）</span>');
+  html += '<div class="sub">参考仓库</div>' +
+    (refs.length ? refs.map(x =>
+      '<div class="item"><b><a href="' + esc(x.source) + '" target="_blank" rel="noopener">' + esc(x.name) + '</a></b> <span class="tag">参考仓库</span>' +
+      '<div class="hint">' + esc(x.description || '') + '</div>' +
+      '<a class="sec sm" href="' + esc(x.source) + '" target="_blank" rel="noopener">查看仓库</a></div>').join('')
+      : '<span class="muted">（空）</span>');
+  box.innerHTML = html;
+}
+
+async function catalogSkillInstall(i){
+  const x = SKILL_CATALOG[i]; if(!x) return;
+  const r = await call('POST', '/v1/skills/install', {id: x.id});
+  if(r.obj && r.obj.ok) toast('✔ 已安装 ' + x.id);
+  else toast('安装失败: ' + ((r.obj && r.obj.error) || ('HTTP ' + r.status)));
+  loadSkillsMarket();
+}
+
+async function catalogSkillTest(i){
+  const x = SKILL_CATALOG[i]; if(!x) return;
+  toast('安装并测试 ' + x.id + ' …');
+  const ins = await call('POST', '/v1/skills/install', {id: x.id});
+  if(!(ins.obj && ins.obj.ok)){
+    toast('安装失败: ' + ((ins.obj && ins.obj.error) || ('HTTP ' + ins.status)));
+    return;
+  }
+  const runBody = {name: x.id};
+  if(x.test_args) runBody.args = x.test_args;
+  const r = await call('POST', '/v1/skills/run', runBody);
+  const out = $('skill-test-out');
+  if(out){ out.style.display = 'block'; renderJSON(r.obj, out); }
+  if(r.obj && r.obj.ok) toast('✔ ' + x.id + ' 测试通过');
+  else toast('✘ ' + x.id + ' 测试失败');
+  loadSkillsMarket();
 }
 
 /* ================= Skills 市场 / 发布 ================= */
