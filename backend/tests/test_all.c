@@ -2527,6 +2527,13 @@ static int node_available(void) {
     return ok;
 }
 
+static int python_available(void) {
+    coa_proc_result *r = coa_proc_run("python --version", 5000);
+    int ok = r && r->exit_code == 0;
+    coa_proc_result_free(r);
+    return ok;
+}
+
 static void wait_for_mcp(coa_mcp_manager *m, const char *server) {
     for (int i = 0; i < 40; i++) { /* up to ~4s */
         char *out = NULL, *err = NULL;
@@ -3441,8 +3448,74 @@ static void test_catalog(void) {
         CHECK(strstr(mc, "\"sequential-thinking\"") != NULL && strstr(mc, "\"puppeteer\"") != NULL);
         CHECK(strstr(mc, "github.com/modelcontextprotocol/servers") != NULL);
         CHECK(strstr(mc, "\"repo\":\"https://github.com/github/github-mcp-server\"") != NULL);
+        /* 广场扩充：browserbase + 参考类条目（transport=reference） */
+        CHECK(strstr(mc, "\"browserbase\"") != NULL);
+        CHECK(strstr(mc, "browserbase/mcp-server-browserbase") != NULL);
+        CHECK(strstr(mc, "punkpeye/awesome-mcp-servers") != NULL);
+        CHECK(strstr(mc, "wong2/mcp-cli") != NULL);
+        CHECK(strstr(mc, "\"transport\":\"reference\"") != NULL);
         free(mc);
     }
+    char *sc = coa_catalog_skills_json();
+    CHECK(sc != NULL);
+    if (sc) {
+        /* 可运行技能 + 参考条目（fabric/skillhub/cursorrules） */
+        CHECK(strstr(sc, "\"greet\"") != NULL && strstr(sc, "\"py_uuid\"") != NULL);
+        CHECK(strstr(sc, "\"type\":\"skill\"") != NULL);
+        CHECK(strstr(sc, "\"type\":\"reference\"") != NULL);
+        CHECK(strstr(sc, "github.com/danielmiessler/fabric") != NULL);
+        CHECK(strstr(sc, "github.com/thinkany-ai/skillhub") != NULL);
+        CHECK(strstr(sc, "github.com/PatrickJS/awesome-cursorrules") != NULL);
+        free(sc);
+    }
+    /* 迭代器一致性 */
+    CHECK(coa_catalog_skill_count() >= 10);
+    CHECK(coa_catalog_skill_at(0) != NULL && coa_catalog_skill_at(-1) == NULL &&
+          coa_catalog_skill_at(coa_catalog_skill_count()) == NULL);
+}
+
+/* ---------- infra: install + execute EVERY curated skills-plaza entry ---------- */
+static void test_catalog_skills_run(void) {
+    section("catalog skills install + execute all");
+    int py_ok = python_available();
+    if (!py_ok) printf("  (python not available, python-kind skills skipped)\n");
+    coa_skill_registry *r = coa_skill_registry_new();
+    CHECK(r != NULL);
+    if (!r) return;
+    int n = coa_catalog_skill_count();
+    int ran = 0;
+    for (int i = 0; i < n; i++) {
+        const catalog_skill *cs = coa_catalog_skill_at(i);
+        CHECK(cs != NULL && cs->id && cs->name && cs->kind);
+        if (!cs) continue;
+        if (strcmp(cs->kind, "reference") == 0) {
+            /* reference entries point at upstream repos, nothing to run */
+            CHECK(cs->source && strstr(cs->source, "https://github.com/") == cs->source);
+            continue;
+        }
+        if (strcmp(cs->kind, "python") == 0 && !py_ok) continue;
+        CHECK(cs->body && cs->body[0]);
+        coa_skill sk;
+        memset(&sk, 0, sizeof(sk));
+        sk.name = cs->id;  /* runtime name = ASCII id, same as /v1/skills/install */
+        sk.description = cs->description;
+        sk.kind = cs->kind;
+        sk.body = cs->body;
+        CHECK(coa_skill_register_ex(r, &sk, 1) == 0);
+        coa_skill_result *res = coa_skill_execute(
+            r, cs->id, (cs->test_args && cs->test_args[0]) ? cs->test_args : NULL,
+            NULL, 10000);
+        CHECK(res != NULL);
+        if (res) {
+            CHECK(res->ok == 1);
+            CHECK(res->output && res->output[0]);
+            coa_skill_result_free(res);
+        }
+        ran++;
+    }
+    printf("  catalog skills executed: %d (of %d entries)\n", ran, n);
+    CHECK(ran == 2 + (py_ok ? 5 : 0));  /* 2 shell always + 5 python when available */
+    coa_skill_registry_free(r);
 }
 
 /* ---------- infra: audit JSONL ---------- */
@@ -3641,6 +3714,24 @@ static void test_http_api(void) {
     CHECK(raw_http_request(18211, "GET", "/v1/catalog/mcp", NULL, &r) == 0 && r.status == 200);
     CHECK(strstr(r.body, "github") != NULL);
     CHECK(strstr(r.body, "github.com/modelcontextprotocol/servers") != NULL);
+    CHECK(strstr(r.body, "\"browserbase\"") != NULL);
+    CHECK(strstr(r.body, "\"transport\":\"reference\"") != NULL);
+
+    /* skills plaza: catalog listing + one-click install + run */
+    CHECK(raw_http_request(18211, "GET", "/v1/catalog/skills", NULL, &r) == 0 && r.status == 200);
+    CHECK(strstr(r.body, "\"greet\"") != NULL);
+    CHECK(strstr(r.body, "github.com/danielmiessler/fabric") != NULL);
+    CHECK(raw_http_request(18211, "POST", "/v1/skills/install",
+                           "{\"id\":\"no-such-id\"}", &r) == 0 && r.status == 404);
+    CHECK(raw_http_request(18211, "POST", "/v1/skills/install",
+                           "{\"id\":\"fabric\"}", &r) == 0 && r.status == 400);
+    CHECK(raw_http_request(18211, "POST", "/v1/skills/install",
+                           "{\"id\":\"greet\"}", &r) == 0 && r.status == 200);
+    CHECK(strstr(r.body, "\"ok\":true") != NULL);
+    CHECK(raw_http_request(18211, "POST", "/v1/skills/run",
+                           "{\"name\":\"greet\",\"args\":\"{\\\"who\\\":\\\"plaza\\\"}\"}",
+                           &r) == 0 && r.status == 200);
+    CHECK(strstr(r.body, "\"ok\":true") != NULL && strstr(r.body, "plaza") != NULL);
 
     CHECK(raw_http_request(18211, "GET", "/v1/skills/market", NULL, &r) == 0 && r.status == 200);
     CHECK(strstr(r.body, "templates") != NULL);
@@ -4042,6 +4133,7 @@ int main(void) {
     test_plugin_generate();
     test_task();
     test_catalog();
+    test_catalog_skills_run();
     test_audit();
     test_llm_adapters_http();
     test_http_api();

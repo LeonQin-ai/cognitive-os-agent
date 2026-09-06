@@ -55,10 +55,12 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v5
-      - name: Set up Zig
-        uses: mlugg/setup-zig@v1
-        with:
-          version: "0.14.1"
+      - name: Set up Zig (direct download — setup-zig mirrors are unreliable)
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "https://ziglang.org/download/0.14.1/zig-windows-x86_64-0.14.1.zip" -OutFile "$env:RUNNER_TEMP\zig.zip"
+          Expand-Archive -Path "$env:RUNNER_TEMP\zig.zip" -DestinationPath "$env:RUNNER_TEMP\zig" -Force
+          "$env:RUNNER_TEMP\zig\zig-windows-x86_64-0.14.1" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
       - name: Build
         run: ./build.sh
       - name: Unit tests

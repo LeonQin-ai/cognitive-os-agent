@@ -12,6 +12,7 @@
 #include "cognitive-os-agent/infra/util.h"
 #include "cognitive-os-agent/infra/config.h"
 #include "cognitive-os-agent/infra/catalog.h"
+#include "cognitive-os-agent/infra/logging.h"
 #include "cognitive-os-agent/llm/llm.h"
 #include "cognitive-os-agent/os/os_time.h"
 #include "cognitive-os-agent/os/os_proc.h"
@@ -1132,12 +1133,14 @@ static int h_plugin_generate(const coa_http_request *req, coa_http_response *res
     char *b = body_str(req);
     cJSON *root = b ? cJSON_Parse(b) : NULL;
     free(b);
-    const char *description = NULL;
+    char desc_buf[1024] = "";
     if (root && cJSON_IsObject(root)) {
         cJSON *d = cJSON_GetObjectItemCaseSensitive(root, "description");
-        if (d && cJSON_IsString(d)) description = d->valuestring;
+        /* copy before cJSON_Delete — borrowed valuestring */
+        if (d && cJSON_IsString(d)) snprintf(desc_buf, sizeof(desc_buf), "%s", d->valuestring);
     }
     if (root) cJSON_Delete(root);
+    const char *description = desc_buf;
     if (!description || !*description) {
         resp->status = 400;
         coa_http_resp_json(resp, "{\"ok\":false,\"error\":\"need 'description' string\"}");
@@ -1161,10 +1164,14 @@ static int h_plugin_native_load(const coa_http_request *req, coa_http_response *
     free(b);
     cJSON *pj = root ? cJSON_GetObjectItemCaseSensitive(root, "path") : NULL;
     cJSON *ej = root ? cJSON_GetObjectItemCaseSensitive(root, "entry") : NULL;
-    const char *path = (pj && cJSON_IsString(pj)) ? pj->valuestring : NULL;
-    const char *entry = (ej && cJSON_IsString(ej) && *ej->valuestring)
-                            ? ej->valuestring : "coa_plugin_main";
+    /* copy before cJSON_Delete — borrowed valuestrings */
+    char path_buf[1024] = "", entry_buf[128] = "";
+    if (pj && cJSON_IsString(pj)) snprintf(path_buf, sizeof(path_buf), "%s", pj->valuestring);
+    if (ej && cJSON_IsString(ej) && *ej->valuestring)
+        snprintf(entry_buf, sizeof(entry_buf), "%s", ej->valuestring);
     if (root) cJSON_Delete(root);
+    const char *path = path_buf;
+    const char *entry = *entry_buf ? entry_buf : "coa_plugin_main";
     if (!path || !*path) {
         resp->status = 400;
         coa_http_resp_json(resp, "{\"ok\":false,\"error\":\"need 'path' string\"}");
@@ -1639,6 +1646,11 @@ static int h_mcp_add(const coa_http_request *req, coa_http_response *resp, void 
     coa_mcp_conn c;
     memset(&c, 0, sizeof(c));
     int ok_body = 0;
+    /* copy fields into owned buffers BEFORE deleting the parsed JSON —
+     * valuestrings are borrowed and would dangle after cJSON_Delete
+     * (glibc reuses freed blocks, turning stale reads into garbage) */
+    char name_buf[128] = "", tr_buf[32] = "", url_buf[512] = "",
+         tok_buf[512] = "", cmd_buf[256] = "", args_buf[512] = "";
     if (root && cJSON_IsObject(root)) {
         cJSON *n = cJSON_GetObjectItemCaseSensitive(root, "name");
         cJSON *tr = cJSON_GetObjectItemCaseSensitive(root, "transport");
@@ -1646,15 +1658,21 @@ static int h_mcp_add(const coa_http_request *req, coa_http_response *resp, void 
         cJSON *t = cJSON_GetObjectItemCaseSensitive(root, "token");
         cJSON *cmd = cJSON_GetObjectItemCaseSensitive(root, "command");
         cJSON *a = cJSON_GetObjectItemCaseSensitive(root, "args");
-        if (n && cJSON_IsString(n)) c.name = n->valuestring;
-        if (tr && cJSON_IsString(tr)) c.transport = tr->valuestring;
-        if (u && cJSON_IsString(u)) c.url = u->valuestring;
-        if (t && cJSON_IsString(t)) c.token = t->valuestring;
-        if (cmd && cJSON_IsString(cmd)) c.command = cmd->valuestring;
-        if (a && cJSON_IsString(a)) c.args_csv = a->valuestring;
-        ok_body = c.name && *c.name;
+        if (n && cJSON_IsString(n)) snprintf(name_buf, sizeof(name_buf), "%s", n->valuestring);
+        if (tr && cJSON_IsString(tr)) snprintf(tr_buf, sizeof(tr_buf), "%s", tr->valuestring);
+        if (u && cJSON_IsString(u)) snprintf(url_buf, sizeof(url_buf), "%s", u->valuestring);
+        if (t && cJSON_IsString(t)) snprintf(tok_buf, sizeof(tok_buf), "%s", t->valuestring);
+        if (cmd && cJSON_IsString(cmd)) snprintf(cmd_buf, sizeof(cmd_buf), "%s", cmd->valuestring);
+        if (a && cJSON_IsString(a)) snprintf(args_buf, sizeof(args_buf), "%s", a->valuestring);
+        ok_body = name_buf[0] != '\0';
     }
     if (root) cJSON_Delete(root);
+    c.name = name_buf;
+    c.transport = *tr_buf ? tr_buf : NULL;
+    c.url = *url_buf ? url_buf : NULL;
+    c.token = *tok_buf ? tok_buf : NULL;
+    c.command = *cmd_buf ? cmd_buf : NULL;
+    c.args_csv = *args_buf ? args_buf : NULL;
     int rc = ok_body ? (ctx->mcp ? coa_mcp_manager_add_ex(ctx->mcp, &c) : -1) : -1;
     if (rc != 0) {
         resp->status = 400;
@@ -2012,6 +2030,71 @@ static int h_catalog_models(const coa_http_request *req, coa_http_response *resp
     (void)ud;
     char *s = coa_catalog_models_json();
     coa_http_resp_json(resp, s ? s : "[]");
+    free(s);
+    return 0;
+}
+
+static int h_catalog_skills(const coa_http_request *req, coa_http_response *resp, void *ud) {
+    (void)req;
+    (void)ud;
+    char *s = coa_catalog_skills_json();
+    coa_http_resp_json(resp, s ? s : "[]");
+    free(s);
+    return 0;
+}
+
+/* One-click install of a curated skills-plaza entry: find the catalog entry by
+ * id and upsert it into the runtime skill registry (reference entries, which
+ * point at upstream repos rather than runnable bodies, are rejected). */
+static int h_skill_install(const coa_http_request *req, coa_http_response *resp, void *ud) {
+    coa_ctx *ctx = (coa_ctx *)ud;
+    if (!authz_ok(ctx, req, resp)) return 0;
+    char *b = body_str(req);
+    cJSON *root = b ? cJSON_Parse(b) : NULL;
+    free(b);
+    const char *id = json_str(root, "id");
+    char idbuf[128] = "";
+    if (id && *id) snprintf(idbuf, sizeof(idbuf), "%s", id);
+    cJSON_Delete(root);
+    id = idbuf;
+    const catalog_skill *cs = NULL;
+    if (id && *id) {
+        int n = coa_catalog_skill_count();
+        for (int i = 0; i < n; i++) {
+            const catalog_skill *e = coa_catalog_skill_at(i);
+            if (e && strcmp(e->id, id) == 0) { cs = e; break; }
+        }
+    }
+    if (!cs) {
+        resp->status = 404;
+        coa_http_resp_json(resp, "{\"error\":\"unknown skill id\"}");
+        return 0;
+    }
+    if (strcmp(cs->kind, "reference") == 0) {
+        resp->status = 400;
+        coa_http_resp_json(resp,
+            "{\"error\":\"reference entry (upstream repo), not installable\"}");
+        return 0;
+    }
+    coa_skill sk;
+    memset(&sk, 0, sizeof(sk));
+    sk.name = cs->id;           /* runtime name = ASCII id; cs->name is display */
+    sk.description = cs->description;
+    sk.kind = cs->kind;
+    sk.body = cs->body;
+    if (coa_skill_register_ex(ctx->skills, &sk, 1) != 0) {
+        resp->status = 400;
+        coa_http_resp_json(resp, "{\"error\":\"register failed\"}");
+        return 0;
+    }
+    if (ctx->state_root) coa_skill_registry_persist(ctx->skills, ctx->state_root);
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddBoolToObject(o, "ok", 1);
+    cJSON_AddStringToObject(o, "name", cs->id);
+    cJSON_AddStringToObject(o, "kind", cs->kind);
+    char *s = cJSON_PrintUnformatted(o);
+    cJSON_Delete(o);
+    coa_http_resp_json(resp, s ? s : "{\"ok\":true}");
     free(s);
     return 0;
 }
@@ -2535,6 +2618,7 @@ int coa_api_attach(coa_ctx *ctx) {
     coa_http_server_route(ctx->http, "DELETE", "/v1/plugins/market/", h_plugin_market_delete, ctx);
     coa_http_server_route(ctx->http, "GET", "/v1/skills", h_skills, ctx);
     coa_http_server_route(ctx->http, "POST", "/v1/skills/run", h_skill_run, ctx);
+    coa_http_server_route(ctx->http, "POST", "/v1/skills/install", h_skill_install, ctx);
     coa_http_server_route(ctx->http, "GET", "/v1/skills/market", h_skills_market, ctx);
     coa_http_server_route(ctx->http, "POST", "/v1/skills/publish", h_skills_publish, ctx);
     coa_http_server_route(ctx->http, "POST", "/v1/tools/gh-install", h_gh_install, NULL);
@@ -2561,6 +2645,7 @@ int coa_api_attach(coa_ctx *ctx) {
     coa_http_server_route(ctx->http, "GET", "/metrics", h_metrics, ctx);
     coa_http_server_route(ctx->http, "GET", "/v1/catalog/mcp", h_catalog_mcp, ctx);
     coa_http_server_route(ctx->http, "GET", "/v1/catalog/models", h_catalog_models, ctx);
+    coa_http_server_route(ctx->http, "GET", "/v1/catalog/skills", h_catalog_skills, ctx);
     coa_http_server_route(ctx->http, "GET", "/", h_index, ctx);
     coa_http_server_route(ctx->http, "GET", "/favicon.ico", h_favicon, ctx);
     return 0;

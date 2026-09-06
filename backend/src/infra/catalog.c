@@ -110,6 +110,21 @@ static const mcp_entry MCPS[] = {
       "Notion 工作区读写（官方 Notion MCP）", "GitHub", 0, "Notion Integration Token",
       "https://github.com/makenotion/notion-mcp-server",
       "", "", 1 },
+    { "browserbase", "Browserbase（云端浏览器）", "",
+      "云端无头浏览器自动化/网页抓取（browserbase MCP，stdio）", "GitHub", 1,
+      "BROWSERBASE_API_KEY + BROWSERBASE_PROJECT_ID",
+      "https://github.com/browserbase/mcp-server-browserbase",
+      "npx", "-y @browserbasehq/mcp", 0 },
+    /* ---- 参考入口（合集/工具仓库，非单个 server，不可一键连接） ---- */
+    { "official-servers", "MCP 官方 Server 合集", "",
+      "modelcontextprotocol/servers 官方参考实现合集（参考入口）", "参考", 0, "",
+      "https://github.com/modelcontextprotocol/servers", "", "", 0 },
+    { "awesome-mcp", "Awesome MCP Servers", "",
+      "社区精选 MCP Server 大全（参考入口）", "参考", 0, "",
+      "https://github.com/punkpeye/awesome-mcp-servers", "", "", 0 },
+    { "mcp-cli", "mcp-cli（MCP 命令行调试）", "",
+      "命令行调用/调试 MCP Server 的工具（参考入口）", "参考", 0, "",
+      "https://github.com/wong2/mcp-cli", "", "", 0 },
 };
 #define N_MCPS (int)(sizeof(MCPS) / sizeof(MCPS[0]))
 
@@ -164,9 +179,89 @@ char *coa_catalog_mcp_json(void) {
                  "\"transport\":\"%s\",\"command\":\"%s\",\"args\":\"%s\",\"needs_token\":%s}",
                  i ? "," : "", m->id, m->name, m->url, desc,
                  m->category, m->needs_local ? "true" : "false", kh, repo,
-                 (m->command && *m->command) ? "stdio" : "http",
+                 (m->command && *m->command) ? "stdio"
+                   : ((m->url && *m->url) ? "http" : "reference"),
                  m->command ? m->command : "", m->args ? m->args : "",
                  m->needs_token ? "true" : "false");
+        size_t cur = strlen(out), blen = strlen(buf);
+        char *no = realloc(out, cur + blen + 2);
+        if (!no) break;
+        out = no;
+        memcpy(out + cur, buf, blen + 1);
+    }
+    size_t cur = strlen(out);
+    char *no = realloc(out, cur + 2);
+    if (no) { out = no; memcpy(out + cur, "]", 2); }
+    return out;
+}
+
+/* ---------------- Skills plaza ----------------
+ * Runnable cross-platform skills (shell/echo + python) installable via
+ * /v1/skills/install, plus "reference" entries pointing at the skill/prompt
+ * frameworks the plaza is curated from (fabric, skillhub, cursorrules). */
+static const catalog_skill SKILLS[] = {
+    /* ---- 可安装运行（shell：cmd.exe 与 /bin/sh 均可用） ---- */
+    { "greet",      "Greet（参数化问候）",
+      "按 {{who}} 参数输出问候语", "shell",
+      "echo hello {{who}}", "{\"who\":\"world\"}", "" },
+    { "banner",     "Banner（标题横幅）",
+      "输出 === {{title}} === 横幅行", "shell",
+      "echo === {{title}} ===", "{\"title\":\"demo\"}", "" },
+    /* ---- 可安装运行（python：需本机 python 命令） ---- */
+    { "py_now",     "Now（当前时间戳）",
+      "输出 ISO 格式当前时间", "python",
+      "import datetime; print(datetime.datetime.now().isoformat())", "", "" },
+    { "py_sysinfo", "SysInfo（系统信息）",
+      "输出 OS 与 Python 版本信息", "python",
+      "import platform, sys; print(platform.system(), platform.release()); print(sys.version.split()[0])",
+      "", "" },
+    { "py_calc",    "Calc（数值求和）",
+      "计算 {{a}} + {{b}} 并输出", "python",
+      "print({{a}} + {{b}})", "{\"a\":1,\"b\":2}", "" },
+    { "py_uuid",    "UUID（随机标识）",
+      "生成一个 UUIDv4 随机标识", "python",
+      "import uuid; print(uuid.uuid4())", "", "" },
+    { "py_sha256",  "SHA256（文本指纹）",
+      "计算 {{text}} 的 SHA-256 摘要", "python",
+      "import hashlib; print(hashlib.sha256('{{text}}'.encode()).hexdigest())",
+      "{\"text\":\"cognitive-os-agent\"}", "" },
+    /* ---- 参考：技能/提示词框架仓库（不可直接运行） ---- */
+    { "fabric",     "Fabric（提示词技能框架）",
+      "danielmiessler/fabric 模块化 LLM 技能（patterns）精选", "reference", "", "",
+      "https://github.com/danielmiessler/fabric" },
+    { "skillhub",   "SkillHub（社区技能底座）",
+      "thinkany-ai/skillhub 开源技能社区底座", "reference", "", "",
+      "https://github.com/thinkany-ai/skillhub" },
+    { "awesome-cursorrules", "Awesome CursorRules",
+      "PatrickJS/awesome-cursorrules 规则/技能精选列表", "reference", "", "",
+      "https://github.com/PatrickJS/awesome-cursorrules" },
+};
+#define N_SKILLS (int)(sizeof(SKILLS) / sizeof(SKILLS[0]))
+
+int coa_catalog_skill_count(void) { return N_SKILLS; }
+
+const catalog_skill *coa_catalog_skill_at(int i) {
+    return (i >= 0 && i < N_SKILLS) ? &SKILLS[i] : NULL;
+}
+
+char *coa_catalog_skills_json(void) {
+    char *out = coa_strdup("[");
+    for (int i = 0; i < N_SKILLS; i++) {
+        char buf[1200];
+        const catalog_skill *s = &SKILLS[i];
+        char desc[600], src[300];
+        snprintf(desc, sizeof(desc), "%s", s->description ? s->description : "");
+        for (char *p = desc; *p; p++) if (*p == '"') *p = '\'';
+        snprintf(src, sizeof(src), "%s", s->source ? s->source : "");
+        for (char *p = src; *p; p++) if (*p == '"') *p = '\'';
+        const char *type = strcmp(s->kind, "reference") == 0 ? "reference" : "skill";
+        snprintf(buf, sizeof(buf),
+                 "%s{\"id\":\"%s\",\"name\":\"%s\",\"description\":\"%s\","
+                 "\"kind\":\"%s\",\"body\":\"%s\",\"test_args\":\"%s\","
+                 "\"source\":\"%s\",\"type\":\"%s\"}",
+                 i ? "," : "", s->id, s->name, desc,
+                 s->kind, s->body ? s->body : "",
+                 s->test_args ? s->test_args : "", src, type);
         size_t cur = strlen(out), blen = strlen(buf);
         char *no = realloc(out, cur + blen + 2);
         if (!no) break;
