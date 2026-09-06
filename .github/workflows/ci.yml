@@ -17,6 +17,10 @@ jobs:
       - uses: actions/checkout@v5
       - name: Build
         run: make -j"$(nproc)"
+      - name: Start mock LLM server (needed by adapters + e2e)
+        run: |
+          ./build/mock-llm-server 9000 &
+          sleep 1
       - name: Unit tests
         run: ./build/cognitive-os-agent-test
       - name: Scenario tests
@@ -26,10 +30,7 @@ jobs:
       - name: Benchmark sanity (mock)
         run: ./build/cognitive-os-agent-bench --mock
       - name: E2E (mock LLM server)
-        run: |
-          ./build/mock-llm-server 9000 &
-          sleep 1
-          ./build/cognitive-os-agent-e2e
+        run: ./build/cognitive-os-agent-e2e
 
   linux-asan:
     name: Linux (AddressSanitizer)
@@ -58,9 +59,9 @@ jobs:
       - name: Set up Zig (direct download — setup-zig mirrors are unreliable)
         shell: pwsh
         run: |
-          Invoke-WebRequest -Uri "https://ziglang.org/download/0.14.1/zig-windows-x86_64-0.14.1.zip" -OutFile "$env:RUNNER_TEMP\zig.zip"
+          Invoke-WebRequest -Uri "https://ziglang.org/download/0.14.1/zig-x86_64-windows-0.14.1.zip" -OutFile "$env:RUNNER_TEMP\zig.zip"
           Expand-Archive -Path "$env:RUNNER_TEMP\zig.zip" -DestinationPath "$env:RUNNER_TEMP\zig" -Force
-          "$env:RUNNER_TEMP\zig\zig-windows-x86_64-0.14.1" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          "$env:RUNNER_TEMP\zig\zig-x86_64-windows-0.14.1" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
       - name: Build
         run: ./build.sh
       - name: Unit tests
