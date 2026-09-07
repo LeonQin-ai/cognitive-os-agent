@@ -56,7 +56,9 @@ const coa_tool *coa_tool_mcp(void) {
         "tools are also exposed directly as mcp__<server>__<tool> entries.",
         "{\"type\":\"object\",\"properties\":{\"server\":{\"type\":\"string\"},"
         "\"tool\":{\"type\":\"string\"},"
-        "\"args\":{\"type\":\"object\",\"description\":\"arguments for the remote tool\"}},"
+        "\"args\":{\"type\":\"object\",\"description\":\"arguments for the remote "
+        "tool - OMIT the args property entirely when the remote tool needs no "
+        "parameters\"}},"
         "\"required\":[\"server\",\"tool\"]}",
         1,
         mcp_exec,

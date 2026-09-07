@@ -55,7 +55,9 @@ const coa_tool *coa_tool_git(void) {
     static const coa_tool t = {
         "git",
         "Run a git subcommand (e.g. args=\"status\" or args=\"log --oneline -5\").",
-        "{\"type\":\"object\",\"properties\":{\"args\":{\"type\":\"string\"},\"dir\":{\"type\":\"string\"}}}",
+        "{\"type\":\"object\",\"properties\":{\"args\":{\"type\":\"string\"},"
+        "\"dir\":{\"type\":\"string\",\"description\":\"optional working directory - "
+        "OMIT this property unless the user explicitly names one\"}}}",
         1,
         git_exec,
     };

@@ -157,6 +157,30 @@ static char *body_str(const coa_http_request *req) {
     return s;
 }
 
+/* Extract the planner input + image flag from the last message, tolerating
+ * both plain-string content and typed parts arrays (multimodal messages:
+ * OpenAI {type:image_url} / Anthropic {type:image}). */
+static void scan_message(cJSON *msg, const char **content, int *saw_image) {
+    cJSON *c = cJSON_GetObjectItemCaseSensitive(msg, "content");
+    if (!c) return;
+    if (cJSON_IsString(c)) {
+        if (c->valuestring) *content = c->valuestring;
+    } else if (cJSON_IsArray(c)) {
+        cJSON *p;
+        cJSON_ArrayForEach(p, c) {
+            cJSON *t = cJSON_GetObjectItemCaseSensitive(p, "type");
+            if (!t || !cJSON_IsString(t)) continue;
+            if (strcmp(t->valuestring, "text") == 0) {
+                cJSON *tx = cJSON_GetObjectItemCaseSensitive(p, "text");
+                if (tx && cJSON_IsString(tx) && tx->valuestring) *content = tx->valuestring;
+            } else if (strcmp(t->valuestring, "image_url") == 0 ||
+                       strcmp(t->valuestring, "image") == 0) {
+                *saw_image = 1;
+            }
+        }
+    }
+}
+
 static int h_chat(const coa_http_request *req, coa_http_response *resp, void *ud) {
     (void)ud;
     char *b = body_str(req);
@@ -164,6 +188,7 @@ static int h_chat(const coa_http_request *req, coa_http_response *resp, void *ud
     free(b);
 
     const char *last = "hello";
+    int saw_image = 0;
     int stream = 0;
     if (root && cJSON_IsObject(root)) {
         cJSON *msgs = cJSON_GetObjectItemCaseSensitive(root, "messages");
@@ -173,8 +198,7 @@ static int h_chat(const coa_http_request *req, coa_http_response *resp, void *ud
             cJSON *it = msgs->child;
             const char *content = NULL;
             while (it) {
-                cJSON *c = cJSON_GetObjectItemCaseSensitive(it, "content");
-                if (c && cJSON_IsString(c)) content = c->valuestring;
+                scan_message(it, &content, &saw_image);
                 it = it->next;
             }
             if (content) last = content;
@@ -182,6 +206,11 @@ static int h_chat(const coa_http_request *req, coa_http_response *resp, void *ud
     }
     char *plan = plan_for(last);
     cJSON_Delete(root);
+    if (saw_image) {
+        /* prove the image part reached the server over the wire */
+        char *with = (char *)malloc(strlen(plan) + 16);
+        if (with) { snprintf(with, strlen(plan) + 16, "[img] %s", plan); free(plan); plan = with; }
+    }
 
     char *escaped = NULL;
     {
@@ -225,6 +254,7 @@ static int h_messages(const coa_http_request *req, coa_http_response *resp, void
     free(b);
 
     const char *last = "hello";
+    int saw_image = 0;
     int stream = 0;
     if (root && cJSON_IsObject(root)) {
         cJSON *msgs = cJSON_GetObjectItemCaseSensitive(root, "messages");
@@ -234,8 +264,7 @@ static int h_messages(const coa_http_request *req, coa_http_response *resp, void
             cJSON *it = msgs->child;
             const char *content = NULL;
             while (it) {
-                cJSON *c = cJSON_GetObjectItemCaseSensitive(it, "content");
-                if (c && cJSON_IsString(c)) content = c->valuestring;
+                scan_message(it, &content, &saw_image);
                 it = it->next;
             }
             if (content) last = content;
@@ -243,6 +272,10 @@ static int h_messages(const coa_http_request *req, coa_http_response *resp, void
     }
     char *plan = plan_for(last);
     cJSON_Delete(root);
+    if (saw_image) {
+        char *with = (char *)malloc(strlen(plan) + 16);
+        if (with) { snprintf(with, strlen(plan) + 16, "[img] %s", plan); free(plan); plan = with; }
+    }
 
     char *escaped = NULL;
     {

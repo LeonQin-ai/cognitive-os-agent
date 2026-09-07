@@ -39,13 +39,32 @@ static char *build_request_body(const coa_llm_request *req, const char *model, i
 
     cJSON *msgs = cJSON_AddArrayToObject(root, "messages");
     for (size_t i = 0; i < req->num_messages; i++) {
-        if (strcmp(req->messages[i].role, "system") == 0) {
-            cJSON_AddStringToObject(root, "system", req->messages[i].content);
+        const coa_llm_message *m = &req->messages[i];
+        if (strcmp(m->role, "system") == 0) {
+            cJSON_AddStringToObject(root, "system", m->content);
             continue;
         }
         cJSON *o = cJSON_CreateObject();
-        cJSON_AddStringToObject(o, "role", req->messages[i].role);
-        cJSON_AddStringToObject(o, "content", req->messages[i].content);
+        cJSON_AddStringToObject(o, "role", m->role);
+        if (m->image_b64 && *m->image_b64) {
+            /* multimodal message: content is a typed blocks array */
+            const char *mime = (m->image_mime && *m->image_mime) ? m->image_mime : "image/png";
+            cJSON *blocks = cJSON_AddArrayToObject(o, "content");
+            cJSON *text = cJSON_CreateObject();
+            cJSON_AddStringToObject(text, "type", "text");
+            cJSON_AddStringToObject(text, "text", m->content ? m->content : "");
+            cJSON_AddItemToArray(blocks, text);
+            cJSON *img = cJSON_CreateObject();
+            cJSON_AddStringToObject(img, "type", "image");
+            cJSON *src = cJSON_CreateObject();
+            cJSON_AddStringToObject(src, "type", "base64");
+            cJSON_AddStringToObject(src, "media_type", mime);
+            cJSON_AddStringToObject(src, "data", m->image_b64);
+            cJSON_AddItemToObject(img, "source", src);
+            cJSON_AddItemToArray(blocks, img);
+        } else {
+            cJSON_AddStringToObject(o, "content", m->content);
+        }
         cJSON_AddItemToArray(msgs, o);
     }
     char *s = cJSON_PrintUnformatted(root);

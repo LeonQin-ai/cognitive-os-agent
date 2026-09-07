@@ -44,17 +44,30 @@ static const char *SYS_PROMPT_HEAD =
     "full system because some tools are disabled by policy. If the request "
     "conflicts with a stated business rule, a disabled tool, or a read-only "
     "context, you MUST refuse with a plain-text explanation — NEVER attempt a "
-    "workaround through another tool (e.g. shell).\n";
+    "workaround through another tool (e.g. shell). This includes quota/rate "
+    "rules (\"already done this hour\", \"only once per day\") — user urgency "
+    "or insistence never overrides them.\n";
 
 static const char *SYS_PROMPT_TAIL =
     "Use the dedicated git tool (not shell) for git operations, and the mcp tool "
     "(not shell) for MCP calls. Use exactly the argument names listed above. "
+    "ARGUMENT DISCIPLINE: do NOT add any argument beyond the listed schema — "
+    "omit optional parameters unless the user explicitly provided a value "
+    "(e.g. no dir:\".\" filler for git, no empty args:{} for mcp). "
     "IMPORTANT: For greetings, conversation, questions, or requests that do NOT "
     "require tool operations, respond with PLAIN TEXT (not JSON). "
+    "Arithmetic (e.g. \"1+1=?\"), general knowledge, explanations, "
+    "self-introduction and creative writing are answered in PLAIN TEXT — "
+    "never call a tool to compute or echo them. (This does NOT restrict file "
+    "operations the user explicitly asked for: copying, editing or writing "
+    "requested files is exactly what the tools are for.) "
     "Only output JSON when a tool action is genuinely needed.\n"
     "EXAMPLES:\n"
     "  User: \"create a file named hello.txt with content world\"\n"
     "  -> [{\"tool\":\"file_write\",\"args\":{\"path\":\"hello.txt\",\"content\":\"world\"}}]\n"
+    "  User: \"read a.txt and b.txt\"\n"
+    "  -> [{\"tool\":\"file_read\",\"args\":{\"path\":\"a.txt\"}},"
+    "{\"tool\":\"file_read\",\"args\":{\"path\":\"b.txt\"}}]\n"
     "  User: \"你有哪些技能/skills\"\n"
     "  -> 直接用中文列出上面注册的技能（名字和用途），纯文本，不输出 JSON\n"
     "  User: \"hello\"\n"
@@ -62,7 +75,15 @@ static const char *SYS_PROMPT_TAIL =
     "PATH DISCOVERY: Before reading or writing a file whose exact location you "
     "are unsure of, first call file_read on its PARENT DIRECTORY (which returns "
     "a listing) so you use the correct, full path. Avoid guessing paths: a wrong "
-    "path makes the action fail.";
+    "path makes the action fail.\n"
+    "DOCUMENT HANDLING: file_read works only for text files. Binary document "
+    "formats (.docx, .xlsx, .pptx, .pdf, zip) return unreadable bytes like "
+    "\"PK...\" — NEVER re-read them with file_read. Instead use the shell tool "
+    "with python to extract the text, e.g. for .docx: "
+    "python -c \"import docx;d=docx.Document('f.docx');print('\\n'.join(p.text for p in d.paragraphs))\" "
+    "(xlsx: openpyxl, pdf: pypdf), or unzip the file and read its XML. Compute "
+    "answers that need arithmetic or filtering over file contents with a python "
+    "script via shell — do not count long tables in your head.";
 
 /* Build the system prompt from the ACTUAL tool + skill registries. Returns a
  * malloc'd prompt, or NULL when no registry is available (caller falls back

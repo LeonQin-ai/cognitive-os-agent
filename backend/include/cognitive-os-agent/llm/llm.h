@@ -14,6 +14,12 @@ typedef struct coa_llm coa_llm;
 typedef struct coa_llm_message {
     const char *role;    /* "system" | "user" | "assistant" */
     const char *content;
+    /* Optional image attachment (multimodal messages). When image_b64 is
+     * non-NULL the adapters emit a typed content-parts array instead of a
+     * plain string: OpenAI-compatible {type:image_url,data:URL} and Anthropic
+     * {type:image,source:{type:base64}}. Mime defaults to "image/png". */
+    const char *image_b64;   /* base64 payload, no data: prefix (may be NULL) */
+    const char *image_mime;  /* e.g. "image/png" (NULL = image/png) */
 } coa_llm_message;
 
 typedef struct coa_llm_request {

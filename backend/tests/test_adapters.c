@@ -34,6 +34,37 @@ static void check_chat(const char *provider) {
     coa_llm_destroy(llm);
 }
 
+/* Multimodal message: image attached; the mock server prefixes "[img] " to
+ * its response when it received a typed image part over the wire. */
+static void check_image(const char *provider) {
+    char url[64];
+    snprintf(url, sizeof(url), "http://localhost:9000");
+    coa_llm *llm = coa_llm_create(provider, url, provider[0] == 'a' ? "test-key" : NULL, "test-model");
+    if (!llm) { printf("  FAIL create %s\n", provider); g_fail++; return; }
+    coa_llm_message msgs[2] = {
+        {"system", "plan", NULL, NULL},
+        {"user", "describe this image", "aGVsbG8td29ybGQ=", "image/png"},
+    };
+    coa_llm_request req;
+    memset(&req, 0, sizeof(req));
+    req.messages = msgs;
+    req.num_messages = 2;
+    req.temperature = 0.2;
+    req.max_tokens = 1024;
+    coa_llm_response resp;
+    memset(&resp, 0, sizeof(resp));
+    int rc = coa_llm_chat(llm, &req, &resp);
+    CHECK(rc == 0);
+    if (resp.error) printf("    error: %s\n", resp.error);
+    CHECK(resp.content != NULL);
+    if (resp.content) CHECK(strstr(resp.content, "[img]") != NULL);
+    printf("    image(provider=%s) content=%.60s\n", provider,
+           resp.content ? resp.content : "(null)");
+    free(resp.content);
+    free(resp.error);
+    coa_llm_destroy(llm);
+}
+
 static void on_delta(const char *d, void *ud) {
     (void)d;
     int *n = (int *)ud;
@@ -64,6 +95,8 @@ int main(void) {
     printf("adapter tests (mock-llm-server :9000)\n");
     check_chat("openai");
     check_chat("anthropic");
+    check_image("openai");
+    check_image("anthropic");
     check_stream("openai");
     check_stream("anthropic");
     printf(g_fail == 0 ? "ADAPTER PASS\n" : "ADAPTER FAIL\n");

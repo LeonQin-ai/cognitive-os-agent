@@ -101,6 +101,7 @@ struct coa_reasoning {
      * loop ends when the LLM stops proposing actions (final text answer). */
     int max_rounds;          /* from config (default AGENT_LOOP_MAX_ROUNDS) */
     int round_idx;           /* 1-based round currently executing */
+    int stall_nudged;        /* one-shot stall-recovery nudge already given */
     int had_plan;            /* last REASON produced tool actions (vs final text) */
     char *last_plan_raw;     /* this round's raw plan (stall detection) */
     char *prev_plan;         /* previous round's raw plan (stall detection) */
@@ -1025,6 +1026,7 @@ int coa_reasoning_run(coa_reasoning *r, const char *prompt, char **answer) {
     round_log_reset(r);
     free(r->last_plan_raw); r->last_plan_raw = NULL;
     free(r->prev_plan);     r->prev_plan = NULL;
+    r->stall_nudged = 0;
 
     char *final_text = NULL;   /* LLM's plain-text answer (had_plan == 0) */
     char *result = NULL;       /* per-round pipeline output */
@@ -1068,9 +1070,22 @@ int coa_reasoning_run(coa_reasoning *r, const char *prompt, char **answer) {
         /* executed a planned round: keep the observation for the next round */
         round_log_append(r, result ? result : "");
         /* stall detection: the LLM proposed the exact same plan twice — no
-         * progress is possible, stop instead of burning the round budget */
+         * progress is possible. Give ONE recovery nudge ("the actions already
+         * succeeded; answer from the observations instead of repeating them")
+         * before giving up — models often re-emit a successful plan because
+         * they lost track of the feedback, not because they are stuck. */
         if (r->prev_plan && r->last_plan_raw &&
             strcmp(r->prev_plan, r->last_plan_raw) == 0) {
+            if (!r->stall_nudged && r->round_idx < r->max_rounds) {
+                r->stall_nudged = 1;
+                free(r->prev_plan);
+                r->prev_plan = NULL;
+                round_log_append(r,
+                    "[system] 连续两轮计划完全相同，但这些动作都已成功执行，结果就在上面。"
+                    "不要重复已执行的动作：如果观察结果足以回答任务，直接用纯文本给出最终答案；"
+                    "否则给出与之前不同的下一步动作。");
+                continue;
+            }
             stalled = 1;
             break;
         }

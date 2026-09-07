@@ -35,9 +35,33 @@ static char *build_request_body(const coa_llm_request *req, const char *model, i
     cJSON_AddStringToObject(root, "model", model ? model : "default");
     cJSON *msgs = cJSON_AddArrayToObject(root, "messages");
     for (size_t i = 0; i < req->num_messages; i++) {
+        const coa_llm_message *m = &req->messages[i];
         cJSON *o = cJSON_CreateObject();
-        cJSON_AddStringToObject(o, "role", req->messages[i].role);
-        cJSON_AddStringToObject(o, "content", req->messages[i].content);
+        cJSON_AddStringToObject(o, "role", m->role);
+        if (m->image_b64 && *m->image_b64) {
+            /* multimodal message: content is a typed parts array */
+            const char *mime = (m->image_mime && *m->image_mime) ? m->image_mime : "image/png";
+            cJSON *parts = cJSON_AddArrayToObject(o, "content");
+            cJSON *text = cJSON_CreateObject();
+            cJSON_AddStringToObject(text, "type", "text");
+            cJSON_AddStringToObject(text, "text", m->content ? m->content : "");
+            cJSON_AddItemToArray(parts, text);
+            cJSON *img = cJSON_CreateObject();
+            cJSON_AddStringToObject(img, "type", "image_url");
+            cJSON *iu = cJSON_CreateObject();
+            /* url = "data:<mime>;base64," + payload (single allocation) */
+            size_t ulen = strlen(mime) + strlen(m->image_b64) + 32;
+            char *u = (char *)malloc(ulen);
+            if (u) {
+                snprintf(u, ulen, "data:%s;base64,%s", mime, m->image_b64);
+                cJSON_AddStringToObject(iu, "url", u);
+                free(u);
+            }
+            cJSON_AddItemToObject(img, "image_url", iu);
+            cJSON_AddItemToArray(parts, img);
+        } else {
+            cJSON_AddStringToObject(o, "content", m->content);
+        }
         cJSON_AddItemToArray(msgs, o);
     }
     cJSON_AddNumberToObject(root, "temperature", req->temperature);
