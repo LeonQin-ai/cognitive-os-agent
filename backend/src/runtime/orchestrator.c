@@ -277,10 +277,12 @@ int coa_orchestrate(coa_ctx *ctx, const char *task, char **answer,
             int i = 1;
             cJSON_ArrayForEach(it, arr) {
                 cJSON *a = cJSON_GetObjectItemCaseSensitive(it, "agent");
+                cJSON *s = cJSON_GetObjectItemCaseSensitive(it, "status");
                 cJSON *r = cJSON_GetObjectItemCaseSensitive(it, "result");
                 const char *ag = (a && cJSON_IsString(a)) ? a->valuestring : "?";
+                const char *st = (s && cJSON_IsString(s)) ? s->valuestring : "?";
                 const char *rs = (r && cJSON_IsString(r)) ? r->valuestring : "";
-                coa_strbuf_appendf(&b, "%d. [%s] %s\n", i++, ag, rs);
+                coa_strbuf_appendf(&b, "%d. [%s/status=%s] %s\n", i++, ag, st, rs);
             }
             cJSON_Delete(arr);
             merged = b.buf;
@@ -289,7 +291,12 @@ int coa_orchestrate(coa_ctx *ctx, const char *task, char **answer,
     if (ctx->llm && merged) {
         char sys2[] =
             "你是编排器。综合各 agent 的子任务结果，针对任务给出最终统一答案。"
-            "直接输出答案正文，不要罗列过程。";
+            "直接输出答案正文，不要罗列过程。\n"
+            "严格禁止虚构：答案中对文件、命令、测试结果的任何断言，"
+            "必须能在对应 agent 的结果文本中找到原文依据。"
+            "若某步骤 status 不是 ok，或其结果只是意向说明而没有任何实际执行证据"
+            "（没有工具输出、没有验证过文件生成、没有真实测试运行结果），"
+            "必须如实报告该部分未完成，并说明缺失了什么，不得声称成功。";
         final = coa_llm_chat_simple(ctx->llm, sys2, merged);
     }
     if (!final || !*final)

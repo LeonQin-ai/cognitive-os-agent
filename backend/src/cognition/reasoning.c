@@ -909,6 +909,27 @@ static void compact_history(coa_reasoning *r, size_t n_drop) {
  * Called from the run path; also read from the HTTP thread by
  * coa_reasoning_history_json, hence the hist_mtx guard. compact_history is
  * only ever invoked from here with the lock held (do not lock inside it). */
+/* Heuristic: the model narrated what it is about to do ("Let me check…",
+ * "我需要先…") instead of emitting a JSON action array or a real answer.
+ * Short intent-sounding text on the first round is a premature loop stop —
+ * the model meant to act. Long text is treated as a genuine answer. */
+static int looks_like_intent(const char *text) {
+    if (!text) return 0;
+    if (strlen(text) > 512) return 0;   /* long output is a real answer */
+    static const char *const marks[] = {
+        "I need to", "Let me", "I will", "I'll", "First,", "First ",
+        "I'm going to",
+        "\xe6\x88\x91\xe9\x9c\x80\xe8\xa6\x81",   /* 我需要 */
+        "\xe8\xae\xa9\xe6\x88\x91",               /* 让我   */
+        "\xe6\x88\x91\xe5\xb0\x86",               /* 我将   */
+        "\xe6\x88\x91\xe5\x85\x88",               /* 我先   */
+        "\xe7\xac\xac\xe4\xb8\x80\xe6\xad\xa5",   /* 第一步 */
+    };
+    for (size_t i = 0; i < sizeof(marks) / sizeof(marks[0]); i++)
+        if (strstr(text, marks[i])) return 1;
+    return 0;
+}
+
 static void record_turn(coa_reasoning *r, const char *q, const char *a) {
     if (!r || !q || !a) return;
     coa_mutex_lock(&r->hist_mtx);
@@ -1025,6 +1046,22 @@ int coa_reasoning_run(coa_reasoning *r, const char *prompt, char **answer) {
             continue;
         }
         if (!r->had_plan) { /* no actions planned → this is the final answer */
+            /* Round-1 intent narration ("Let me check the files…") without a
+             * single action is a premature stop: the model announced its plan
+             * instead of emitting the JSON action array. Give it one nudge
+             * round — the narration and a corrective note go into the round
+             * log, which the next round's planner context shows. Only fires
+             * once (round 1) and only when more rounds remain, so chat-style
+             * tasks keep their single-round answer. */
+            if (r->round_idx == 1 && r->max_rounds > 1 && looks_like_intent(result)) {
+                round_log_append(r, result && *result ? result : "");
+                round_log_append(r,
+                    "[system] 上一轮只输出了意向说明，没有执行任何工具动作。"
+                    "如果任务还需要操作（读写文件、执行命令、生成文件等），"
+                    "请输出 JSON 动作数组并实际执行；"
+                    "只有任务确实无需任何工具即可回答时，才直接给出最终答案。");
+                continue;
+            }
             final_text = coa_strdup(result ? result : "");
             break;
         }
