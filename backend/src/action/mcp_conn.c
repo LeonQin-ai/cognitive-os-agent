@@ -14,6 +14,7 @@
 #include "cognitive-os-agent/os/http.h"
 #include "cognitive-os-agent/os/os_fs.h"
 #include "cognitive-os-agent/os/os_time.h"
+#include "cognitive-os-agent/infra/logging.h"
 #include "cognitive-os-agent/infra/util.h"
 
 #include <stdlib.h>
@@ -569,6 +570,8 @@ static void mcp_server_slug(const char *server, char *out, size_t cap) {
  * when npx must cold-download. Servers that miss it register their tools on
  * a later sync / agent call and can be re-checked from the UI test button. */
 #define MCP_BOOTSTRAP_TIMEOUT_MS 15000
+/* Total budget across ALL servers during boot sync — see sync_tools. */
+#define MCP_BOOTSTRAP_TOTAL_BUDGET_MS 20000
 
 /* Discover and register tools for ONE connection. Caller holds m->mtx.
  * Returns the number of tools registered. */
@@ -656,8 +659,25 @@ int coa_mcp_manager_sync_tools(coa_mcp_manager *m, struct coa_tool_registry *reg
     if (!m || !reg) return -1;
     int registered = 0;
     coa_mutex_lock(&m->mtx);
-    for (size_t i = 0; i < m->count; i++)
-        registered += sync_server(m, reg, i, MCP_BOOTSTRAP_TIMEOUT_MS);
+    /* Global boot budget: N dead servers at 15s each used to stall startup
+     * for N*15s before the HTTP listener came up (3 broken entries = 44s,
+     * longer than the desktop shell's connect timeout). Once the budget is
+     * spent, remaining servers are skipped — their tools register lazily on
+     * first use, exactly like a cold npx that misses bootstrap. */
+    int64_t budget_left = MCP_BOOTSTRAP_TOTAL_BUDGET_MS;
+    for (size_t i = 0; i < m->count; i++) {
+        int tmo = budget_left < MCP_BOOTSTRAP_TIMEOUT_MS
+                    ? (int)budget_left : MCP_BOOTSTRAP_TIMEOUT_MS;
+        if (tmo <= 0) {
+            coa_log_warn("mcp: boot sync budget exhausted, skipping '%s' "
+                         "(tools register on first use)",
+                         m->items[i].name);
+            continue;
+        }
+        int64_t t0 = coa_time_now_ms();
+        registered += sync_server(m, reg, i, tmo);
+        budget_left -= coa_time_now_ms() - t0;
+    }
     coa_mutex_unlock(&m->mtx);
     return registered;
 }

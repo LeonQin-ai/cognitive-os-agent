@@ -101,7 +101,11 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
     }
     CloseHandle(pi.hThread);
 
-    if (!wait_server(kPort, 10000)) {
+    /* Boot can legitimately take tens of seconds when restored MCP servers
+     * pay their handshake timeouts before the HTTP listener comes up — 10s
+     * produced false "server did not start" dialogs. 60s covers the worst
+     * case; normal boots connect in well under a second. */
+    if (!wait_server(kPort, 60000)) {
         MessageBoxW(nullptr,
                     L"The cognitive-os-agent server did not start in time.\n\n"
                     L"See cognitive-os-agent-server.log in the install folder for details.",
