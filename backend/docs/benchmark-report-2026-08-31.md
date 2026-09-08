@@ -6,7 +6,7 @@
 >
 > 注（2026-09-08）：**提示词/schema 强化后复跑**——BFCL 提到 **20-22/22**（4 轮真实运行），失分项全部定位并修复；LLM 适配器新增多模态（图片）消息支持，GAIA 的"多模态"短板部分补齐。详见「2026-09-08 强化复跑」。
 >
-> 注（2026-09-08）：**新增 GAIA 风格 mini 实测**——L1/L2 任务形状 9 条 + vision 任务 1 条，AST 外的又一真实运行评测，**9/9 (100%)**；过程中修复 2 个 agent 循环缺陷。详见「GAIA 风格 mini 实测」。
+> 注（2026-09-08）：**新增 GAIA 风格 mini 实测**——17 条任务（L1×8+L2×9）榜单式百分比分数：**Average 88.24-94.12%（L1 稳定 100%，L2 77.78-88.89%）**（deepseek-chat 两轮真实运行）；过程中修复 2 个 agent 循环缺陷。详见「GAIA 风格 mini 实测」。
 
 ## 2026-09-08 强化复跑（把"不是 100%"的项修掉）
 
@@ -42,30 +42,49 @@ LLM 层此前 `content` 只支持纯字符串，多模态模型（如 GLM 系列
 - mock-llm-server 能识别两种图片载荷格式并在响应中标记；test_adapters 新增双 provider 图片消息上线断言（ADAPTER PASS）
 - **GAIA 类任务的可达性重估**：多模态输入 ✅（图片消息层）、文档解析 ✅（shell+python）、文本式网页 ✅（shell curl）；剩余差距 = 交互式网页操作（需浏览器自动化）与多步跨日任务评测集本身
 
-### GAIA 风格 mini 实测（2026-09-08，deepseek-chat 真实运行）
+### GAIA 风格 mini 实测（2026-09-08，deepseek-chat 真实运行，榜单式百分比分数）
 
-新增 `tests/bench_gaia.c`（产物 `build/cognitive-os-agent-bench-gaia`）：GAIA **任务形状**复刻（非官方数据集——官方 test 集答案不公开且需 HuggingFace 提交通道），判分采用 **GAIA 官方归一化**（小写、去标点、去冠词、折叠空白后精确匹配末行/全文 + 数值等值兜底），走完整 agent 循环（`coa_run` 多轮 act-observe），fixture 运行时生成（csv/txt 由 C 写入，docx/png 由 `tools/gen_gaia_fixtures.py` 生成）。
+新增 `tests/bench_gaia.c`（产物 `build/cognitive-os-agent-bench-gaia`）：GAIA **任务形状**复刻（非官方数据集——官方 test 集答案不公开且需 HuggingFace 提交通道），判分采用 **GAIA 官方归一化**（小写、去标点、去冠词、折叠空白后精确匹配末行/全文 + 数值等值兜底），走完整 agent 循环（`coa_run` 多轮 act-observe），fixture 运行时生成（csv/txt 由 C 写入，docx/png 由 `tools/gen_gaia_fixtures.py` 生成）。**17 条任务**（L1×8 + L2×9），输出榜单格式分数（两轮真实运行，deepseek 采样方差如实报告）：
 
-| 级别 | 任务 | 考察 | 得分 |
+| 分数 | Run 1 | Run 2 | 说明 |
 |---|---|---|---|
-| L1 | calc（17×23−91） | 纯推理不调工具 | ✅ |
-| L1 | price（csv 查价） | 单文件事实抽取 | ✅ |
-| L1 | date（txt 提取日期） | 非结构化文本抽取 | ✅ |
-| L1 | docx_email（**二进制 docx** 读邮箱） | 文档解析（shell+python-docx） | ✅ |
-| L2 | revenue（orders×products join 求和） | 多文件 join + 聚合 | ✅ |
-| L2 | count（20 行过滤计数） | 条件过滤 | ✅ |
-| L2 | maxrev（分组聚合取最大） | 多步计算 | ✅ |
-| L2 | latest（按日期排序） | 排序推理 | ✅ |
-| L2 | docx_avg（docx 提取 3 数求均值） | 文档解析 + 算术 | ✅ |
-| V | vision-code（png 中的 4 位码） | 图像理解（LLM 层，`--vision`） | 未跑（deepseek-chat 文本-only；GLM 等视觉模型可跑） |
-| **合计** | | | **9/9 (100%)**，L1 4/4、L2 5/5 |
+| **Average score (%)** | **88.24** | **94.12** | 均值 ~91.2 |
+| **Level 1 score (%)** | **100.00** | **100.00** | 两轮稳定满分 |
+| **Level 2 score (%)** | **77.78** | **88.89** | 波动来自 deepseek 循环方差 |
 
-**首轮 5/9 → 修复 2 个 agent 循环缺陷 → 9/9**（有前后对照，均为框架侧根因）：
-1. **二进制文档不会解析**：agent 对 .docx 反复 file_read 只拿到 "PK…" 垃圾。修复：planner 提示词新增 DOCUMENT HANDLING——二进制文档格式用 shell+python（python-docx/openpyxl/pypdf）提取，且明确"不要重复 file_read 二进制文件"。修复后 docx_email/docx_avg 真实执行 python-docx 提取成功。
-2. **stall 即放弃**：模型连续两轮发出完全相同的（已成功的）read 计划时循环直接中止，最终答案沦为观察日志垃圾。修复：stall 时先给**一次性纠偏 nudge**（"动作已成功执行，基于观察直接给最终答案，不要重复"），nudge 后仍 stall 才中止——与 intent-nudge 同模式。修复后 count/maxrev/revenue 类任务被救回。
+任务清单（17 条，全部独立可验）：
+
+| 级别 | 任务 | 考察 | Run1 | Run2 |
+|---|---|---|---|---|
+| L1 | calc（17×23−91） | 纯推理不调工具 | ✅ | ✅ |
+| L1 | price（csv 查价） | 单文件事实抽取 | ✅ | ✅ |
+| L1 | date（txt 提取日期） | 非结构化文本抽取 | ✅ | ✅ |
+| L1 | docx_email（**二进制 docx** 读邮箱） | 文档解析（shell+python-docx） | ✅ | ✅ |
+| L1 | dist（两段行程总里程） | 多步算术 | ✅ | ✅ |
+| L1 | attendees（数名单人数） | 计数抽取 | ✅ | ✅ |
+| L1 | cents（价格单位换算） | 单位换算 | ✅ | ✅ |
+| L1 | median（5 数中位数） | 排序统计 | ✅ | ✅ |
+| L2 | revenue（orders×products join 求和） | 多文件 join + 聚合 | ✅ | ✅ |
+| L2 | count（20 行双条件过滤计数） | 条件过滤 | ❌ | ✅ |
+| L2 | maxrev（分组聚合取最大） | 多步计算 | ✅ | ✅ |
+| L2 | latest（按日期排序） | 排序推理 | ✅ | ✅ |
+| L2 | docx_avg（docx 提取 3 数求均值） | 文档解析 + 算术 | ✅ | ✅ |
+| L2 | sales_pct（环比增长百分比） | 文件抽取 + 算术 | ✅ | ✅ |
+| L2 | second_price（第二高价产品名） | 排序 + 严格格式作答 | ❌ | ❌ |
+| L2 | avg_shipped（多文件去重均值） | join + 去重 + 均值 | ✅ | ✅ |
+| L2 | days_between（跨 3 个月天数差） | 日期推理 | ✅ | ✅ |
+| V | vision-code（png 中的 4 位码） | 图像理解（LLM 层，`--vision`） | 未跑（deepseek-chat 文本-only；GLM 等视觉模型可跑） | |
+
+失分定位（诚实口径）：
+- **count（Run1）**：deepseek 温度方差——nudge 纠偏后仍重复相同 read 计划（Run2 恢复通过）。
+- **second_price（两轮）**：模型答整句（"Widget-C is the second most expensive product"）而非裸名，GAIA 官方严格判分同样会判错——属模型作答纪律，与 BFCL "多给可选参数"同类，框架已通过提示词约束（"Answer with the product name only"）但 deepseek 仍偶发违反。
+
+**框架侧修复记录（评测首轮 5/9 时发现，均有前后对照）**：
+1. **二进制文档不会解析**：agent 对 .docx 反复 file_read 只拿到 "PK…" 垃圾。修复：planner 提示词新增 DOCUMENT HANDLING——二进制文档格式用 shell+python（python-docx/openpyxl/pypdf）提取。修复后 docx 任务真实执行 python-docx 提取成功。
+2. **stall 即放弃**：模型连续两轮发出完全相同的（已成功的）read 计划时循环直接中止，最终答案沦为观察日志垃圾。修复：stall 时先给**一次性纠偏 nudge**（"动作已成功执行，基于观察直接给最终答案，不要重复"），nudge 后仍 stall 才中止。多数任务被救回。
 3. 过程中发现并修正评测器自身 1 处错误：revenue 期望值 618.35 是**设计 fixture 时的算术错误**，agent 实算 575.85 正确（各分项逐行可验）——修正判分器而非"修分"。
 
-**对照 GAIA 官方榜单**（用户提供 2026-06~08 快照，头部 agent 90-93%，且多为 GPT-5/Claude/Gemini 集成 + 官方 165 题）：本 9 题为自建 mini 集，任务复杂度远低于官方 L2/L3，**分数只能作方向性参考**；可量化的结论是：GAIA L1/L2 任务形状在 cognitive-os-agent 上**可达 100%**，且文档解析、多文件聚合两条路径是本轮框架修复打通的。
+**对照 GAIA 官方榜单**（2026-06~08 快照，头部 agent 90-93.36%，多为 GPT-5/Claude/Gemini 集成 + 官方 165 题）：本 17 题为自建 mini 集，任务复杂度远低于官方 L2/L3，**分数只能作方向性参考**；可量化的结论是：GAIA L1/L2 任务形状在 cognitive-os-agent 上 **L1 稳定 100%、L2 78-89%、平均 ~91%**，文档解析与多文件聚合两条路径是本轮框架修复打通的。
 
 ## 分数总表（deepseek-chat）
 
@@ -135,7 +154,7 @@ mock 规划器对照：BFCL 7/22、enf 4/4（mock 对违规请求本就不产生
 |---|---|---|
 | `tests/bench_bfcl.c` | `build/cognitive-os-agent-bench-bfcl` | BFCL 四大场景 + Tau-bench 策略遵循，共 22 条 |
 | `tests/bench_real.c` | `build/cognitive-os-agent-bench-real` | ToolBench 风格工具选择/参数构造 5 条 + AgentBench 风格 OS 命令副作用 4 条 |
-| `tests/bench_gaia.c` | `build/cognitive-os-agent-bench-gaia` | GAIA 风格 L1/L2 任务形状 9 条（官方归一化判分）+ vision 任务 1 条（`--vision`，需多模态模型） |
+| `tests/bench_gaia.c` | `build/cognitive-os-agent-bench-gaia` | GAIA 风格 L1/L2 任务形状 17 条（官方归一化判分，榜单式百分比分数）+ vision 任务 1 条（`--vision`，需多模态模型） |
 
 - BFCL 判分为 **AST 级**：输出解析为 `[{tool,args}]`，值类型严格（字符串 `"3"` ≠ 数字 `3`），多余/缺失参数都算错；parallel 为多重集合比对（顺序无关）。
 - irrelevance / tau-policy 的正确行为是**不产生任何工具调用**（纯文本回答/拒绝）。
@@ -179,7 +198,7 @@ mock 规划器对照：BFCL 7/22、enf 4/4（mock 对违规请求本就不产生
 | BFCL Simple/Multiple/Parallel/Irrelevance | ✅ 已覆盖 | 判分器 AST 级，22 条静态用例 |
 | Tau-bench（策略遵循） | ✅ 已覆盖 | 提示词规则 4 条（裸 LLM 0/4）+ **policy-enforced 引擎规则 4 条（框架 4/4）**，执行侧 policy 硬拦截有量化证据 |
 | ToolBench / AgentBench（CLI 族） | ✅ 已覆盖（bench_real.c） | 2026-09-07 复测端到端 9/9 |
-| GAIA | ✅ mini 已覆盖（2026-09-08） | L1/L2 任务形状 9 条自建用例 **9/9**（官方归一化判分，完整 agent 循环）；多模态消息层已就绪（vision 任务 `--vision`，需视觉模型）；剩余差距 = 官方 L3 长程任务 + 交互式网页操作（需浏览器自动化）|
+| GAIA | ✅ mini 已覆盖（2026-09-08） | L1/L2 任务形状 17 条自建用例，榜单式分数 **Average 88.24-94.12%（L1 100%，L2 77.78-88.89%）**（官方归一化判分，完整 agent 循环）；多模态消息层已就绪（vision 任务 `--vision`，需视觉模型）；剩余差距 = 官方 L3 长程任务 + 交互式网页操作（需浏览器自动化）|
 | WebArena / OSWorld | ❌ 范围外 | 需浏览器/GUI/VM 沙箱 |
 | SWE-bench | ⚠️ mini 可落地 | agent 循环已有；todo-cli 实测中 coder 已具备"跑单测→修复→再跑"迭代环，缺的只是 repo 级任务集 + 容器化沙箱 |
 

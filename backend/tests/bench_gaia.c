@@ -49,12 +49,20 @@ static const gaia_task TASKS[] = {
     {1, "price",       "The file gaia/products.csv lists products and their prices. What is the price of Widget-B? Answer with the number only.", "42.50", 0},
     {1, "date",        "Read the file gaia/meeting_notes.txt. On what date was the product launch moved to? Answer as MM/DD/YYYY only.", "03/15/2026", 0},
     {1, "docx_email",  "The document gaia/contact.docx contains support information. What is the support contact email address? Answer with the email address only.", "support@example.com", 1},
+    {1, "dist",        "A freight truck drives for 3 hours at 80 km/h and then for 2 hours at 95 km/h. What is the total distance traveled in km? Answer with the number only.", "430", 0},
+    {1, "attendees",   "Read the file gaia/meeting_notes.txt. How many attendees are listed? Answer with the number only.", "3", 0},
+    {1, "cents",       "In gaia/products.csv, what is the price of Widget-D expressed in cents? Answer with the number only.", "975", 0},
+    {1, "median",      "The file gaia/numbers.txt contains several numbers, one per line. What is their median? Answer with the number only.", "12", 0},
     /* ---- Level 2: multi-file / multi-step reasoning ---- */
     {2, "revenue",     "gaia/orders.csv lists orders with columns order_id, product, qty, status. gaia/products.csv lists unit prices. What is the total revenue of the orders whose status is shipped? Answer with the number only, rounded to two decimals.", "575.85", 0},
     {2, "count",       "The file gaia/inventory.csv has columns item, quantity, status. How many rows have status shipped AND quantity at least 3? Answer with the number only.", "7", 0},
     {2, "maxrev",      "Using gaia/orders.csv and gaia/products.csv, which product generated the most revenue across the shipped orders? Answer with the product name only.", "Widget-B", 0},
     {2, "latest",      "Read the file gaia/events.txt. Which event happened most recently? Answer with the event name only.", "retrospective", 0},
     {2, "docx_avg",    "The document gaia/report.docx lists three quarterly revenue figures. What is their average? Answer with the number only, rounded to two decimals.", "148.33", 1},
+    {2, "sales_pct",   "Read the file gaia/sales.txt. Unit sales grew from January to February. By what percent did they increase? Answer with the number only.", "25", 0},
+    {2, "second_price","In gaia/products.csv, which product has the second highest price? Answer with the product name only.", "Widget-C", 0},
+    {2, "avg_shipped", "Using gaia/orders.csv and gaia/products.csv, what is the average unit price of the products that appear in at least one shipped order? Answer with the number only, rounded to two decimals.", "31.89", 0},
+    {2, "days_between","Read the file gaia/events.txt. How many days elapsed between the kickoff event and the retrospective event? Answer with the number only.", "99", 0},
 };
 #define N_TASKS ((int)(sizeof(TASKS) / sizeof(TASKS[0])))
 
@@ -167,6 +175,8 @@ static void make_text_fixtures(void) {
         "Marketing asked for more lead time, so the product launch date is "
         "moved to March 15, 2026.\n"
         "Next sync scheduled for the following Tuesday.\n");
+    write_fixture("numbers.txt", "12\n7\n45\n9\n33\n");
+    write_fixture("sales.txt", "Month,units\nJan,240\nFeb,300\n");
 }
 
 static int run_python_fixtures(void) {
@@ -297,17 +307,23 @@ int main(int argc, char **argv) {
     coa_shutdown(&ctx);
 
     int tot_n = l1_n + l2_n, tot_ok = l1_ok + l2_ok;
-    printf("\n== summary ==\n");
-    printf("  GAIA-style L1 : %d/%d\n", l1_ok, l1_n);
-    printf("  GAIA-style L2 : %d/%d\n", l2_ok, l2_n);
-    printf("  total         : %d/%d (%.0f%%)\n", tot_ok, tot_n,
-           tot_n ? 100.0 * tot_ok / tot_n : 0.0);
+    /* leaderboard-style scores (GAIA official reports percentages) */
+    double l1_pct = l1_n ? 100.0 * l1_ok / l1_n : 0.0;
+    double l2_pct = l2_n ? 100.0 * l2_ok / l2_n : 0.0;
+    double avg_pct = tot_n ? 100.0 * tot_ok / tot_n : 0.0;
+    printf("\n== scores (leaderboard format) ==\n");
+    printf("  Average score   : %.2f%%  (%d/%d)\n", avg_pct, tot_ok, tot_n);
+    printf("  Level 1 score   : %.2f%%  (%d/%d)\n", l1_pct, l1_ok, l1_n);
+    printf("  Level 2 score   : %.2f%%  (%d/%d)\n", l2_pct, l2_ok, l2_n);
     if (vision) printf("  vision (L1-style) : %s\n",
                       vis_ok < 0 ? "skipped (--vision set but unavailable)" :
                       vis_ok ? "1/1" : "0/1");
     printf("  total wall time: %lldms\n", (long long)total);
 
     cJSON *j = cJSON_CreateObject();
+    cJSON_AddNumberToObject(j, "avg_score_pct", avg_pct);
+    cJSON_AddNumberToObject(j, "l1_score_pct", l1_pct);
+    cJSON_AddNumberToObject(j, "l2_score_pct", l2_pct);
     cJSON_AddNumberToObject(j, "l1_ok", l1_ok);
     cJSON_AddNumberToObject(j, "l1_total", l1_n);
     cJSON_AddNumberToObject(j, "l2_ok", l2_ok);
