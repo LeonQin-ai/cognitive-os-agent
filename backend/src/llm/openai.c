@@ -112,7 +112,7 @@ static int openai_chat(coa_llm *llm, const coa_llm_request *req, coa_llm_respons
         coa_strmap_set(hdrs, "Authorization", auth);
     }
 
-    coa_http_response *r = coa_http_post(base, path, body, "application/json", hdrs, 60000);
+    coa_http_response *r = coa_http_post(base, path, body, "application/json", hdrs, coa_llm_timeout_ms());
     free(body);
     free(base);
     if (hdrs) { coa_strmap_free(hdrs); free(hdrs); }
@@ -161,7 +161,7 @@ static int openai_stream(coa_llm *llm, const coa_llm_request *req, coa_llm_strea
         coa_strmap_set(hdrs, "Authorization", auth);
     }
 
-    coa_sse *s = coa_sse_start(base, path, body, "application/json", hdrs, 60000);
+    coa_sse *s = coa_sse_start(base, path, body, "application/json", hdrs, coa_llm_timeout_ms());
     free(body);
     free(base);
     if (hdrs) { coa_strmap_free(hdrs); free(hdrs); }

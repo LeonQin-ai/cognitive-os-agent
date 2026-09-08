@@ -26,6 +26,19 @@ void coa_llm_destroy(coa_llm *llm) {
     if (llm->vt && llm->vt->destroy) llm->vt->destroy(llm);
 }
 
+/* LLM HTTP timeout (ms). Reasoning models think for minutes before the
+ * first byte, so a 60s default aborted mid-reasoning ("http request
+ * failed" with no server error). Override via COA_LLM_TIMEOUT_MS
+ * (the COA_* env mapping exposes it as the "llm.timeout_ms" key). */
+int coa_llm_timeout_ms(void) {
+    const char *e = getenv("COA_LLM_TIMEOUT_MS");
+    if (e && *e) {
+        long v = atol(e);
+        if (v >= 10000 && v <= 600000) return (int)v;
+    }
+    return 300000;
+}
+
 int coa_llm_chat(coa_llm *llm, const coa_llm_request *req, coa_llm_response *resp) {
     if (!llm || !llm->vt || !llm->vt->chat) return -1;
     return llm->vt->chat(llm, req, resp);

@@ -91,7 +91,7 @@ static int anthropic_chat(coa_llm *llm, const coa_llm_request *req, coa_llm_resp
     coa_strmap *hdrs = anthropic_headers(llm);
 
     coa_http_response *r = coa_http_post(impl_of(llm)->base_url, ANTHROPIC_PATH, body,
-                                       "application/json", hdrs, 60000);
+                                       "application/json", hdrs, coa_llm_timeout_ms());
     free(body);
     if (hdrs) { coa_strmap_free(hdrs); free(hdrs); }
     if (!r) { set_error(resp, "http request failed"); return -1; }
@@ -136,7 +136,7 @@ static int anthropic_stream(coa_llm *llm, const coa_llm_request *req, coa_llm_st
     coa_strmap *hdrs = anthropic_headers(llm);
 
     coa_sse *s = coa_sse_start(impl_of(llm)->base_url, ANTHROPIC_PATH, body,
-                             "application/json", hdrs, 60000);
+                             "application/json", hdrs, coa_llm_timeout_ms());
     free(body);
     if (hdrs) { coa_strmap_free(hdrs); free(hdrs); }
     if (!s) return -1;

@@ -68,6 +68,11 @@ typedef struct {
 coa_llm *coa_llm_create(const char *provider, const char *base_url, const char *api_key, const char *model);
 void coa_llm_destroy(coa_llm *llm);
 
+/* HTTP timeout for LLM calls in ms (default 300000; override with
+ * COA_LLM_TIMEOUT_MS / the "llm.timeout_ms" config key). Reasoning models
+ * routinely think longer than a minute before the first byte. */
+int coa_llm_timeout_ms(void);
+
 /* Non-streaming chat. resp->content is filled; caller frees. Returns 0 ok, -1 error. */
 int coa_llm_chat(coa_llm *llm, const coa_llm_request *req, coa_llm_response *resp);
 /* Streaming chat; cb is called with deltas. Returns 0 ok, -1 error. A pending
