@@ -11,8 +11,6 @@ OS="$(uname -s)"
 ZIG=""
 if   [ -x tools/zig/zig.exe ]; then ZIG="tools/zig/zig.exe"
 elif [ -x tools/zig/zig     ]; then ZIG="tools/zig/zig"
-elif [ -x ../../c-agent/tools/zig/zig.exe ]; then ZIG="../../c-agent/tools/zig/zig.exe"
-elif [ -x ../../c-agent/tools/zig/zig     ]; then ZIG="../../c-agent/tools/zig/zig"
 elif command -v zig >/dev/null 2>&1; then ZIG="zig"
 else
   echo "ERROR: zig not found. Download it to tools/ (see README) or install zig into PATH." >&2

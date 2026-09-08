@@ -73,7 +73,7 @@ int main(void) {
         system(cmd);
     }
 
-    printf("\nc-agent installed to %s\n", dir);
+    printf("\ncognitive-os-agent installed to %s\n", dir);
     printf("Launch it from the desktop or start-menu shortcut.\n\n");
     system("pause");
     return 0;

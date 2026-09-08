@@ -135,13 +135,24 @@ static int openai_chat(coa_llm *llm, const coa_llm_request *req, coa_llm_respons
     cJSON *msg = choices && choices->child
         ? cJSON_GetObjectItemCaseSensitive(choices->child, "message") : NULL;
     cJSON *content = msg ? cJSON_GetObjectItemCaseSensitive(msg, "content") : NULL;
-    if (content && cJSON_IsString(content)) {
+    if (content && cJSON_IsString(content) && content->valuestring[0]) {
         resp->content = coa_strdup(content->valuestring);
     } else {
-        cJSON *err_obj = cJSON_GetObjectItemCaseSensitive(root, "error");
-        const char *em = err_obj && cJSON_IsObject(err_obj)
-            ? (err_obj->valuestring ? err_obj->valuestring : "unknown") : "no content in response";
-        set_error(resp, em);
+        /* Reasoning models (GLM/DeepSeek-R1 style) can exhaust the token
+         * budget while thinking and return an empty content with the
+         * answer text left in reasoning_content — use it as a fallback
+         * rather than surfacing "no content in response". */
+        cJSON *reasoning = msg
+            ? cJSON_GetObjectItemCaseSensitive(msg, "reasoning_content") : NULL;
+        if (reasoning && cJSON_IsString(reasoning) && reasoning->valuestring[0]) {
+            resp->content = coa_strdup(reasoning->valuestring);
+        } else {
+            cJSON *err_obj = cJSON_GetObjectItemCaseSensitive(root, "error");
+            const char *em = err_obj && cJSON_IsObject(err_obj)
+                ? (err_obj->valuestring ? err_obj->valuestring : "unknown")
+                : "no content in response";
+            set_error(resp, em);
+        }
     }
     cJSON_Delete(root);
     return resp->error ? -1 : 0;
