@@ -258,7 +258,17 @@ coa_listener *coa_listen_addr(const char *host, uint16_t port) {
     int fd = (int)socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) { set_err("socket() failed"); return NULL; }
     int one = 1;
+#if defined(_WIN32)
+    /* Windows: SO_REUSEADDR permits a SECOND process to bind the same
+     * address while the first is actively listening (double-bind). Two
+     * desktop shells then both "listen" on 18300 and traffic is split
+     * unpredictably between them — closing one kills the server the page
+     * is talking to (observed as a black window). SO_EXCLUSIVEADDRUSE
+     * makes a conflicting bind fail loudly with WSAEADDRINUSE instead. */
+    setsockopt(fd, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, (const char *)&one, sizeof(one));
+#else
     setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (const char *)&one, sizeof(one));
+#endif
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;

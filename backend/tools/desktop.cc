@@ -106,8 +106,12 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
      * produced false "server did not start" dialogs. 60s covers the worst
      * case; normal boots connect in well under a second. */
     if (!wait_server(kPort, 60000)) {
+        /* A conflicting bind now fails loudly (SO_EXCLUSIVEADDRUSE): the
+         * usual cause is another instance already running on this port. */
         MessageBoxW(nullptr,
                     L"The cognitive-os-agent server did not start in time.\n\n"
+                    L"If another cognitive-os-agent window is already open, close it "
+                    L"first (only one instance can own port 18300), then relaunch.\n\n"
                     L"See cognitive-os-agent-server.log in the install folder for details.",
                     L"cognitive-os-agent", MB_ICONWARNING);
     }
