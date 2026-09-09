@@ -127,6 +127,21 @@ LLM 层此前 `content` 只支持纯字符串，多模态模型（如 GLM 系列
 
 样本虽小但含金量真实：agent 展示了"读代码 → 定位 → 修改 → 跑测试 → 迭代"完整闭环（如 pylint-8898 修复后 20 条既有测试无一回归）。对照：SWE-bench_Verified 全集 SOTA ~65-70%（Claude/GPT 级），一般 agent 30-50%。本数字为 6 题小样本，仅说明能力上限存在，不具统计效力。
 
+## WebArena 风格浏览器实测（2026-09-09，GLM-5.3-flash 真实运行）
+
+正式 WebArena 需自托管整套站点环境，本节为**同类风格**的可控替代：在稳定的沙箱站点（books.toscrape.com / quotes.toscrape.com，专为爬虫/自动化练习设计）上出 6 道确定答案的浏览器任务，agent 经运行时 `/v1/mcp` 注册 Playwright MCP（stdio，24 个 `mcp__playwright__browser_*` 工具）后自主驱动真实 Chromium 完成。判分严格匹配（归一化/数值精确相等，无子串回退，杜绝拒绝话术误判），标准答案由 harness 在出题时对活页爬取核验。
+
+| 任务 | 考察 | 答案 | 结果 |
+|---|---|---|---|
+| 全站书总数（读分页器推算） | 导航+DOM 查询+推理 | 1000 | ✅（50×20 推算正确） |
+| 左侧栏分类数 | 定位元素+计数 | 50 | ✅ |
+| 《Soumission》价格 | 元素精确抽取 | £50.10 | ✅ |
+| 指定名言作者 | 文本匹配抽取 | Albert Einstein | ✅ |
+| 首页引言数 | 元素计数 | 10 | ✅ |
+| Travel 分类第一本书 | 点击跳转+跨页抽取 | It's Only the Himalayas | ✅ |
+
+**6/6 = 100%**，单题 9-21s。日志核验为真实浏览器动作（每题均有 navigate + `browser_evaluate` 对活页 DOM 的 JS 查询记录，共 14 次工具调用），非模型记忆作答。局限：样本小、站点结构简单、答案可被强模型从记忆中猜中（故以工具调用日志佐证）；不等于 WebArena 正式集分数。复现脚本：`webarena/run.py`（含 MCP 注册、逐题串行——共享单浏览器不可并发、严格判分）。
+
 ## 分数总表（deepseek-chat）
 
 | 评测项 | 得分 | 对照（历史/其他） |
@@ -240,7 +255,7 @@ mock 规划器对照：BFCL 7/22、enf 4/4（mock 对违规请求本就不产生
 | Tau-bench（策略遵循） | ✅ 已覆盖 | 提示词规则 4 条（裸 LLM 0/4）+ **policy-enforced 引擎规则 4 条（框架 4/4）**，执行侧 policy 硬拦截有量化证据 |
 | ToolBench / AgentBench（CLI 族） | ✅ 已覆盖（bench_real.c） | 2026-09-07 复测端到端 9/9 |
 | GAIA | ✅ **官方 validation 全量已跑**（2026-09-09） | 官方 165 题：**Average 10.91%**（GLM-5.3-flash，无浏览器/搜索的 CLI agent 真实分）；失败 112/147 为网络调研任务（工具差距）；Playwright MCP 已接入，复跑待做；自建 mini 17 题 88-94%（deepseek）作方向性对照 |
-| WebArena / OSWorld | ⚠️ 浏览器工具已通（2026-09-09） | Playwright MCP 经 `/v1/mcp`（stdio）接入实测：24 工具、导航+快照+作答全链路通；正式 WebArena 评测集待跑 |
+| WebArena / OSWorld | ✅ 风格化 mini 已跑（2026-09-09） | Playwright MCP（stdio，24 工具）接入后 6 道真实浏览器任务 **6/6**（GLM-5.3-flash，严格判分+工具调用日志佐证非记忆作答）；OSWorld（GUI/VM）仍范围外 |
 | SWE-bench | ✅ mini 已跑（2026-09-09） | **SWE-bench_Verified 11 题（GLM-5.3-flash）：有效样本 5/6 resolved（83%）**，官方 resolved 双验标准（FAIL_TO_PASS + PASS_TO_PASS 回归）；6 例 setup 网络失败重跑中 |
 
 ## 补齐路线

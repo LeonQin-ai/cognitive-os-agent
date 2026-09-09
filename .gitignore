@@ -34,3 +34,13 @@ backend/gaia-dataset/
 backend/gaia-full/
 backend/gaia_fixtures.log
 tools/zig/
+backend/webarena/node_modules/
+backend/webarena/diag-work
+backend/swebench/
+backend/webarena-run/
+backend/mcp-test/
+backend/code.lnk
+webarena-run/
+mcp-test/
+code.lnk
+backend/tools/zig/
