@@ -30,6 +30,7 @@ typedef struct coa_task {
     coa_task_status status;
     char *input;               /* task description / prompt */
     char *output;              /* set by runner */
+    char *tag;                 /* optional routing tag (e.g. chat session id) */
     void *userdata;
     /* internal (managed by scheduler.c): coroutine handle + owning scheduler */
     void *coro;                /* coa_coro* running this task, or NULL */
@@ -49,6 +50,10 @@ void coa_scheduler_free(coa_scheduler *s);
 /* Enqueue a task. Returns its id, or -1 on failure. */
 int64_t coa_scheduler_submit(coa_scheduler *s, int priority, const char *input,
                             void *userdata, int64_t timeout_ms);
+/* Same, with an owned routing tag (NULL = none). The tag is freed with the
+ * task; runners read it as t->tag. */
+int64_t coa_scheduler_submit_tag(coa_scheduler *s, int priority, const char *input,
+                                 void *userdata, int64_t timeout_ms, const char *tag);
 /* Request cancellation. Returns 1 if the task was found, 0 otherwise. */
 int coa_scheduler_cancel(coa_scheduler *s, int64_t id);
 

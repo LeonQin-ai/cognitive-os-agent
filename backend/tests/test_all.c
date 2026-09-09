@@ -2223,6 +2223,54 @@ static void test_chat_upload_evolve(void) {
         coa_shutdown(&ctx);
     }
 
+    /* multi-session chat: two named sessions carry isolated histories; the
+     * default session is untouched; session_clear wipes one session only */
+    {
+        coa_config cfg;
+        memset(&cfg, 0, sizeof(cfg));
+        cfg.state_root = "state-test/chat-sess";
+        cfg.workspace = "state-test/loop-w";
+        cfg.provider = "mock";
+        cfg.http_port = 0;
+        coa_ctx ctx;
+        if (coa_init(&ctx, &cfg) != 0) { CHECK(0); return; }
+        char *a = NULL;
+        CHECK(coa_reasoning_run_ex(ctx.reasoning, "tab-a", "苹果多少钱", &a) == 0);
+        free(a); a = NULL;
+        CHECK(coa_reasoning_run_ex(ctx.reasoning, "tab-b", "天气怎么样", &a) == 0);
+        free(a); a = NULL;
+        CHECK(coa_reasoning_run_ex(ctx.reasoning, "default", "第三个话题", &a) == 0);
+        free(a); a = NULL;
+
+        char *ha = coa_reasoning_history_json_ex(ctx.reasoning, "tab-a", 10);
+        CHECK(ha && strstr(ha, "苹果多少钱") && !strstr(ha, "天气怎么样")
+              && !strstr(ha, "第三个话题"));
+        free(ha);
+        char *hb = coa_reasoning_history_json_ex(ctx.reasoning, "tab-b", 10);
+        CHECK(hb && strstr(hb, "天气怎么样") && !strstr(hb, "苹果多少钱"));
+        free(hb);
+        char *hd = coa_reasoning_history_json(ctx.reasoning, 10); /* default */
+        CHECK(hd && strstr(hd, "第三个话题") && !strstr(hd, "苹果多少钱"));
+        free(hd);
+
+        char *ss = coa_reasoning_sessions_json(ctx.reasoning);
+        CHECK(ss && strstr(ss, "tab-a") && strstr(ss, "tab-b")
+              && strstr(ss, "\"default\""));
+        free(ss);
+
+        CHECK(coa_reasoning_session_clear(ctx.reasoning, "tab-a") == 0);
+        char *ha2 = coa_reasoning_history_json_ex(ctx.reasoning, "tab-a", 10);
+        CHECK(ha2 && strstr(ha2, "苹果多少钱") == NULL);
+        free(ha2);
+        /* clearing one session leaves the other intact */
+        char *hb2 = coa_reasoning_history_json_ex(ctx.reasoning, "tab-b", 10);
+        CHECK(hb2 && strstr(hb2, "天气怎么样") != NULL);
+        free(hb2);
+        CHECK(coa_reasoning_session_clear(ctx.reasoning, "no-such") == -1);
+
+        coa_shutdown(&ctx);
+    }
+
     /* uploaded documents are recallable via the vector store (Chinese text
      * exercises the CJK bigram fallback of the local embedder) */
     {

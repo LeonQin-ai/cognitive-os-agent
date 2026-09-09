@@ -121,7 +121,7 @@ static void coa_sched_trampoline(coa_task *t, coa_scheduler *s, void *ud) {
             coa_orchestrate(ctx, t->input, &answer, NULL);
     } else {
         coa_mutex_lock(&ctx->run_lock);
-        coa_reasoning_run(ctx->reasoning, t->input, &answer);
+        coa_reasoning_run_ex(ctx->reasoning, t->tag, t->input, &answer);
         coa_mutex_unlock(&ctx->run_lock);
     }
     t->output = answer ? answer : coa_strdup("(no output)");

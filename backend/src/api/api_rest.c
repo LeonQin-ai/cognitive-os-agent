@@ -127,9 +127,12 @@ static int h_task_get(const coa_http_request *req, coa_http_response *resp, void
     return 0;
 }
 
-/* POST /v1/chat {"message":"..."} — conversational counterpart of task
- * creation: same async scheduler path, but semantically a chat turn (the
- * reasoning engine keeps the multi-turn context across calls). */
+/* POST /v1/chat {"message":"...", "session":"chat-tab-2"} — conversational
+ * counterpart of task creation: same async scheduler path, but semantically
+ * a chat turn (the reasoning engine keeps the multi-turn context across
+ * calls). The optional "session" id isolates the conversation: each session
+ * carries its own history, summary and session notes, so multiple chat boxes
+ * can run side by side (default = the shared default session). */
 static int h_chat(const coa_http_request *req, coa_http_response *resp, void *ud) {
     coa_ctx *ctx = (coa_ctx *)ud;
     if (!authz_ok(ctx, req, resp)) return 0;
@@ -137,9 +140,12 @@ static int h_chat(const coa_http_request *req, coa_http_response *resp, void *ud
     cJSON *root = b ? cJSON_Parse(b) : NULL;
     free(b);
     const char *msg = NULL;
+    const char *session = NULL;
     if (root && cJSON_IsObject(root)) {
         cJSON *p = cJSON_GetObjectItemCaseSensitive(root, "message");
         if (p && cJSON_IsString(p)) msg = p->valuestring;
+        cJSON *s = cJSON_GetObjectItemCaseSensitive(root, "session");
+        if (s && cJSON_IsString(s) && s->valuestring[0]) session = s->valuestring;
     }
     if (!msg || !*msg) {
         if (root) cJSON_Delete(root);
@@ -147,7 +153,7 @@ static int h_chat(const coa_http_request *req, coa_http_response *resp, void *ud
         coa_http_resp_json(resp, "{\"error\":\"missing 'message' string\"}");
         return 0;
     }
-    int64_t id = coa_scheduler_submit(ctx->scheduler, 0, msg, NULL, 0);
+    int64_t id = coa_scheduler_submit_tag(ctx->scheduler, 0, msg, NULL, 0, session);
     cJSON_Delete(root);
     if (id < 0) {
         resp->status = 500;
@@ -155,6 +161,36 @@ static int h_chat(const coa_http_request *req, coa_http_response *resp, void *ud
         return 0;
     }
     coa_http_resp_appendf(resp, "{\"id\":%lld,\"status\":\"queued\"}", (long long)id);
+    return 0;
+}
+
+/* GET /v1/chat/sessions — list chat sessions (id, turns, task, last active).
+ * DELETE /v1/chat/sessions/<id> — clear that session's history and notes. */
+static int h_chat_sessions(const coa_http_request *req, coa_http_response *resp, void *ud) {
+    coa_ctx *ctx = (coa_ctx *)ud;
+    if (!authz_ok(ctx, req, resp)) return 0;
+    if (strcmp(req->method, "GET") == 0) {
+        char *js = coa_reasoning_sessions_json(ctx->reasoning);
+        coa_http_resp_append(resp, js ? js : "[]");
+        free(js);
+        return 0;
+    }
+    /* DELETE /v1/chat/sessions/<id> */
+    const char *suffix = req->path + strlen("/v1/chat/sessions/");
+    if (!*suffix) {
+        resp->status = 400;
+        coa_http_resp_json(resp, "{\"error\":\"missing session id\"}");
+        return 0;
+    }
+    char sid[128];
+    snprintf(sid, sizeof(sid), "%s", suffix);
+    int rc = coa_reasoning_session_clear(ctx->reasoning, sid);
+    if (rc != 0) {
+        resp->status = 404;
+        coa_http_resp_json(resp, "{\"error\":\"session not found\"}");
+        return 0;
+    }
+    coa_http_resp_json(resp, "{\"status\":\"cleared\"}");
     return 0;
 }
 
@@ -429,18 +465,9 @@ static int h_hook_delete(const coa_http_request *req, coa_http_response *resp, v
     return 0;
 }
 
-/* GET /v1/chat/history — recent conversation turns (oldest first) for the
- * chat panel to backfill on open. */
-static int h_chat_history(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
-    if (!authz_ok(ctx, req, resp)) return 0;
-    (void)req;
-    char *turns = ctx->reasoning ? coa_reasoning_history_json(ctx->reasoning, 20)
-                                 : coa_strdup("[]");
-    coa_http_resp_appendf(resp, "{\"turns\":%s}", turns ? turns : "[]");
-    free(turns);
-    return 0;
-}
+/* GET /v1/chat/history[?session=<id>] — recent conversation turns (oldest
+ * first) for the chat panel to backfill on open; per-session when ?session=
+ * is given. (Defined below sanitize_upload_name, which decodes the param.) */
 
 /* Copy `in` (the ?name= parameter) into `out`, percent-decoding and replacing
  * unsafe characters so the result is a plain basename (no traversal). */
@@ -477,6 +504,23 @@ static void sanitize_upload_name(const char *in, char *out, size_t cap) {
 static void uploads_dir_of(const coa_ctx *ctx, char *dir, size_t cap) {
     coa_path_join(dir, cap, ctx->state_root, "uploads");
     coa_fs_mkdirs(dir);
+}
+
+/* GET /v1/chat/history[?session=<id>] — recent conversation turns (oldest
+ * first) for the chat panel to backfill on open; per-session when ?session=
+ * is given. */
+static int h_chat_history(const coa_http_request *req, coa_http_response *resp, void *ud) {
+    coa_ctx *ctx = (coa_ctx *)ud;
+    if (!authz_ok(ctx, req, resp)) return 0;
+    char sid[128] = "";
+    const char *sp = strstr(req->query, "session=");
+    if (sp) sanitize_upload_name(sp + 8, sid, sizeof(sid));
+    char *turns = ctx->reasoning
+        ? coa_reasoning_history_json_ex(ctx->reasoning, sid[0] ? sid : NULL, 20)
+        : coa_strdup("[]");
+    coa_http_resp_appendf(resp, "{\"turns\":%s}", turns ? turns : "[]");
+    free(turns);
+    return 0;
 }
 
 /* POST /v1/upload?name=<filename> — raw-body upload for RAG. The file is
@@ -2842,6 +2886,8 @@ int coa_api_attach(coa_ctx *ctx) {
     coa_http_server_route(ctx->http, "POST", "/v1/config/snapshot", h_config_snapshot, ctx);
     coa_http_server_route(ctx->http, "POST", "/v1/chat", h_chat, ctx);
     coa_http_server_route(ctx->http, "GET", "/v1/chat/history", h_chat_history, ctx);
+    coa_http_server_route(ctx->http, "GET", "/v1/chat/sessions", h_chat_sessions, ctx);
+    coa_http_server_route(ctx->http, "DELETE", "/v1/chat/sessions/", h_chat_sessions, ctx);
     coa_http_server_route(ctx->http, "GET", "/v1/policy/rules", h_policy_rules, ctx);
     coa_http_server_route(ctx->http, "POST", "/v1/policy/rules", h_policy_add, ctx);
     coa_http_server_route(ctx->http, "DELETE", "/v1/policy/rules/", h_policy_delete, ctx);

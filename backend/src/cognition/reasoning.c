@@ -20,6 +20,7 @@
 #include "cognitive-os-agent/retrieval/engine.h"
 #include "cognitive-os-agent/os/os_fs.h"
 #include "cognitive-os-agent/os/os_thread.h"
+#include "cognitive-os-agent/os/os_time.h"
 #include "cognitive-os-agent/tx/tx.h"
 #include "cognitive-os-agent/execution/executor.h"
 #include "cognitive-os-agent/infra/util.h"
@@ -30,6 +31,56 @@
 #include <string.h>
 #include <stdio.h>
 #include "cJSON.h"
+
+/* One chat session: isolated conversation history, compaction summary and
+ * session notes. Sessions are created on demand by coa_reasoning_run_ex
+ * (id NULL or "" = the default shared session, used by every legacy caller). */
+#define COA_SESSION_MAX 64
+struct coa_session {
+    char *id;
+    coa_mutex mtx;
+    char **hist_q;
+    char **hist_a;
+    size_t hist_n, hist_cap;
+    char *summary;         /* LLM-compacted summary of dropped turns */
+    int compact_fails;     /* consecutive compaction LLM failures */
+    int compact_disabled;  /* circuit breaker: stop trying after 3 failures */
+    char sn_state[256];    /* current state / progress */
+    char sn_task[256];     /* current task */
+    char sn_files[256];    /* files touched this session */
+    char sn_errors[256];   /* recent errors */
+    char sn_worklog[1024]; /* append-only per-action log (tail kept) */
+    long long last_active_ms;
+};
+
+static struct coa_session *session_new(const char *id) {
+    struct coa_session *s = calloc(1, sizeof(*s));
+    if (!s) return NULL;
+    s->id = coa_strdup(id && *id ? id : "default");
+    if (!s->id) { free(s); return NULL; }
+    coa_mutex_init(&s->mtx);
+    s->last_active_ms = (long long)coa_time_now_ms();
+    return s;
+}
+
+static void session_free(struct coa_session *s) {
+    if (!s) return;
+    for (size_t i = 0; i < s->hist_n; i++) {
+        free(s->hist_q[i]);
+        free(s->hist_a[i]);
+    }
+    free(s->hist_q);
+    free(s->hist_a);
+    coa_mutex_destroy(&s->mtx);
+    free(s->summary);
+    free(s->id);
+    free(s);
+}
+
+/* Find-or-create the session with this id (NULL/"" = default). Registry cap
+ * COA_SESSION_MAX; beyond it the default session is reused (no unbounded
+ * growth from hostile clients). Callers hold no run in flight. (Defined
+ * after struct coa_reasoning — see below.) */
 
 struct coa_reasoning {
     coa_llm *llm;
@@ -53,27 +104,16 @@ struct coa_reasoning {
     coa_router *router;       /* optional multi-provider routing (NULL = single LLM) */
     coa_attention *attention; /* salience ranking over retrieved context */
 
-    /* multi-turn conversation history (bounded ring of recent turns).
-     * hist_mtx guards all hist_* accesses: the reasoning run itself is
-     * serialized by the ctx run-lock, but /v1/chat/history reads the ring
-     * from the HTTP thread while a run may be in flight. */
-    coa_mutex hist_mtx;
-    char **hist_q;
-    char **hist_a;
-    size_t hist_n, hist_cap;
-
-    /* LLM-compacted summary of turns dropped from the ring (NULL = none) */
-    char *summary;
-    int compact_fails;    /* consecutive compaction LLM failures */
-    int compact_disabled; /* circuit breaker: stop trying after 3 failures */
-
-    /* session notes: fixed-section working notes injected into every prompt
-     * (Claude Code-style SessionMemory template, updated each run) */
-    char sn_state[256];    /* current state / progress */
-    char sn_task[256];     /* current task */
-    char sn_files[256];    /* files touched this session */
-    char sn_errors[256];   /* recent errors */
-    char sn_worklog[1024]; /* append-only per-action log (tail kept) */
+    /* multi-turn conversation history (bounded ring of recent turns), kept
+     * PER CHAT SESSION. sess_mtx guards the session registry; each session's
+     * own mtx guards its ring: the reasoning run itself is serialized by the
+     * ctx run-lock, but /v1/chat/history reads a ring from the HTTP thread
+     * while a run may be in flight. `cur` is the session selected for the
+     * current run (set at run entry, stable for the run's duration). */
+    coa_mutex sess_mtx;
+    struct coa_session **sessions;
+    size_t nsessions, scap;
+    struct coa_session *cur;
 
     /* code index: touched files are indexed for term -> file:line recall */
     struct coa_index *index;
@@ -108,6 +148,33 @@ struct coa_reasoning {
     char *round_log;         /* accumulated action results of previous rounds */
     size_t round_log_len, round_log_cap;
 };
+
+static struct coa_session *session_get(coa_reasoning *r, const char *id) {
+    const char *want = (id && *id) ? id : "default";
+    coa_mutex_lock(&r->sess_mtx);
+    for (size_t i = 0; i < r->nsessions; i++)
+        if (strcmp(r->sessions[i]->id, want) == 0) {
+            struct coa_session *s = r->sessions[i];
+            coa_mutex_unlock(&r->sess_mtx);
+            return s;
+        }
+    struct coa_session *s = NULL;
+    if (r->nsessions < COA_SESSION_MAX) {
+        s = session_new(want);
+        if (s) {
+            struct coa_session **na =
+                realloc(r->sessions, (r->nsessions + 1) * sizeof(*na));
+            if (na) { r->sessions = na; r->sessions[r->nsessions++] = s; }
+            else { session_free(s); s = NULL; }
+        }
+    }
+    if (!s) { /* cap reached or alloc failed: fall back to default */
+        for (size_t i = 0; i < r->nsessions; i++)
+            if (strcmp(r->sessions[i]->id, "default") == 0) { s = r->sessions[i]; break; }
+    }
+    coa_mutex_unlock(&r->sess_mtx);
+    return s;
+}
 
 static void clear_actions(coa_reasoning *r) {
     for (int i = 0; i < r->n_actions; i++) {
@@ -187,7 +254,7 @@ static void sn_note_file(coa_reasoning *r, const char *args_json) {
     if (!o) return;
     cJSON *p = cJSON_GetObjectItemCaseSensitive(o, "path");
     if (p && cJSON_IsString(p) && p->valuestring)
-        sn_append_line(r->sn_files, sizeof(r->sn_files), p->valuestring);
+        sn_append_line(r->cur->sn_files, sizeof(r->cur->sn_files), p->valuestring);
     cJSON_Delete(o);
 }
 
@@ -216,28 +283,28 @@ static char *build_context(coa_reasoning *r, const char *prompt) {
      * Over budget the lowest-value sections shed first:
      * worklog -> errors/files -> task/state only. */
     size_t warm_used = 0;
-    if (r->summary && *r->summary) {
+    if (r->cur->summary && *r->cur->summary) {
         coa_strbuf_append(&b, "## Earlier conversation summary\n");
-        coa_strbuf_append(&b, r->summary);
+        coa_strbuf_append(&b, r->cur->summary);
         coa_strbuf_append(&b, "\n\n");
-        warm_used += strlen(r->summary) + 34;
+        warm_used += strlen(r->cur->summary) + 34;
     }
-    if (r->sn_task[0] || r->sn_state[0] || r->sn_files[0] ||
-        r->sn_errors[0] || r->sn_worklog[0]) {
+    if (r->cur->sn_task[0] || r->cur->sn_state[0] || r->cur->sn_files[0] ||
+        r->cur->sn_errors[0] || r->cur->sn_worklog[0]) {
         size_t budget_left = (warm_used < (size_t)r->budget_warm)
             ? (size_t)r->budget_warm - warm_used : 0;
         for (int lv = 0; lv < 3; lv++) { /* 0=full 1=no worklog 2=minimal */
             coa_strbuf nb;
             coa_strbuf_init(&nb);
             coa_strbuf_append(&nb, "## Session notes\n");
-            if (r->sn_task[0]) coa_strbuf_appendf(&nb, "- 任务: %s\n", r->sn_task);
-            if (r->sn_state[0]) coa_strbuf_appendf(&nb, "- 状态: %s\n", r->sn_state);
-            if (lv < 2 && r->sn_files[0])
-                coa_strbuf_appendf(&nb, "- 本会话涉及文件:\n%s", r->sn_files);
-            if (lv < 2 && r->sn_errors[0])
-                coa_strbuf_appendf(&nb, "- 近期错误:\n%s", r->sn_errors);
-            if (lv < 1 && r->sn_worklog[0])
-                coa_strbuf_appendf(&nb, "- 工作日志:\n%s", r->sn_worklog);
+            if (r->cur->sn_task[0]) coa_strbuf_appendf(&nb, "- 任务: %s\n", r->cur->sn_task);
+            if (r->cur->sn_state[0]) coa_strbuf_appendf(&nb, "- 状态: %s\n", r->cur->sn_state);
+            if (lv < 2 && r->cur->sn_files[0])
+                coa_strbuf_appendf(&nb, "- 本会话涉及文件:\n%s", r->cur->sn_files);
+            if (lv < 2 && r->cur->sn_errors[0])
+                coa_strbuf_appendf(&nb, "- 近期错误:\n%s", r->cur->sn_errors);
+            if (lv < 1 && r->cur->sn_worklog[0])
+                coa_strbuf_appendf(&nb, "- 工作日志:\n%s", r->cur->sn_worklog);
             coa_strbuf_append(&nb, "\n");
             if (nb.len <= budget_left || lv == 2) {
                 warm_used += nb.len;
@@ -252,35 +319,35 @@ static char *build_context(coa_reasoning *r, const char *prompt) {
     /* HOT tier: multi-turn history (bounded, most-recent-last). Newest turns
      * are kept whole; older turns beyond the hot budget degrade to one line. */
     size_t hot_mark = b.len;
-    coa_mutex_lock(&r->hist_mtx);
-    if (r->hist_n > 0) {
+    coa_mutex_lock(&r->cur->mtx);
+    if (r->cur->hist_n > 0) {
         coa_strbuf_append(&b, "## Conversation history\n");
-        size_t start = r->hist_n > 6 ? r->hist_n - 6 : 0;
+        size_t start = r->cur->hist_n > 6 ? r->cur->hist_n - 6 : 0;
         /* walk newest->oldest; the first turn that pushes the running total
          * over budget (and everything before it) is degraded to one line */
         size_t keep_from = start;
         size_t total = 0;
         int over = 0;
-        for (size_t i = r->hist_n; i-- > start; ) {
-            size_t cost = (r->hist_q[i] ? strlen(r->hist_q[i]) : 0) +
-                          (r->hist_a[i] ? strlen(r->hist_a[i]) : 0) + 24;
+        for (size_t i = r->cur->hist_n; i-- > start; ) {
+            size_t cost = (r->cur->hist_q[i] ? strlen(r->cur->hist_q[i]) : 0) +
+                          (r->cur->hist_a[i] ? strlen(r->cur->hist_a[i]) : 0) + 24;
             total += cost;
             if (total > (size_t)r->budget_hot) { keep_from = i + 1; over = 1; break; }
         }
-        for (size_t i = start; i < r->hist_n; i++) {
+        for (size_t i = start; i < r->cur->hist_n; i++) {
             if (over && i < keep_from) {
-                char *qh = str_head(r->hist_q[i], 120);
+                char *qh = str_head(r->cur->hist_q[i], 120);
                 coa_strbuf_appendf(&b, "User: %s → Assistant: [earlier turn omitted]\n",
                                   qh ? qh : "");
                 free(qh);
                 continue;
             }
-            if (r->hist_q[i]) coa_strbuf_appendf(&b, "User: %s\n", r->hist_q[i]);
-            if (r->hist_a[i]) coa_strbuf_appendf(&b, "Assistant: %s\n", r->hist_a[i]);
+            if (r->cur->hist_q[i]) coa_strbuf_appendf(&b, "User: %s\n", r->cur->hist_q[i]);
+            if (r->cur->hist_a[i]) coa_strbuf_appendf(&b, "Assistant: %s\n", r->cur->hist_a[i]);
         }
         coa_strbuf_append(&b, "\n");
     }
-    coa_mutex_unlock(&r->hist_mtx);
+    coa_mutex_unlock(&r->cur->mtx);
 
     /* COLD tier: retrieved long-term knowledge + code index, under budget.
      * Degradation: fewer attention-selected items, then hard char cut.
@@ -525,9 +592,9 @@ static int h_act(coa_state_machine *sm, void *ud, const char *input, char **out)
                                   r->actions[i].tool, preason ? preason : "rule");
                 char el[128];
                 snprintf(el, sizeof(el), "%s 被策略拒绝", r->actions[i].tool);
-                sn_append_line(r->sn_errors, sizeof(r->sn_errors), el);
+                sn_append_line(r->cur->sn_errors, sizeof(r->cur->sn_errors), el);
                 snprintf(el, sizeof(el), "[%s] DENIED", r->actions[i].tool);
-                sn_append_line(r->sn_worklog, sizeof(r->sn_worklog), el);
+                sn_append_line(r->cur->sn_worklog, sizeof(r->cur->sn_worklog), el);
                 if (r->metrics) coa_metrics_inc(r->metrics, "tools.denied");
                 continue;
             }
@@ -587,7 +654,7 @@ static int h_act(coa_state_machine *sm, void *ud, const char *input, char **out)
                 coa_strbuf_appendf(&b, "[%s] blocked by hook\n", r->actions[i].tool);
                 char el[128];
                 snprintf(el, sizeof(el), "%s 被 hook 拦截", r->actions[i].tool);
-                sn_append_line(r->sn_errors, sizeof(r->sn_errors), el);
+                sn_append_line(r->cur->sn_errors, sizeof(r->cur->sn_errors), el);
                 if (r->metrics) coa_metrics_inc(r->metrics, "tools.hook_blocked");
                 continue;
             }
@@ -644,15 +711,15 @@ static int h_act(coa_state_machine *sm, void *ud, const char *input, char **out)
         if (rc != 0) {
             char el[96];
             snprintf(el, sizeof(el), "%s 执行失败", r->actions[i].tool);
-            sn_append_line(r->sn_errors, sizeof(r->sn_errors), el);
+            sn_append_line(r->cur->sn_errors, sizeof(r->cur->sn_errors), el);
         }
         char wl[128];
         snprintf(wl, sizeof(wl), "[%s] %s", r->actions[i].tool,
                  rc == 0 ? "ok" : "FAILED");
-        sn_append_line(r->sn_worklog, sizeof(r->sn_worklog), wl);
+        sn_append_line(r->cur->sn_worklog, sizeof(r->cur->sn_worklog), wl);
     }
     if (r->n_actions > 0) {
-        snprintf(r->sn_state, sizeof(r->sn_state), "%d/%d 个动作已执行%s",
+        snprintf(r->cur->sn_state, sizeof(r->cur->sn_state), "%d/%d 个动作已执行%s",
                  r->ok_actions, r->n_actions,
                  r->all_actions_ok ? "" : "，部分失败");
     }
@@ -711,9 +778,9 @@ static int h_learn(coa_state_machine *sm, void *ud, const char *input, char **ou
     /* session notes: current task + end-of-run state */
     if (r->last_prompt && *r->last_prompt) {
         char *t = str_head(r->last_prompt, 200);
-        if (t) { snprintf(r->sn_task, sizeof(r->sn_task), "%s", t); free(t); }
+        if (t) { snprintf(r->cur->sn_task, sizeof(r->cur->sn_task), "%s", t); free(t); }
     }
-    snprintf(r->sn_state, sizeof(r->sn_state), "%s",
+    snprintf(r->cur->sn_state, sizeof(r->cur->sn_state), "%s",
              r->all_actions_ok ? "上一任务已完成" : "上一任务部分失败");
     if (r->mem) {
         /* episode only on the final round: intermediate rounds would record
@@ -767,7 +834,8 @@ coa_reasoning *coa_reasoning_new(const coa_reasoning_config *cfg) {
     if (!cfg || !cfg->llm || !cfg->tools) return NULL;
     coa_reasoning *r = calloc(1, sizeof(coa_reasoning));
     if (!r) return NULL;
-    coa_mutex_init(&r->hist_mtx);
+    coa_mutex_init(&r->sess_mtx);
+    r->cur = session_get(r, NULL); /* default session, always present */
     r->llm = cfg->llm;
     r->tools = cfg->tools;
     r->mem = cfg->memory;
@@ -813,16 +881,10 @@ void coa_reasoning_free(coa_reasoning *r) {
     free(r->last_prompt);
     free(r->workspace);
     free(r->state_root);
-    coa_mutex_lock(&r->hist_mtx);
-    for (size_t i = 0; i < r->hist_n; i++) {
-        free(r->hist_q[i]);
-        free(r->hist_a[i]);
-    }
-    free(r->hist_q);
-    free(r->hist_a);
-    coa_mutex_unlock(&r->hist_mtx);
-    coa_mutex_destroy(&r->hist_mtx);
-    free(r->summary);
+    for (size_t i = 0; i < r->nsessions; i++)
+        session_free(r->sessions[i]);
+    free(r->sessions);
+    coa_mutex_destroy(&r->sess_mtx);
     free(r->last_plan_raw);
     free(r->prev_plan);
     free(r->round_log);
@@ -852,16 +914,16 @@ void coa_reasoning_set_router(coa_reasoning *r, coa_router *router) {
  * summary, then drop those turns. On LLM failure the turns are kept and the
  * attempt is retried next threshold; 3 consecutive failures trip the breaker. */
 static void compact_history(coa_reasoning *r, size_t n_drop) {
-    if (!r || r->hist_n == 0) return;
-    if (n_drop > r->hist_n) n_drop = r->hist_n;
+    if (!r || r->cur->hist_n == 0) return;
+    if (n_drop > r->cur->hist_n) n_drop = r->cur->hist_n;
     if (n_drop == 0) return;
 
     coa_strbuf tb;
     coa_strbuf_init(&tb);
     for (size_t i = 0; i < n_drop; i++) {
         coa_strbuf_appendf(&tb, "User: %s\nAssistant: %s\n\n",
-                          r->hist_q[i] ? r->hist_q[i] : "",
-                          r->hist_a[i] ? r->hist_a[i] : "");
+                          r->cur->hist_q[i] ? r->cur->hist_q[i] : "",
+                          r->cur->hist_a[i] ? r->cur->hist_a[i] : "");
     }
     char *turns = coa_strbuf_detach(&tb);
 
@@ -883,27 +945,27 @@ static void compact_history(coa_reasoning *r, size_t n_drop) {
                                    user_prompt);
     free(user_prompt);
     if (sum && *sum) {
-        free(r->summary);
-        r->summary = str_head(sum, COMPACT_SUMMARY_CAP);
-        if (!r->summary) r->summary = coa_strdup(sum);
-        r->compact_fails = 0;
+        free(r->cur->summary);
+        r->cur->summary = str_head(sum, COMPACT_SUMMARY_CAP);
+        if (!r->cur->summary) r->cur->summary = coa_strdup(sum);
+        r->cur->compact_fails = 0;
         coa_log_info("reasoning: compacted %zu turns into a %zu-char summary",
-                    n_drop, strlen(r->summary));
+                    n_drop, strlen(r->cur->summary));
     } else {
         free(sum);
-        r->compact_fails++;
-        if (r->compact_fails >= 3) r->compact_disabled = 1; /* circuit breaker */
+        r->cur->compact_fails++;
+        if (r->cur->compact_fails >= 3) r->cur->compact_disabled = 1; /* circuit breaker */
         coa_log_warn("reasoning: compaction LLM call failed (%d consecutive)",
-                    r->compact_fails);
+                    r->cur->compact_fails);
         return; /* keep the turns; retry at the next threshold */
     }
     for (size_t i = 0; i < n_drop; i++) {
-        free(r->hist_q[i]);
-        free(r->hist_a[i]);
+        free(r->cur->hist_q[i]);
+        free(r->cur->hist_a[i]);
     }
-    memmove(r->hist_q, r->hist_q + n_drop, (r->hist_n - n_drop) * sizeof(char *));
-    memmove(r->hist_a, r->hist_a + n_drop, (r->hist_n - n_drop) * sizeof(char *));
-    r->hist_n -= n_drop;
+    memmove(r->cur->hist_q, r->cur->hist_q + n_drop, (r->cur->hist_n - n_drop) * sizeof(char *));
+    memmove(r->cur->hist_a, r->cur->hist_a + n_drop, (r->cur->hist_n - n_drop) * sizeof(char *));
+    r->cur->hist_n -= n_drop;
 }
 
 /* Append a completed turn to the bounded multi-turn history.
@@ -933,50 +995,113 @@ static int looks_like_intent(const char *text) {
 
 static void record_turn(coa_reasoning *r, const char *q, const char *a) {
     if (!r || !q || !a) return;
-    coa_mutex_lock(&r->hist_mtx);
-    if (r->hist_cap == 0) {
-        r->hist_cap = 16;
-        r->hist_q = calloc(r->hist_cap, sizeof(char *));
-        r->hist_a = calloc(r->hist_cap, sizeof(char *));
+    coa_mutex_lock(&r->cur->mtx);
+    if (r->cur->hist_cap == 0) {
+        r->cur->hist_cap = 16;
+        r->cur->hist_q = calloc(r->cur->hist_cap, sizeof(char *));
+        r->cur->hist_a = calloc(r->cur->hist_cap, sizeof(char *));
     }
-    if (r->hist_n >= r->hist_cap) {
-        free(r->hist_q[0]);
-        free(r->hist_a[0]);
-        memmove(r->hist_q, r->hist_q + 1, (r->hist_cap - 1) * sizeof(char *));
-        memmove(r->hist_a, r->hist_a + 1, (r->hist_cap - 1) * sizeof(char *));
-        r->hist_n--;
+    if (r->cur->hist_n >= r->cur->hist_cap) {
+        free(r->cur->hist_q[0]);
+        free(r->cur->hist_a[0]);
+        memmove(r->cur->hist_q, r->cur->hist_q + 1, (r->cur->hist_cap - 1) * sizeof(char *));
+        memmove(r->cur->hist_a, r->cur->hist_a + 1, (r->cur->hist_cap - 1) * sizeof(char *));
+        r->cur->hist_n--;
     }
-    r->hist_q[r->hist_n] = str_head(q, HIST_TURN_CAP);
-    r->hist_a[r->hist_n] = str_head(a, HIST_TURN_CAP);
-    if (!r->hist_q[r->hist_n]) r->hist_q[r->hist_n] = coa_strdup(q);
-    if (!r->hist_a[r->hist_n]) r->hist_a[r->hist_n] = coa_strdup(a);
-    r->hist_n++;
+    r->cur->hist_q[r->cur->hist_n] = str_head(q, HIST_TURN_CAP);
+    r->cur->hist_a[r->cur->hist_n] = str_head(a, HIST_TURN_CAP);
+    if (!r->cur->hist_q[r->cur->hist_n]) r->cur->hist_q[r->cur->hist_n] = coa_strdup(q);
+    if (!r->cur->hist_a[r->cur->hist_n]) r->cur->hist_a[r->cur->hist_n] = coa_strdup(a);
+    r->cur->hist_n++;
     /* ring full → compact the oldest half via LLM instead of silent loss */
-    if (r->hist_n >= r->hist_cap && !r->compact_disabled && r->llm)
-        compact_history(r, r->hist_cap / 2);
-    coa_mutex_unlock(&r->hist_mtx);
+    if (r->cur->hist_n >= r->cur->hist_cap && !r->cur->compact_disabled && r->llm)
+        compact_history(r, r->cur->hist_cap / 2);
+    coa_mutex_unlock(&r->cur->mtx);
+}
+
+char *coa_reasoning_history_json_ex(coa_reasoning *r, const char *session_id,
+                                    int max_turns) {
+    if (!r) return coa_strdup("[]");
+    if (max_turns <= 0) max_turns = 20;
+    struct coa_session *s = session_get(r, session_id);
+    if (!s) return coa_strdup("[]");
+    coa_mutex_lock(&s->mtx);
+    size_t start = (s->hist_n > (size_t)max_turns) ? s->hist_n - (size_t)max_turns : 0;
+    cJSON *arr = cJSON_CreateArray();
+    for (size_t i = start; i < s->hist_n; i++) {
+        cJSON *t = cJSON_CreateObject();
+        cJSON_AddStringToObject(t, "q", s->hist_q[i] ? s->hist_q[i] : "");
+        cJSON_AddStringToObject(t, "a", s->hist_a[i] ? s->hist_a[i] : "");
+        cJSON_AddItemToArray(arr, t);
+    }
+    coa_mutex_unlock(&s->mtx);
+    char *sjson = cJSON_PrintUnformatted(arr);
+    cJSON_Delete(arr);
+    return sjson ? sjson : coa_strdup("[]");
 }
 
 char *coa_reasoning_history_json(coa_reasoning *r, int max_turns) {
+    return coa_reasoning_history_json_ex(r, NULL, max_turns);
+}
+
+/* Sessions listing for the UI: [{id, turns, last_active_ms, task}]. */
+char *coa_reasoning_sessions_json(coa_reasoning *r) {
     if (!r) return coa_strdup("[]");
-    if (max_turns <= 0) max_turns = 20;
-    coa_mutex_lock(&r->hist_mtx);
-    size_t start = (r->hist_n > (size_t)max_turns) ? r->hist_n - (size_t)max_turns : 0;
+    coa_mutex_lock(&r->sess_mtx);
     cJSON *arr = cJSON_CreateArray();
-    for (size_t i = start; i < r->hist_n; i++) {
-        cJSON *t = cJSON_CreateObject();
-        cJSON_AddStringToObject(t, "q", r->hist_q[i] ? r->hist_q[i] : "");
-        cJSON_AddStringToObject(t, "a", r->hist_a[i] ? r->hist_a[i] : "");
-        cJSON_AddItemToArray(arr, t);
+    for (size_t i = 0; i < r->nsessions; i++) {
+        struct coa_session *s = r->sessions[i];
+        cJSON *o = cJSON_CreateObject();
+        cJSON_AddStringToObject(o, "id", s->id);
+        coa_mutex_lock(&s->mtx);
+        cJSON_AddNumberToObject(o, "turns", (double)s->hist_n);
+        cJSON_AddStringToObject(o, "task", s->sn_task);
+        coa_mutex_unlock(&s->mtx);
+        cJSON_AddNumberToObject(o, "last_active_ms", (double)s->last_active_ms);
+        cJSON_AddItemToArray(arr, o);
     }
-    coa_mutex_unlock(&r->hist_mtx);
-    char *s = cJSON_PrintUnformatted(arr);
+    coa_mutex_unlock(&r->sess_mtx);
+    char *sjson = cJSON_PrintUnformatted(arr);
     cJSON_Delete(arr);
-    return s ? s : coa_strdup("[]");
+    return sjson ? sjson : coa_strdup("[]");
+}
+
+/* Clear one session's conversation (keeps the session itself). */
+int coa_reasoning_session_clear(coa_reasoning *r, const char *session_id) {
+    if (!r) return -1;
+    const char *want = (session_id && *session_id) ? session_id : "default";
+    coa_mutex_lock(&r->sess_mtx);
+    struct coa_session *s = NULL;
+    for (size_t i = 0; i < r->nsessions; i++)
+        if (strcmp(r->sessions[i]->id, want) == 0) { s = r->sessions[i]; break; }
+    coa_mutex_unlock(&r->sess_mtx);
+    if (!s) return -1;
+    coa_mutex_lock(&s->mtx);
+    for (size_t i = 0; i < s->hist_n; i++) {
+        free(s->hist_q[i]);
+        free(s->hist_a[i]);
+    }
+    s->hist_n = 0;
+    free(s->summary);
+    s->summary = NULL;
+    s->sn_state[0] = s->sn_task[0] = s->sn_files[0] = 0;
+    s->sn_errors[0] = s->sn_worklog[0] = 0;
+    coa_mutex_unlock(&s->mtx);
+    return 0;
 }
 
 int coa_reasoning_run(coa_reasoning *r, const char *prompt, char **answer) {
+    return coa_reasoning_run_ex(r, NULL, prompt, answer);
+}
+
+int coa_reasoning_run_ex(coa_reasoning *r, const char *session_id,
+                         const char *prompt, char **answer) {
     if (!r || !prompt) return -1;
+
+    /* select (or create) the chat session this run belongs to; the ctx
+     * run-lock serializes runs, so swapping r->cur here is race-free */
+    r->cur = session_get(r, session_id);
+    if (r->cur) r->cur->last_active_ms = (long long)coa_time_now_ms();
 
     /* Ingestion guard: a prompt with invalid UTF-8 (e.g. a non-UTF-8 API
      * client) would poison memory/history and break every later LLM call. */
@@ -1184,14 +1309,14 @@ char *coa_reasoning_session_json(coa_reasoning *r) {
     if (!r) return coa_strdup("{}");
     cJSON *o = cJSON_CreateObject();
     if (!o) return coa_strdup("{}");
-    cJSON_AddStringToObject(o, "task", r->sn_task);
-    cJSON_AddStringToObject(o, "state", r->sn_state);
-    cJSON_AddStringToObject(o, "files", r->sn_files);
-    cJSON_AddStringToObject(o, "errors", r->sn_errors);
-    cJSON_AddStringToObject(o, "worklog", r->sn_worklog);
-    cJSON_AddStringToObject(o, "summary", r->summary ? r->summary : "");
-    cJSON_AddNumberToObject(o, "history_turns", (double)r->hist_n);
-    cJSON_AddBoolToObject(o, "compaction_disabled", r->compact_disabled ? 1 : 0);
+    cJSON_AddStringToObject(o, "task", r->cur->sn_task);
+    cJSON_AddStringToObject(o, "state", r->cur->sn_state);
+    cJSON_AddStringToObject(o, "files", r->cur->sn_files);
+    cJSON_AddStringToObject(o, "errors", r->cur->sn_errors);
+    cJSON_AddStringToObject(o, "worklog", r->cur->sn_worklog);
+    cJSON_AddStringToObject(o, "summary", r->cur->summary ? r->cur->summary : "");
+    cJSON_AddNumberToObject(o, "history_turns", (double)r->cur->hist_n);
+    cJSON_AddBoolToObject(o, "compaction_disabled", r->cur->compact_disabled ? 1 : 0);
     char *s = cJSON_PrintUnformatted(o);
     cJSON_Delete(o);
     return s ? s : coa_strdup("{}");

@@ -164,6 +164,7 @@ void coa_scheduler_free(coa_scheduler *s) {
     for (size_t i = 0; i < s->alen; i++) {
         free(s->all[i]->input);
         free(s->all[i]->output);
+        free(s->all[i]->tag);
         free(s->all[i]);
     }
     free(s->all);
@@ -176,6 +177,11 @@ void coa_scheduler_free(coa_scheduler *s) {
 
 int64_t coa_scheduler_submit(coa_scheduler *s, int priority, const char *input,
                             void *userdata, int64_t timeout_ms) {
+    return coa_scheduler_submit_tag(s, priority, input, userdata, timeout_ms, NULL);
+}
+
+int64_t coa_scheduler_submit_tag(coa_scheduler *s, int priority, const char *input,
+                                 void *userdata, int64_t timeout_ms, const char *tag) {
     coa_task *t = calloc(1, sizeof(coa_task));
     if (!t) return -1;
     coa_mutex_lock(&s->mtx);
@@ -185,6 +191,7 @@ int64_t coa_scheduler_submit(coa_scheduler *s, int priority, const char *input,
     t->created_ms = coa_time_now_ms();
     t->status = COA_TS_QUEUED;
     t->input = input ? coa_strdup(input) : coa_strdup("");
+    t->tag = tag ? coa_strdup(tag) : NULL;
     t->userdata = userdata;
     t->sched = s;
     queue_insert(s, t);

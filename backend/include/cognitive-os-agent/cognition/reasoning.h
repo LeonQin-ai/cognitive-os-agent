@@ -72,6 +72,13 @@ void coa_reasoning_free(coa_reasoning *r);
  * *answer receives the final output (caller frees). Returns 0 ok, -1 failed. */
 int coa_reasoning_run(coa_reasoning *r, const char *prompt, char **answer);
 
+/* Same, bound to a named chat session: conversation history, compaction
+ * summary and session notes are isolated per session_id (NULL/"" = the
+ * shared default session used by coa_reasoning_run). Sessions are created
+ * on demand (capped); runs must still be serialized by the caller. */
+int coa_reasoning_run_ex(coa_reasoning *r, const char *session_id,
+                         const char *prompt, char **answer);
+
 /* The underlying state machine (borrowed; valid until coa_reasoning_free). */
 coa_state_machine *coa_reasoning_sm(coa_reasoning *r);
 
@@ -91,6 +98,17 @@ char *coa_reasoning_session_json(coa_reasoning *r);
  * first (the newest max_turns turns; <=0 = default 20). Thread-safe against
  * a concurrent run. Caller frees. */
 char *coa_reasoning_history_json(coa_reasoning *r, int max_turns);
+
+/* Per-session variant of the above; NULL session_id = default session. */
+char *coa_reasoning_history_json_ex(coa_reasoning *r, const char *session_id,
+                                    int max_turns);
+
+/* Chat session registry (multi-session support): list sessions as a JSON
+ * array of {id, turns, task, last_active_ms}; clear one session's history
+ * and notes (returns -1 if the session does not exist). Callers free the
+ * JSON string. */
+char *coa_reasoning_sessions_json(coa_reasoning *r);
+int coa_reasoning_session_clear(coa_reasoning *r, const char *session_id);
 
 #ifdef __cplusplus
 }
