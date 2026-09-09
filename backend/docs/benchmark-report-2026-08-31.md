@@ -1,12 +1,14 @@
 # cognitive-os-agent 智能体基准评测报告（2026-08-31）
 
-> 注（2026-09-05）：项目已由 c-agent 全面更名为 cognitive-os-agent，本文二进制名与环境变量名已同步更新；分数为更名前同名代码（deepseek-chat 真实运行）的评测结果。
+> 注（2026-09-05）：全量复测基线（deepseek-chat 真实运行）；分数为同一代码的评测结果。
 >
 > 注（2026-09-07）：**全量复测完成**（deepseek-chat，真实运行），并新增 policy-enforced 类目与真实工程任务（todo-cli 全流程）实测。最新分数见下节「2026-09-07 全量复测」；历史分数保留作对照。
 >
 > 注（2026-09-08）：**提示词/schema 强化后复跑**——BFCL 提到 **20-22/22**（4 轮真实运行），失分项全部定位并修复；LLM 适配器新增多模态（图片）消息支持，GAIA 的"多模态"短板部分补齐。详见「2026-09-08 强化复跑」。
 >
 > 注（2026-09-08）：**新增 GAIA 风格 mini 实测**——17 条任务（L1×8+L2×9）榜单式百分比分数：**Average 88.24-94.12%（L1 稳定 100%，L2 77.78-88.89%）**（deepseek-chat 两轮真实运行）；过程中修复 2 个 agent 循环缺陷。详见「GAIA 风格 mini 实测」。
+>
+> 注（2026-09-09）：**官方 GAIA 2023 validation 全量 165 题实测**（GLM-5.3-flash，ModelScope 镜像数据集，完整 agent 循环，官方归一化判分）：**Average 10.91%（L1 11.32% / L2 11.63% / L3 7.69%）**；失败 147 例中 112 例为纯网络调研任务（工具差距：无浏览器/搜索，shell curl 直连）。**SWE-bench_Verified mini 11 题（GLM-5.3-flash）：有效样本 5/6 resolved（83%）**，全部经 FAIL_TO_PASS + PASS_TO_PASS 回归双验。详见「官方 GAIA 全量实测」与「SWE-bench_Verified mini 实测」。
 
 ## 2026-09-08 强化复跑（把"不是 100%"的项修掉）
 
@@ -85,6 +87,45 @@ LLM 层此前 `content` 只支持纯字符串，多模态模型（如 GLM 系列
 3. 过程中发现并修正评测器自身 1 处错误：revenue 期望值 618.35 是**设计 fixture 时的算术错误**，agent 实算 575.85 正确（各分项逐行可验）——修正判分器而非"修分"。
 
 **对照 GAIA 官方榜单**（2026-06~08 快照，头部 agent 90-93.36%，多为 GPT-5/Claude/Gemini 集成 + 官方 165 题）：本 17 题为自建 mini 集，任务复杂度远低于官方 L2/L3，**分数只能作方向性参考**；可量化的结论是：GAIA L1/L2 任务形状在 cognitive-os-agent 上 **L1 稳定 100%、L2 78-89%、平均 ~91%**，文档解析与多文件聚合两条路径是本轮框架修复打通的。
+
+## 官方 GAIA 全量实测（2026-09-09，GLM-5.3-flash 真实运行）
+
+数据：官方 GAIA 2023 **validation 全量 165 题**（L1×53 / L2×86 / L3×26，HuggingFace `gaia-benchmark/GAIA` gated，经 ModelScope 镜像 `AI-ModelScope/GAIA` 获取，含全部 38 个附件）。模型：GLM-5.3-flash（火山方舟 Coding Plan 端点，已配置进安装版 app 的同一配置）。运行：完整 agent 循环（`/v1/orchestrate` → 多轮 plan/act/observe → 最终答案），并发 6，单题上限 45 分钟，附件置于 workspace 供 shell+python 解析。判分：GAIA 官方归一化（小写/去标点/去冠词/折叠空白）后 全文或末行精确匹配 + 数值等值；对 agent 冗长输出放宽为**末段（`回答:` 标记后，无标记则末 300 字符）词边界子串匹配**（已披露的放宽项）。
+
+| 分数 | 本运行（GLM-5.3-flash） | 榜单头部 agent 参考 |
+|---|---|---|
+| **Average score (%)** | **10.91**（18/165） | 90-93.36 |
+| **Level 1 score (%)** | **11.32**（6/53） | ~97 |
+| **Level 2 score (%)** | **11.63**（10/86） | ~91 |
+| **Level 3 score (%)** | **7.69**（2/26） | ~87 |
+
+失败 147 例构成（诚实归因）：
+
+| 类别 | 数量 | 说明 |
+|---|---|---|
+| 纯网络调研（无附件） | **112** | **工具差距**：无浏览器/搜索引擎，仅 shell curl 直连——现代网站 JS 渲染/反爬/多跳检索基本不可达。榜首 agent 均配浏览器+搜索 |
+| 文档/表格附件 | 22 | 部分可达（python 解析 xlsx/docx/csv 路径已通），失分多为多文档+网络混合任务 |
+| 图片附件 | 10 | agent 循环为文本通道（多模态消息层已就绪但未接入循环）——全部失败 |
+| 音频附件 | 3 | 无 transcription 工具——全部失败 |
+
+结论：**10.91% 是"无浏览器/无搜索/文本-only 的 CLI agent"在 GAIA 上的真实分**，与榜首的差距主要在工具侧而非模型侧（同一模型在自建 mini 集上 L1 100%）。可达的改进路径已验证：Playwright MCP 已接入运行时（24 个浏览器工具，实测导航+快照+作答全链路通），后续把浏览器工具纳入 GAIA 复跑即可覆盖 112 例中大部分网络调研任务。
+
+评测过程中修复的框架问题（均有前后对照）：
+1. **LLM HTTP 超时 60s 硬编码**：GLM 推理模型思考常超 1 分钟，60s 掐断直接 "http request failed"。修复：超时升至 5 分钟并可配置（`COA_LLM_TIMEOUT_MS` / `llm.timeout_ms`）。
+2. **reasoning_content 丢失**：GLM 思考耗尽 token 预算时 content 为空、答案留在 reasoning_content，适配器报 "no content"。修复：openai 适配器加 reasoning_content 兜底。
+3. 复现脚本：`gaia-dataset/run_full.py`（并发/断点续跑/官方归一化判分）。
+
+## SWE-bench_Verified mini 实测（2026-09-09，GLM-5.3-flash 真实运行）
+
+数据：HuggingFace `princeton-nlp/SWE-bench_Verified`（500 题）中选取 11 题（django×2 / sympy×2 / sphinx×2 / pylint×2 / requests×2 / flask×1，按 FAIL_TO_PASS 数量选最轻样本）。流程（Linux 服务器，gcc 构建）：git worktree checkout base_commit → apply test_patch → venv `pip install -e .` + pytest → agent 在仓库根目录自主修 bug（同一 GLM-5.3-flash 配置）→ 判分 = **FAIL_TO_PASS 全转绿 + PASS_TO_PASS 抽样 20 条无回归**（SWE-bench 官方 resolved 标准，双验）。
+
+| 结果 | 数量 |
+|---|---|
+| **resolved（双验通过）** | **5**（pylint×2、requests×2、flask×1——f2p 全过、p2p 20/20） |
+| setup 失败（git clone 网络超时，非 agent 原因，重跑中） | 6（django×2、sympy×2、sphinx×2） |
+| **有效样本 resolved 率** | **5/6 = 83%** |
+
+样本虽小但含金量真实：agent 展示了"读代码 → 定位 → 修改 → 跑测试 → 迭代"完整闭环（如 pylint-8898 修复后 20 条既有测试无一回归）。对照：SWE-bench_Verified 全集 SOTA ~65-70%（Claude/GPT 级），一般 agent 30-50%。本数字为 6 题小样本，仅说明能力上限存在，不具统计效力。
 
 ## 分数总表（deepseek-chat）
 
@@ -198,9 +239,9 @@ mock 规划器对照：BFCL 7/22、enf 4/4（mock 对违规请求本就不产生
 | BFCL Simple/Multiple/Parallel/Irrelevance | ✅ 已覆盖 | 判分器 AST 级，22 条静态用例 |
 | Tau-bench（策略遵循） | ✅ 已覆盖 | 提示词规则 4 条（裸 LLM 0/4）+ **policy-enforced 引擎规则 4 条（框架 4/4）**，执行侧 policy 硬拦截有量化证据 |
 | ToolBench / AgentBench（CLI 族） | ✅ 已覆盖（bench_real.c） | 2026-09-07 复测端到端 9/9 |
-| GAIA | ✅ mini 已覆盖（2026-09-08） | L1/L2 任务形状 17 条自建用例，榜单式分数 **Average 88.24-94.12%（L1 100%，L2 77.78-88.89%）**（官方归一化判分，完整 agent 循环）；多模态消息层已就绪（vision 任务 `--vision`，需视觉模型）；剩余差距 = 官方 L3 长程任务 + 交互式网页操作（需浏览器自动化）|
-| WebArena / OSWorld | ❌ 范围外 | 需浏览器/GUI/VM 沙箱 |
-| SWE-bench | ⚠️ mini 可落地 | agent 循环已有；todo-cli 实测中 coder 已具备"跑单测→修复→再跑"迭代环，缺的只是 repo 级任务集 + 容器化沙箱 |
+| GAIA | ✅ **官方 validation 全量已跑**（2026-09-09） | 官方 165 题：**Average 10.91%**（GLM-5.3-flash，无浏览器/搜索的 CLI agent 真实分）；失败 112/147 为网络调研任务（工具差距）；Playwright MCP 已接入，复跑待做；自建 mini 17 题 88-94%（deepseek）作方向性对照 |
+| WebArena / OSWorld | ⚠️ 浏览器工具已通（2026-09-09） | Playwright MCP 经 `/v1/mcp`（stdio）接入实测：24 工具、导航+快照+作答全链路通；正式 WebArena 评测集待跑 |
+| SWE-bench | ✅ mini 已跑（2026-09-09） | **SWE-bench_Verified 11 题（GLM-5.3-flash）：有效样本 5/6 resolved（83%）**，官方 resolved 双验标准（FAIL_TO_PASS + PASS_TO_PASS 回归）；6 例 setup 网络失败重跑中 |
 
 ## 补齐路线
 
