@@ -85,8 +85,11 @@ LLM 层此前 `content` 只支持纯字符串，多模态模型（如 GLM 系列
 1. **二进制文档不会解析**：agent 对 .docx 反复 file_read 只拿到 "PK…" 垃圾。修复：planner 提示词新增 DOCUMENT HANDLING——二进制文档格式用 shell+python（python-docx/openpyxl/pypdf）提取。修复后 docx 任务真实执行 python-docx 提取成功。
 2. **stall 即放弃**：模型连续两轮发出完全相同的（已成功的）read 计划时循环直接中止，最终答案沦为观察日志垃圾。修复：stall 时先给**一次性纠偏 nudge**（"动作已成功执行，基于观察直接给最终答案，不要重复"），nudge 后仍 stall 才中止。多数任务被救回。
 3. 过程中发现并修正评测器自身 1 处错误：revenue 期望值 618.35 是**设计 fixture 时的算术错误**，agent 实算 575.85 正确（各分项逐行可验）——修正判分器而非"修分"。
+4. （2026-09-09 补）second_price 期望值同样勘误：fixture 中最高价是 Widget-C（58.00），**第二高价是 Widget-B（42.50）**，原答案误标 Widget-C，导致该题连续两轮"假失败"；vision 任务 max_tokens 256→4096（推理模型思考即烧光预算返回空 content）。
 
-**对照 GAIA 官方榜单**（2026-06~08 快照，头部 agent 90-93.36%，多为 GPT-5/Claude/Gemini 集成 + 官方 165 题）：本 17 题为自建 mini 集，任务复杂度远低于官方 L2/L3，**分数只能作方向性参考**；可量化的结论是：GAIA L1/L2 任务形状在 cognitive-os-agent 上 **L1 稳定 100%、L2 78-89%、平均 ~91%**，文档解析与多文件聚合两条路径是本轮框架修复打通的。
+**GLM-5.3-flash 复跑（2026-09-09，勘误后）**：**17/17 = 100% + vision 1/1**（vision 3 连跑全过，GLM-5.3-flash 经方舟端点支持图像输入）。
+
+**对照 GAIA 官方榜单**（2026-06~08 快照，头部 agent 90-93.36%，多为 GPT-5/Claude/Gemini 集成 + 官方 165 题）：本 17 题为自建 mini 集，任务复杂度远低于官方 L2/L3，**分数只能作方向性参考**；可量化的结论是：GAIA L1/L2 任务形状在 cognitive-os-agent 上可全通（deepseek 平均 ~91%，GLM-5.3-flash 勘误后 17/17），文档解析与多文件聚合两条路径是本轮框架修复打通的。
 
 ## 官方 GAIA 全量实测（2026-09-09，GLM-5.3-flash 真实运行）
 

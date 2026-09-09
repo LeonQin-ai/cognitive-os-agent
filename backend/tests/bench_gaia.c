@@ -60,7 +60,7 @@ static const gaia_task TASKS[] = {
     {2, "latest",      "Read the file gaia/events.txt. Which event happened most recently? Answer with the event name only.", "retrospective", 0},
     {2, "docx_avg",    "The document gaia/report.docx lists three quarterly revenue figures. What is their average? Answer with the number only, rounded to two decimals.", "148.33", 1},
     {2, "sales_pct",   "Read the file gaia/sales.txt. Unit sales grew from January to February. By what percent did they increase? Answer with the number only.", "25", 0},
-    {2, "second_price","In gaia/products.csv, which product has the second highest price? Answer with the product name only.", "Widget-C", 0},
+    {2, "second_price","In gaia/products.csv, which product has the second highest price? Answer with the product name only.", "Widget-B", 0},
     {2, "avg_shipped", "Using gaia/orders.csv and gaia/products.csv, what is the average unit price of the products that appear in at least one shipped order? Answer with the number only, rounded to two decimals.", "31.89", 0},
     {2, "days_between","Read the file gaia/events.txt. How many days elapsed between the kickoff event and the retrospective event? Answer with the number only.", "99", 0},
 };
@@ -217,7 +217,9 @@ static int vision_task(coa_llm *llm, char **answer_out) {
     req.messages = msgs;
     req.num_messages = 1;
     req.temperature = 0.2;
-    req.max_tokens = 256;
+    /* reasoning models burn token budget on thinking before answering; 256
+     * starves them into an empty content (seen with GLM-5.3-flash) */
+    req.max_tokens = 4096;
     coa_llm_response resp;
     memset(&resp, 0, sizeof(resp));
     int rc = coa_llm_chat(llm, &req, &resp);
