@@ -40,8 +40,12 @@ static char *build_request_body(const coa_llm_request *req, const char *model, i
     cJSON *msgs = cJSON_AddArrayToObject(root, "messages");
     for (size_t i = 0; i < req->num_messages; i++) {
         const coa_llm_message *m = &req->messages[i];
+        /* Tool observations can carry non-UTF-8 bytes (binary files, PDF
+         * extraction); providers reject such bodies, so sanitize text. */
+        char *content = m->content ? coa_str_utf8_sanitize(m->content) : NULL;
         if (strcmp(m->role, "system") == 0) {
-            cJSON_AddStringToObject(root, "system", m->content);
+            cJSON_AddStringToObject(root, "system", content ? content : "");
+            free(content);
             continue;
         }
         cJSON *o = cJSON_CreateObject();
@@ -52,7 +56,7 @@ static char *build_request_body(const coa_llm_request *req, const char *model, i
             cJSON *blocks = cJSON_AddArrayToObject(o, "content");
             cJSON *text = cJSON_CreateObject();
             cJSON_AddStringToObject(text, "type", "text");
-            cJSON_AddStringToObject(text, "text", m->content ? m->content : "");
+            cJSON_AddStringToObject(text, "text", content ? content : "");
             cJSON_AddItemToArray(blocks, text);
             cJSON *img = cJSON_CreateObject();
             cJSON_AddStringToObject(img, "type", "image");
@@ -63,8 +67,9 @@ static char *build_request_body(const coa_llm_request *req, const char *model, i
             cJSON_AddItemToObject(img, "source", src);
             cJSON_AddItemToArray(blocks, img);
         } else {
-            cJSON_AddStringToObject(o, "content", m->content);
+            cJSON_AddStringToObject(o, "content", content ? content : "");
         }
+        free(content);
         cJSON_AddItemToArray(msgs, o);
     }
     char *s = cJSON_PrintUnformatted(root);
