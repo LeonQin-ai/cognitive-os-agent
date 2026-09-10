@@ -161,22 +161,11 @@ int64_t coa_config_get_int(const coa_config *c, const char *key, int64_t def) {
     return def;
 }
 
-double coa_config_get_dbl(const coa_config *c, const char *key, double def) {
-    cJSON *n = config_get_path(c, key);
-    if (n && cJSON_IsNumber(n))
-        return n->valuedouble;
-    return def;
-}
-
 int coa_config_get_bool(const coa_config *c, const char *key, int def) {
     cJSON *n = config_get_path(c, key);
     if (n && cJSON_IsBool(n))
         return cJSON_IsTrue(n);
     return def;
-}
-
-int coa_config_has(const coa_config *c, const char *key) {
-    return config_get_path(c, key) != NULL;
 }
 
 char *coa_config_to_json(const coa_config *c) {

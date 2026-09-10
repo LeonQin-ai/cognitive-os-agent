@@ -214,15 +214,6 @@ int coa_mcp_manager_count(coa_mcp_manager *m) {
     return n;
 }
 
-const coa_mcp_conn *coa_mcp_manager_get(coa_mcp_manager *m, size_t i) {
-    if (!m)
-        return NULL;
-    coa_mutex_lock(&m->mtx);
-    const coa_mcp_conn *c = (i < m->count) ? &m->items[i] : NULL;
-    coa_mutex_unlock(&m->mtx);
-    return c;
-}
-
 /* ---- stdio transport helpers ---- */
 
 /* Split args_csv on whitespace into a NULL-terminated argv. */
@@ -805,22 +796,6 @@ int coa_mcp_manager_sync_tools_one(coa_mcp_manager *m, struct coa_tool_registry 
     int registered = sync_server(m, reg, (size_t)idx, MCP_BOOTSTRAP_TIMEOUT_MS);
     coa_mutex_unlock(&m->mtx);
     return registered;
-}
-
-int coa_mcp_manager_tool_count(coa_mcp_manager *m, const char *name) {
-    if (!m || !name)
-        return -1;
-    coa_mutex_lock(&m->mtx);
-    int idx = find_conn(m, name);
-    int n = -1;
-    if (idx >= 0) {
-        if (ensure_initialized(m, (size_t)idx, MCP_BOOTSTRAP_TIMEOUT_MS) == 0) {
-            const cJSON *tools = fetch_tools(m, (size_t)idx, MCP_BOOTSTRAP_TIMEOUT_MS);
-            n = tools ? cJSON_GetArraySize(tools) : -1;
-        }
-    }
-    coa_mutex_unlock(&m->mtx);
-    return n;
 }
 
 char *coa_mcp_manager_json(coa_mcp_manager *m) {

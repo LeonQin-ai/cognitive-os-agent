@@ -38,8 +38,6 @@ void coa_state_machine_set_hooks(coa_state_machine *sm, coa_hook_registry *hooks
 /* Install a handler for a stage (or NULL to use the pass-through default). */
 void coa_state_machine_set_handler(coa_state_machine *sm, coa_state st, coa_state_handler fn, void *ud);
 
-coa_state coa_state_machine_current(const coa_state_machine *sm);
-
 /* Run the full pipeline on `input`. Returns final state (DONE or FAILED).
  * *result receives the final working value; caller frees. */
 coa_state coa_state_machine_run(coa_state_machine *sm, const char *input, char **result);

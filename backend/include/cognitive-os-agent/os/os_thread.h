@@ -44,8 +44,6 @@ typedef void (*coa_thread_fn)(void *arg);
 coa_thread *coa_thread_create(coa_thread_fn fn, void *arg);
 void coa_thread_join(coa_thread *t);
 void coa_thread_detach(coa_thread *t);
-/* OS thread id (for logging/debug). */
-uint64_t coa_thread_self_id(void);
 
 #ifdef __cplusplus
 }

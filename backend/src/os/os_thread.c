@@ -95,9 +95,6 @@ void coa_thread_detach(coa_thread *t) {
     }
     free(t);
 }
-uint64_t coa_thread_self_id(void) {
-    return (uint64_t)GetCurrentThreadId();
-}
 
 #else /* POSIX */
 
@@ -202,9 +199,6 @@ void coa_thread_detach(coa_thread *t) {
     PosixThread *pt = (PosixThread *)t;
     pthread_detach(pt->t);
     free(t);
-}
-uint64_t coa_thread_self_id(void) {
-    return (uint64_t)(size_t)pthread_self();
 }
 
 #endif

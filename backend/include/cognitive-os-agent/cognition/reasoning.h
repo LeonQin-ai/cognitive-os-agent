@@ -78,9 +78,6 @@ int coa_reasoning_run(coa_reasoning *r, const char *prompt, char **answer);
  * on demand (capped); runs must still be serialized by the caller. */
 int coa_reasoning_run_ex(coa_reasoning *r, const char *session_id, const char *prompt, char **answer);
 
-/* The underlying state machine (borrowed; valid until coa_reasoning_free). */
-coa_state_machine *coa_reasoning_sm(coa_reasoning *r);
-
 /* Swap the active LLM at runtime. Caller serializes access (the ctx run-lock);
  * the old instance stays owned by the caller to destroy after the swap. */
 void coa_reasoning_set_llm(coa_reasoning *r, coa_llm *llm);

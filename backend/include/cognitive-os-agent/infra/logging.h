@@ -15,20 +15,8 @@ typedef enum coa_loglevel {
     COA_LOG_OFF = 6,
 } coa_loglevel;
 
-typedef struct coa_log_opts {
-    coa_loglevel level; /* minimum level emitted (default INFO) */
-    int color;          /* 1 = ANSI colors on stderr (default 1 if tty) */
-    const char *file;   /* optional log file path (NULL = none) */
-} coa_log_opts;
-
-/* Initialize the global logger. Returns 0 on success, -1 if file open failed. */
-int coa_log_init(const coa_log_opts *opts);
-void coa_log_shutdown(void);
-
-coa_loglevel coa_log_get_level(void);
+/* Set the minimum level emitted by the global logger (default INFO). */
 void coa_log_set_level(coa_loglevel lvl);
-
-const char *coa_log_level_name(coa_loglevel lvl);
 
 void coa_log_write(coa_loglevel lvl, const char *fmt, ...);
 

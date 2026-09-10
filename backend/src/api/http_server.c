@@ -33,10 +33,6 @@ struct coa_http_server {
     coa_mutex mtx;
 };
 
-coa_http_server *coa_http_server_new(uint16_t port) {
-    return coa_http_server_new_bind(NULL, port);
-}
-
 coa_http_server *coa_http_server_new_bind(const char *host, uint16_t port) {
     coa_http_server *s = calloc(1, sizeof(coa_http_server));
     if (!s)

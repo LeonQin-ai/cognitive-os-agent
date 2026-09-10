@@ -31,36 +31,6 @@ static const char *level_colors[] = {
     "\x1b[90m", "\x1b[36m", "\x1b[32m", "\x1b[33m", "\x1b[31m", "\x1b[35m",
 };
 
-int coa_log_init(const coa_log_opts *opts) {
-    if (g_log.inited)
-        coa_log_shutdown();
-    coa_mutex_init(&g_log.mtx);
-    g_log.level = opts ? opts->level : COA_LOG_INFO;
-    g_log.file = NULL;
-    g_log.color = opts ? opts->color : 1;
-    if (opts && opts->file) {
-        g_log.file = fopen(opts->file, "a");
-        if (!g_log.file)
-            return -1;
-    }
-    g_log.inited = 1;
-    return 0;
-}
-
-void coa_log_shutdown(void) {
-    if (!g_log.inited)
-        return;
-    if (g_log.file) {
-        fclose(g_log.file);
-        g_log.file = NULL;
-    }
-    coa_mutex_destroy(&g_log.mtx);
-    memset(&g_log, 0, sizeof(g_log));
-}
-
-coa_loglevel coa_log_get_level(void) {
-    return g_log.level;
-}
 void coa_log_set_level(coa_loglevel lvl) {
     g_log.level = lvl;
 }

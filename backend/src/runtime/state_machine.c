@@ -53,10 +53,6 @@ void coa_state_machine_set_handler(coa_state_machine *sm, coa_state st, coa_stat
     sm->stages[st].ud = ud;
 }
 
-coa_state coa_state_machine_current(const coa_state_machine *sm) {
-    return sm->current;
-}
-
 /* The seven cognitive stages, in order. */
 static const coa_state cognitive_order[] = {
     COA_ST_RECEIVE, COA_ST_UNDERSTAND, COA_ST_REASON, COA_ST_PLAN, COA_ST_ACT, COA_ST_VERIFY, COA_ST_LEARN,

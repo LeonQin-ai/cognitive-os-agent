@@ -258,28 +258,6 @@ int coa_sock_recv(coa_socket *s, void *buf, size_t cap) {
     return n;
 }
 
-int coa_sock_recv_until(coa_socket *s, char *buf, size_t cap, const char *delim) {
-    size_t n = 0;
-    char ch;
-    while (n + 1 < cap) {
-        int r = coa_sock_recv(s, &ch, 1);
-        if (r <= 0)
-            return (int)n;
-        buf[n++] = ch;
-        if (strchr(delim, ch))
-            break;
-    }
-    buf[n] = '\0';
-    return (int)n;
-}
-
-int coa_sock_set_blocking(coa_socket *s, int blocking) {
-    if (!s)
-        return -1;
-    set_nonblock(s->fd, blocking ? 0 : 1);
-    return 0;
-}
-
 int coa_sock_wait_readable(coa_socket *s, int timeout_ms) {
     if (!s || s->fd < 0)
         return -1;
@@ -364,10 +342,6 @@ coa_listener *coa_listen_addr(const char *host, uint16_t port) {
     l->fd = fd;
     g_err[0] = '\0';
     return l;
-}
-
-coa_listener *coa_listen(uint16_t port) {
-    return coa_listen_addr(NULL, port);
 }
 
 coa_socket *coa_accept(coa_listener *l, int timeout_ms) {

@@ -109,48 +109,6 @@ int coa_index_add_file(coa_index *idx, const char *path, const char *content) {
     return 0;
 }
 
-static int has_source_ext(const char *name) {
-    static const char *exts[] = {".c",    ".h",   ".py", ".js", ".ts",   ".json", ".md",  ".sh",
-                                 ".html", ".css", ".rs", ".go", ".java", ".c",    ".cpp", ".hpp"};
-    size_t len = strlen(name);
-    for (size_t i = 0; i < sizeof(exts) / sizeof(char *); i++) {
-        size_t el = strlen(exts[i]);
-        if (len >= el && strcmp(name + len - el, exts[i]) == 0)
-            return 1;
-    }
-    return 0;
-}
-
-static void scan_dir(coa_index *idx, const char *dir) {
-    coa_dir_list dl;
-    if (coa_fs_list_dir(dir, &dl) != 0)
-        return;
-    for (size_t i = 0; i < dl.count; i++) {
-        char full[2048];
-        coa_path_join(full, sizeof(full), dir, dl.items[i].name);
-        if (dl.items[i].is_dir) {
-            if (strcmp(dl.items[i].name, "state") == 0 || strcmp(dl.items[i].name, "build") == 0 ||
-                strcmp(dl.items[i].name, "node_modules") == 0 || strcmp(dl.items[i].name, ".git") == 0)
-                continue;
-            scan_dir(idx, full);
-        } else if (has_source_ext(dl.items[i].name)) {
-            char *content = coa_fs_read_file(full);
-            if (content) {
-                coa_index_add_file(idx, full, content);
-                free(content);
-            }
-        }
-    }
-    coa_fs_list_free(&dl);
-}
-
-int coa_index_build_dir(coa_index *idx, const char *dir) {
-    if (!coa_fs_is_dir(dir))
-        return -1;
-    scan_dir(idx, dir);
-    return 0;
-}
-
 char *coa_index_search(coa_index *idx, const char *query, int limit) {
     /* tokenize query with the same rule as indexing (alnum + underscore) */
     const char *tokens[32];

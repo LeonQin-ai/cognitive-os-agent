@@ -153,15 +153,6 @@ int coa_plugin_registry_count(coa_plugin_registry *r) {
     return n;
 }
 
-const coa_plugin_meta *coa_plugin_registry_get(coa_plugin_registry *r, size_t i) {
-    if (!r)
-        return NULL;
-    coa_mutex_lock(&r->mtx);
-    const coa_plugin_meta *m = (i < r->count) ? &r->items[i] : NULL;
-    coa_mutex_unlock(&r->mtx);
-    return m;
-}
-
 int coa_plugin_registry_deps_met(coa_plugin_registry *r, const char *name) {
     if (!r || !name)
         return 0;

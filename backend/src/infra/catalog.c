@@ -380,14 +380,6 @@ static const catalog_remote_skill REMOTE_SKILLS[] = {
 };
 #define N_REMOTE (int)(sizeof(REMOTE_SKILLS) / sizeof(REMOTE_SKILLS[0]))
 
-int coa_catalog_remote_skill_count(void) {
-    return N_REMOTE;
-}
-
-const catalog_remote_skill *coa_catalog_remote_skill_at(int i) {
-    return (i >= 0 && i < N_REMOTE) ? &REMOTE_SKILLS[i] : NULL;
-}
-
 const catalog_remote_skill *coa_catalog_remote_skill_find(const char *repo, const char *id) {
     for (int i = 0; i < N_REMOTE; i++) {
         const catalog_remote_skill *e = &REMOTE_SKILLS[i];

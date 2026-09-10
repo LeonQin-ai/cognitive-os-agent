@@ -50,10 +50,6 @@ void coa_ringbuf_free(coa_ringbuf *r) {
     free(r);
 }
 
-size_t coa_ringbuf_capacity(coa_ringbuf *r) {
-    return r ? r->capacity : 0;
-}
-
 int coa_ringbuf_push(coa_ringbuf *r, void *item) {
     if (!r || !item)
         return -1;

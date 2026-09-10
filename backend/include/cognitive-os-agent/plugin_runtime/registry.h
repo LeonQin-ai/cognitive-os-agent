@@ -37,8 +37,6 @@ int coa_plugin_registry_set_enabled(coa_plugin_registry *r, const char *name, in
 /* Latest version of a plugin (borrowed). NULL if absent. */
 const coa_plugin_meta *coa_plugin_registry_find(coa_plugin_registry *r, const char *name);
 int coa_plugin_registry_count(coa_plugin_registry *r);
-/* Versioned entry by index (all versions, borrowed). */
-const coa_plugin_meta *coa_plugin_registry_get(coa_plugin_registry *r, size_t i);
 
 /* 1 if every dependency (of the latest version) is registered. */
 int coa_plugin_registry_deps_met(coa_plugin_registry *r, const char *name);

@@ -29,9 +29,6 @@ int coa_ws_server_accept(coa_ws_server *s, coa_socket *sock, const char *sec_ws_
 /* Broadcast a text message to every connected client. */
 void coa_ws_server_broadcast(coa_ws_server *s, const char *json_text);
 
-/* Number of connected clients. */
-int coa_ws_server_count(coa_ws_server *s);
-
 #ifdef __cplusplus
 }
 #endif

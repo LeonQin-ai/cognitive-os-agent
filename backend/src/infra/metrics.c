@@ -80,20 +80,6 @@ void coa_metrics_set(coa_metrics *m, const char *name, double v) {
     coa_mutex_unlock(&m->mtx);
 }
 
-void coa_metrics_observe(coa_metrics *m, const char *name, double v) {
-    static const double bounds[6] = {0.001, 0.01, 0.1, 1, 10, 100};
-    coa_mutex_lock(&m->mtx);
-    metric *mt = find_or_add(m, name, M_HIST);
-    if (mt) {
-        mt->value += 1.0; /* count */
-        mt->sum += v;
-        for (int i = 0; i < 6; i++)
-            if (v <= bounds[i])
-                mt->buckets[i] += 1.0;
-    }
-    coa_mutex_unlock(&m->mtx);
-}
-
 static const char *kind_name(metric_kind k) {
     switch (k) {
     case M_COUNTER:

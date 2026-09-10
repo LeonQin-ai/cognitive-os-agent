@@ -24,9 +24,7 @@ void coa_config_free(coa_config *c);
 /* Getters. Returns NULL / default if missing. */
 const char *coa_config_get_str(const coa_config *c, const char *key, const char *def);
 int64_t coa_config_get_int(const coa_config *c, const char *key, int64_t def);
-double coa_config_get_dbl(const coa_config *c, const char *key, double def);
 int coa_config_get_bool(const coa_config *c, const char *key, int def);
-int coa_config_has(const coa_config *c, const char *key);
 
 /* Render the whole config as a JSON string; caller frees. */
 char *coa_config_to_json(const coa_config *c);

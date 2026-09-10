@@ -40,7 +40,6 @@ int coa_mcp_manager_remove(coa_mcp_manager *m, const char *name);
 /* Borrowed lookups (valid until next mutation). */
 const coa_mcp_conn *coa_mcp_manager_find(coa_mcp_manager *m, const char *name);
 int coa_mcp_manager_count(coa_mcp_manager *m);
-const coa_mcp_conn *coa_mcp_manager_get(coa_mcp_manager *m, size_t i);
 
 /* Invoke `tool` on the named server with JSON args (standard tools/call).
  * On success returns ok=1 with the concatenated text content; on failure
@@ -58,9 +57,6 @@ int coa_mcp_manager_sync_tools(coa_mcp_manager *m, struct coa_tool_registry *reg
  * doesn't block on every other server's handshake. Returns the number of
  * tools registered, or -1 if the name is unknown. */
 int coa_mcp_manager_sync_tools_one(coa_mcp_manager *m, struct coa_tool_registry *reg, const char *name);
-
-/* Number of discovered tools for a connection (-1 if unknown). */
-int coa_mcp_manager_tool_count(coa_mcp_manager *m, const char *name);
 
 /* JSON array of connections {name,transport,url,has_token,command,args,tools}. */
 char *coa_mcp_manager_json(coa_mcp_manager *m);

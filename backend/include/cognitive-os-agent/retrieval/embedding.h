@@ -13,8 +13,6 @@ extern "C" {
 
 #define COA_EMBED_DIM 256
 
-int coa_embed_dim(void);
-
 /* Embed `text` into a COA_EMBED_DIM float vector (L2-normalized) using the
  * currently configured provider. */
 void coa_embed_text(const char *text, float *out);

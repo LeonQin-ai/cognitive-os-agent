@@ -146,10 +146,6 @@ static int remote_embed(const char *text, float *out) {
 
 /* ---------- public API ---------- */
 
-int coa_embed_dim(void) {
-    return COA_EMBED_DIM;
-}
-
 void coa_embed_text(const char *text, float *out) {
     if (!out)
         return;

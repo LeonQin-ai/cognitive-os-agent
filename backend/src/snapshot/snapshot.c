@@ -192,22 +192,6 @@ int coa_snapshot_capture(coa_snapshot *s, const char *path) {
     return 0;
 }
 
-int coa_snapshot_capture_json(coa_snapshot *s, const char *paths_json) {
-    cJSON *arr = cJSON_Parse(paths_json);
-    if (!arr || !cJSON_IsArray(arr)) {
-        if (arr)
-            cJSON_Delete(arr);
-        return -1;
-    }
-    cJSON *it;
-    cJSON_ArrayForEach(it, arr) {
-        if (cJSON_IsString(it))
-            coa_snapshot_capture(s, it->valuestring);
-    }
-    cJSON_Delete(arr);
-    return 0;
-}
-
 const char *coa_snapshot_commit(coa_snapshot *s) {
     if (s->pending_count == 0)
         return NULL;

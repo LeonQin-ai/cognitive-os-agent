@@ -226,29 +226,6 @@ int64_t coa_scheduler_submit_tag(coa_scheduler *s, int priority, const char *inp
     return id;
 }
 
-int coa_scheduler_cancel(coa_scheduler *s, int64_t id) {
-    int found = 0;
-    coa_mutex_lock(&s->mtx);
-    for (size_t i = 0; i < s->qlen; i++) {
-        if (s->queue[i]->id == id) {
-            s->queue[i]->cancel_flag = 1;
-            found = 1;
-            break;
-        }
-    }
-    if (!found) {
-        for (size_t i = 0; i < s->alen; i++) {
-            if (s->all[i]->id == id) {
-                s->all[i]->cancel_flag = 1;
-                found = 1;
-                break;
-            }
-        }
-    }
-    coa_mutex_unlock(&s->mtx);
-    return found;
-}
-
 coa_task *coa_scheduler_get(coa_scheduler *s, int64_t id) {
     coa_task *r = NULL;
     coa_mutex_lock(&s->mtx);
@@ -257,14 +234,6 @@ coa_task *coa_scheduler_get(coa_scheduler *s, int64_t id) {
             r = s->all[i];
             break;
         }
-    coa_mutex_unlock(&s->mtx);
-    return r;
-}
-
-int coa_scheduler_active(coa_scheduler *s) {
-    int r;
-    coa_mutex_lock(&s->mtx);
-    r = s->active;
     coa_mutex_unlock(&s->mtx);
     return r;
 }

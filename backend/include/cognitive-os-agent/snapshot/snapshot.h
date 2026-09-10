@@ -24,8 +24,6 @@ long long coa_snapshot_get_max_file(const coa_snapshot *s);
  * If the file does not exist, records it as "to be created" so rollback deletes it.
  * Returns 0 ok, -1 error. */
 int coa_snapshot_capture(coa_snapshot *s, const char *path);
-/* Capture a set of paths given as a JSON array of strings. */
-int coa_snapshot_capture_json(coa_snapshot *s, const char *paths_json);
 
 /* Commit the pending snapshot. Returns a stable id (borrowed) or NULL. */
 const char *coa_snapshot_commit(coa_snapshot *s);

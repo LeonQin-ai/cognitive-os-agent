@@ -53,13 +53,10 @@ int64_t coa_scheduler_submit(coa_scheduler *s, int priority, const char *input, 
  * task; runners read it as t->tag. */
 int64_t coa_scheduler_submit_tag(coa_scheduler *s, int priority, const char *input, void *userdata, int64_t timeout_ms,
                                  const char *tag);
-/* Request cancellation. Returns 1 if the task was found, 0 otherwise. */
-int coa_scheduler_cancel(coa_scheduler *s, int64_t id);
 
 /* Look up a task by id (borrowed pointer, valid until scheduler_free). */
 coa_task *coa_scheduler_get(coa_scheduler *s, int64_t id);
 
-int coa_scheduler_active(coa_scheduler *s); /* queued + running */
 int coa_scheduler_total(coa_scheduler *s);
 
 void coa_scheduler_set_completion_cb(coa_scheduler *s, coa_task_completion cb, void *ud);

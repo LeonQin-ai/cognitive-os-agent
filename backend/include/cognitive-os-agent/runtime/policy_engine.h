@@ -48,8 +48,6 @@ coa_policy_decision coa_policy_check(coa_policy_engine *pe, const char *tool_nam
 /* Heuristic risk score 0-100 for a tool call (independent of rules). */
 int coa_policy_risk(const char *tool_name, const char *args_json);
 
-void coa_policy_set_ask_cb(coa_policy_engine *pe, coa_policy_ask_cb cb, void *ud);
-
 #ifdef __cplusplus
 }
 #endif

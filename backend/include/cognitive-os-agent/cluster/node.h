@@ -39,7 +39,6 @@ void coa_cluster_mark_down(coa_cluster *c, int64_t stale_ms);
 
 const coa_cluster_node *coa_cluster_find(coa_cluster *c, const char *id);
 int coa_cluster_count(coa_cluster *c);
-const coa_cluster_node *coa_cluster_get(coa_cluster *c, size_t i);
 int coa_cluster_up_count(coa_cluster *c);
 
 /* JSON array of nodes {id,host,port,role,status,caps,last_seen_ms} (caller frees). */

@@ -173,15 +173,6 @@ int coa_cluster_count(coa_cluster *c) {
     return n;
 }
 
-const coa_cluster_node *coa_cluster_get(coa_cluster *c, size_t i) {
-    if (!c)
-        return NULL;
-    coa_mutex_lock(&c->mtx);
-    const coa_cluster_node *n = (i < c->count) ? &c->items[i] : NULL;
-    coa_mutex_unlock(&c->mtx);
-    return n;
-}
-
 int coa_cluster_up_count(coa_cluster *c) {
     if (!c)
         return 0;

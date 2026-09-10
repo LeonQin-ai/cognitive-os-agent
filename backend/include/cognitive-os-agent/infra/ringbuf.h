@@ -24,8 +24,6 @@ int coa_ringbuf_push(coa_ringbuf *r, void *item);
 /* Lock-free dequeue. Returns 1 ok (*item set), 0 buffer empty, -1 bad args. */
 int coa_ringbuf_pop(coa_ringbuf *r, void **item);
 
-size_t coa_ringbuf_capacity(coa_ringbuf *r);
-
 #ifdef __cplusplus
 }
 #endif

@@ -278,15 +278,6 @@ void coa_ws_server_broadcast(coa_ws_server *s, const char *json_text) {
     coa_mutex_unlock(&s->mtx);
 }
 
-int coa_ws_server_count(coa_ws_server *s) {
-    if (!s)
-        return 0;
-    coa_mutex_lock(&s->mtx);
-    int n = (int)s->count;
-    coa_mutex_unlock(&s->mtx);
-    return n;
-}
-
 void coa_ws_server_free(coa_ws_server *s) {
     if (!s)
         return;

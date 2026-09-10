@@ -48,8 +48,6 @@ typedef struct catalog_remote_skill {
     const char *fallback_url; /* mirror (ghproxy) tried when direct fails */
 } catalog_remote_skill;
 
-int coa_catalog_remote_skill_count(void);
-const catalog_remote_skill *coa_catalog_remote_skill_at(int i);
 /* Find by repo+id (either may be NULL = wildcard). NULL when not found. */
 const catalog_remote_skill *coa_catalog_remote_skill_find(const char *repo, const char *id);
 

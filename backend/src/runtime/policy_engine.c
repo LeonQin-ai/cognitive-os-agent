@@ -177,11 +177,6 @@ int coa_policy_load_file(coa_policy_engine *pe, const char *path) {
     return n;
 }
 
-void coa_policy_set_ask_cb(coa_policy_engine *pe, coa_policy_ask_cb cb, void *ud) {
-    pe->ask_cb = cb;
-    pe->ask_ud = ud;
-}
-
 static int args_contain_dangerous(const char *args_json) {
     static const char *danger[] = {"rm ",       "del ",     "drop ",  "format",  "mkfs",
                                    "chmod 777", "shutdown", "reboot", "--force", "rmdir"};

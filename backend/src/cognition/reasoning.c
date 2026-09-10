@@ -932,10 +932,6 @@ void coa_reasoning_free(coa_reasoning *r) {
     free(r);
 }
 
-coa_state_machine *coa_reasoning_sm(coa_reasoning *r) {
-    return r ? r->sm : NULL;
-}
-
 void coa_reasoning_set_llm(coa_reasoning *r, coa_llm *llm) {
     if (!r || !llm)
         return;

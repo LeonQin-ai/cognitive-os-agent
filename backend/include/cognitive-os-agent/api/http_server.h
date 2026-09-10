@@ -34,7 +34,6 @@ typedef int (*coa_http_handler)(const coa_http_request *req, coa_http_response *
 /* Inbound WebSocket text message callback (NUL-terminated, borrowed). */
 typedef void (*coa_ws_handler)(const char *text, void *ud);
 
-coa_http_server *coa_http_server_new(uint16_t port);
 coa_http_server *coa_http_server_new_bind(const char *host, uint16_t port);
 void coa_http_server_free(coa_http_server *s);
 
