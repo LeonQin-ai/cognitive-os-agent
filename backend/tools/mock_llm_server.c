@@ -310,7 +310,7 @@ static int h_messages(const coa_http_request *req, coa_http_response *resp, void
 int main(int argc, char **argv) {
     uint16_t port = (uint16_t)(argc > 1 ? atoi(argv[1]) : 9000);
     if (coa_sock_init() != 0) { fprintf(stderr, "sock init failed\n"); return 1; }
-    coa_http_server *s = coa_http_server_new(port);
+    coa_http_server *s = coa_http_server_new_bind(NULL, port);
     if (!s) { fprintf(stderr, "listen failed on %u\n", (unsigned)port); return 1; }
     coa_http_server_route(s, "POST", "/v1/chat/completions", h_chat, NULL);
     coa_http_server_route(s, "POST", "/v1/messages", h_messages, NULL);
