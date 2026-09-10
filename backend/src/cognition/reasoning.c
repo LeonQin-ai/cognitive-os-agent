@@ -1279,10 +1279,14 @@ int coa_reasoning_run_ex(coa_reasoning *r, const char *session_id, const char *p
         }
     }
 
-    /* Budget exhausted (or stalled) without a plain-text answer: force one
-     * final tool-free LLM call to synthesize the gathered observations, so a
-     * big task ends with a real answer instead of "(已达到最大轮数…)". */
-    if (st == COA_ST_DONE && !final_text && r->round_log_len > 0 && r->llm) {
+    /* Budget exhausted (or stalled, or the last round hit a stage failure —
+     * LLM error, failed action on the final round) without a plain-text
+     * answer: force one final tool-free LLM call to synthesize the gathered
+     * observations, so a big task ends with a real answer instead of a bare
+     * transcript. Without this, a stage failure on the LAST round skipped
+     * synthesis entirely (the old `st == COA_ST_DONE` guard) and the caller
+     * received the raw round log with no answer at all. */
+    if (!final_text && r->round_log_len > 0 && r->llm) {
         char sys[320];
         snprintf(sys, sizeof(sys),
                  "You are finalizing an agent run. Based on the original request and the "
@@ -1298,10 +1302,16 @@ int coa_reasoning_run_ex(coa_reasoning *r, const char *session_id, const char *p
             snprintf(user, strlen(prompt) + sizeof(tail) + 64, "任务: %s\n\n已执行动作的观察记录（末段）:\n%s", prompt,
                      tail);
             char *ans = coa_llm_chat_simple(r->llm, sys, user);
-            if (ans && *ans)
+            if (ans && *ans) {
                 final_text = ans;
-            else
+                /* a synthesized final answer completes the run even when the
+                 * last stage failed: the caller gets a usable result instead
+                 * of a failure status with no answer text */
+                if (st != COA_ST_DONE)
+                    st = COA_ST_DONE;
+            } else {
                 free(ans);
+            }
             free(user);
         }
     }
