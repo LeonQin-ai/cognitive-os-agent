@@ -16,21 +16,26 @@
 #include <stdarg.h>
 #include "cJSON.h"
 
-#define FLOW_MAX_NODES   16
-#define FLOW_MAX_TASKLEN 8192   /* after {{ref}} substitution — a distilled
-                                 * upstream answer + the node instruction must
-                                 * both fit (2048 truncated real plans) */
-#define FLOW_SUBST_CAP   4096   /* max chars substituted per {{ref}} */
+#define FLOW_MAX_NODES 16
+#define FLOW_MAX_TASKLEN                                                                                               \
+    8192                    /* after {{ref}} substitution — a distilled                                                \
+                             * upstream answer + the node instruction must                                             \
+                             * both fit (2048 truncated real plans) */
+#define FLOW_SUBST_CAP 4096 /* max chars substituted per {{ref}} */
 
-static void flow_event(coa_ctx *ctx, const char *stage, const char *id,
-                       const char *agent, const char *detail) {
-    if (!ctx || !ctx->bus) return;
+static void flow_event(coa_ctx *ctx, const char *stage, const char *id, const char *agent, const char *detail) {
+    if (!ctx || !ctx->bus)
+        return;
     cJSON *o = cJSON_CreateObject();
-    if (!o) return;
+    if (!o)
+        return;
     cJSON_AddStringToObject(o, "stage", stage);
-    if (id) cJSON_AddStringToObject(o, "node", id);
-    if (agent) cJSON_AddStringToObject(o, "agent", agent);
-    if (detail) cJSON_AddStringToObject(o, "detail", detail);
+    if (id)
+        cJSON_AddStringToObject(o, "node", id);
+    if (agent)
+        cJSON_AddStringToObject(o, "agent", agent);
+    if (detail)
+        cJSON_AddStringToObject(o, "detail", detail);
     char *js = cJSON_PrintUnformatted(o);
     cJSON_Delete(o);
     if (js) {
@@ -40,7 +45,8 @@ static void flow_event(coa_ctx *ctx, const char *stage, const char *id,
 }
 
 static void flow_err(char **err, const char *fmt, ...) {
-    if (!err) return;
+    if (!err)
+        return;
     va_list ap;
     va_start(ap, fmt);
     char buf[512];
@@ -55,10 +61,10 @@ typedef struct flow_node {
     char id[64];
     char agent[64];
     char task[FLOW_MAX_TASKLEN];
-    int  layer;
-    int  indeg;
-    int  nadj;                       /* out-degree */
-    int  adj[FLOW_MAX_NODES];        /* successor indices */
+    int layer;
+    int indeg;
+    int nadj;                /* out-degree */
+    int adj[FLOW_MAX_NODES]; /* successor indices */
 } flow_node;
 
 typedef struct flow_dag {
@@ -68,7 +74,8 @@ typedef struct flow_dag {
 
 static int flow_node_index(flow_dag *d, const char *id) {
     for (int i = 0; i < d->n; i++)
-        if (strcmp(d->nodes[i].id, id) == 0) return i;
+        if (strcmp(d->nodes[i].id, id) == 0)
+            return i;
     return -1;
 }
 
@@ -97,8 +104,7 @@ static int flow_parse(const char *dag_json, flow_dag *d, char **err) {
         cJSON *jid = cJSON_GetObjectItemCaseSensitive(jn, "id");
         cJSON *jag = cJSON_GetObjectItemCaseSensitive(jn, "agent");
         cJSON *jtk = cJSON_GetObjectItemCaseSensitive(jn, "task");
-        if (!cJSON_IsString(jid) || !*jid->valuestring ||
-            !cJSON_IsString(jag) || !*jag->valuestring ||
+        if (!cJSON_IsString(jid) || !*jid->valuestring || !cJSON_IsString(jag) || !*jag->valuestring ||
             !cJSON_IsString(jtk) || !*jtk->valuestring) {
             cJSON_Delete(root);
             flow_err(err, "each node needs string 'id', 'agent' and 'task'");
@@ -128,13 +134,17 @@ static int flow_parse(const char *dag_json, flow_dag *d, char **err) {
             if (cJSON_IsObject(je)) {
                 cJSON *jf = cJSON_GetObjectItemCaseSensitive(je, "from");
                 cJSON *jt = cJSON_GetObjectItemCaseSensitive(je, "to");
-                if (cJSON_IsString(jf)) from = jf->valuestring;
-                if (cJSON_IsString(jt)) to = jt->valuestring;
+                if (cJSON_IsString(jf))
+                    from = jf->valuestring;
+                if (cJSON_IsString(jt))
+                    to = jt->valuestring;
             } else if (cJSON_IsArray(je) && cJSON_GetArraySize(je) == 2) {
                 cJSON *jf = cJSON_GetArrayItem(je, 0);
                 cJSON *jt = cJSON_GetArrayItem(je, 1);
-                if (cJSON_IsString(jf)) from = jf->valuestring;
-                if (cJSON_IsString(jt)) to = jt->valuestring;
+                if (cJSON_IsString(jf))
+                    from = jf->valuestring;
+                if (cJSON_IsString(jt))
+                    to = jt->valuestring;
             }
             if (!from || !to) {
                 cJSON_Delete(root);
@@ -148,11 +158,11 @@ static int flow_parse(const char *dag_json, flow_dag *d, char **err) {
                 snprintf(fbuf, sizeof(fbuf), "%s", from);
                 snprintf(tbuf, sizeof(tbuf), "%s", to);
                 cJSON_Delete(root);
-                flow_err(err, "edge references unknown node ('%s' -> '%s')",
-                         fbuf, tbuf);
+                flow_err(err, "edge references unknown node ('%s' -> '%s')", fbuf, tbuf);
                 return -1;
             }
-            if (d->nodes[fi].nadj >= FLOW_MAX_NODES) continue;
+            if (d->nodes[fi].nadj >= FLOW_MAX_NODES)
+                continue;
             d->nodes[fi].adj[d->nodes[fi].nadj++] = ti;
             d->nodes[ti].indeg++;
         }
@@ -167,11 +177,13 @@ static int flow_layer(flow_dag *d) {
     int queue[FLOW_MAX_NODES], qh = 0, qt = 0, done = 0;
     for (int i = 0; i < d->n; i++) {
         d->nodes[i].layer = 0;
-        if (d->nodes[i].indeg == 0) queue[qt++] = i;
+        if (d->nodes[i].indeg == 0)
+            queue[qt++] = i;
     }
     /* working copy of indeg so the dag stays reusable */
     int indeg[FLOW_MAX_NODES];
-    for (int i = 0; i < d->n; i++) indeg[i] = d->nodes[i].indeg;
+    for (int i = 0; i < d->n; i++)
+        indeg[i] = d->nodes[i].indeg;
     while (qh < qt) {
         int u = queue[qh++];
         done++;
@@ -179,7 +191,8 @@ static int flow_layer(flow_dag *d) {
             int v = d->nodes[u].adj[k];
             if (d->nodes[u].layer + 1 > d->nodes[v].layer)
                 d->nodes[v].layer = d->nodes[u].layer + 1;
-            if (--indeg[v] == 0) queue[qt++] = v;
+            if (--indeg[v] == 0)
+                queue[qt++] = v;
         }
     }
     return done;
@@ -190,7 +203,7 @@ static int flow_layer(flow_dag *d) {
 typedef struct flow_job {
     coa_ctx *ctx;
     flow_node *nd;
-    char task[FLOW_MAX_TASKLEN];     /* after {{ref}} substitution */
+    char task[FLOW_MAX_TASKLEN]; /* after {{ref}} substitution */
     char *out;
     int rc;
 } flow_job;
@@ -209,8 +222,7 @@ static coa_reasoning *flow_reasoning_new(coa_ctx *ctx) {
     rc.skills = ctx->skills;
     rc.mcp = ctx->mcp;
     rc.state_root = ctx->state_root;
-    rc.max_rounds = ctx->config
-        ? (int)coa_config_get_int(ctx->config, "reasoning.max_rounds", 32) : 32;
+    rc.max_rounds = ctx->config ? (int)coa_config_get_int(ctx->config, "reasoning.max_rounds", 32) : 32;
     return coa_reasoning_new(&rc);
 }
 
@@ -228,13 +240,11 @@ static void flow_worker(void *arg) {
     char key[96];
     snprintf(key, sizeof(key), "flow/%s/result", j->nd->id);
     coa_blackboard_put(j->ctx->blackboard, key, result);
-    flow_event(j->ctx, "done", j->nd->id, j->nd->agent,
-               j->rc == 0 ? "ok" : "error");
+    flow_event(j->ctx, "done", j->nd->id, j->nd->agent, j->rc == 0 ? "ok" : "error");
 }
 
 /* Replace "{{<id>}}" in the node's task with upstream results (capped). */
-static void flow_substitute(flow_dag *d, flow_node *nd, char **results,
-                            char *out, size_t outsz) {
+static void flow_substitute(flow_dag *d, flow_node *nd, char **results, char *out, size_t outsz) {
     const char *t = nd->task;
     size_t o = 0;
     out[0] = '\0';
@@ -261,17 +271,22 @@ static void flow_substitute(flow_dag *d, flow_node *nd, char **results,
                             last = p;
                             p += 1;
                         }
-                        if (last) ans = last + strlen("\n回答: ");
+                        if (last)
+                            ans = last + strlen("\n回答: ");
                         size_t cap = outsz - o - 1;
                         char hdr[96];
                         int hl = snprintf(hdr, sizeof(hdr), "「上游 %s 结果开始」\n", ref);
                         if (hl > 0 && (size_t)hl < cap) {
-                            memcpy(out + o, hdr, (size_t)hl); o += (size_t)hl; cap -= (size_t)hl;
+                            memcpy(out + o, hdr, (size_t)hl);
+                            o += (size_t)hl;
+                            cap -= (size_t)hl;
                         }
                         const char *body = ans && *ans ? ans : src;
                         size_t len = strlen(body);
-                        if (len > FLOW_SUBST_CAP) len = FLOW_SUBST_CAP;
-                        if (len > cap) len = cap;
+                        if (len > FLOW_SUBST_CAP)
+                            len = FLOW_SUBST_CAP;
+                        if (len > cap)
+                            len = cap;
                         /* strncat would scan for a NUL that is not written
                          * at out+o — copy directly instead. */
                         memcpy(out + o, body, len);
@@ -280,7 +295,8 @@ static void flow_substitute(flow_dag *d, flow_node *nd, char **results,
                         size_t room = outsz - o - 1;
                         const char *ftr = "\n「上游结果结束」";
                         size_t fl = strlen(ftr);
-                        if (fl > room) fl = room;
+                        if (fl > room)
+                            fl = room;
                         memcpy(out + o, ftr, fl);
                         o += fl;
                         out[o] = '\0';
@@ -296,13 +312,15 @@ static void flow_substitute(flow_dag *d, flow_node *nd, char **results,
 }
 
 int coa_flow_validate(const char *dag_json, char **err) {
-    if (err) *err = NULL;
+    if (err)
+        *err = NULL;
     if (!dag_json || !*dag_json) {
         flow_err(err, "empty flow document");
         return -1;
     }
     flow_dag d;
-    if (flow_parse(dag_json, &d, err) != 0) return -1;
+    if (flow_parse(dag_json, &d, err) != 0)
+        return -1;
     if (flow_layer(&d) < d.n) {
         flow_err(err, "cycle detected in flow graph");
         return -1;
@@ -310,11 +328,13 @@ int coa_flow_validate(const char *dag_json, char **err) {
     return 0;
 }
 
-int coa_flow_run(coa_ctx *ctx, const char *dag_json, char **answer,
-                char **trace_json) {
-    if (answer) *answer = NULL;
-    if (trace_json) *trace_json = NULL;
-    if (!ctx || !dag_json || !*dag_json || !answer) return -1;
+int coa_flow_run(coa_ctx *ctx, const char *dag_json, char **answer, char **trace_json) {
+    if (answer)
+        *answer = NULL;
+    if (trace_json)
+        *trace_json = NULL;
+    if (!ctx || !dag_json || !*dag_json || !answer)
+        return -1;
 
     flow_dag d;
     char *err = NULL;
@@ -330,39 +350,42 @@ int coa_flow_run(coa_ctx *ctx, const char *dag_json, char **answer,
     /* every node's agent must be registered */
     for (int i = 0; i < d.n; i++) {
         if (coa_agent_pool_find(ctx->agents, d.nodes[i].agent) < 0) {
-            coa_log_warn("flow: node '%s' references unregistered agent '%s'",
-                        d.nodes[i].id, d.nodes[i].agent);
+            coa_log_warn("flow: node '%s' references unregistered agent '%s'", d.nodes[i].id, d.nodes[i].agent);
             return -1;
         }
     }
 
     int maxlayer = 0;
     for (int i = 0; i < d.n; i++)
-        if (d.nodes[i].layer > maxlayer) maxlayer = d.nodes[i].layer;
+        if (d.nodes[i].layer > maxlayer)
+            maxlayer = d.nodes[i].layer;
 
     char **results = (char **)calloc((size_t)d.n, sizeof(char *));
     char **tasks = (char **)calloc((size_t)d.n, sizeof(char *));
     flow_job *jobs = (flow_job *)calloc((size_t)d.n, sizeof(flow_job));
     if (!results || !tasks || !jobs) {
-        free(results); free(tasks); free(jobs);
+        free(results);
+        free(tasks);
+        free(jobs);
         return -1;
     }
 
     for (int L = 0; L <= maxlayer; L++) {
         int layern = 0, runidx[FLOW_MAX_NODES];
         for (int i = 0; i < d.n; i++)
-            if (d.nodes[i].layer == L) runidx[layern++] = i;
+            if (d.nodes[i].layer == L)
+                runidx[layern++] = i;
         /* substitute upstream results into task templates, set up jobs */
         for (int k = 0; k < layern; k++) {
             int i = runidx[k];
             tasks[i] = (char *)malloc(FLOW_MAX_TASKLEN);
-            if (tasks[i]) flow_substitute(&d, &d.nodes[i], results, tasks[i],
-                                          FLOW_MAX_TASKLEN);
-            else tasks[i] = coa_strdup(d.nodes[i].task);
+            if (tasks[i])
+                flow_substitute(&d, &d.nodes[i], results, tasks[i], FLOW_MAX_TASKLEN);
+            else
+                tasks[i] = coa_strdup(d.nodes[i].task);
             jobs[i].ctx = ctx;
             jobs[i].nd = &d.nodes[i];
-            snprintf(jobs[i].task, FLOW_MAX_TASKLEN, "%s",
-                     tasks[i] ? tasks[i] : d.nodes[i].task);
+            snprintf(jobs[i].task, FLOW_MAX_TASKLEN, "%s", tasks[i] ? tasks[i] : d.nodes[i].task);
             jobs[i].out = NULL;
             jobs[i].rc = -1;
         }
@@ -372,11 +395,13 @@ int coa_flow_run(coa_ctx *ctx, const char *dag_json, char **answer,
         for (int k = 0; k < layern; k++) {
             int i = runidx[k];
             threads[k] = coa_thread_create(flow_worker, &jobs[i]);
-            if (!threads[k]) flow_worker(&jobs[i]); /* spawn failed → inline */
+            if (!threads[k])
+                flow_worker(&jobs[i]); /* spawn failed → inline */
         }
         for (int k = 0; k < layern; k++) {
             int i = runidx[k];
-            if (threads[k]) coa_thread_join(threads[k]);
+            if (threads[k])
+                coa_thread_join(threads[k]);
             results[i] = jobs[i].out; /* may be NULL on failure */
         }
     }
@@ -417,12 +442,15 @@ int coa_flow_run(coa_ctx *ctx, const char *dag_json, char **answer,
     char *trace_str = cJSON_PrintUnformatted(trace);
     if (trace_str) {
         coa_blackboard_put(ctx->blackboard, "flow/trace", trace_str);
-        if (trace_json) *trace_json = coa_strdup(trace_str);
+        if (trace_json)
+            *trace_json = coa_strdup(trace_str);
         free(trace_str);
     }
     cJSON_Delete(trace);
-    for (int i = 0; i < d.n; i++) free(results[i]);
-    for (int i = 0; i < d.n; i++) free(tasks[i]);
+    for (int i = 0; i < d.n; i++)
+        free(results[i]);
+    for (int i = 0; i < d.n; i++)
+        free(tasks[i]);
     free(results);
     free(tasks);
     free(jobs);

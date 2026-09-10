@@ -26,8 +26,12 @@
 #include <fcntl.h>
 #endif
 
-struct coa_socket { int fd; };
-struct coa_listener { int fd; };
+struct coa_socket {
+    int fd;
+};
+struct coa_listener {
+    int fd;
+};
 
 #if defined(_WIN32)
 #define CLOSEFD(fd) closesocket((fd))
@@ -40,17 +44,23 @@ static char g_err[256] = "";
 static const char *sock_strerror(int err) {
 #if defined(_WIN32)
     switch (err) {
-        case WSAETIMEDOUT: return "connect timeout";
-        case WSAECONNREFUSED: return "connection refused";
-        case WSAECONNRESET: return "connection reset";
-        default: return "socket error";
+    case WSAETIMEDOUT:
+        return "connect timeout";
+    case WSAECONNREFUSED:
+        return "connection refused";
+    case WSAECONNRESET:
+        return "connection reset";
+    default:
+        return "socket error";
     }
 #else
     return strerror(err);
 #endif
 }
 
-static void set_err(const char *msg) { snprintf(g_err, sizeof(g_err), "%s", msg); }
+static void set_err(const char *msg) {
+    snprintf(g_err, sizeof(g_err), "%s", msg);
+}
 
 #if defined(_WIN32)
 /* WSAStartup must precede any Winsock call. Initialization normally happens in
@@ -61,7 +71,10 @@ static int wsa_started = 0;
 static int wsa_start(void) {
     if (!wsa_started) {
         WSADATA wsa;
-        if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) { set_err("WSAStartup failed"); return -1; }
+        if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
+            set_err("WSAStartup failed");
+            return -1;
+        }
         wsa_started = 1;
     }
     return 0;
@@ -77,11 +90,16 @@ int coa_sock_init(void) {
 
 void coa_sock_cleanup(void) {
 #if defined(_WIN32)
-    if (wsa_started) { WSACleanup(); wsa_started = 0; }
+    if (wsa_started) {
+        WSACleanup();
+        wsa_started = 0;
+    }
 #endif
 }
 
-const char *coa_sock_error(void) { return g_err; }
+const char *coa_sock_error(void) {
+    return g_err;
+}
 
 static void set_nonblock(int fd, int nb) {
 #if defined(_WIN32)
@@ -95,7 +113,8 @@ static void set_nonblock(int fd, int nb) {
 
 coa_socket *coa_sock_connect(const char *host, uint16_t port, int timeout_ms) {
 #if defined(_WIN32)
-    if (wsa_start() != 0) return NULL;
+    if (wsa_start() != 0)
+        return NULL;
 #endif
     struct addrinfo hints;
     memset(&hints, 0, sizeof(hints));
@@ -115,19 +134,34 @@ coa_socket *coa_sock_connect(const char *host, uint16_t port, int timeout_ms) {
      * on IPv4) must not be able to consume the whole timeout before we fall back. */
     int naddrs = 0;
     struct addrinfo *cnt;
-    for (cnt = res; cnt; cnt = cnt->ai_next) naddrs++;
+    for (cnt = res; cnt; cnt = cnt->ai_next)
+        naddrs++;
     struct addrinfo *ai;
     for (ai = res; ai; ai = ai->ai_next) {
         fd = (int)socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
-        if (fd < 0) continue;
+        if (fd < 0)
+            continue;
         set_nonblock(fd, 1);
         int r = connect(fd, ai->ai_addr, (socklen_t)ai->ai_addrlen);
-        if (r == 0) { err = 0; break; }
+        if (r == 0) {
+            err = 0;
+            break;
+        }
 #if defined(_WIN32)
         int we = WSAGetLastError();
-        if (we != WSAEWOULDBLOCK) { err = we; CLOSEFD(fd); fd = -1; continue; }
+        if (we != WSAEWOULDBLOCK) {
+            err = we;
+            CLOSEFD(fd);
+            fd = -1;
+            continue;
+        }
 #else
-        if (errno != EINPROGRESS) { err = errno; CLOSEFD(fd); fd = -1; continue; }
+        if (errno != EINPROGRESS) {
+            err = errno;
+            CLOSEFD(fd);
+            fd = -1;
+            continue;
+        }
 #endif
         /* wait for writability; budget per address = timeout split across all,
          * bounded to [2s, 5s] so a dead address is skipped quickly */
@@ -139,17 +173,24 @@ coa_socket *coa_sock_connect(const char *host, uint16_t port, int timeout_ms) {
         FD_SET(fd, &wset);
 #endif
         int per = naddrs > 1 && timeout_ms > 0 ? timeout_ms / naddrs : timeout_ms;
-        if (per > 5000) per = 5000;
+        if (per > 5000)
+            per = 5000;
         /* Respect an explicit small budget: never RAISE a caller's timeout
          * above what they asked for. The 2s floor is only a default for
          * callers that didn't specify one (health probes pass, e.g., 300ms
          * and must fail fast rather than hang the single-threaded server). */
-        if (timeout_ms <= 0) per = 2000;
+        if (timeout_ms <= 0)
+            per = 2000;
         struct timeval tv;
         tv.tv_sec = per / 1000;
         tv.tv_usec = (per % 1000) * 1000;
         int sr = select(fd + 1, NULL, &wset, NULL, &tv);
-        if (sr <= 0) { err = 10060; CLOSEFD(fd); fd = -1; continue; }
+        if (sr <= 0) {
+            err = 10060;
+            CLOSEFD(fd);
+            fd = -1;
+            continue;
+        }
         int soerr = 0;
         socklen_t slen = sizeof(soerr);
         if (getsockopt(fd, SOL_SOCKET, SO_ERROR, (char *)&soerr, &slen) < 0 || soerr != 0) {
@@ -162,7 +203,10 @@ coa_socket *coa_sock_connect(const char *host, uint16_t port, int timeout_ms) {
         break;
     }
     freeaddrinfo(res);
-    if (fd < 0) { set_err("no usable address"); return NULL; }
+    if (fd < 0) {
+        set_err("no usable address");
+        return NULL;
+    }
     if (err) {
         set_err(sock_strerror(err));
         CLOSEFD(fd);
@@ -174,7 +218,10 @@ coa_socket *coa_sock_connect(const char *host, uint16_t port, int timeout_ms) {
         setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, (const char *)&one, sizeof(one));
     }
     coa_socket *s = malloc(sizeof(coa_socket));
-    if (!s) { CLOSEFD(fd); return NULL; }
+    if (!s) {
+        CLOSEFD(fd);
+        return NULL;
+    }
     s->fd = fd;
     g_err[0] = '\0';
     return s;
@@ -187,7 +234,8 @@ int coa_sock_send(coa_socket *s, const void *data, size_t len) {
         int n = (int)send(s->fd, p + off, (int)(len - off), 0);
         if (n <= 0) {
 #if !defined(_WIN32)
-            if (errno == EINTR) continue;
+            if (errno == EINTR)
+                continue;
 #endif
             return (int)off;
         }
@@ -198,10 +246,12 @@ int coa_sock_send(coa_socket *s, const void *data, size_t len) {
 
 int coa_sock_recv(coa_socket *s, void *buf, size_t cap) {
     int n = (int)recv(s->fd, buf, (int)cap, 0);
-    if (n == 0) return 0; /* EOF */
+    if (n == 0)
+        return 0; /* EOF */
     if (n < 0) {
 #if !defined(_WIN32)
-        if (errno == EINTR) return -1;
+        if (errno == EINTR)
+            return -1;
 #endif
         return -1;
     }
@@ -213,22 +263,26 @@ int coa_sock_recv_until(coa_socket *s, char *buf, size_t cap, const char *delim)
     char ch;
     while (n + 1 < cap) {
         int r = coa_sock_recv(s, &ch, 1);
-        if (r <= 0) return (int)n;
+        if (r <= 0)
+            return (int)n;
         buf[n++] = ch;
-        if (strchr(delim, ch)) break;
+        if (strchr(delim, ch))
+            break;
     }
     buf[n] = '\0';
     return (int)n;
 }
 
 int coa_sock_set_blocking(coa_socket *s, int blocking) {
-    if (!s) return -1;
+    if (!s)
+        return -1;
     set_nonblock(s->fd, blocking ? 0 : 1);
     return 0;
 }
 
 int coa_sock_wait_readable(coa_socket *s, int timeout_ms) {
-    if (!s || s->fd < 0) return -1;
+    if (!s || s->fd < 0)
+        return -1;
     fd_set rset;
     FD_ZERO(&rset);
 #if defined(_WIN32)
@@ -237,26 +291,35 @@ int coa_sock_wait_readable(coa_socket *s, int timeout_ms) {
     FD_SET(s->fd, &rset);
 #endif
     struct timeval tv;
-    if (timeout_ms < 0) timeout_ms = 0;
+    if (timeout_ms < 0)
+        timeout_ms = 0;
     tv.tv_sec = timeout_ms / 1000;
     tv.tv_usec = (timeout_ms % 1000) * 1000;
     int r = select(s->fd + 1, &rset, NULL, NULL, &tv);
-    if (r < 0) return -1;
-    if (r == 0) return 0;
+    if (r < 0)
+        return -1;
+    if (r == 0)
+        return 0;
 #if defined(_WIN32)
-    if (FD_ISSET((SOCKET)s->fd, &rset)) return 1;
+    if (FD_ISSET((SOCKET)s->fd, &rset))
+        return 1;
 #else
-    if (FD_ISSET(s->fd, &rset)) return 1;
+    if (FD_ISSET(s->fd, &rset))
+        return 1;
 #endif
     return 0;
 }
 
 coa_listener *coa_listen_addr(const char *host, uint16_t port) {
 #if defined(_WIN32)
-    if (wsa_start() != 0) return NULL;
+    if (wsa_start() != 0)
+        return NULL;
 #endif
     int fd = (int)socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) { set_err("socket() failed"); return NULL; }
+    if (fd < 0) {
+        set_err("socket() failed");
+        return NULL;
+    }
     int one = 1;
 #if defined(_WIN32)
     /* Windows: SO_REUSEADDR permits a SECOND process to bind the same
@@ -277,7 +340,8 @@ coa_listener *coa_listen_addr(const char *host, uint16_t port) {
          * off the LAN and avoids the Windows Firewall authorization prompt on
          * first run */
         addr.sin_addr.s_addr = inet_addr(host);
-        if (addr.sin_addr.s_addr == INADDR_NONE) addr.sin_addr.s_addr = INADDR_ANY;
+        if (addr.sin_addr.s_addr == INADDR_NONE)
+            addr.sin_addr.s_addr = INADDR_ANY;
     } else {
         addr.sin_addr.s_addr = INADDR_ANY;
     }
@@ -293,7 +357,10 @@ coa_listener *coa_listen_addr(const char *host, uint16_t port) {
         return NULL;
     }
     coa_listener *l = malloc(sizeof(coa_listener));
-    if (!l) { CLOSEFD(fd); return NULL; }
+    if (!l) {
+        CLOSEFD(fd);
+        return NULL;
+    }
     l->fd = fd;
     g_err[0] = '\0';
     return l;
@@ -304,7 +371,8 @@ coa_listener *coa_listen(uint16_t port) {
 }
 
 coa_socket *coa_accept(coa_listener *l, int timeout_ms) {
-    if (l->fd < 0) return NULL;
+    if (l->fd < 0)
+        return NULL;
     /* Wait for an inbound connection with a real timeout. SO_RCVTIMEO does
      * NOT unblock accept() on Windows/Winsock (it only affects recv), so the
      * old code could hang a serving thread forever and ignore stop requests.
@@ -322,7 +390,8 @@ coa_socket *coa_accept(coa_listener *l, int timeout_ms) {
         tv.tv_sec = timeout_ms / 1000;
         tv.tv_usec = (timeout_ms % 1000) * 1000;
         int r = select(l->fd + 1, &rset, NULL, NULL, &tv);
-        if (r <= 0) return NULL; /* timeout or error */
+        if (r <= 0)
+            return NULL; /* timeout or error */
     }
     struct sockaddr_in peer;
     socklen_t plen = sizeof(peer);
@@ -332,7 +401,10 @@ coa_socket *coa_accept(coa_listener *l, int timeout_ms) {
         return NULL;
     }
     coa_socket *s = malloc(sizeof(coa_socket));
-    if (!s) { CLOSEFD(fd); return NULL; }
+    if (!s) {
+        CLOSEFD(fd);
+        return NULL;
+    }
     s->fd = fd;
     /* SO_RCVTIMEO so a half-open connection (connected but never sends a
      * complete request) cannot wedge the single-threaded HTTP server: recv()
@@ -344,20 +416,22 @@ coa_socket *coa_accept(coa_listener *l, int timeout_ms) {
     DWORD rto = 30000;
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, (const char *)&rto, sizeof(rto));
 #else
-    struct timeval rto = { 30, 0 };
+    struct timeval rto = {30, 0};
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, (const char *)&rto, sizeof(rto));
 #endif
     return s;
 }
 
 void coa_sock_close(coa_socket *s) {
-    if (!s) return;
+    if (!s)
+        return;
     CLOSEFD(s->fd);
     free(s);
 }
 
 void coa_listener_close(coa_listener *l) {
-    if (!l) return;
+    if (!l)
+        return;
     CLOSEFD(l->fd);
     free(l);
 }

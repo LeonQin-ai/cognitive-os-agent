@@ -20,21 +20,21 @@ typedef enum coa_task_status {
 
 typedef struct coa_task {
     int64_t id;
-    int priority;              /* lower = higher priority */
-    int64_t timeout_ms;        /* 0 = none */
+    int priority;       /* lower = higher priority */
+    int64_t timeout_ms; /* 0 = none */
     int64_t created_ms;
     int64_t started_ms;
     int64_t finished_ms;
-    volatile int cancel_flag;  /* set by cancel() */
-    int timed_out;             /* set when deadline passed */
+    volatile int cancel_flag; /* set by cancel() */
+    int timed_out;            /* set when deadline passed */
     coa_task_status status;
-    char *input;               /* task description / prompt */
-    char *output;              /* set by runner */
-    char *tag;                 /* optional routing tag (e.g. chat session id) */
+    char *input;  /* task description / prompt */
+    char *output; /* set by runner */
+    char *tag;    /* optional routing tag (e.g. chat session id) */
     void *userdata;
     /* internal (managed by scheduler.c): coroutine handle + owning scheduler */
-    void *coro;                /* coa_coro* running this task, or NULL */
-    void *sched;               /* coa_scheduler* back-pointer for the trampoline */
+    void *coro;  /* coa_coro* running this task, or NULL */
+    void *sched; /* coa_scheduler* back-pointer for the trampoline */
 } coa_task;
 
 typedef struct coa_scheduler coa_scheduler;
@@ -48,19 +48,18 @@ coa_scheduler *coa_scheduler_new(int workers, coa_task_runner runner, void *work
 void coa_scheduler_free(coa_scheduler *s);
 
 /* Enqueue a task. Returns its id, or -1 on failure. */
-int64_t coa_scheduler_submit(coa_scheduler *s, int priority, const char *input,
-                            void *userdata, int64_t timeout_ms);
+int64_t coa_scheduler_submit(coa_scheduler *s, int priority, const char *input, void *userdata, int64_t timeout_ms);
 /* Same, with an owned routing tag (NULL = none). The tag is freed with the
  * task; runners read it as t->tag. */
-int64_t coa_scheduler_submit_tag(coa_scheduler *s, int priority, const char *input,
-                                 void *userdata, int64_t timeout_ms, const char *tag);
+int64_t coa_scheduler_submit_tag(coa_scheduler *s, int priority, const char *input, void *userdata, int64_t timeout_ms,
+                                 const char *tag);
 /* Request cancellation. Returns 1 if the task was found, 0 otherwise. */
 int coa_scheduler_cancel(coa_scheduler *s, int64_t id);
 
 /* Look up a task by id (borrowed pointer, valid until scheduler_free). */
 coa_task *coa_scheduler_get(coa_scheduler *s, int64_t id);
 
-int coa_scheduler_active(coa_scheduler *s);               /* queued + running */
+int coa_scheduler_active(coa_scheduler *s); /* queued + running */
 int coa_scheduler_total(coa_scheduler *s);
 
 void coa_scheduler_set_completion_cb(coa_scheduler *s, coa_task_completion cb, void *ud);

@@ -33,23 +33,29 @@ static void WINAPI fiber_proc(LPVOID p) {
 
 coa_coro *coa_coro_new(coa_coro_fn fn, void *arg, size_t stack_size) {
     coa_coro *c = (coa_coro *)calloc(1, sizeof(*c));
-    if (!c) return NULL;
+    if (!c)
+        return NULL;
     c->fn = fn;
     c->arg = arg;
-    c->fiber = CreateFiber(stack_size ? stack_size : COA_CORO_STACK_DEFAULT,
-                           fiber_proc, c);
-    if (!c->fiber) { free(c); return NULL; }
+    c->fiber = CreateFiber(stack_size ? stack_size : COA_CORO_STACK_DEFAULT, fiber_proc, c);
+    if (!c->fiber) {
+        free(c);
+        return NULL;
+    }
     return c;
 }
 
 void coa_coro_free(coa_coro *c) {
-    if (!c) return;
-    if (c->fiber) DeleteFiber(c->fiber);
+    if (!c)
+        return;
+    if (c->fiber)
+        DeleteFiber(c->fiber);
     free(c);
 }
 
 void coa_coro_resume(coa_coro *c) {
-    if (!c || c->done) return;
+    if (!c || c->done)
+        return;
     if (!tls_main_fiber) {
         /* Convert this thread into a fiber; it becomes the "main" fiber. */
         ConvertThreadToFiber(NULL);
@@ -59,10 +65,13 @@ void coa_coro_resume(coa_coro *c) {
 }
 
 void coa_coro_yield(void) {
-    if (tls_main_fiber) SwitchToFiber(tls_main_fiber);
+    if (tls_main_fiber)
+        SwitchToFiber(tls_main_fiber);
 }
 
-int coa_coro_done(const coa_coro *c) { return c ? c->done : 1; }
+int coa_coro_done(const coa_coro *c) {
+    return c ? c->done : 1;
+}
 
 #else /* POSIX (ucontext) */
 
@@ -100,13 +109,21 @@ static void coro_entry(void) {
 
 coa_coro *coa_coro_new(coa_coro_fn fn, void *arg, size_t stack_size) {
     coa_coro *c = (coa_coro *)calloc(1, sizeof(*c));
-    if (!c) return NULL;
+    if (!c)
+        return NULL;
     size_t sz = stack_size ? stack_size : COA_CORO_STACK_DEFAULT;
     c->stack = (char *)malloc(sz);
-    if (!c->stack) { free(c); return NULL; }
+    if (!c->stack) {
+        free(c);
+        return NULL;
+    }
     c->fn = fn;
     c->arg = arg;
-    if (getcontext(&c->ctx) != 0) { free(c->stack); free(c); return NULL; }
+    if (getcontext(&c->ctx) != 0) {
+        free(c->stack);
+        free(c);
+        return NULL;
+    }
     c->ctx.uc_stack.ss_sp = c->stack;
     c->ctx.uc_stack.ss_size = sz;
     c->ctx.uc_link = NULL;
@@ -115,13 +132,15 @@ coa_coro *coa_coro_new(coa_coro_fn fn, void *arg, size_t stack_size) {
 }
 
 void coa_coro_free(coa_coro *c) {
-    if (!c) return;
+    if (!c)
+        return;
     free(c->stack);
     free(c);
 }
 
 void coa_coro_resume(coa_coro *c) {
-    if (!c || c->done) return;
+    if (!c || c->done)
+        return;
     c->resume_ctx = &tls_main_ctx;
     tls_current = c;
     swapcontext(&tls_main_ctx, &c->ctx);
@@ -130,11 +149,14 @@ void coa_coro_resume(coa_coro *c) {
 
 void coa_coro_yield(void) {
     coa_coro *cur = tls_current;
-    if (!cur || cur->done) return;
+    if (!cur || cur->done)
+        return;
     swapcontext(&cur->ctx, cur->resume_ctx);
 }
 
-int coa_coro_done(const coa_coro *c) { return c ? c->done : 1; }
+int coa_coro_done(const coa_coro *c) {
+    return c ? c->done : 1;
+}
 
 #pragma GCC diagnostic pop
 

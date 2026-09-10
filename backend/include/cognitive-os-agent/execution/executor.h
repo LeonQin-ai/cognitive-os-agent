@@ -29,17 +29,16 @@ void coa_executor_result_free(coa_executor_result *r);
 /* vtable — impl is the executor's private state. */
 typedef struct coa_executor_ops {
     const char *name; /* "local", "sandbox", "vm", ... */
-    int  (*start)(void *impl);
+    int (*start)(void *impl);
     /* run one action; returns 0 and fills *result (always non-NULL on rc 0),
      * nonzero on infrastructure failure (tool-level failure stays in result.ok) */
-    int  (*execute)(void *impl, const char *tool, const char *args_json,
-                    coa_executor_result **result);
-    int  (*stop)(void *impl);
+    int (*execute)(void *impl, const char *tool, const char *args_json, coa_executor_result **result);
+    int (*stop)(void *impl);
     void (*destroy)(void *impl);
     /* optional state capture for executors that own their environment;
      * return -1 when unsupported */
-    int  (*snapshot)(void *impl, char **snapshot_id);
-    int  (*restore)(void *impl, const char *snapshot_id);
+    int (*snapshot)(void *impl, char **snapshot_id);
+    int (*restore)(void *impl, const char *snapshot_id);
 } coa_executor_ops;
 
 struct coa_executor {
@@ -50,9 +49,8 @@ struct coa_executor {
 /* --- LocalExecutor: delegates to the tool registry (tool registry ctx) --- */
 struct coa_tool_registry;
 struct coa_tool_ctx;
-coa_executor *coa_executor_new_local(struct coa_tool_registry *reg,
-                                   struct coa_tool_ctx *tctx,
-                                   void *snapshot /* coa_snapshot*, may be NULL */);
+coa_executor *coa_executor_new_local(struct coa_tool_registry *reg, struct coa_tool_ctx *tctx,
+                                     void *snapshot /* coa_snapshot*, may be NULL */);
 
 /* --- Routing executors (architecture v1.0 §9 Executor family) ---
  * Wrap an inner executor and forward every action to it, rewriting `shell`
@@ -69,8 +67,7 @@ void coa_executor_free(coa_executor *e);
 const char *coa_executor_name(const coa_executor *e);
 
 /* Run one action. Returns 0 ok (*result filled, caller frees), -1 infra error. */
-int coa_executor_execute(coa_executor *e, const char *tool, const char *args_json,
-                        coa_executor_result **result);
+int coa_executor_execute(coa_executor *e, const char *tool, const char *args_json, coa_executor_result **result);
 int coa_executor_start(coa_executor *e);
 int coa_executor_stop(coa_executor *e);
 int coa_executor_snapshot(coa_executor *e, char **snapshot_id);

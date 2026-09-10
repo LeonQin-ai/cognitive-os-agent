@@ -15,11 +15,11 @@ typedef struct coa_plugin_registry coa_plugin_registry;
 typedef struct coa_plugin_meta {
     char *name;
     char *version;
-    char *signature;    /* hex digest of the artifact */
+    char *signature; /* hex digest of the artifact */
     char *description;
-    char **caps;        /* capability tokens */
+    char **caps; /* capability tokens */
     size_t n_caps;
-    char **deps;        /* dependency plugin names (any version) */
+    char **deps; /* dependency plugin names (any version) */
     size_t n_deps;
     int enabled;
     int64_t built_ms;

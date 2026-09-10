@@ -12,28 +12,28 @@ extern "C" {
 typedef struct coa_llm coa_llm;
 
 typedef struct coa_llm_message {
-    const char *role;    /* "system" | "user" | "assistant" */
+    const char *role; /* "system" | "user" | "assistant" */
     const char *content;
     /* Optional image attachment (multimodal messages). When image_b64 is
      * non-NULL the adapters emit a typed content-parts array instead of a
      * plain string: OpenAI-compatible {type:image_url,data:URL} and Anthropic
      * {type:image,source:{type:base64}}. Mime defaults to "image/png". */
-    const char *image_b64;   /* base64 payload, no data: prefix (may be NULL) */
-    const char *image_mime;  /* e.g. "image/png" (NULL = image/png) */
+    const char *image_b64;  /* base64 payload, no data: prefix (may be NULL) */
+    const char *image_mime; /* e.g. "image/png" (NULL = image/png) */
 } coa_llm_message;
 
 typedef struct coa_llm_request {
-    const char *model;         /* NULL = provider default */
+    const char *model; /* NULL = provider default */
     const coa_llm_message *messages;
     size_t num_messages;
     double temperature;
     int max_tokens;
-    int stream;                /* set by the streaming entry points */
+    int stream; /* set by the streaming entry points */
 } coa_llm_request;
 
 typedef struct coa_llm_response {
-    char *content;             /* full accumulated text (caller frees) */
-    char *error;               /* NULL if ok (caller frees) */
+    char *content; /* full accumulated text (caller frees) */
+    char *error;   /* NULL if ok (caller frees) */
 } coa_llm_response;
 
 typedef void (*coa_llm_stream_cb)(const char *delta, void *ud);
@@ -92,8 +92,7 @@ char *coa_llm_chat_simple(coa_llm *llm, const char *system_prompt, const char *u
 
 /* Same, with an explicit max_tokens budget (needed when the reply embeds
  * long content, e.g. JSON plans carrying whole scripts — 1024 truncates). */
-char *coa_llm_chat_simple_ex(coa_llm *llm, const char *system_prompt,
-                             const char *user_prompt, int max_tokens);
+char *coa_llm_chat_simple_ex(coa_llm *llm, const char *system_prompt, const char *user_prompt, int max_tokens);
 
 #ifdef __cplusplus
 }

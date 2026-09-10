@@ -15,8 +15,7 @@ char *coa_market_fetch(const char *base_url, const char *path, int timeout_ms);
 
 /* POST a JSON payload to a marketplace server (best-effort publish).
  * Returns 0 on 2xx, -1 otherwise. */
-int coa_market_publish(const char *base_url, const char *path,
-                      const char *json_body, int timeout_ms);
+int coa_market_publish(const char *base_url, const char *path, const char *json_body, int timeout_ms);
 
 #ifdef __cplusplus
 }

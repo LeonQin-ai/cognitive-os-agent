@@ -21,15 +21,18 @@ struct coa_usage {
 
 coa_usage *coa_usage_new(void) {
     coa_usage *u = (coa_usage *)calloc(1, sizeof(coa_usage));
-    if (!u) return NULL;
+    if (!u)
+        return NULL;
     coa_mutex_init(&u->mtx);
     return u;
 }
 
 void coa_usage_free(coa_usage *u) {
-    if (!u) return;
+    if (!u)
+        return;
     coa_mutex_lock(&u->mtx);
-    for (size_t i = 0; i < u->count; i++) free(u->models[i].model);
+    for (size_t i = 0; i < u->count; i++)
+        free(u->models[i].model);
     free(u->models);
     coa_mutex_unlock(&u->mtx);
     coa_mutex_destroy(&u->mtx);
@@ -37,16 +40,23 @@ void coa_usage_free(coa_usage *u) {
 }
 
 void coa_usage_add(coa_usage *u, const char *model, long prompt_tokens, long completion_tokens) {
-    if (!u || !model) return;
+    if (!u || !model)
+        return;
     coa_mutex_lock(&u->mtx);
     model_entry *e = NULL;
     for (size_t i = 0; i < u->count; i++)
-        if (strcmp(u->models[i].model, model) == 0) { e = &u->models[i]; break; }
+        if (strcmp(u->models[i].model, model) == 0) {
+            e = &u->models[i];
+            break;
+        }
     if (!e) {
         if (u->count == u->cap) {
             size_t ncap = u->cap ? u->cap * 2 : 8;
             model_entry *nm = (model_entry *)realloc(u->models, ncap * sizeof(model_entry));
-            if (!nm) { coa_mutex_unlock(&u->mtx); return; }
+            if (!nm) {
+                coa_mutex_unlock(&u->mtx);
+                return;
+            }
             u->models = nm;
             u->cap = ncap;
         }
@@ -63,7 +73,8 @@ void coa_usage_add(coa_usage *u, const char *model, long prompt_tokens, long com
 }
 
 long coa_usage_prompt_total(coa_usage *u) {
-    if (!u) return 0;
+    if (!u)
+        return 0;
     coa_mutex_lock(&u->mtx);
     long v = u->prompt_total;
     coa_mutex_unlock(&u->mtx);
@@ -71,7 +82,8 @@ long coa_usage_prompt_total(coa_usage *u) {
 }
 
 long coa_usage_completion_total(coa_usage *u) {
-    if (!u) return 0;
+    if (!u)
+        return 0;
     coa_mutex_lock(&u->mtx);
     long v = u->completion_total;
     coa_mutex_unlock(&u->mtx);

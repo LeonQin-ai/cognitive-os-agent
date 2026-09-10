@@ -39,21 +39,23 @@ struct coa_im {
     coa_mutex mtx;
     im_sess *sessions;
     size_t count, cap;
-    int64_t next_id;   /* shared id counter for sessions + messages */
+    int64_t next_id; /* shared id counter for sessions + messages */
 };
 
 static im_sess *find_sess(coa_im *im, int64_t id) {
     for (size_t i = 0; i < im->count; i++)
-        if (im->sessions[i].id == id) return &im->sessions[i];
+        if (im->sessions[i].id == id)
+            return &im->sessions[i];
     return NULL;
 }
 
-static void sess_add_msg(im_sess *s, int64_t id, const char *role, const char *sender,
-                         const char *content, int64_t ts) {
+static void sess_add_msg(im_sess *s, int64_t id, const char *role, const char *sender, const char *content,
+                         int64_t ts) {
     if (s->count == s->cap) {
         size_t cap = s->cap ? s->cap * 2 : 8;
         im_msg *nm = realloc(s->msgs, cap * sizeof(im_msg));
-        if (!nm) return;
+        if (!nm)
+            return;
         s->msgs = nm;
         s->cap = cap;
     }
@@ -75,7 +77,8 @@ static void sess_free(im_sess *s) {
     free(s->name);
     free(s->kind);
     free(s->channel);
-    for (size_t i = 0; i < s->n_members; i++) free(s->members[i]);
+    for (size_t i = 0; i < s->n_members; i++)
+        free(s->members[i]);
     free(s->members);
 }
 
@@ -92,14 +95,16 @@ static void im_persist(coa_im *im) {
         cJSON *mem = cJSON_AddArrayToObject(o, "members");
         for (size_t j = 0; j < s->n_members; j++)
             cJSON_AddItemToArray(mem, cJSON_CreateString(s->members[j]));
-        if (s->channel) cJSON_AddStringToObject(o, "channel", s->channel);
+        if (s->channel)
+            cJSON_AddStringToObject(o, "channel", s->channel);
         cJSON_AddNumberToObject(o, "created_ms", (double)s->created_ms);
         cJSON *ma = cJSON_AddArrayToObject(o, "messages");
         for (size_t j = 0; j < s->count; j++) {
             cJSON *m = cJSON_CreateObject();
             cJSON_AddNumberToObject(m, "id", (double)s->msgs[j].id);
             cJSON_AddStringToObject(m, "role", s->msgs[j].role);
-            if (s->msgs[j].sender) cJSON_AddStringToObject(m, "sender", s->msgs[j].sender);
+            if (s->msgs[j].sender)
+                cJSON_AddStringToObject(m, "sender", s->msgs[j].sender);
             cJSON_AddStringToObject(m, "content", s->msgs[j].content);
             cJSON_AddNumberToObject(m, "ts_ms", (double)s->msgs[j].ts_ms);
             cJSON_AddItemToArray(ma, m);
@@ -116,19 +121,27 @@ static void im_persist(coa_im *im) {
 
 static void im_load(coa_im *im) {
     char *js = coa_fs_read_file(im->path);
-    if (!js) return;
+    if (!js)
+        return;
     cJSON *root = cJSON_Parse(js);
     free(js);
-    if (!root || !cJSON_IsObject(root)) { if (root) cJSON_Delete(root); return; }
+    if (!root || !cJSON_IsObject(root)) {
+        if (root)
+            cJSON_Delete(root);
+        return;
+    }
     cJSON *nid = cJSON_GetObjectItemCaseSensitive(root, "next_id");
-    if (nid && cJSON_IsNumber(nid)) im->next_id = (int64_t)nid->valuedouble;
+    if (nid && cJSON_IsNumber(nid))
+        im->next_id = (int64_t)nid->valuedouble;
     cJSON *arr = cJSON_GetObjectItemCaseSensitive(root, "sessions");
     if (arr && cJSON_IsArray(arr)) {
         cJSON *it;
         cJSON_ArrayForEach(it, arr) {
-            if (!cJSON_IsObject(it)) continue;
+            if (!cJSON_IsObject(it))
+                continue;
             cJSON *id = cJSON_GetObjectItemCaseSensitive(it, "id");
-            if (!id || !cJSON_IsNumber(id)) continue;
+            if (!id || !cJSON_IsNumber(id))
+                continue;
             im_sess s;
             memset(&s, 0, sizeof(s));
             s.id = (int64_t)id->valuedouble;
@@ -158,24 +171,27 @@ static void im_load(coa_im *im) {
             if (ms && cJSON_IsArray(ms)) {
                 cJSON *m;
                 cJSON_ArrayForEach(m, ms) {
-                    if (!cJSON_IsObject(m)) continue;
+                    if (!cJSON_IsObject(m))
+                        continue;
                     cJSON *mid = cJSON_GetObjectItemCaseSensitive(m, "id");
                     cJSON *role = cJSON_GetObjectItemCaseSensitive(m, "role");
                     cJSON *sender = cJSON_GetObjectItemCaseSensitive(m, "sender");
                     cJSON *cont = cJSON_GetObjectItemCaseSensitive(m, "content");
                     cJSON *ts = cJSON_GetObjectItemCaseSensitive(m, "ts_ms");
-                    sess_add_msg(&s,
-                        (mid && cJSON_IsNumber(mid)) ? (int64_t)mid->valuedouble : 0,
-                        (role && cJSON_IsString(role)) ? role->valuestring : "",
-                        (sender && cJSON_IsString(sender)) ? sender->valuestring : NULL,
-                        (cont && cJSON_IsString(cont)) ? cont->valuestring : "",
-                        (ts && cJSON_IsNumber(ts)) ? (int64_t)ts->valuedouble : 0);
+                    sess_add_msg(&s, (mid && cJSON_IsNumber(mid)) ? (int64_t)mid->valuedouble : 0,
+                                 (role && cJSON_IsString(role)) ? role->valuestring : "",
+                                 (sender && cJSON_IsString(sender)) ? sender->valuestring : NULL,
+                                 (cont && cJSON_IsString(cont)) ? cont->valuestring : "",
+                                 (ts && cJSON_IsNumber(ts)) ? (int64_t)ts->valuedouble : 0);
                 }
             }
             if (im->count == im->cap) {
                 size_t cap = im->cap ? im->cap * 2 : 8;
                 im_sess *ns = realloc(im->sessions, cap * sizeof(im_sess));
-                if (!ns) { sess_free(&s); break; }
+                if (!ns) {
+                    sess_free(&s);
+                    break;
+                }
                 im->sessions = ns;
                 im->cap = cap;
             }
@@ -187,7 +203,8 @@ static void im_load(coa_im *im) {
 
 coa_im *coa_im_new(const char *state_root) {
     coa_im *im = calloc(1, sizeof(coa_im));
-    if (!im) return NULL;
+    if (!im)
+        return NULL;
     snprintf(im->path, sizeof(im->path), "%s", state_root ? state_root : "state");
     /* state_root/im/sessions.json */
     {
@@ -208,9 +225,11 @@ coa_im *coa_im_new(const char *state_root) {
 }
 
 void coa_im_free(coa_im *im) {
-    if (!im) return;
+    if (!im)
+        return;
     coa_mutex_lock(&im->mtx);
-    for (size_t i = 0; i < im->count; i++) sess_free(&im->sessions[i]);
+    for (size_t i = 0; i < im->count; i++)
+        sess_free(&im->sessions[i]);
     free(im->sessions);
     coa_mutex_unlock(&im->mtx);
     coa_mutex_destroy(&im->mtx);
@@ -221,14 +240,18 @@ int64_t coa_im_create_session(coa_im *im, const char *name) {
     return coa_im_create_session_ex(im, name, "direct", NULL, 0);
 }
 
-int64_t coa_im_create_session_ex(coa_im *im, const char *name, const char *kind,
-                                const char **members, size_t n_members) {
-    if (!im) return -1;
+int64_t coa_im_create_session_ex(coa_im *im, const char *name, const char *kind, const char **members,
+                                 size_t n_members) {
+    if (!im)
+        return -1;
     coa_mutex_lock(&im->mtx);
     if (im->count == im->cap) {
         size_t cap = im->cap ? im->cap * 2 : 8;
         im_sess *ns = realloc(im->sessions, cap * sizeof(im_sess));
-        if (!ns) { coa_mutex_unlock(&im->mtx); return -1; }
+        if (!ns) {
+            coa_mutex_unlock(&im->mtx);
+            return -1;
+        }
         im->sessions = ns;
         im->cap = cap;
     }
@@ -253,26 +276,31 @@ int64_t coa_im_create_session_ex(coa_im *im, const char *name, const char *kind,
 }
 
 int coa_im_delete_session(coa_im *im, int64_t id) {
-    if (!im) return 0;
+    if (!im)
+        return 0;
     coa_mutex_lock(&im->mtx);
     int found = 0;
     for (size_t i = 0; i < im->count; i++) {
         if (im->sessions[i].id == id) {
             sess_free(&im->sessions[i]);
-            memmove(&im->sessions[i], &im->sessions[i + 1],
-                    (im->count - i - 1) * sizeof(im_sess));
+            memmove(&im->sessions[i], &im->sessions[i + 1], (im->count - i - 1) * sizeof(im_sess));
             im->count--;
             found = 1;
             break;
         }
     }
-    if (found) im_persist(im);
+    if (found)
+        im_persist(im);
     coa_mutex_unlock(&im->mtx);
     return found;
 }
 
 coa_im_session *coa_im_list_sessions(coa_im *im, size_t *count) {
-    if (!im) { if (count) *count = 0; return NULL; }
+    if (!im) {
+        if (count)
+            *count = 0;
+        return NULL;
+    }
     coa_mutex_lock(&im->mtx);
     coa_im_session *out = NULL;
     if (im->count) {
@@ -295,7 +323,8 @@ coa_im_session *coa_im_list_sessions(coa_im *im, size_t *count) {
             }
         }
     }
-    if (count) *count = out ? im->count : 0;
+    if (count)
+        *count = out ? im->count : 0;
     coa_mutex_unlock(&im->mtx);
     return out;
 }
@@ -305,14 +334,19 @@ void coa_im_sessions_free(coa_im_session *s, size_t count) {
         free(s[i].name);
         free(s[i].kind);
         free(s[i].channel);
-        for (size_t j = 0; j < s[i].n_members; j++) free(s[i].members[j]);
+        for (size_t j = 0; j < s[i].n_members; j++)
+            free(s[i].members[j]);
         free(s[i].members);
     }
     free(s);
 }
 
 coa_im_message *coa_im_messages(coa_im *im, int64_t session_id, size_t *count) {
-    if (!im) { if (count) *count = 0; return NULL; }
+    if (!im) {
+        if (count)
+            *count = 0;
+        return NULL;
+    }
     coa_mutex_lock(&im->mtx);
     im_sess *s = find_sess(im, session_id);
     coa_im_message *out = NULL;
@@ -330,7 +364,8 @@ coa_im_message *coa_im_messages(coa_im *im, int64_t session_id, size_t *count) {
             n = s->count;
         }
     }
-    if (count) *count = n;
+    if (count)
+        *count = n;
     coa_mutex_unlock(&im->mtx);
     return out;
 }
@@ -348,12 +383,15 @@ int64_t coa_im_send(coa_im *im, int64_t session_id, const char *role, const char
     return coa_im_send_ex(im, session_id, role, content, NULL);
 }
 
-int64_t coa_im_send_ex(coa_im *im, int64_t session_id, const char *role,
-                      const char *content, const char *sender) {
-    if (!im || !content) return -1;
+int64_t coa_im_send_ex(coa_im *im, int64_t session_id, const char *role, const char *content, const char *sender) {
+    if (!im || !content)
+        return -1;
     coa_mutex_lock(&im->mtx);
     im_sess *s = find_sess(im, session_id);
-    if (!s) { coa_mutex_unlock(&im->mtx); return -1; }
+    if (!s) {
+        coa_mutex_unlock(&im->mtx);
+        return -1;
+    }
     int64_t id = im->next_id++;
     sess_add_msg(s, id, role ? role : "user", sender, content, coa_time_now_ms());
     im_persist(im);
@@ -362,16 +400,19 @@ int64_t coa_im_send_ex(coa_im *im, int64_t session_id, const char *role,
 }
 
 size_t coa_im_total_messages(coa_im *im) {
-    if (!im) return 0;
+    if (!im)
+        return 0;
     coa_mutex_lock(&im->mtx);
     size_t total = 0;
-    for (size_t i = 0; i < im->count; i++) total += im->sessions[i].count;
+    for (size_t i = 0; i < im->count; i++)
+        total += im->sessions[i].count;
     coa_mutex_unlock(&im->mtx);
     return total;
 }
 
 char *coa_im_sessions_json(coa_im *im) {
-    if (!im) return coa_strdup("{}");
+    if (!im)
+        return coa_strdup("{}");
     coa_mutex_lock(&im->mtx);
     cJSON *root = cJSON_CreateObject();
     cJSON *arr = cJSON_AddArrayToObject(root, "sessions");
@@ -386,7 +427,8 @@ char *coa_im_sessions_json(coa_im *im) {
         cJSON *mem = cJSON_AddArrayToObject(o, "members");
         for (size_t j = 0; j < s->n_members; j++)
             cJSON_AddItemToArray(mem, cJSON_CreateString(s->members[j]));
-        if (s->channel) cJSON_AddStringToObject(o, "channel", s->channel);
+        if (s->channel)
+            cJSON_AddStringToObject(o, "channel", s->channel);
         cJSON_AddNumberToObject(o, "created_ms", (double)s->created_ms);
         cJSON_AddNumberToObject(o, "messages", (double)s->count);
         cJSON_AddItemToArray(arr, o);
@@ -400,40 +442,50 @@ char *coa_im_sessions_json(coa_im *im) {
 
 /* case-insensitive substring match */
 static int ci_strstr(const char *hay, const char *needle) {
-    if (!hay || !needle || !*needle) return 0;
+    if (!hay || !needle || !*needle)
+        return 0;
     size_t nlen = strlen(needle);
     size_t hlen = strlen(hay);
-    if (hlen < nlen) return 0;
+    if (hlen < nlen)
+        return 0;
     for (size_t i = 0; i + nlen <= hlen; i++) {
         size_t j = 0;
         for (j = 0; j < nlen; j++) {
             int a = (unsigned char)hay[i + j], b = (unsigned char)needle[j];
-            if (a >= 'A' && a <= 'Z') a += 32;
-            if (b >= 'A' && b <= 'Z') b += 32;
-            if (a != b) break;
+            if (a >= 'A' && a <= 'Z')
+                a += 32;
+            if (b >= 'A' && b <= 'Z')
+                b += 32;
+            if (a != b)
+                break;
         }
-        if (j == nlen) return 1;
+        if (j == nlen)
+            return 1;
     }
     return 0;
 }
 
 char *coa_im_search(coa_im *im, const char *query, int limit) {
-    if (!im) return coa_strdup("[]");
-    if (!query || !*query) return coa_strdup("[]");
+    if (!im)
+        return coa_strdup("[]");
+    if (!query || !*query)
+        return coa_strdup("[]");
     coa_mutex_lock(&im->mtx);
     cJSON *arr = cJSON_CreateArray();
     int count = 0;
     for (size_t i = 0; i < im->count && (limit <= 0 || count < limit); i++) {
         im_sess *s = &im->sessions[i];
         for (size_t j = 0; j < s->count && (limit <= 0 || count < limit); j++) {
-            if (!ci_strstr(s->msgs[j].content, query)) continue;
+            if (!ci_strstr(s->msgs[j].content, query))
+                continue;
             cJSON *o = cJSON_CreateObject();
             cJSON_AddNumberToObject(o, "session_id", (double)s->id);
             cJSON_AddStringToObject(o, "session_name", s->name ? s->name : "");
             cJSON_AddStringToObject(o, "kind", s->kind ? s->kind : "direct");
             cJSON_AddNumberToObject(o, "id", (double)s->msgs[j].id);
             cJSON_AddStringToObject(o, "role", s->msgs[j].role);
-            if (s->msgs[j].sender) cJSON_AddStringToObject(o, "sender", s->msgs[j].sender);
+            if (s->msgs[j].sender)
+                cJSON_AddStringToObject(o, "sender", s->msgs[j].sender);
             cJSON_AddStringToObject(o, "content", s->msgs[j].content);
             cJSON_AddNumberToObject(o, "ts_ms", (double)s->msgs[j].ts_ms);
             cJSON_AddItemToArray(arr, o);
@@ -447,7 +499,8 @@ char *coa_im_search(coa_im *im, const char *query, int limit) {
 }
 
 const char *coa_im_session_channel(coa_im *im, int64_t session_id) {
-    if (!im) return NULL;
+    if (!im)
+        return NULL;
     coa_mutex_lock(&im->mtx);
     im_sess *s = find_sess(im, session_id);
     const char *ch = s ? s->channel : NULL;
@@ -456,10 +509,14 @@ const char *coa_im_session_channel(coa_im *im, int64_t session_id) {
 }
 
 int coa_im_session_set_channel(coa_im *im, int64_t session_id, const char *channel) {
-    if (!im) return -1;
+    if (!im)
+        return -1;
     coa_mutex_lock(&im->mtx);
     im_sess *s = find_sess(im, session_id);
-    if (!s) { coa_mutex_unlock(&im->mtx); return -1; }
+    if (!s) {
+        coa_mutex_unlock(&im->mtx);
+        return -1;
+    }
     char *old = s->channel;
     s->channel = (channel && *channel) ? coa_strdup(channel) : NULL;
     free(old);
@@ -469,7 +526,8 @@ int coa_im_session_set_channel(coa_im *im, int64_t session_id, const char *chann
 }
 
 int64_t coa_im_session_by_channel(coa_im *im, const char *channel) {
-    if (!im || !channel || !*channel) return -1;
+    if (!im || !channel || !*channel)
+        return -1;
     coa_mutex_lock(&im->mtx);
     int64_t found = -1;
     for (size_t i = 0; i < im->count; i++)

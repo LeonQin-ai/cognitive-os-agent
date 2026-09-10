@@ -25,13 +25,15 @@ struct coa_state_store {
 
 coa_state_store *coa_state_store_new(void) {
     coa_state_store *s = (coa_state_store *)calloc(1, sizeof(*s));
-    if (!s) return NULL;
+    if (!s)
+        return NULL;
     coa_mutex_init(&s->mtx);
     return s;
 }
 
 void coa_state_store_free(coa_state_store *s) {
-    if (!s) return;
+    if (!s)
+        return;
     coa_mutex_lock(&s->mtx);
     for (size_t i = 0; i < s->count; i++) {
         free(s->items[i].ns);
@@ -53,29 +55,33 @@ static long ss_find(coa_state_store *s, const char *ns, const char *key) {
 }
 
 /* Caller holds mtx. 1 = mutated (needs flush). */
-static int ss_put(coa_state_store *s, const char *ns, const char *key,
-                  const char *val) {
+static int ss_put(coa_state_store *s, const char *ns, const char *key, const char *val) {
     long i = ss_find(s, ns, key);
     if (i >= 0) {
         if (!val) { /* remove */
-            free(s->items[i].ns); free(s->items[i].key); free(s->items[i].val);
-            memmove(&s->items[i], &s->items[i + 1],
-                    (s->count - (size_t)i - 1) * sizeof(ss_entry));
+            free(s->items[i].ns);
+            free(s->items[i].key);
+            free(s->items[i].val);
+            memmove(&s->items[i], &s->items[i + 1], (s->count - (size_t)i - 1) * sizeof(ss_entry));
             s->count--;
             return 1;
         }
-        if (strcmp(s->items[i].val, val) == 0) return 0;
+        if (strcmp(s->items[i].val, val) == 0)
+            return 0;
         char *nv = coa_strdup(val);
-        if (!nv) return 0;
+        if (!nv)
+            return 0;
         free(s->items[i].val);
         s->items[i].val = nv;
         return 1;
     }
-    if (!val) return 0;
+    if (!val)
+        return 0;
     if (s->count == s->cap) {
         size_t cap = s->cap ? s->cap * 2 : 16;
         ss_entry *ni = (ss_entry *)realloc(s->items, cap * sizeof(ss_entry));
-        if (!ni) return 0;
+        if (!ni)
+            return 0;
         s->items = ni;
         s->cap = cap;
     }
@@ -85,7 +91,9 @@ static int ss_put(coa_state_store *s, const char *ns, const char *key,
     e->key = coa_strdup(key);
     e->val = coa_strdup(val);
     if (!e->ns || !e->key || !e->val) {
-        free(e->ns); free(e->key); free(e->val);
+        free(e->ns);
+        free(e->key);
+        free(e->val);
         s->count--;
         return 0;
     }
@@ -108,31 +116,36 @@ static char *ss_json_unlocked(coa_state_store *s) {
         }
     }
     char *out = root ? cJSON_PrintUnformatted(root) : NULL;
-    if (root) cJSON_Delete(root);
+    if (root)
+        cJSON_Delete(root);
     return out ? out : coa_strdup("{}");
 }
 
 static void ss_flush(coa_state_store *s) {
-    if (!s->path) return;
+    if (!s->path)
+        return;
     char *js = ss_json_unlocked(s);
-    if (!js) return;
+    if (!js)
+        return;
     if (coa_fs_write_file(s->path, js, strlen(js)) != 0)
         coa_log_warn("state_store: flush to %s failed", s->path);
     free(js);
 }
 
-int coa_state_store_set(coa_state_store *s, const char *ns, const char *key,
-                       const char *val) {
-    if (!s || !ns || !*ns || !key || !*key) return -1;
+int coa_state_store_set(coa_state_store *s, const char *ns, const char *key, const char *val) {
+    if (!s || !ns || !*ns || !key || !*key)
+        return -1;
     coa_mutex_lock(&s->mtx);
     int mutated = ss_put(s, ns, key, val);
-    if (mutated > 0) ss_flush(s);
+    if (mutated > 0)
+        ss_flush(s);
     coa_mutex_unlock(&s->mtx);
     return 0;
 }
 
 const char *coa_state_store_get(coa_state_store *s, const char *ns, const char *key) {
-    if (!s || !ns || !key) return NULL;
+    if (!s || !ns || !key)
+        return NULL;
     coa_mutex_lock(&s->mtx);
     long i = ss_find(s, ns, key);
     const char *v = i >= 0 ? s->items[i].val : NULL;
@@ -141,16 +154,19 @@ const char *coa_state_store_get(coa_state_store *s, const char *ns, const char *
 }
 
 int coa_state_store_remove(coa_state_store *s, const char *ns, const char *key) {
-    if (!s || !ns || !key) return -1;
+    if (!s || !ns || !key)
+        return -1;
     coa_mutex_lock(&s->mtx);
     int mutated = ss_put(s, ns, key, NULL);
-    if (mutated > 0) ss_flush(s);
+    if (mutated > 0)
+        ss_flush(s);
     coa_mutex_unlock(&s->mtx);
     return 0;
 }
 
 int coa_state_store_count(coa_state_store *s) {
-    if (!s) return 0;
+    if (!s)
+        return 0;
     coa_mutex_lock(&s->mtx);
     int n = (int)s->count;
     coa_mutex_unlock(&s->mtx);
@@ -158,34 +174,37 @@ int coa_state_store_count(coa_state_store *s) {
 }
 
 int coa_state_store_count_ns(coa_state_store *s, const char *ns) {
-    if (!s || !ns) return 0;
+    if (!s || !ns)
+        return 0;
     coa_mutex_lock(&s->mtx);
     int n = 0;
     for (size_t i = 0; i < s->count; i++)
-        if (strcmp(s->items[i].ns, ns) == 0) n++;
+        if (strcmp(s->items[i].ns, ns) == 0)
+            n++;
     coa_mutex_unlock(&s->mtx);
     return n;
 }
 
-int coa_state_store_task_set(coa_state_store *s, long long id, const char *status,
-                            const char *input) {
-    if (!s || !status) return -1;
+int coa_state_store_task_set(coa_state_store *s, long long id, const char *status, const char *input) {
+    if (!s || !status)
+        return -1;
     char key[32], val[512];
     snprintf(key, sizeof(key), "%lld", id);
     snprintf(val, sizeof(val), "%s|%.400s", status, input ? input : "");
     return coa_state_store_set(s, "task", key, val);
 }
 
-int coa_state_store_agent_set(coa_state_store *s, const char *name,
-                             const char *role, const char *status) {
-    if (!s || !name || !*name) return -1;
+int coa_state_store_agent_set(coa_state_store *s, const char *name, const char *role, const char *status) {
+    if (!s || !name || !*name)
+        return -1;
     char val[512];
     snprintf(val, sizeof(val), "%s|%s", role ? role : "", status ? status : "idle");
     return coa_state_store_set(s, "agent", name, val);
 }
 
 char *coa_state_store_json(coa_state_store *s) {
-    if (!s) return coa_strdup("{}");
+    if (!s)
+        return coa_strdup("{}");
     coa_mutex_lock(&s->mtx);
     char *out = ss_json_unlocked(s);
     coa_mutex_unlock(&s->mtx);
@@ -193,17 +212,20 @@ char *coa_state_store_json(coa_state_store *s) {
 }
 
 int coa_state_store_load_json(coa_state_store *s, const char *json) {
-    if (!s || !json) return -1;
+    if (!s || !json)
+        return -1;
     cJSON *root = cJSON_Parse(json);
     if (!root || !cJSON_IsObject(root)) {
-        if (root) cJSON_Delete(root);
+        if (root)
+            cJSON_Delete(root);
         return -1;
     }
     int applied = 0;
     coa_mutex_lock(&s->mtx);
     cJSON *nsobj;
     cJSON_ArrayForEach(nsobj, root) {
-        if (!cJSON_IsObject(nsobj) || !nsobj->string) continue;
+        if (!cJSON_IsObject(nsobj) || !nsobj->string)
+            continue;
         cJSON *it;
         cJSON_ArrayForEach(it, nsobj) {
             if (it->string && cJSON_IsString(it)) {
@@ -218,12 +240,15 @@ int coa_state_store_load_json(coa_state_store *s, const char *json) {
 }
 
 int coa_state_store_save(coa_state_store *s, const char *path) {
-    if (!s || !path || !*path) return -1;
+    if (!s || !path || !*path)
+        return -1;
     char *js = coa_state_store_json(s); /* takes mtx itself — no outer lock */
-    if (!js) return -1;
+    if (!js)
+        return -1;
     int rc = coa_fs_write_file(path, js, strlen(js));
     free(js);
-    if (rc != 0) return -1;
+    if (rc != 0)
+        return -1;
     coa_mutex_lock(&s->mtx);
     free(s->path);
     s->path = coa_strdup(path);
@@ -232,12 +257,15 @@ int coa_state_store_save(coa_state_store *s, const char *path) {
 }
 
 int coa_state_store_load(coa_state_store *s, const char *path) {
-    if (!s || !path || !*path) return -1;
+    if (!s || !path || !*path)
+        return -1;
     char *js = coa_fs_read_file(path);
-    if (!js) return -1;
+    if (!js)
+        return -1;
     int applied = coa_state_store_load_json(s, js);
     free(js);
-    if (applied < 0) return -1;
+    if (applied < 0)
+        return -1;
     coa_mutex_lock(&s->mtx);
     free(s->path);
     s->path = coa_strdup(path);

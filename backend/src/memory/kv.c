@@ -16,15 +16,20 @@ struct coa_kvstore {
 
 coa_kvstore *coa_kvstore_new(void) {
     coa_kvstore *k = (coa_kvstore *)calloc(1, sizeof(*k));
-    if (!k) return NULL;
+    if (!k)
+        return NULL;
     coa_mutex_init(&k->mtx);
     return k;
 }
 
 void coa_kvstore_free(coa_kvstore *k) {
-    if (!k) return;
+    if (!k)
+        return;
     coa_mutex_lock(&k->mtx);
-    for (size_t i = 0; i < k->count; i++) { free(k->items[i].key); free(k->items[i].val); }
+    for (size_t i = 0; i < k->count; i++) {
+        free(k->items[i].key);
+        free(k->items[i].val);
+    }
     free(k->items);
     k->items = NULL;
     k->count = k->cap = 0;
@@ -34,7 +39,8 @@ void coa_kvstore_free(coa_kvstore *k) {
 }
 
 void coa_kvstore_set(coa_kvstore *k, const char *key, const char *val) {
-    if (!k || !key || !*key) return;
+    if (!k || !key || !*key)
+        return;
     coa_mutex_lock(&k->mtx);
     for (size_t i = 0; i < k->count; i++) {
         if (strcmp(k->items[i].key, key) == 0) {
@@ -52,11 +58,17 @@ void coa_kvstore_set(coa_kvstore *k, const char *key, const char *val) {
             return;
         }
     }
-    if (!val) { coa_mutex_unlock(&k->mtx); return; } /* deleting absent key: no-op */
+    if (!val) {
+        coa_mutex_unlock(&k->mtx);
+        return;
+    } /* deleting absent key: no-op */
     if (k->count == k->cap) {
         size_t cap = k->cap ? k->cap * 2 : 8;
         coa_kv *nb = (coa_kv *)realloc(k->items, cap * sizeof(coa_kv));
-        if (!nb) { coa_mutex_unlock(&k->mtx); return; }
+        if (!nb) {
+            coa_mutex_unlock(&k->mtx);
+            return;
+        }
         k->items = nb;
         k->cap = cap;
     }
@@ -67,17 +79,22 @@ void coa_kvstore_set(coa_kvstore *k, const char *key, const char *val) {
 }
 
 const char *coa_kvstore_get(coa_kvstore *k, const char *key) {
-    if (!k || !key) return NULL;
+    if (!k || !key)
+        return NULL;
     coa_mutex_lock(&k->mtx);
     const char *v = NULL;
     for (size_t i = 0; i < k->count; i++)
-        if (strcmp(k->items[i].key, key) == 0) { v = k->items[i].val; break; }
+        if (strcmp(k->items[i].key, key) == 0) {
+            v = k->items[i].val;
+            break;
+        }
     coa_mutex_unlock(&k->mtx);
     return v;
 }
 
 int coa_kvstore_remove(coa_kvstore *k, const char *key) {
-    if (!k || !key) return 0;
+    if (!k || !key)
+        return 0;
     coa_mutex_lock(&k->mtx);
     int found = 0;
     for (size_t i = 0; i < k->count; i++) {
@@ -96,7 +113,8 @@ int coa_kvstore_remove(coa_kvstore *k, const char *key) {
 }
 
 int coa_kvstore_count(coa_kvstore *k) {
-    if (!k) return 0;
+    if (!k)
+        return 0;
     coa_mutex_lock(&k->mtx);
     int n = (int)k->count;
     coa_mutex_unlock(&k->mtx);
@@ -104,14 +122,16 @@ int coa_kvstore_count(coa_kvstore *k) {
 }
 
 char *coa_kvstore_snapshot_json(coa_kvstore *k) {
-    if (!k) return coa_strdup("{}");
+    if (!k)
+        return coa_strdup("{}");
     coa_mutex_lock(&k->mtx);
     cJSON *o = cJSON_CreateObject();
     if (o)
         for (size_t i = 0; i < k->count; i++)
             cJSON_AddStringToObject(o, k->items[i].key, k->items[i].val ? k->items[i].val : "");
     char *s = o ? cJSON_PrintUnformatted(o) : NULL;
-    if (o) cJSON_Delete(o);
+    if (o)
+        cJSON_Delete(o);
     coa_mutex_unlock(&k->mtx);
     return s ? s : coa_strdup("{}");
 }

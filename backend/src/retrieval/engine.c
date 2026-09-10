@@ -24,13 +24,17 @@ struct coa_index {
     size_t count, cap;
 };
 
-coa_index *coa_index_new(void) { return calloc(1, sizeof(coa_index)); }
+coa_index *coa_index_new(void) {
+    return calloc(1, sizeof(coa_index));
+}
 
 void coa_index_free(coa_index *idx) {
-    if (!idx) return;
+    if (!idx)
+        return;
     for (size_t i = 0; i < idx->count; i++) {
         free(idx->terms[i].word);
-        for (size_t j = 0; j < idx->terms[i].count; j++) free(idx->terms[i].occs[j].file);
+        for (size_t j = 0; j < idx->terms[i].count; j++)
+            free(idx->terms[i].occs[j].file);
         free(idx->terms[i].occs);
     }
     free(idx->terms);
@@ -47,7 +51,8 @@ static term *find_term(coa_index *idx, const char *word, size_t wlen) {
 
 static term *get_or_add(coa_index *idx, const char *word, size_t wlen) {
     term *t = find_term(idx, word, wlen);
-    if (t) return t;
+    if (t)
+        return t;
     if (idx->count == idx->cap) {
         size_t cap = idx->cap ? idx->cap * 2 : 256;
         idx->terms = realloc(idx->terms, cap * sizeof(term));
@@ -62,8 +67,7 @@ static term *get_or_add(coa_index *idx, const char *word, size_t wlen) {
 }
 
 static void add_occ(term *t, const char *file, int line) {
-    if (t->count > 0 && strcmp(t->occs[t->count - 1].file, file) == 0 &&
-        t->occs[t->count - 1].line == line)
+    if (t->count > 0 && strcmp(t->occs[t->count - 1].file, file) == 0 && t->occs[t->count - 1].line == line)
         return; /* dedupe */
     if (t->count == t->cap) {
         size_t cap = t->cap ? t->cap * 2 : 8;
@@ -75,17 +79,27 @@ static void add_occ(term *t, const char *file, int line) {
     t->count++;
 }
 
-static int is_word_char(int c) { return isalnum(c) || c == '_'; }
+static int is_word_char(int c) {
+    return isalnum(c) || c == '_';
+}
 
 int coa_index_add_file(coa_index *idx, const char *path, const char *content) {
     const char *p = content;
     int line = 1;
     char word[128];
     while (*p) {
-        if (*p == '\n') { line++; p++; continue; }
-        if (!is_word_char((unsigned char)*p)) { p++; continue; }
+        if (*p == '\n') {
+            line++;
+            p++;
+            continue;
+        }
+        if (!is_word_char((unsigned char)*p)) {
+            p++;
+            continue;
+        }
         size_t n = 0;
-        while (*p && is_word_char((unsigned char)*p) && n + 1 < sizeof(word)) word[n++] = *p++;
+        while (*p && is_word_char((unsigned char)*p) && n + 1 < sizeof(word))
+            word[n++] = *p++;
         word[n] = '\0';
         if (n >= 2) {
             term *t = get_or_add(idx, word, n);
@@ -96,19 +110,21 @@ int coa_index_add_file(coa_index *idx, const char *path, const char *content) {
 }
 
 static int has_source_ext(const char *name) {
-    static const char *exts[] = {".c", ".h", ".py", ".js", ".ts", ".json", ".md",
-                                 ".sh", ".html", ".css", ".rs", ".go", ".java", ".c", ".cpp", ".hpp"};
+    static const char *exts[] = {".c",    ".h",   ".py", ".js", ".ts",   ".json", ".md",  ".sh",
+                                 ".html", ".css", ".rs", ".go", ".java", ".c",    ".cpp", ".hpp"};
     size_t len = strlen(name);
     for (size_t i = 0; i < sizeof(exts) / sizeof(char *); i++) {
         size_t el = strlen(exts[i]);
-        if (len >= el && strcmp(name + len - el, exts[i]) == 0) return 1;
+        if (len >= el && strcmp(name + len - el, exts[i]) == 0)
+            return 1;
     }
     return 0;
 }
 
 static void scan_dir(coa_index *idx, const char *dir) {
     coa_dir_list dl;
-    if (coa_fs_list_dir(dir, &dl) != 0) return;
+    if (coa_fs_list_dir(dir, &dl) != 0)
+        return;
     for (size_t i = 0; i < dl.count; i++) {
         char full[2048];
         coa_path_join(full, sizeof(full), dir, dl.items[i].name);
@@ -129,7 +145,8 @@ static void scan_dir(coa_index *idx, const char *dir) {
 }
 
 int coa_index_build_dir(coa_index *idx, const char *dir) {
-    if (!coa_fs_is_dir(dir)) return -1;
+    if (!coa_fs_is_dir(dir))
+        return -1;
     scan_dir(idx, dir);
     return 0;
 }
@@ -140,20 +157,26 @@ char *coa_index_search(coa_index *idx, const char *query, int limit) {
     int ntok = 0;
     const char *p = query;
     while (*p && ntok < 32) {
-        while (*p && !is_word_char((unsigned char)*p)) p++;
-        if (!*p) break;
+        while (*p && !is_word_char((unsigned char)*p))
+            p++;
+        if (!*p)
+            break;
         const char *s = p;
-        while (*p && is_word_char((unsigned char)*p)) p++;
-        if ((size_t)(p - s) >= 2) tokens[ntok++] = s;
+        while (*p && is_word_char((unsigned char)*p))
+            p++;
+        if ((size_t)(p - s) >= 2)
+            tokens[ntok++] = s;
     }
 
     cJSON *arr = cJSON_CreateArray();
     for (int t = 0; t < ntok; t++) {
         size_t wlen = strlen(tokens[t]);
         term *tm = find_term(idx, tokens[t], wlen);
-        if (!tm) continue;
+        if (!tm)
+            continue;
         for (size_t i = 0; i < tm->count; i++) {
-            if (limit > 0 && cJSON_GetArraySize(arr) >= limit) break;
+            if (limit > 0 && cJSON_GetArraySize(arr) >= limit)
+                break;
             cJSON *o = cJSON_CreateObject();
             cJSON_AddStringToObject(o, "term", tm->word);
             cJSON_AddStringToObject(o, "file", tm->occs[i].file);

@@ -28,7 +28,8 @@ static char *dup_or_null(const char *s) {
 
 static int find_chan(coa_im_channels *cs, const char *name) {
     for (size_t i = 0; i < cs->count; i++)
-        if (strcmp(cs->items[i].name, name) == 0) return (int)i;
+        if (strcmp(cs->items[i].name, name) == 0)
+            return (int)i;
     return -1;
 }
 
@@ -61,9 +62,12 @@ static void channels_persist(coa_im_channels *cs) {
         cJSON *o = cJSON_CreateObject();
         cJSON_AddStringToObject(o, "name", ch->name);
         cJSON_AddStringToObject(o, "type", ch->type ? ch->type : "generic");
-        if (ch->endpoint) cJSON_AddStringToObject(o, "endpoint", ch->endpoint);
-        if (ch->token) cJSON_AddStringToObject(o, "token", ch->token);
-        if (ch->target) cJSON_AddStringToObject(o, "target", ch->target);
+        if (ch->endpoint)
+            cJSON_AddStringToObject(o, "endpoint", ch->endpoint);
+        if (ch->token)
+            cJSON_AddStringToObject(o, "token", ch->token);
+        if (ch->target)
+            cJSON_AddStringToObject(o, "target", ch->target);
         cJSON_AddBoolToObject(o, "enabled", ch->enabled);
         cJSON_AddItemToArray(arr, o);
     }
@@ -77,17 +81,21 @@ static void channels_persist(coa_im_channels *cs) {
 
 static void channels_load(coa_im_channels *cs) {
     char *js = coa_fs_read_file(cs->path);
-    if (!js) return;
+    if (!js)
+        return;
     cJSON *root = cJSON_Parse(js);
     free(js);
-    if (!root) return;
+    if (!root)
+        return;
     cJSON *arr = cJSON_GetObjectItemCaseSensitive(root, "channels");
     if (arr && cJSON_IsArray(arr)) {
         cJSON *it;
         cJSON_ArrayForEach(it, arr) {
-            if (!cJSON_IsObject(it)) continue;
+            if (!cJSON_IsObject(it))
+                continue;
             cJSON *n = cJSON_GetObjectItemCaseSensitive(it, "name");
-            if (!n || !cJSON_IsString(n)) continue;
+            if (!n || !cJSON_IsString(n))
+                continue;
             coa_im_channel ch;
             memset(&ch, 0, sizeof(ch));
             ch.name = n->valuestring;
@@ -104,7 +112,10 @@ static void channels_load(coa_im_channels *cs) {
             if (cs->count == cs->cap) {
                 size_t cap = cs->cap ? cs->cap * 2 : 8;
                 coa_im_channel *ni = realloc(cs->items, cap * sizeof(coa_im_channel));
-                if (!ni) { chan_free(&ch); break; }
+                if (!ni) {
+                    chan_free(&ch);
+                    break;
+                }
                 cs->items = ni;
                 cs->cap = cap;
             }
@@ -121,7 +132,8 @@ static void channels_load(coa_im_channels *cs) {
 
 coa_im_channels *coa_im_channels_new(const char *state_root) {
     coa_im_channels *cs = calloc(1, sizeof(coa_im_channels));
-    if (!cs) return NULL;
+    if (!cs)
+        return NULL;
     snprintf(cs->path, sizeof(cs->path), "%s", state_root ? state_root : "state");
     char dir[600];
     snprintf(dir, sizeof(dir), "%s/im", cs->path);
@@ -136,9 +148,11 @@ coa_im_channels *coa_im_channels_new(const char *state_root) {
 }
 
 void coa_im_channels_free(coa_im_channels *cs) {
-    if (!cs) return;
+    if (!cs)
+        return;
     coa_mutex_lock(&cs->mtx);
-    for (size_t i = 0; i < cs->count; i++) chan_free(&cs->items[i]);
+    for (size_t i = 0; i < cs->count; i++)
+        chan_free(&cs->items[i]);
     free(cs->items);
     coa_mutex_unlock(&cs->mtx);
     coa_mutex_destroy(&cs->mtx);
@@ -146,7 +160,8 @@ void coa_im_channels_free(coa_im_channels *cs) {
 }
 
 int coa_im_channel_register(coa_im_channels *cs, const coa_im_channel *ch) {
-    if (!cs || !ch || !ch->name || !*ch->name || !ch->type || !*ch->type) return -1;
+    if (!cs || !ch || !ch->name || !*ch->name || !ch->type || !*ch->type)
+        return -1;
     coa_mutex_lock(&cs->mtx);
     int i = find_chan(cs, ch->name);
     if (i >= 0) {
@@ -156,7 +171,10 @@ int coa_im_channel_register(coa_im_channels *cs, const coa_im_channel *ch) {
         if (cs->count == cs->cap) {
             size_t cap = cs->cap ? cs->cap * 2 : 8;
             coa_im_channel *ni = realloc(cs->items, cap * sizeof(coa_im_channel));
-            if (!ni) { coa_mutex_unlock(&cs->mtx); return -1; }
+            if (!ni) {
+                coa_mutex_unlock(&cs->mtx);
+                return -1;
+            }
             cs->items = ni;
             cs->cap = cap;
         }
@@ -168,10 +186,14 @@ int coa_im_channel_register(coa_im_channels *cs, const coa_im_channel *ch) {
 }
 
 int coa_im_channel_remove(coa_im_channels *cs, const char *name) {
-    if (!cs || !name) return -1;
+    if (!cs || !name)
+        return -1;
     coa_mutex_lock(&cs->mtx);
     int i = find_chan(cs, name);
-    if (i < 0) { coa_mutex_unlock(&cs->mtx); return -1; }
+    if (i < 0) {
+        coa_mutex_unlock(&cs->mtx);
+        return -1;
+    }
     chan_free(&cs->items[i]);
     memmove(&cs->items[i], &cs->items[i + 1], (cs->count - i - 1) * sizeof(coa_im_channel));
     cs->count--;
@@ -181,7 +203,8 @@ int coa_im_channel_remove(coa_im_channels *cs, const char *name) {
 }
 
 coa_im_channel *coa_im_channel_find(coa_im_channels *cs, const char *name) {
-    if (!cs || !name) return NULL;
+    if (!cs || !name)
+        return NULL;
     coa_mutex_lock(&cs->mtx);
     int i = find_chan(cs, name);
     coa_im_channel *c = (i >= 0) ? &cs->items[i] : NULL;
@@ -190,7 +213,8 @@ coa_im_channel *coa_im_channel_find(coa_im_channels *cs, const char *name) {
 }
 
 int coa_im_channel_count(coa_im_channels *cs) {
-    if (!cs) return 0;
+    if (!cs)
+        return 0;
     coa_mutex_lock(&cs->mtx);
     int n = (int)cs->count;
     coa_mutex_unlock(&cs->mtx);
@@ -198,7 +222,8 @@ int coa_im_channel_count(coa_im_channels *cs) {
 }
 
 coa_im_channel *coa_im_channel_get(coa_im_channels *cs, size_t i) {
-    if (!cs) return NULL;
+    if (!cs)
+        return NULL;
     coa_mutex_lock(&cs->mtx);
     coa_im_channel *c = (i < cs->count) ? &cs->items[i] : NULL;
     coa_mutex_unlock(&cs->mtx);
@@ -215,9 +240,12 @@ char *coa_im_channels_json(coa_im_channels *cs) {
             cJSON *o = cJSON_CreateObject();
             cJSON_AddStringToObject(o, "name", ch->name);
             cJSON_AddStringToObject(o, "type", ch->type ? ch->type : "generic");
-            if (ch->endpoint) cJSON_AddStringToObject(o, "endpoint", ch->endpoint);
-            if (ch->token) cJSON_AddStringToObject(o, "token", ch->token);
-            if (ch->target) cJSON_AddStringToObject(o, "target", ch->target);
+            if (ch->endpoint)
+                cJSON_AddStringToObject(o, "endpoint", ch->endpoint);
+            if (ch->token)
+                cJSON_AddStringToObject(o, "token", ch->token);
+            if (ch->target)
+                cJSON_AddStringToObject(o, "target", ch->target);
             cJSON_AddBoolToObject(o, "enabled", ch->enabled);
             cJSON_AddItemToArray(arr, o);
         }
@@ -233,21 +261,25 @@ char *coa_im_channels_json(coa_im_channels *cs) {
 /* Build the JSON body for a channel type and POST it. Returns the HTTP body
  * (malloc'd) or NULL. If `force_path` is non-NULL it overrides the URL path
  * (used by telegram's /bot<token>/sendMessage). */
-static char *post_channel(coa_im_channel *ch, cJSON *body, const char *force_path,
-                          char *out_err, size_t err_sz) {
+static char *post_channel(coa_im_channel *ch, cJSON *body, const char *force_path, char *out_err, size_t err_sz) {
     char *js = cJSON_PrintUnformatted(body);
     cJSON_Delete(body);
-    if (!js) return NULL;
+    if (!js)
+        return NULL;
 
     char base[512], path[512];
-    const char *ep = (ch->endpoint && *ch->endpoint) ? ch->endpoint
-                   : (strcmp(ch->type, "telegram") == 0 ? DEFAULT_TG_API : NULL);
-    if (!ep) { free(js); return NULL; }
+    const char *ep =
+        (ch->endpoint && *ch->endpoint) ? ch->endpoint : (strcmp(ch->type, "telegram") == 0 ? DEFAULT_TG_API : NULL);
+    if (!ep) {
+        free(js);
+        return NULL;
+    }
     const char *slash = strstr(ep, "://");
     const char *pathstart = slash ? strchr(slash + 3, '/') : strchr(ep, '/');
     if (pathstart) {
         size_t blen = (size_t)(pathstart - ep);
-        if (blen >= sizeof(base)) blen = sizeof(base) - 1;
+        if (blen >= sizeof(base))
+            blen = sizeof(base) - 1;
         memcpy(base, ep, blen);
         base[blen] = '\0';
         snprintf(path, sizeof(path), "%s", pathstart);
@@ -255,7 +287,8 @@ static char *post_channel(coa_im_channel *ch, cJSON *body, const char *force_pat
         snprintf(base, sizeof(base), "%s", ep);
         snprintf(path, sizeof(path), "/");
     }
-    if (force_path && *force_path) snprintf(path, sizeof(path), "%s", force_path);
+    if (force_path && *force_path)
+        snprintf(path, sizeof(path), "%s", force_path);
 
     coa_http_response *r = coa_http_post(base, path, js, "application/json", NULL, 10000);
     free(js);
@@ -274,10 +307,13 @@ static char *post_channel(coa_im_channel *ch, cJSON *body, const char *force_pat
 }
 
 char *coa_im_channel_send(coa_im_channels *cs, const char *name, const char *text) {
-    if (!cs || !name) return coa_strdup("{\"ok\":false,\"error\":\"bad args\"}");
+    if (!cs || !name)
+        return coa_strdup("{\"ok\":false,\"error\":\"bad args\"}");
     coa_im_channel *ch = coa_im_channel_find(cs, name);
-    if (!ch) return coa_strdup("{\"ok\":false,\"error\":\"channel not found\"}");
-    if (!ch->enabled) return coa_strdup("{\"ok\":false,\"error\":\"channel disabled\"}");
+    if (!ch)
+        return coa_strdup("{\"ok\":false,\"error\":\"channel not found\"}");
+    if (!ch->enabled)
+        return coa_strdup("{\"ok\":false,\"error\":\"channel disabled\"}");
 
     cJSON *body = NULL;
     char path[512];
@@ -310,8 +346,8 @@ char *coa_im_channel_send(coa_im_channels *cs, const char *name, const char *tex
     }
 
     char err[512] = "";
-    char *resp = post_channel((coa_im_channel *)ch, body,
-                              (strcmp(ch->type, "telegram") == 0) ? path : NULL, err, sizeof(err));
+    char *resp =
+        post_channel((coa_im_channel *)ch, body, (strcmp(ch->type, "telegram") == 0) ? path : NULL, err, sizeof(err));
     if (!resp) {
         char out[768];
         snprintf(out, sizeof(out), "{\"ok\":false,\"error\":\"%s\"}", err);
@@ -319,7 +355,8 @@ char *coa_im_channel_send(coa_im_channels *cs, const char *name, const char *tex
     }
     char out[900];
     size_t rl = strlen(resp);
-    if (rl > 400) rl = 400;
+    if (rl > 400)
+        rl = 400;
     char tmp[401];
     memcpy(tmp, resp, rl);
     tmp[rl] = '\0';
@@ -330,12 +367,14 @@ char *coa_im_channel_send(coa_im_channels *cs, const char *name, const char *tex
 
 /* ---------- telegram inbound poll ---------- */
 
-int coa_im_channel_poll_telegram(coa_im_channels *cs, const char *name,
-                                coa_im_ingest_fn ingest, void *ud) {
-    if (!cs || !name || !ingest) return -1;
+int coa_im_channel_poll_telegram(coa_im_channels *cs, const char *name, coa_im_ingest_fn ingest, void *ud) {
+    if (!cs || !name || !ingest)
+        return -1;
     coa_im_channel *ch = coa_im_channel_find(cs, name);
-    if (!ch || strcmp(ch->type, "telegram") != 0 || !ch->enabled) return -1;
-    if (!ch->token || !*ch->token) return -1;
+    if (!ch || strcmp(ch->type, "telegram") != 0 || !ch->enabled)
+        return -1;
+    if (!ch->token || !*ch->token)
+        return -1;
 
     const char *ep = (ch->endpoint && *ch->endpoint) ? ch->endpoint : DEFAULT_TG_API;
     char base[512], path[900];
@@ -343,49 +382,58 @@ int coa_im_channel_poll_telegram(coa_im_channels *cs, const char *name,
     const char *pathstart = slash ? strchr(slash + 3, '/') : strchr(ep, '/');
     if (pathstart) {
         size_t blen = (size_t)(pathstart - ep);
-        if (blen >= sizeof(base)) blen = sizeof(base) - 1;
+        if (blen >= sizeof(base))
+            blen = sizeof(base) - 1;
         memcpy(base, ep, blen);
         base[blen] = '\0';
-        snprintf(path, sizeof(path), "%s/bot%s/getUpdates?offset=%lld&timeout=1",
-                 pathstart, ch->token, (long long)(ch->last_update_id + 1));
+        snprintf(path, sizeof(path), "%s/bot%s/getUpdates?offset=%lld&timeout=1", pathstart, ch->token,
+                 (long long)(ch->last_update_id + 1));
     } else {
         snprintf(base, sizeof(base), "%s", ep);
-        snprintf(path, sizeof(path), "/bot%s/getUpdates?offset=%lld&timeout=1",
-                 ch->token, (long long)(ch->last_update_id + 1));
+        snprintf(path, sizeof(path), "/bot%s/getUpdates?offset=%lld&timeout=1", ch->token,
+                 (long long)(ch->last_update_id + 1));
     }
 
     coa_http_response *r = coa_http_get(base, path, NULL, 9000);
     if (!r || r->status != 200 || !r->body) {
-        if (r) coa_http_response_free(r);
+        if (r)
+            coa_http_response_free(r);
         return -1;
     }
     cJSON *root = cJSON_Parse(r->body);
     coa_http_response_free(r);
-    if (!root) return -1;
+    if (!root)
+        return -1;
     cJSON *result = cJSON_GetObjectItemCaseSensitive(root, "result");
     int ingested = 0;
     if (result && cJSON_IsArray(result)) {
         cJSON *it;
         cJSON_ArrayForEach(it, result) {
-            if (!cJSON_IsObject(it)) continue;
+            if (!cJSON_IsObject(it))
+                continue;
             cJSON *uid = cJSON_GetObjectItemCaseSensitive(it, "update_id");
             int64_t this_uid = (uid && cJSON_IsNumber(uid)) ? (int64_t)uid->valuedouble : 0;
             /* advance the watermark and skip updates we've already seen (Telegram
              * dedups via offset; this is a defensive guard for polling robustness) */
-            if (this_uid <= ch->last_update_id) continue;
+            if (this_uid <= ch->last_update_id)
+                continue;
             ch->last_update_id = this_uid;
             cJSON *msg = cJSON_GetObjectItemCaseSensitive(it, "message");
-            if (!msg || !cJSON_IsObject(msg)) continue;
+            if (!msg || !cJSON_IsObject(msg))
+                continue;
             cJSON *text = cJSON_GetObjectItemCaseSensitive(msg, "text");
-            if (!text || !cJSON_IsString(text) || !text->valuestring[0]) continue;
+            if (!text || !cJSON_IsString(text) || !text->valuestring[0])
+                continue;
             /* sender name: from.first_name / from.username */
             const char *sender = NULL;
             cJSON *from = cJSON_GetObjectItemCaseSensitive(msg, "from");
             if (from && cJSON_IsObject(from)) {
                 cJSON *fn = cJSON_GetObjectItemCaseSensitive(from, "first_name");
                 cJSON *un = cJSON_GetObjectItemCaseSensitive(from, "username");
-                if (fn && cJSON_IsString(fn)) sender = fn->valuestring;
-                else if (un && cJSON_IsString(un)) sender = un->valuestring;
+                if (fn && cJSON_IsString(fn))
+                    sender = fn->valuestring;
+                else if (un && cJSON_IsString(un))
+                    sender = un->valuestring;
             }
             ingest(name, sender ? sender : "phone", text->valuestring, ud);
             ingested++;

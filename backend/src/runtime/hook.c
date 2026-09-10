@@ -27,14 +27,16 @@ struct coa_hook_registry {
 
 coa_hook_registry *coa_hook_registry_new(void) {
     coa_hook_registry *h = calloc(1, sizeof(*h));
-    if (!h) return NULL;
+    if (!h)
+        return NULL;
     coa_mutex_init(&h->mtx);
     h->next_id = 1;
     return h;
 }
 
 void coa_hook_registry_free(coa_hook_registry *h) {
-    if (!h) return;
+    if (!h)
+        return;
     coa_mutex_lock(&h->mtx);
     coa_hook *c = h->head;
     while (c) {
@@ -49,11 +51,16 @@ void coa_hook_registry_free(coa_hook_registry *h) {
 }
 
 int coa_hook_register(coa_hook_registry *h, const char *event, coa_hook_fn fn, void *ud) {
-    if (!h || !event || !*event || !fn) return -1;
+    if (!h || !event || !*event || !fn)
+        return -1;
     coa_hook *hk = calloc(1, sizeof(*hk));
-    if (!hk) return -1;
+    if (!hk)
+        return -1;
     hk->event = coa_strdup(event);
-    if (!hk->event) { free(hk); return -1; }
+    if (!hk->event) {
+        free(hk);
+        return -1;
+    }
     coa_mutex_lock(&h->mtx);
     hk->id = h->next_id++;
     hk->fn = fn;
@@ -66,7 +73,8 @@ int coa_hook_register(coa_hook_registry *h, const char *event, coa_hook_fn fn, v
 }
 
 int coa_hook_unregister(coa_hook_registry *h, int id) {
-    if (!h || id <= 0) return -1;
+    if (!h || id <= 0)
+        return -1;
     coa_mutex_lock(&h->mtx);
     coa_hook **pp = &h->head;
     while (*pp) {
@@ -85,7 +93,8 @@ int coa_hook_unregister(coa_hook_registry *h, int id) {
 }
 
 int coa_hook_dispatch(coa_hook_registry *h, const char *event, const char *payload_json) {
-    if (!h || !event || !*event) return -1;
+    if (!h || !event || !*event)
+        return -1;
     int blocked = 0;
     /* registration order is reversed (head insert); collect matching ids first
      * under the lock, then fire outside it so a hook may register/unregister */
@@ -105,13 +114,15 @@ int coa_hook_dispatch(coa_hook_registry *h, const char *event, const char *paylo
     coa_mutex_unlock(&h->mtx);
     for (int i = n - 1; i >= 0; i--) { /* fire in registration order */
         int rc = fns[i](event, payload_json, uds[i]);
-        if (rc != 0) blocked = 1;
+        if (rc != 0)
+            blocked = 1;
     }
     return blocked ? 1 : 0;
 }
 
 char *coa_hook_registry_json(coa_hook_registry *h) {
-    if (!h) return coa_strdup("[]");
+    if (!h)
+        return coa_strdup("[]");
     coa_mutex_lock(&h->mtx);
     cJSON *arr = cJSON_CreateArray();
     for (coa_hook *c = h->head; c; c = c->next) {
@@ -128,9 +139,11 @@ char *coa_hook_registry_json(coa_hook_registry *h) {
 
 int coa_hook_audit_file(const char *event, const char *payload_json, void *ud) {
     const char *path = ud;
-    if (!path || !event) return 0;
+    if (!path || !event)
+        return 0;
     FILE *f = fopen(path, "a");
-    if (!f) return 0;
+    if (!f)
+        return 0;
     cJSON *o = cJSON_CreateObject();
     if (o) {
         cJSON_AddNumberToObject(o, "ts_ms", (double)coa_time_now_ms());

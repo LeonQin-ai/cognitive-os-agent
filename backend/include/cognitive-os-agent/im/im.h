@@ -15,17 +15,17 @@ typedef struct coa_im coa_im;
 typedef struct coa_im_session {
     int64_t id;
     char *name;
-    char *kind;           /* "direct" (default) | "group" */
-    char **members;       /* member names for group sessions */
+    char *kind;     /* "direct" (default) | "group" */
+    char **members; /* member names for group sessions */
     size_t n_members;
-    char *channel;        /* linked external messaging channel (NULL = none) */
+    char *channel; /* linked external messaging channel (NULL = none) */
     int64_t created_ms;
 } coa_im_session;
 
 typedef struct coa_im_message {
     int64_t id;
-    char *role;           /* "user" | "assistant" | "system" */
-    char *sender;         /* member/actor name (NULL = role only) */
+    char *role;   /* "user" | "assistant" | "system" */
+    char *sender; /* member/actor name (NULL = role only) */
     char *content;
     int64_t ts_ms;
 } coa_im_message;
@@ -39,8 +39,8 @@ int64_t coa_im_create_session(coa_im *im, const char *name);
 
 /* Create a session with a kind ("direct"|"group") and optional member names
  * (copied). Returns id > 0, or -1 on error. */
-int64_t coa_im_create_session_ex(coa_im *im, const char *name, const char *kind,
-                                const char **members, size_t n_members);
+int64_t coa_im_create_session_ex(coa_im *im, const char *name, const char *kind, const char **members,
+                                 size_t n_members);
 /* Delete a session and its messages. Returns 1 ok, 0 not found. */
 int coa_im_delete_session(coa_im *im, int64_t id);
 
@@ -56,8 +56,7 @@ void coa_im_messages_free(coa_im_message *m, size_t count);
 int64_t coa_im_send(coa_im *im, int64_t session_id, const char *role, const char *content);
 
 /* Append a message with an optional sender (member/actor name). */
-int64_t coa_im_send_ex(coa_im *im, int64_t session_id, const char *role,
-                      const char *content, const char *sender);
+int64_t coa_im_send_ex(coa_im *im, int64_t session_id, const char *role, const char *content, const char *sender);
 
 /* Total messages across all sessions (dashboard metric). */
 size_t coa_im_total_messages(coa_im *im);

@@ -10,9 +10,9 @@ extern "C" {
 #endif
 
 typedef struct coa_llm coa_llm;
-struct coa_tool_registry;   /* action/tools.h */
-struct coa_skill_registry;  /* action/skill.h */
-struct coa_policy_engine;   /* runtime/policy_engine.h */
+struct coa_tool_registry;  /* action/tools.h */
+struct coa_skill_registry; /* action/skill.h */
+struct coa_policy_engine;  /* runtime/policy_engine.h */
 
 typedef struct coa_planned_action {
     char *tool;      /* tool name, e.g. "file_write" */
@@ -27,9 +27,8 @@ typedef struct coa_planned_action {
  *   - *raw_out holds the verbatim model output (caller frees; may be NULL).
  *   - *err_out (optional) holds a malloc'd diagnostic on failure; caller frees.
  * Uses a static built-in tool catalog (legacy/test entry point). */
-int coa_planner_plan(coa_llm *llm, const char *prompt,
-                    coa_planned_action **actions, int *n_actions,
-                    char **raw_out, char **err_out);
+int coa_planner_plan(coa_llm *llm, const char *prompt, coa_planned_action **actions, int *n_actions, char **raw_out,
+                     char **err_out);
 
 /* Same as coa_planner_plan, but the system prompt is built dynamically from
  * the ACTUAL registered tools and skills, so the model sees (and can invoke
@@ -37,12 +36,9 @@ int coa_planner_plan(coa_llm *llm, const char *prompt,
  * back to the static catalog. `policy` (may be NULL) hides denied tools from
  * the catalog — deny rules both block calls and remove the tool from the
  * pool the model can see. */
-int coa_planner_plan_ex(coa_llm *llm, const struct coa_tool_registry *tools,
-                       struct coa_skill_registry *skills,
-                       struct coa_policy_engine *policy,
-                       const char *prompt,
-                       coa_planned_action **actions, int *n_actions,
-                       char **raw_out, char **err_out);
+int coa_planner_plan_ex(coa_llm *llm, const struct coa_tool_registry *tools, struct coa_skill_registry *skills,
+                        struct coa_policy_engine *policy, const char *prompt, coa_planned_action **actions,
+                        int *n_actions, char **raw_out, char **err_out);
 
 void coa_planner_actions_free(coa_planned_action *a, int n);
 

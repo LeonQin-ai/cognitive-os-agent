@@ -24,13 +24,11 @@ char *coa_vectorstore_nearest(coa_vectorstore *v, const char *query, int k);
 /* Hybrid retrieval: score = w_vec*cosine + (1-w_vec)*keyword_overlap
  * (rerank-style token+bigram blend). w_vec clamped to [0,1].
  * Same JSON shape as coa_vectorstore_nearest. */
-char *coa_vectorstore_nearest_hybrid(coa_vectorstore *v, const char *query,
-                                    int k, float w_vec);
+char *coa_vectorstore_nearest_hybrid(coa_vectorstore *v, const char *query, int k, float w_vec);
 
 /* Multi-query (MQE) merge: retrieve per query variant and merge per entry
  * with the max score. Same JSON shape as coa_vectorstore_nearest. */
-char *coa_vectorstore_nearest_multi(coa_vectorstore *v, const char *const *queries,
-                                   int nq, int k);
+char *coa_vectorstore_nearest_multi(coa_vectorstore *v, const char *const *queries, int nq, int k);
 
 #ifdef __cplusplus
 }

@@ -19,8 +19,7 @@ coa_tx_manager *coa_tx_manager_new(void);
 void coa_tx_manager_free(coa_tx_manager *m);
 
 /* Begin a transaction. snap/tools/ctx may be NULL (capture/execute become no-ops). */
-coa_tx *coa_tx_begin(coa_tx_manager *m, coa_snapshot *snap, coa_tool_registry *tools,
-                   const coa_tool_ctx *ctx);
+coa_tx *coa_tx_begin(coa_tx_manager *m, coa_snapshot *snap, coa_tool_registry *tools, const coa_tool_ctx *ctx);
 
 /* Capture a path for rollback, then execute a tool. Returns 0 ok, -1 if denied/failed. */
 int coa_tx_run(coa_tx *tx, const char *tool_name, const char *args_json);

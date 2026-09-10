@@ -27,26 +27,24 @@ void coa_ws_accept_key(const char *client_key, char out[29]);
 
 /* ---- framing ---- */
 enum {
-    COA_WS_OP_TEXT   = 0x1,
+    COA_WS_OP_TEXT = 0x1,
     COA_WS_OP_BINARY = 0x2,
-    COA_WS_OP_CLOSE  = 0x8,
-    COA_WS_OP_PING   = 0x9,
-    COA_WS_OP_PONG   = 0xA,
+    COA_WS_OP_CLOSE = 0x8,
+    COA_WS_OP_PING = 0x9,
+    COA_WS_OP_PONG = 0xA,
 };
 
 /* Build a single-frame message (FIN set). If mask != 0 the payload is XOR'd
  * with a fresh 4-byte key (client->server). Returns a malloc'd buffer (caller
  * frees); *out_len receives its byte length. */
-char *coa_ws_build_frame(int opcode, const unsigned char *payload, size_t len,
-                        int mask, size_t *out_len);
+char *coa_ws_build_frame(int opcode, const unsigned char *payload, size_t len, int mask, size_t *out_len);
 
 /* Parse one frame from buf[0..len). Handles masked + unmasked, 7/16/64-bit
  * lengths. Writes the unmasked payload into `payload` (caller allocates at
  * least the frame's payload size), and sets *payload_len, *opcode, *fin.
  * Returns 0 ok, -1 if truncated or an unsupported length encoding. */
-int coa_ws_parse_frame(const unsigned char *buf, size_t len,
-                      unsigned char *payload, size_t *payload_len,
-                      int *opcode, int *fin);
+int coa_ws_parse_frame(const unsigned char *buf, size_t len, unsigned char *payload, size_t *payload_len, int *opcode,
+                       int *fin);
 
 #ifdef __cplusplus
 }

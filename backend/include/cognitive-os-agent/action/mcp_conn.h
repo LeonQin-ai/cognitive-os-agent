@@ -14,15 +14,15 @@
 extern "C" {
 #endif
 
-struct coa_tool_registry;   /* action/tools.h */
+struct coa_tool_registry; /* action/tools.h */
 
 typedef struct coa_mcp_conn {
     char *name;
-    char *transport;   /* "http" | "stdio" (NULL = "http") */
-    char *url;         /* http: endpoint */
-    char *token;       /* http: optional bearer token (NULL = none) */
-    char *command;     /* stdio: executable, e.g. "npx" */
-    char *args_csv;    /* stdio: space-separated args, e.g. "-y pkg" */
+    char *transport; /* "http" | "stdio" (NULL = "http") */
+    char *url;       /* http: endpoint */
+    char *token;     /* http: optional bearer token (NULL = none) */
+    char *command;   /* stdio: executable, e.g. "npx" */
+    char *args_csv;  /* stdio: space-separated args, e.g. "-y pkg" */
 } coa_mcp_conn;
 
 typedef struct coa_mcp_manager coa_mcp_manager;
@@ -45,9 +45,8 @@ const coa_mcp_conn *coa_mcp_manager_get(coa_mcp_manager *m, size_t i);
 /* Invoke `tool` on the named server with JSON args (standard tools/call).
  * On success returns ok=1 with the concatenated text content; on failure
  * ok=0 with a diagnostic. Caller frees out_text/err_text with free(). */
-int coa_mcp_manager_call(coa_mcp_manager *m, const char *name,
-                        const char *tool, const char *args_json,
-                        char **out_text, char **err_text);
+int coa_mcp_manager_call(coa_mcp_manager *m, const char *name, const char *tool, const char *args_json, char **out_text,
+                         char **err_text);
 
 /* Discover remote tools (tools/list) for every connection and register them
  * into `reg` as `mcp__<server>__<tool>` (upsert). Returns the number of
@@ -58,8 +57,7 @@ int coa_mcp_manager_sync_tools(coa_mcp_manager *m, struct coa_tool_registry *reg
  * a bounded bootstrap timeout — used when adding one server so the request
  * doesn't block on every other server's handshake. Returns the number of
  * tools registered, or -1 if the name is unknown. */
-int coa_mcp_manager_sync_tools_one(coa_mcp_manager *m, struct coa_tool_registry *reg,
-                                   const char *name);
+int coa_mcp_manager_sync_tools_one(coa_mcp_manager *m, struct coa_tool_registry *reg, const char *name);
 
 /* Number of discovered tools for a connection (-1 if unknown). */
 int coa_mcp_manager_tool_count(coa_mcp_manager *m, const char *name);

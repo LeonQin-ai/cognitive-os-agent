@@ -20,8 +20,8 @@ int coa_agent_pool_add(coa_agent_pool *p, const char *name, const char *role);
 /* Like coa_agent_pool_add, but also records the model/provider this agent
  * should use (stored for display and future per-agent execution). Either may
  * be NULL (falls back to the global active model). */
-int coa_agent_pool_add_model(coa_agent_pool *p, const char *name, const char *role,
-                            const char *provider, const char *model);
+int coa_agent_pool_add_model(coa_agent_pool *p, const char *name, const char *role, const char *provider,
+                             const char *model);
 int coa_agent_pool_count(coa_agent_pool *p);
 
 /* Remove a registered agent by name. Returns 0 ok, -1 if unknown/bad args. */

@@ -11,17 +11,17 @@ extern "C" {
 
 typedef enum coa_event_type {
     COA_EV_SYSTEM = 0,
-    COA_EV_TASK   = 1,
+    COA_EV_TASK = 1,
     COA_EV_MEMORY = 2,
-    COA_EV_TOOL   = 3,
-    COA_EV_MODEL  = 4,
+    COA_EV_TOOL = 3,
+    COA_EV_MODEL = 4,
 } coa_event_type;
 
 typedef struct coa_event {
     coa_event_type type;
-    const char *source;  /* borrowed, must outlive dispatch */
+    const char *source; /* borrowed, must outlive dispatch */
     int64_t ts_ms;
-    cJSON *payload;      /* owned by bus during dispatch */
+    cJSON *payload; /* owned by bus during dispatch */
 } coa_event;
 
 typedef struct coa_event_bus coa_event_bus;

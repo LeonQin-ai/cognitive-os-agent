@@ -10,7 +10,9 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
-struct coa_plugin { HMODULE h; };
+struct coa_plugin {
+    HMODULE h;
+};
 
 static char g_err[512] = "";
 
@@ -21,7 +23,10 @@ coa_plugin *coa_plugin_load(const char *path) {
         return NULL;
     }
     coa_plugin *p = malloc(sizeof(coa_plugin));
-    if (!p) { FreeLibrary(h); return NULL; }
+    if (!p) {
+        FreeLibrary(h);
+        return NULL;
+    }
     p->h = h;
     g_err[0] = '\0';
     return p;
@@ -31,10 +36,13 @@ void *coa_plugin_symbol(coa_plugin *p, const char *name) {
     return (void *)(uintptr_t)GetProcAddress(p->h, name);
 }
 
-const char *coa_plugin_error(void) { return g_err; }
+const char *coa_plugin_error(void) {
+    return g_err;
+}
 
 void coa_plugin_unload(coa_plugin *p) {
-    if (!p) return;
+    if (!p)
+        return;
     FreeLibrary(p->h);
     free(p);
 }
@@ -43,7 +51,9 @@ void coa_plugin_unload(coa_plugin *p) {
 
 #include <dlfcn.h>
 
-struct coa_plugin { void *h; };
+struct coa_plugin {
+    void *h;
+};
 
 static char g_err[512] = "";
 
@@ -54,7 +64,10 @@ coa_plugin *coa_plugin_load(const char *path) {
         return NULL;
     }
     coa_plugin *p = malloc(sizeof(coa_plugin));
-    if (!p) { dlclose(h); return NULL; }
+    if (!p) {
+        dlclose(h);
+        return NULL;
+    }
     p->h = h;
     g_err[0] = '\0';
     return p;
@@ -64,10 +77,13 @@ void *coa_plugin_symbol(coa_plugin *p, const char *name) {
     return dlsym(p->h, name);
 }
 
-const char *coa_plugin_error(void) { return g_err; }
+const char *coa_plugin_error(void) {
+    return g_err;
+}
 
 void coa_plugin_unload(coa_plugin *p) {
-    if (!p) return;
+    if (!p)
+        return;
     dlclose(p->h);
     free(p);
 }

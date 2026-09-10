@@ -34,11 +34,12 @@ static void to_posix_dir(const char *win, char *out, size_t cap) {
 }
 
 /* Which quoting style the chosen backend needs for the embedded command. */
-typedef enum { SH_QUOTED = 0,   /* command sits inside a "..." argument
-                                 * (bash -c "...", custom override) — inner
-                                 * quotes need \" escaping */
-               SH_CMDLINE = 1   /* cmd.exe /s /c "..." — /s strips ONLY the
-                                 * outer quotes, inner quotes pass through */
+typedef enum {
+    SH_QUOTED = 0, /* command sits inside a "..." argument
+                    * (bash -c "...", custom override) — inner
+                    * quotes need \" escaping */
+    SH_CMDLINE = 1 /* cmd.exe /s /c "..." — /s strips ONLY the
+                    * outer quotes, inner quotes pass through */
 } sh_kind;
 
 /* Choose the shell invocation format string (single %s = the command).
@@ -48,7 +49,10 @@ typedef enum { SH_QUOTED = 0,   /* command sits inside a "..." argument
 static const char *shell_fmt_kind(sh_kind *kind) {
     static char buf[768];
     static int done = 0;
-    if (done) { *kind = (strstr(buf, "cmd.exe /s /c") == buf) ? SH_CMDLINE : SH_QUOTED; return buf; }
+    if (done) {
+        *kind = (strstr(buf, "cmd.exe /s /c") == buf) ? SH_CMDLINE : SH_QUOTED;
+        return buf;
+    }
     done = 1;
     *kind = SH_QUOTED;
     const char *override = getenv("COA_SHELL");
@@ -68,9 +72,12 @@ static const char *shell_fmt_kind(sh_kind *kind) {
     const char *pf = getenv("ProgramFiles");
     const char *pf86 = getenv("ProgramFiles(x86)");
     const char *local = getenv("LOCALAPPDATA");
-    if (pf)   snprintf(base[nb++], 64, "%s", pf);
-    if (pf86) snprintf(base[nb++], 64, "%s", pf86);
-    if (local) snprintf(base[nb++], 64, "%s\\Programs", local);
+    if (pf)
+        snprintf(base[nb++], 64, "%s", pf);
+    if (pf86)
+        snprintf(base[nb++], 64, "%s", pf86);
+    if (local)
+        snprintf(base[nb++], 64, "%s\\Programs", local);
     for (char d = 'C'; d <= 'F' && nb < 8; d++)
         snprintf(base[nb++], 64, "%c:\\Program Files", d);
     for (char d = 'C'; d <= 'F' && nb < 8; d++)
@@ -87,12 +94,11 @@ static const char *shell_fmt_kind(sh_kind *kind) {
                 char dir[300];
                 snprintf(dir, sizeof(dir), "%s", path);
                 char *slash = strrchr(dir, '\\');
-                if (slash) *slash = '\0';
+                if (slash)
+                    *slash = '\0';
                 char posixdir[320];
                 to_posix_dir(dir, posixdir, sizeof(posixdir));
-                snprintf(buf, sizeof(buf),
-                         "\"%s\" -c \"PATH=\\\"%s:$PATH\\\"; export PATH; %%s\"",
-                         path, posixdir);
+                snprintf(buf, sizeof(buf), "\"%s\" -c \"PATH=\\\"%s:$PATH\\\"; export PATH; %%s\"", path, posixdir);
                 return buf;
             }
         }
@@ -117,7 +123,8 @@ static void compose_shell_command(const char *cmd, char *full, size_t cap) {
         if (esc) {
             char *o = esc;
             for (const char *p = cmd; *p; p++) {
-                if (*p == '"') *o++ = '\\';
+                if (*p == '"')
+                    *o++ = '\\';
                 *o++ = *p;
             }
             *o = '\0';
@@ -137,9 +144,11 @@ static void compose_shell_command(const char *cmd, char *full, size_t cap) {
  * conversion. Returns NULL on conversion failure. */
 static wchar_t *utf8_to_wide(const char *s) {
     int n = MultiByteToWideChar(CP_UTF8, 0, s, -1, NULL, 0);
-    if (n <= 0) return NULL;
+    if (n <= 0)
+        return NULL;
     wchar_t *w = (wchar_t *)malloc((size_t)n * sizeof(wchar_t));
-    if (!w) return NULL;
+    if (!w)
+        return NULL;
     if (MultiByteToWideChar(CP_UTF8, 0, s, -1, w, n) <= 0) {
         free(w);
         return NULL;
@@ -154,7 +163,8 @@ coa_proc_result *coa_proc_run_in(const char *cmd, int timeout_ms, const char *cw
     sa.lpSecurityDescriptor = NULL;
 
     HANDLE rd, wr;
-    if (!CreatePipe(&rd, &wr, &sa, 0)) return NULL;
+    if (!CreatePipe(&rd, &wr, &sa, 0))
+        return NULL;
     SetHandleInformation(rd, HANDLE_FLAG_INHERIT, 0);
 
     STARTUPINFOA si;
@@ -173,7 +183,7 @@ coa_proc_result *coa_proc_run_in(const char *cmd, int timeout_ms, const char *cw
     /* lpCurrentDirectory must be a FULL path; a relative one makes
      * CreateProcess fail (or behave nondeterministically). Resolve first. */
     wchar_t wabs_cwd[1024];
-    wchar_t *cwd_heap = NULL;   /* allocation to free after CreateProcess */
+    wchar_t *cwd_heap = NULL; /* allocation to free after CreateProcess */
     const wchar_t *cwd_arg = NULL;
     if (cwd && *cwd) {
         wchar_t *wcwd = utf8_to_wide(cwd);
@@ -182,15 +192,13 @@ coa_proc_result *coa_proc_run_in(const char *cmd, int timeout_ms, const char *cw
                 cwd_arg = wabs_cwd;
             else
                 cwd_arg = wcwd;
-            cwd_heap = wcwd;    /* wcwd is always heap — free it either way */
+            cwd_heap = wcwd; /* wcwd is always heap — free it either way */
         }
     }
 
     BOOL ok = FALSE;
     if (wfull)
-        ok = CreateProcessW(NULL, wfull, NULL, NULL, TRUE,
-                            CREATE_NO_WINDOW, NULL,
-                            cwd_arg, &si, &pi);
+        ok = CreateProcessW(NULL, wfull, NULL, NULL, TRUE, CREATE_NO_WINDOW, NULL, cwd_arg, &si, &pi);
     free(wfull);
     free(cwd_heap);
     CloseHandle(wr);
@@ -200,27 +208,41 @@ coa_proc_result *coa_proc_run_in(const char *cmd, int timeout_ms, const char *cw
     }
 
     coa_proc_result *r = calloc(1, sizeof(coa_proc_result));
-    if (!r) { CloseHandle(rd); CloseHandle(pi.hProcess); CloseHandle(pi.hThread); return NULL; }
+    if (!r) {
+        CloseHandle(rd);
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+        return NULL;
+    }
 
     char *buf = malloc(65536);
     size_t cap = 65536, len = 0;
-    if (!buf) { CloseHandle(rd); CloseHandle(pi.hProcess); CloseHandle(pi.hThread); free(r); return NULL; }
+    if (!buf) {
+        CloseHandle(rd);
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+        free(r);
+        return NULL;
+    }
 
     int64_t deadline = timeout_ms > 0 ? coa_time_now_ms() + timeout_ms : 0;
     int alive = 1;
     while (alive) {
-        if (timeout_ms > 0 && coa_time_now_ms() >= deadline) break;
+        if (timeout_ms > 0 && coa_time_now_ms() >= deadline)
+            break;
         DWORD avail = 0;
         if (PeekNamedPipe(rd, NULL, 0, NULL, &avail, NULL) && avail > 0) {
             DWORD to_read = avail;
             if (len + to_read + 1 > cap) {
                 cap = (len + to_read + 1) * 2;
                 char *nb = realloc(buf, cap);
-                if (!nb) break;
+                if (!nb)
+                    break;
                 buf = nb;
             }
             DWORD got = 0;
-            if (!ReadFile(rd, buf + len, to_read, &got, NULL)) break;
+            if (!ReadFile(rd, buf + len, to_read, &got, NULL))
+                break;
             len += got;
         } else {
             /* No data available (avail==0), or the pipe is broken because the
@@ -229,8 +251,10 @@ coa_proc_result *coa_proc_run_in(const char *cmd, int timeout_ms, const char *cw
              * timeout (GetExitCodeProcess can transiently report STILL_ACTIVE
              * right after the child closes the pipe). */
             DWORD code = 0;
-            if (GetExitCodeProcess(pi.hProcess, &code) && code != STILL_ACTIVE) alive = 0;
-            else coa_time_sleep_ms(5);
+            if (GetExitCodeProcess(pi.hProcess, &code) && code != STILL_ACTIVE)
+                alive = 0;
+            else
+                coa_time_sleep_ms(5);
         }
     }
 
@@ -249,7 +273,8 @@ coa_proc_result *coa_proc_run_in(const char *cmd, int timeout_ms, const char *cw
     r->output = buf;
     buf[len] = '\0';
     /* trim trailing whitespace */
-    while (len > 0 && (buf[len - 1] == '\n' || buf[len - 1] == '\r' || buf[len - 1] == ' ')) buf[--len] = '\0';
+    while (len > 0 && (buf[len - 1] == '\n' || buf[len - 1] == '\r' || buf[len - 1] == ' '))
+        buf[--len] = '\0';
 
     CloseHandle(rd);
     CloseHandle(pi.hProcess);
@@ -258,7 +283,8 @@ coa_proc_result *coa_proc_run_in(const char *cmd, int timeout_ms, const char *cw
 }
 
 void coa_proc_result_free(coa_proc_result *r) {
-    if (!r) return;
+    if (!r)
+        return;
     free(r->output);
     free(r);
 }
@@ -268,11 +294,13 @@ coa_proc_result *coa_proc_run(const char *cmd, int timeout_ms) {
 }
 
 int coa_proc_spawn_detached(const char *cmd) {
-    if (!cmd || !*cmd) return -1;
+    if (!cmd || !*cmd)
+        return -1;
     char full[4096];
     compose_shell_command(cmd, full, sizeof(full));
     wchar_t *wfull = utf8_to_wide(full);
-    if (!wfull) return -1;
+    if (!wfull)
+        return -1;
     STARTUPINFOA si;
     PROCESS_INFORMATION pi;
     memset(&si, 0, sizeof(si));
@@ -280,11 +308,11 @@ int coa_proc_spawn_detached(const char *cmd) {
     si.cb = sizeof(si);
     si.dwFlags |= STARTF_USESHOWWINDOW;
     si.wShowWindow = SW_HIDE;
-    BOOL ok = CreateProcessW(NULL, wfull, NULL, NULL, FALSE,
-                             CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP,
-                             NULL, NULL, &si, &pi);
+    BOOL ok = CreateProcessW(NULL, wfull, NULL, NULL, FALSE, CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP, NULL, NULL,
+                             &si, &pi);
     free(wfull);
-    if (!ok) return -1;
+    if (!ok)
+        return -1;
     CloseHandle(pi.hProcess);
     CloseHandle(pi.hThread);
     return 0;
@@ -294,8 +322,8 @@ int coa_proc_spawn_detached(const char *cmd) {
 
 struct coa_proc_popen {
     HANDLE proc;
-    HANDLE in_wr;    /* write end of child stdin */
-    HANDLE out_rd;   /* read end of child stdout */
+    HANDLE in_wr;  /* write end of child stdin */
+    HANDLE out_rd; /* read end of child stdout */
     char *buf;
     size_t len, cap;
 };
@@ -303,12 +331,19 @@ struct coa_proc_popen {
 /* Quote a single argv element for a Windows command line. */
 static void quote_arg(const char *a, char *out, size_t cap) {
     size_t o = 0;
-    if (o < cap) out[o++] = '"';
+    if (o < cap)
+        out[o++] = '"';
     for (const char *p = a; *p && o + 2 < cap; p++) {
-        if (*p == '"') { if (o + 2 < cap) { out[o++] = '\\'; out[o++] = '"'; } }
-        else out[o++] = *p;
+        if (*p == '"') {
+            if (o + 2 < cap) {
+                out[o++] = '\\';
+                out[o++] = '"';
+            }
+        } else
+            out[o++] = *p;
     }
-    if (o < cap) out[o++] = '"';
+    if (o < cap)
+        out[o++] = '"';
     out[o] = '\0';
 }
 
@@ -317,7 +352,8 @@ coa_proc_popen *coa_proc_popen_new(char *const argv[]) {
 }
 
 coa_proc_popen *coa_proc_popen_new_ex(char *const argv[], int merge_stderr) {
-    if (!argv || !argv[0]) return NULL;
+    if (!argv || !argv[0])
+        return NULL;
 
     /* Build "cmd.exe /s /c "<argv0> <argv1> ..."" so batch shims like npx.cmd
      * also work. /s makes cmd strip ONLY the outer quotes, preserving the
@@ -344,24 +380,29 @@ coa_proc_popen *coa_proc_popen_new_ex(char *const argv[], int merge_stderr) {
         } else {
             wr = snprintf(cmdline + off, sizeof(cmdline) - off, " %s", q);
         }
-        if (wr < 0 || (size_t)wr >= sizeof(cmdline) - off) break;
+        if (wr < 0 || (size_t)wr >= sizeof(cmdline) - off)
+            break;
         off += (size_t)wr;
     }
-    if (off < sizeof(cmdline) - 1) { cmdline[off++] = '"'; cmdline[off] = '\0'; }
+    if (off < sizeof(cmdline) - 1) {
+        cmdline[off++] = '"';
+        cmdline[off] = '\0';
+    }
 
-    SECURITY_ATTRIBUTES sa = { sizeof(sa), NULL, TRUE };
+    SECURITY_ATTRIBUTES sa = {sizeof(sa), NULL, TRUE};
     HANDLE in_rd = NULL, in_wr = NULL, out_rd = NULL, out_wr = NULL;
-    if (!CreatePipe(&in_rd, &in_wr, &sa, 0)) return NULL;
+    if (!CreatePipe(&in_rd, &in_wr, &sa, 0))
+        return NULL;
     if (!CreatePipe(&out_rd, &out_wr, &sa, 0)) {
-        CloseHandle(in_rd); CloseHandle(in_wr);
+        CloseHandle(in_rd);
+        CloseHandle(in_wr);
         return NULL;
     }
     SetHandleInformation(in_wr, HANDLE_FLAG_INHERIT, 0);
     SetHandleInformation(out_rd, HANDLE_FLAG_INHERIT, 0);
 
     /* child stderr -> NUL so server logs never pollute the JSON stream */
-    HANDLE nul = CreateFileA("NUL", GENERIC_WRITE, FILE_SHARE_WRITE, &sa,
-                             OPEN_EXISTING, 0, NULL);
+    HANDLE nul = CreateFileA("NUL", GENERIC_WRITE, FILE_SHARE_WRITE, &sa, OPEN_EXISTING, 0, NULL);
 
     STARTUPINFOA si;
     PROCESS_INFORMATION pi;
@@ -377,14 +418,14 @@ coa_proc_popen *coa_proc_popen_new_ex(char *const argv[], int merge_stderr) {
     {
         wchar_t *wcmdline = utf8_to_wide(cmdline);
         if (wcmdline) {
-            ok = CreateProcessW(NULL, wcmdline, NULL, NULL, TRUE,
-                                CREATE_NO_WINDOW, NULL, NULL, &si, &pi);
+            ok = CreateProcessW(NULL, wcmdline, NULL, NULL, TRUE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi);
             free(wcmdline);
         }
     }
     CloseHandle(in_rd);
     CloseHandle(out_wr);
-    if (nul) CloseHandle(nul);
+    if (nul)
+        CloseHandle(nul);
     if (!ok) {
         CloseHandle(in_wr);
         CloseHandle(out_rd);
@@ -417,7 +458,8 @@ coa_proc_popen *coa_proc_popen_new_ex(char *const argv[], int merge_stderr) {
 }
 
 int coa_proc_popen_write(coa_proc_popen *p, const char *data, size_t len) {
-    if (!p || !data) return -1;
+    if (!p || !data)
+        return -1;
     DWORD written = 0;
     if (!WriteFile(p->in_wr, data, (DWORD)len, &written, NULL) || written != len)
         return -1;
@@ -425,7 +467,8 @@ int coa_proc_popen_write(coa_proc_popen *p, const char *data, size_t len) {
 }
 
 size_t coa_proc_popen_read(coa_proc_popen *p, int timeout_ms) {
-    if (!p) return 0;
+    if (!p)
+        return 0;
     int64_t deadline = timeout_ms > 0 ? coa_time_now_ms() + timeout_ms : 0;
     size_t start_len = p->len;
     for (;;) {
@@ -434,20 +477,24 @@ size_t coa_proc_popen_read(coa_proc_popen *p, int timeout_ms) {
             if (p->len + avail + 1 > p->cap) {
                 size_t ncap = (p->len + avail + 1) * 2;
                 char *nb = realloc(p->buf, ncap);
-                if (!nb) break;
+                if (!nb)
+                    break;
                 p->buf = nb;
                 p->cap = ncap;
             }
             DWORD got = 0;
-            if (!ReadFile(p->out_rd, p->buf + p->len, avail, &got, NULL) || got == 0) break;
+            if (!ReadFile(p->out_rd, p->buf + p->len, avail, &got, NULL) || got == 0)
+                break;
             p->len += got;
             p->buf[p->len] = '\0';
             return p->len - start_len; /* return after one read burst */
         }
         /* no data: stop when dead or deadline passed */
         DWORD code = 0;
-        if (GetExitCodeProcess(p->proc, &code) && code != STILL_ACTIVE) break;
-        if (timeout_ms > 0 && coa_time_now_ms() >= deadline) break;
+        if (GetExitCodeProcess(p->proc, &code) && code != STILL_ACTIVE)
+            break;
+        if (timeout_ms > 0 && coa_time_now_ms() >= deadline)
+            break;
         coa_time_sleep_ms(10);
     }
     return p->len - start_len;
@@ -458,33 +505,46 @@ const char *coa_proc_popen_buffer(coa_proc_popen *p) {
 }
 
 void coa_proc_popen_reset(coa_proc_popen *p) {
-    if (p) { p->len = 0; if (p->buf) p->buf[0] = '\0'; }
+    if (p) {
+        p->len = 0;
+        if (p->buf)
+            p->buf[0] = '\0';
+    }
 }
 
 /* Discard the first `n` bytes of the read buffer, keeping the rest. */
 void coa_proc_popen_trim(coa_proc_popen *p, size_t n) {
-    if (!p || n == 0) return;
-    if (n >= p->len) { coa_proc_popen_reset(p); return; }
+    if (!p || n == 0)
+        return;
+    if (n >= p->len) {
+        coa_proc_popen_reset(p);
+        return;
+    }
     memmove(p->buf, p->buf + n, p->len - n);
     p->len -= n;
     p->buf[p->len] = '\0';
 }
 
 int coa_proc_popen_alive(coa_proc_popen *p) {
-    if (!p) return 0;
+    if (!p)
+        return 0;
     DWORD code = 0;
-    if (GetExitCodeProcess(p->proc, &code) && code != STILL_ACTIVE) return 0;
+    if (GetExitCodeProcess(p->proc, &code) && code != STILL_ACTIVE)
+        return 0;
     return 1;
 }
 
 void coa_proc_popen_free(coa_proc_popen *p) {
-    if (!p) return;
+    if (!p)
+        return;
     if (p->proc != INVALID_HANDLE_VALUE) {
         TerminateProcess(p->proc, 1);
         CloseHandle(p->proc);
     }
-    if (p->in_wr) CloseHandle(p->in_wr);
-    if (p->out_rd) CloseHandle(p->out_rd);
+    if (p->in_wr)
+        CloseHandle(p->in_wr);
+    if (p->out_rd)
+        CloseHandle(p->out_rd);
     free(p->buf);
     free(p);
 }
@@ -500,7 +560,8 @@ void coa_proc_popen_free(coa_proc_popen *p) {
 
 coa_proc_result *coa_proc_run_in(const char *cmd, int timeout_ms, const char *cwd) {
     int pfd[2];
-    if (pipe(pfd) != 0) return NULL;
+    if (pipe(pfd) != 0)
+        return NULL;
     /* make read end non-blocking for the read loop */
     int flags = fcntl(pfd[0], F_GETFL, 0);
     fcntl(pfd[0], F_SETFL, flags | O_NONBLOCK);
@@ -514,7 +575,8 @@ coa_proc_result *coa_proc_run_in(const char *cmd, int timeout_ms, const char *cw
     if (pid == 0) {
         /* child */
         if (cwd && *cwd) {
-            if (chdir(cwd) != 0) _exit(126);
+            if (chdir(cwd) != 0)
+                _exit(126);
         }
         dup2(pfd[1], STDOUT_FILENO);
         dup2(pfd[1], STDERR_FILENO);
@@ -529,8 +591,10 @@ coa_proc_result *coa_proc_run_in(const char *cmd, int timeout_ms, const char *cw
     char *buf = malloc(65536);
     size_t cap = 65536, len = 0;
     if (!r || !buf) {
-        if (r) free(r);
-        if (buf) free(buf);
+        if (r)
+            free(r);
+        if (buf)
+            free(buf);
         close(pfd[0]);
         kill(pid, SIGKILL);
         waitpid(pid, NULL, 0);
@@ -539,14 +603,16 @@ coa_proc_result *coa_proc_run_in(const char *cmd, int timeout_ms, const char *cw
 
     int64_t deadline = timeout_ms > 0 ? coa_time_now_ms() + timeout_ms : 0;
     for (;;) {
-        if (timeout_ms > 0 && coa_time_now_ms() >= deadline) break;
+        if (timeout_ms > 0 && coa_time_now_ms() >= deadline)
+            break;
         ssize_t got = read(pfd[0], buf + len, cap - len - 1);
         if (got > 0) {
             len += (size_t)got;
             if (len + 1024 > cap) {
                 cap *= 2;
                 char *nb = realloc(buf, cap);
-                if (!nb) break;
+                if (!nb)
+                    break;
                 buf = nb;
             }
             continue;
@@ -558,7 +624,8 @@ coa_proc_result *coa_proc_run_in(const char *cmd, int timeout_ms, const char *cw
             r->exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
             break;
         }
-        if (got < 0 && errno != EAGAIN && errno != EINTR) break;
+        if (got < 0 && errno != EAGAIN && errno != EINTR)
+            break;
         coa_time_sleep_ms(5);
     }
 
@@ -573,18 +640,21 @@ coa_proc_result *coa_proc_run_in(const char *cmd, int timeout_ms, const char *cw
     /* drain remaining */
     for (;;) {
         ssize_t got = read(pfd[0], buf + len, cap - len - 1);
-        if (got <= 0) break;
+        if (got <= 0)
+            break;
         len += (size_t)got;
     }
     close(pfd[0]);
     buf[len] = '\0';
-    while (len > 0 && (buf[len - 1] == '\n' || buf[len - 1] == '\r' || buf[len - 1] == ' ')) buf[--len] = '\0';
+    while (len > 0 && (buf[len - 1] == '\n' || buf[len - 1] == '\r' || buf[len - 1] == ' '))
+        buf[--len] = '\0';
     r->output = buf;
     return r;
 }
 
 void coa_proc_result_free(coa_proc_result *r) {
-    if (!r) return;
+    if (!r)
+        return;
     free(r->output);
     free(r);
 }
@@ -594,9 +664,11 @@ coa_proc_result *coa_proc_run(const char *cmd, int timeout_ms) {
 }
 
 int coa_proc_spawn_detached(const char *cmd) {
-    if (!cmd || !*cmd) return -1;
+    if (!cmd || !*cmd)
+        return -1;
     pid_t pid = fork();
-    if (pid < 0) return -1;
+    if (pid < 0)
+        return -1;
     if (pid == 0) {
         /* child: new session, no controlling tty, stdio to /dev/null */
         setsid();
@@ -618,8 +690,8 @@ int coa_proc_spawn_detached(const char *cmd) {
 
 struct coa_proc_popen {
     pid_t pid;
-    int in_wr;    /* write end of child stdin */
-    int out_rd;   /* read end of child stdout */
+    int in_wr;  /* write end of child stdin */
+    int out_rd; /* read end of child stdout */
     char *buf;
     size_t len, cap;
     int dead;
@@ -630,17 +702,22 @@ coa_proc_popen *coa_proc_popen_new(char *const argv[]) {
 }
 
 coa_proc_popen *coa_proc_popen_new_ex(char *const argv[], int merge_stderr) {
-    if (!argv || !argv[0]) return NULL;
+    if (!argv || !argv[0])
+        return NULL;
     int in_p[2], out_p[2];
-    if (pipe(in_p) != 0) return NULL;
+    if (pipe(in_p) != 0)
+        return NULL;
     if (pipe(out_p) != 0) {
-        close(in_p[0]); close(in_p[1]);
+        close(in_p[0]);
+        close(in_p[1]);
         return NULL;
     }
     pid_t pid = fork();
     if (pid < 0) {
-        close(in_p[0]); close(in_p[1]);
-        close(out_p[0]); close(out_p[1]);
+        close(in_p[0]);
+        close(in_p[1]);
+        close(out_p[0]);
+        close(out_p[1]);
         return NULL;
     }
     if (pid == 0) {
@@ -650,10 +727,13 @@ coa_proc_popen *coa_proc_popen_new_ex(char *const argv[], int merge_stderr) {
             dup2(out_p[1], STDERR_FILENO);
         } else {
             int devnull = open("/dev/null", O_WRONLY);
-            if (devnull >= 0) dup2(devnull, STDERR_FILENO);
+            if (devnull >= 0)
+                dup2(devnull, STDERR_FILENO);
         }
-        close(in_p[0]); close(in_p[1]);
-        close(out_p[0]); close(out_p[1]);
+        close(in_p[0]);
+        close(in_p[1]);
+        close(out_p[0]);
+        close(out_p[1]);
         execvp(argv[0], argv);
         _exit(127);
     }
@@ -667,7 +747,8 @@ coa_proc_popen *coa_proc_popen_new_ex(char *const argv[], int merge_stderr) {
     if (!p) {
         kill(pid, SIGKILL);
         waitpid(pid, NULL, 0);
-        close(in_p[1]); close(out_p[0]);
+        close(in_p[1]);
+        close(out_p[0]);
         return NULL;
     }
     p->pid = pid;
@@ -678,7 +759,8 @@ coa_proc_popen *coa_proc_popen_new_ex(char *const argv[], int merge_stderr) {
     if (!p->buf) {
         kill(pid, SIGKILL);
         waitpid(pid, NULL, 0);
-        close(in_p[1]); close(out_p[0]);
+        close(in_p[1]);
+        close(out_p[0]);
         free(p);
         return NULL;
     }
@@ -687,12 +769,14 @@ coa_proc_popen *coa_proc_popen_new_ex(char *const argv[], int merge_stderr) {
 }
 
 int coa_proc_popen_write(coa_proc_popen *p, const char *data, size_t len) {
-    if (!p || !data) return -1;
+    if (!p || !data)
+        return -1;
     size_t off = 0;
     while (off < len) {
         ssize_t w = write(p->in_wr, data + off, len - off);
         if (w <= 0) {
-            if (w < 0 && (errno == EINTR)) continue;
+            if (w < 0 && (errno == EINTR))
+                continue;
             return -1;
         }
         off += (size_t)w;
@@ -701,19 +785,22 @@ int coa_proc_popen_write(coa_proc_popen *p, const char *data, size_t len) {
 }
 
 size_t coa_proc_popen_read(coa_proc_popen *p, int timeout_ms) {
-    if (!p) return 0;
+    if (!p)
+        return 0;
     int64_t deadline = timeout_ms > 0 ? coa_time_now_ms() + timeout_ms : 0;
     size_t start_len = p->len;
     for (;;) {
-        struct pollfd pf = { p->out_rd, POLLIN, 0 };
+        struct pollfd pf = {p->out_rd, POLLIN, 0};
         int timeout = timeout_ms > 0 ? (int)(deadline - coa_time_now_ms()) : 100;
-        if (timeout < 0) timeout = 0;
+        if (timeout < 0)
+            timeout = 0;
         int pr = poll(&pf, 1, timeout);
         if (pr > 0 && (pf.revents & (POLLIN | POLLHUP))) {
             if (p->len + 4096 + 1 > p->cap) {
                 size_t ncap = (p->len + 4096 + 1) * 2;
                 char *nb = realloc(p->buf, ncap);
-                if (!nb) break;
+                if (!nb)
+                    break;
                 p->buf = nb;
                 p->cap = ncap;
             }
@@ -723,13 +810,22 @@ size_t coa_proc_popen_read(coa_proc_popen *p, int timeout_ms) {
                 p->buf[p->len] = '\0';
                 return p->len - start_len; /* one burst per call */
             }
-            if (got == 0) { p->dead = 1; break; } /* EOF: child closed stdout */
-            if (errno == EAGAIN || errno == EINTR) { /* spurious; keep polling */ }
-            else { p->dead = 1; break; }
+            if (got == 0) {
+                p->dead = 1;
+                break;
+            }                                        /* EOF: child closed stdout */
+            if (errno == EAGAIN || errno == EINTR) { /* spurious; keep polling */
+            } else {
+                p->dead = 1;
+                break;
+            }
         }
-        if (p->dead) break;
-        if (timeout_ms > 0 && coa_time_now_ms() >= deadline) break;
-        if (pr == 0 && timeout_ms <= 0) break; /* poll timeout in no-deadline mode */
+        if (p->dead)
+            break;
+        if (timeout_ms > 0 && coa_time_now_ms() >= deadline)
+            break;
+        if (pr == 0 && timeout_ms <= 0)
+            break; /* poll timeout in no-deadline mode */
     }
     return p->len - start_len;
 }
@@ -739,29 +835,43 @@ const char *coa_proc_popen_buffer(coa_proc_popen *p) {
 }
 
 void coa_proc_popen_reset(coa_proc_popen *p) {
-    if (p) { p->len = 0; if (p->buf) p->buf[0] = '\0'; }
+    if (p) {
+        p->len = 0;
+        if (p->buf)
+            p->buf[0] = '\0';
+    }
 }
 
 /* Discard the first `n` bytes of the read buffer, keeping the rest. */
 void coa_proc_popen_trim(coa_proc_popen *p, size_t n) {
-    if (!p || n == 0) return;
-    if (n >= p->len) { coa_proc_popen_reset(p); return; }
+    if (!p || n == 0)
+        return;
+    if (n >= p->len) {
+        coa_proc_popen_reset(p);
+        return;
+    }
     memmove(p->buf, p->buf + n, p->len - n);
     p->len -= n;
     p->buf[p->len] = '\0';
 }
 
 int coa_proc_popen_alive(coa_proc_popen *p) {
-    if (!p) return 0;
-    if (p->dead) return 0;
+    if (!p)
+        return 0;
+    if (p->dead)
+        return 0;
     int status = 0;
     pid_t wr = waitpid(p->pid, &status, WNOHANG);
-    if (wr == p->pid) { p->dead = 1; return 0; }
+    if (wr == p->pid) {
+        p->dead = 1;
+        return 0;
+    }
     return 1;
 }
 
 void coa_proc_popen_free(coa_proc_popen *p) {
-    if (!p) return;
+    if (!p)
+        return;
     kill(p->pid, SIGKILL);
     waitpid(p->pid, NULL, 0);
     close(p->in_wr);

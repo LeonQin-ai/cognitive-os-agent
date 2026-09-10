@@ -26,11 +26,11 @@ struct coa_skill_registry;
 /* Dependency bundle for the generation pipeline, so the loop can also be
  * driven from inside the runtime (missing-capability auto-generation). */
 typedef struct coa_plugin_gen_deps {
-    coa_llm *llm;                        /* may be NULL -> mock fallback */
-    const char *provider;               /* "mock" forces the offline template */
+    coa_llm *llm;                         /* may be NULL -> mock fallback */
+    const char *provider;                 /* "mock" forces the offline template */
     struct coa_plugin_registry *registry; /* may be NULL (skip registration) */
     struct coa_skill_registry *skills;    /* may be NULL (skip skill reg) */
-    const char *state_root;              /* may be NULL = "state" */
+    const char *state_root;               /* may be NULL = "state" */
 } coa_plugin_gen_deps;
 
 /* Generate a plugin from a natural-language capability description.

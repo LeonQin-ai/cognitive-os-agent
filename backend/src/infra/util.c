@@ -20,11 +20,16 @@ void coa_strbuf_free(coa_strbuf *sb) {
 }
 
 static void strbuf_grow(coa_strbuf *sb, size_t need) {
-    if (sb->cap >= need) return;
+    if (sb->cap >= need)
+        return;
     size_t cap = sb->cap ? sb->cap : 64;
-    while (cap < need) cap *= 2;
+    while (cap < need)
+        cap *= 2;
     char *nb = realloc(sb->buf, cap);
-    if (!nb) { fprintf(stderr, "coa_strbuf: out of memory\n"); exit(1); }
+    if (!nb) {
+        fprintf(stderr, "coa_strbuf: out of memory\n");
+        exit(1);
+    }
     sb->buf = nb;
     sb->cap = cap;
 }
@@ -47,7 +52,10 @@ void coa_strbuf_appendf(coa_strbuf *sb, const char *fmt, ...) {
     va_copy(ap2, ap);
     int n = vsnprintf(NULL, 0, fmt, ap);
     va_end(ap);
-    if (n < 0) { va_end(ap2); return; }
+    if (n < 0) {
+        va_end(ap2);
+        return;
+    }
     strbuf_grow(sb, sb->len + (size_t)n + 1);
     vsnprintf(sb->buf + sb->len, (size_t)n + 1, fmt, ap2);
     va_end(ap2);
@@ -74,7 +82,10 @@ void coa_strmap_set(coa_strmap *m, const char *key, const char *val) {
     if (m->count == m->cap) {
         size_t cap = m->cap ? m->cap * 2 : 8;
         m->items = realloc(m->items, cap * sizeof(coa_kv));
-        if (!m->items) { fprintf(stderr, "coa_strmap: oom\n"); exit(1); }
+        if (!m->items) {
+            fprintf(stderr, "coa_strmap: oom\n");
+            exit(1);
+        }
         m->cap = cap;
     }
     m->items[m->count].key = coa_strdup(key);
@@ -84,7 +95,8 @@ void coa_strmap_set(coa_strmap *m, const char *key, const char *val) {
 
 const char *coa_strmap_get(const coa_strmap *m, const char *key) {
     for (size_t i = 0; i < m->count; i++) {
-        if (strcmp(m->items[i].key, key) == 0) return m->items[i].val;
+        if (strcmp(m->items[i].key, key) == 0)
+            return m->items[i].val;
     }
     return NULL;
 }
@@ -100,10 +112,12 @@ void coa_strmap_free(coa_strmap *m) {
 
 /* ---------- misc ---------- */
 char *coa_strdup(const char *s) {
-    if (!s) return NULL;
+    if (!s)
+        return NULL;
     size_t n = strlen(s) + 1;
     char *r = malloc(n);
-    if (!r) return NULL;
+    if (!r)
+        return NULL;
     memcpy(r, s, n);
     return r;
 }
@@ -118,8 +132,9 @@ void coa_path_join(char *out, size_t n, const char *a, const char *b) {
 #else
         '/';
 #endif
-    if (!a || !*a) { snprintf(tmp, sizeof(tmp), "%s", b ? b : ""); }
-    else {
+    if (!a || !*a) {
+        snprintf(tmp, sizeof(tmp), "%s", b ? b : "");
+    } else {
         size_t la = strlen(a);
         if (la > 0 && a[la - 1] != '/' && a[la - 1] != '\\')
             snprintf(tmp, sizeof(tmp), "%s%c%s", a, sep, b ? b : "");
@@ -130,16 +145,24 @@ void coa_path_join(char *out, size_t n, const char *a, const char *b) {
 }
 
 void coa_path_resolve(char *out, size_t n, const char *workspace, const char *path) {
-    if (!path || !*path) { snprintf(out, n, "%s", workspace ? workspace : ""); return; }
-    if (path[0] == '/' || path[0] == '\\') { snprintf(out, n, "%s", path); return; }
+    if (!path || !*path) {
+        snprintf(out, n, "%s", workspace ? workspace : "");
+        return;
+    }
+    if (path[0] == '/' || path[0] == '\\') {
+        snprintf(out, n, "%s", path);
+        return;
+    }
 #if defined(_WIN32)
     if (path[1] == ':' && ((path[0] >= 'A' && path[0] <= 'Z') || (path[0] >= 'a' && path[0] <= 'z'))) {
         snprintf(out, n, "%s", path);
         return;
     }
 #endif
-    if (workspace && *workspace) coa_path_join(out, n, workspace, path);
-    else snprintf(out, n, "%s", path);
+    if (workspace && *workspace)
+        coa_path_join(out, n, workspace, path);
+    else
+        snprintf(out, n, "%s", path);
 }
 
 /* ---------- hashing ---------- */
@@ -166,56 +189,82 @@ void coa_hash_hex(char out[17], uint64_t h) {
 /* Returns the number of bytes in the UTF-8 sequence starting at byte b,
  * or 0 if b cannot start a valid sequence of the expected length. */
 static int utf8_seq_len(unsigned char b) {
-    if (b < 0x80) return 1;          /* ASCII */
-    if ((b & 0xE0) == 0xC0) return 2;
-    if ((b & 0xF0) == 0xE0) return 3;
-    if ((b & 0xF8) == 0xF0) return 4;
-    return 0;                        /* continuation byte or invalid lead */
+    if (b < 0x80)
+        return 1; /* ASCII */
+    if ((b & 0xE0) == 0xC0)
+        return 2;
+    if ((b & 0xF0) == 0xE0)
+        return 3;
+    if ((b & 0xF8) == 0xF0)
+        return 4;
+    return 0; /* continuation byte or invalid lead */
 }
 
 int coa_str_utf8_valid_n(const char *s, long long n) {
-    if (!s) return 1;
+    if (!s)
+        return 1;
     size_t len = (n < 0) ? strlen(s) : (size_t)n;
     size_t i = 0;
     while (i < len) {
         int l = utf8_seq_len((unsigned char)s[i]);
-        if (l == 0 || i + (size_t)l > len) return 0;
+        if (l == 0 || i + (size_t)l > len)
+            return 0;
         for (int k = 1; k < l; k++)
-            if (((unsigned char)s[i + k] & 0xC0) != 0x80) return 0;
+            if (((unsigned char)s[i + k] & 0xC0) != 0x80)
+                return 0;
         /* reject overlong / surrogate / > U+10FFFF encodings */
         unsigned int cp = 0;
-        if (l == 1) cp = (unsigned char)s[i];
-        else if (l == 2) cp = ((unsigned char)s[i] & 0x1F) << 6 | ((unsigned char)s[i+1] & 0x3F);
-        else if (l == 3) cp = ((unsigned char)s[i] & 0x0F) << 12 | ((unsigned char)s[i+1] & 0x3F) << 6 | ((unsigned char)s[i+2] & 0x3F);
-        else cp = ((unsigned char)s[i] & 0x07) << 18 | ((unsigned char)s[i+1] & 0x3F) << 12 | ((unsigned char)s[i+2] & 0x3F) << 6 | ((unsigned char)s[i+3] & 0x3F);
+        if (l == 1)
+            cp = (unsigned char)s[i];
+        else if (l == 2)
+            cp = ((unsigned char)s[i] & 0x1F) << 6 | ((unsigned char)s[i + 1] & 0x3F);
+        else if (l == 3)
+            cp = ((unsigned char)s[i] & 0x0F) << 12 | ((unsigned char)s[i + 1] & 0x3F) << 6 |
+                 ((unsigned char)s[i + 2] & 0x3F);
+        else
+            cp = ((unsigned char)s[i] & 0x07) << 18 | ((unsigned char)s[i + 1] & 0x3F) << 12 |
+                 ((unsigned char)s[i + 2] & 0x3F) << 6 | ((unsigned char)s[i + 3] & 0x3F);
         if ((l == 2 && cp < 0x80) || (l == 3 && cp < 0x800) || (l == 4 && cp < 0x10000) ||
-            (cp >= 0xD800 && cp <= 0xDFFF) || cp > 0x10FFFF) return 0;
+            (cp >= 0xD800 && cp <= 0xDFFF) || cp > 0x10FFFF)
+            return 0;
         i += (size_t)l;
     }
     return 1;
 }
 
 char *coa_str_utf8_sanitize(const char *s) {
-    if (!s) return NULL;
+    if (!s)
+        return NULL;
     size_t len = strlen(s);
     char *out = (char *)malloc(len + 1);
-    if (!out) return NULL;
+    if (!out)
+        return NULL;
     size_t o = 0, i = 0;
     while (i < len) {
         int l = utf8_seq_len((unsigned char)s[i]);
         int ok = (l > 0 && i + (size_t)l <= len);
         if (ok) {
             for (int k = 1; k < l; k++)
-                if (((unsigned char)s[i + k] & 0xC0) != 0x80) { ok = 0; break; }
+                if (((unsigned char)s[i + k] & 0xC0) != 0x80) {
+                    ok = 0;
+                    break;
+                }
         }
         if (ok) {
             unsigned int cp = 0;
-            if (l == 1) cp = (unsigned char)s[i];
-            else if (l == 2) cp = ((unsigned char)s[i] & 0x1F) << 6 | ((unsigned char)s[i+1] & 0x3F);
-            else if (l == 3) cp = ((unsigned char)s[i] & 0x0F) << 12 | ((unsigned char)s[i+1] & 0x3F) << 6 | ((unsigned char)s[i+2] & 0x3F);
-            else cp = ((unsigned char)s[i] & 0x07) << 18 | ((unsigned char)s[i+1] & 0x3F) << 12 | ((unsigned char)s[i+2] & 0x3F) << 6 | ((unsigned char)s[i+3] & 0x3F);
+            if (l == 1)
+                cp = (unsigned char)s[i];
+            else if (l == 2)
+                cp = ((unsigned char)s[i] & 0x1F) << 6 | ((unsigned char)s[i + 1] & 0x3F);
+            else if (l == 3)
+                cp = ((unsigned char)s[i] & 0x0F) << 12 | ((unsigned char)s[i + 1] & 0x3F) << 6 |
+                     ((unsigned char)s[i + 2] & 0x3F);
+            else
+                cp = ((unsigned char)s[i] & 0x07) << 18 | ((unsigned char)s[i + 1] & 0x3F) << 12 |
+                     ((unsigned char)s[i + 2] & 0x3F) << 6 | ((unsigned char)s[i + 3] & 0x3F);
             if ((l == 2 && cp < 0x80) || (l == 3 && cp < 0x800) || (l == 4 && cp < 0x10000) ||
-                (cp >= 0xD800 && cp <= 0xDFFF) || cp > 0x10FFFF) ok = 0;
+                (cp >= 0xD800 && cp <= 0xDFFF) || cp > 0x10FFFF)
+                ok = 0;
         }
         if (ok) {
             memcpy(out + o, s + i, (size_t)l);
@@ -223,7 +272,7 @@ char *coa_str_utf8_sanitize(const char *s) {
             i += (size_t)l;
         } else {
             out[o++] = '?';
-            i += (l > 0) ? 1 : 1;   /* skip the bad lead byte; continuations get re-checked */
+            i += (l > 0) ? 1 : 1; /* skip the bad lead byte; continuations get re-checked */
         }
     }
     out[o] = '\0';

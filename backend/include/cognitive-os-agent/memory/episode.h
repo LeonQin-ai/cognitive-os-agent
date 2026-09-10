@@ -18,12 +18,10 @@ void coa_episodic_free(coa_episodic *e);
  * Re-experiencing an existing task REINFORCES it: strength += 1 and the
  * ts/result are refreshed. New episodes start with strength 1. */
 void coa_episodic_add(coa_episodic *e, const char *task, const char *result);
-void coa_episodic_add_ts(coa_episodic *e, const char *task, const char *result,
-                        long long ts);
+void coa_episodic_add_ts(coa_episodic *e, const char *task, const char *result, long long ts);
 /* Like add_ts, but also restores an explicit strength (persistence round-trip;
  * strength <= 0 falls back to 1). Dedup still reinforces (+1). */
-void coa_episodic_add_full(coa_episodic *e, const char *task, const char *result,
-                          long long ts, double strength);
+void coa_episodic_add_full(coa_episodic *e, const char *task, const char *result, long long ts, double strength);
 int coa_episodic_count(coa_episodic *e);
 
 /* Borrowed task/result/ts of the i-th episode (0 = oldest). Do not free. */
@@ -40,8 +38,7 @@ void coa_episodic_reinforce(coa_episodic *e, const char *task);
  * the episode's ts (capped at 30 halvings), floored at floor_strength
  * (floor <= 0 = 0.001). Entries already at/below the floor are not touched.
  * Returns the number of entries decayed. */
-int coa_episodic_decay(coa_episodic *e, long long now_ms, long long half_life_ms,
-                      double floor_strength);
+int coa_episodic_decay(coa_episodic *e, long long now_ms, long long half_life_ms, double floor_strength);
 /* Lifecycle: FORGET — drop episodes with strength < min_strength (compacts the
  * store). Returns the number of entries dropped. */
 int coa_episodic_drop_below(coa_episodic *e, double min_strength);

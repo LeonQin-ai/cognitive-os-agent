@@ -24,7 +24,8 @@ struct coa_vectorstore {
 
 coa_vectorstore *coa_vectorstore_new(void) {
     coa_vectorstore *v = (coa_vectorstore *)calloc(1, sizeof(*v));
-    if (!v) return NULL;
+    if (!v)
+        return NULL;
     coa_mutex_init(&v->mtx);
     return v;
 }
@@ -37,9 +38,11 @@ static void entry_clear(vec_entry *e) {
 }
 
 void coa_vectorstore_free(coa_vectorstore *v) {
-    if (!v) return;
+    if (!v)
+        return;
     coa_mutex_lock(&v->mtx);
-    for (size_t i = 0; i < v->count; i++) entry_clear(&v->items[i]);
+    for (size_t i = 0; i < v->count; i++)
+        entry_clear(&v->items[i]);
     free(v->items);
     v->items = NULL;
     v->count = v->cap = 0;
@@ -49,7 +52,8 @@ void coa_vectorstore_free(coa_vectorstore *v) {
 }
 
 int coa_vectorstore_add(coa_vectorstore *v, const char *id, const char *text, const char *meta) {
-    if (!v || !id || !text) return -1;
+    if (!v || !id || !text)
+        return -1;
     coa_mutex_lock(&v->mtx);
     /* update existing id */
     for (size_t i = 0; i < v->count; i++) {
@@ -66,7 +70,10 @@ int coa_vectorstore_add(coa_vectorstore *v, const char *id, const char *text, co
     if (v->count == v->cap) {
         size_t cap = v->cap ? v->cap * 2 : 8;
         vec_entry *ni = (vec_entry *)realloc(v->items, cap * sizeof(vec_entry));
-        if (!ni) { coa_mutex_unlock(&v->mtx); return -1; }
+        if (!ni) {
+            coa_mutex_unlock(&v->mtx);
+            return -1;
+        }
         v->items = ni;
         v->cap = cap;
     }
@@ -81,7 +88,8 @@ int coa_vectorstore_add(coa_vectorstore *v, const char *id, const char *text, co
 }
 
 int coa_vectorstore_count(coa_vectorstore *v) {
-    if (!v) return 0;
+    if (!v)
+        return 0;
     coa_mutex_lock(&v->mtx);
     int n = (int)v->count;
     coa_mutex_unlock(&v->mtx);
@@ -89,7 +97,8 @@ int coa_vectorstore_count(coa_vectorstore *v) {
 }
 
 char *coa_vectorstore_nearest(coa_vectorstore *v, const char *query, int k) {
-    if (!v) return coa_strdup("[]");
+    if (!v)
+        return coa_strdup("[]");
     float qvec[COA_EMBED_DIM];
     coa_embed_text(query, qvec);
 
@@ -107,17 +116,29 @@ char *coa_vectorstore_nearest(coa_vectorstore *v, const char *query, int k) {
 
     for (size_t i = 0; i < v->count; i++) {
         float s = coa_embed_cosine(qvec, v->items[i].vec, COA_EMBED_DIM);
-        if (k > 0 && ntop >= k && s <= top_score[ntop - 1]) continue;
+        if (k > 0 && ntop >= k && s <= top_score[ntop - 1])
+            continue;
         int pos = ntop;
-        while (pos > 0 && top_score[pos - 1] < s) { pos--; }
+        while (pos > 0 && top_score[pos - 1] < s) {
+            pos--;
+        }
         if (k > 0 && ntop == k) {
             /* drop the lowest */
-            for (int j = ntop - 1; j > pos; j--) { top_idx[j] = top_idx[j - 1]; top_score[j] = top_score[j - 1]; }
+            for (int j = ntop - 1; j > pos; j--) {
+                top_idx[j] = top_idx[j - 1];
+                top_score[j] = top_score[j - 1];
+            }
         } else {
             ntop++;
-            for (int j = ntop - 1; j > pos; j--) { top_idx[j] = top_idx[j - 1]; top_score[j] = top_score[j - 1]; }
+            for (int j = ntop - 1; j > pos; j--) {
+                top_idx[j] = top_idx[j - 1];
+                top_score[j] = top_score[j - 1];
+            }
         }
-        if (pos < ntop) { top_idx[pos] = (int)i; top_score[pos] = s; }
+        if (pos < ntop) {
+            top_idx[pos] = (int)i;
+            top_score[pos] = s;
+        }
     }
 
     cJSON *arr = cJSON_CreateArray();
@@ -137,7 +158,8 @@ char *coa_vectorstore_nearest(coa_vectorstore *v, const char *query, int k) {
     coa_mutex_unlock(&v->mtx);
 
     char *s = arr ? cJSON_PrintUnformatted(arr) : NULL;
-    if (arr) cJSON_Delete(arr);
+    if (arr)
+        cJSON_Delete(arr);
     return s ? s : coa_strdup("[]");
 }
 
@@ -145,14 +167,14 @@ char *coa_vectorstore_nearest(coa_vectorstore *v, const char *query, int k) {
 
 /* Caller holds v->mtx. score = w_vec*cosine + (1-w_vec)*keyword for every
  * entry. w_vec >= 0.999 skips the keyword pass (pure vector). */
-static void score_all(coa_vectorstore *v, const char *query, float w_vec,
-                      float *out) {
+static void score_all(coa_vectorstore *v, const char *query, float w_vec, float *out) {
     float qvec[COA_EMBED_DIM];
     coa_embed_text(query, qvec);
     int do_kw = w_vec < 0.999f;
     for (size_t i = 0; i < v->count; i++) {
         float cos = coa_embed_cosine(qvec, v->items[i].vec, COA_EMBED_DIM);
-        if (cos < 0) cos = 0;
+        if (cos < 0)
+            cos = 0;
         float s = w_vec * cos;
         if (do_kw) {
             float kw = 0;
@@ -165,17 +187,25 @@ static void score_all(coa_vectorstore *v, const char *query, float w_vec,
 
 /* Caller holds v->mtx. Top-k by the given per-entry scores -> JSON array. */
 static char *topk_json(coa_vectorstore *v, const float *scores, int k) {
-    if (k <= 0) return coa_strdup("[]");
+    if (k <= 0)
+        return coa_strdup("[]");
     int *top_idx = (int *)malloc((size_t)k * sizeof(int));
     float *top_score = (float *)malloc((size_t)k * sizeof(float));
-    if (!top_idx || !top_score) { free(top_idx); free(top_score); return coa_strdup("[]"); }
+    if (!top_idx || !top_score) {
+        free(top_idx);
+        free(top_score);
+        return coa_strdup("[]");
+    }
     int ntop = 0;
     for (size_t i = 0; i < v->count; i++) {
         float s = scores[i];
-        if (ntop >= k && s <= top_score[ntop - 1]) continue;
+        if (ntop >= k && s <= top_score[ntop - 1])
+            continue;
         int pos = ntop < k ? ntop : k - 1;
-        while (pos > 0 && top_score[pos - 1] < s) pos--;
-        if (ntop < k) ntop++;
+        while (pos > 0 && top_score[pos - 1] < s)
+            pos--;
+        if (ntop < k)
+            ntop++;
         for (int j = ntop - 1; j > pos; j--) {
             top_idx[j] = top_idx[j - 1];
             top_score[j] = top_score[j - 1];
@@ -198,19 +228,28 @@ static char *topk_json(coa_vectorstore *v, const float *scores, int k) {
     free(top_idx);
     free(top_score);
     char *s = arr ? cJSON_PrintUnformatted(arr) : NULL;
-    if (arr) cJSON_Delete(arr);
+    if (arr)
+        cJSON_Delete(arr);
     return s ? s : coa_strdup("[]");
 }
 
-char *coa_vectorstore_nearest_hybrid(coa_vectorstore *v, const char *query,
-                                    int k, float w_vec) {
-    if (!v || !query || k <= 0) return coa_strdup("[]");
-    if (w_vec < 0) w_vec = 0;
-    if (w_vec > 1) w_vec = 1;
+char *coa_vectorstore_nearest_hybrid(coa_vectorstore *v, const char *query, int k, float w_vec) {
+    if (!v || !query || k <= 0)
+        return coa_strdup("[]");
+    if (w_vec < 0)
+        w_vec = 0;
+    if (w_vec > 1)
+        w_vec = 1;
     coa_mutex_lock(&v->mtx);
-    if (v->count == 0) { coa_mutex_unlock(&v->mtx); return coa_strdup("[]"); }
+    if (v->count == 0) {
+        coa_mutex_unlock(&v->mtx);
+        return coa_strdup("[]");
+    }
     float *scores = (float *)malloc(v->count * sizeof(float));
-    if (!scores) { coa_mutex_unlock(&v->mtx); return coa_strdup("[]"); }
+    if (!scores) {
+        coa_mutex_unlock(&v->mtx);
+        return coa_strdup("[]");
+    }
     score_all(v, query, w_vec, scores);
     char *out = topk_json(v, scores, k);
     free(scores);
@@ -218,20 +257,29 @@ char *coa_vectorstore_nearest_hybrid(coa_vectorstore *v, const char *query,
     return out;
 }
 
-char *coa_vectorstore_nearest_multi(coa_vectorstore *v, const char *const *queries,
-                                   int nq, int k) {
-    if (!v || !queries || nq <= 0 || k <= 0) return coa_strdup("[]");
+char *coa_vectorstore_nearest_multi(coa_vectorstore *v, const char *const *queries, int nq, int k) {
+    if (!v || !queries || nq <= 0 || k <= 0)
+        return coa_strdup("[]");
     coa_mutex_lock(&v->mtx);
-    if (v->count == 0) { coa_mutex_unlock(&v->mtx); return coa_strdup("[]"); }
+    if (v->count == 0) {
+        coa_mutex_unlock(&v->mtx);
+        return coa_strdup("[]");
+    }
     float *best = (float *)calloc(v->count, sizeof(float));
-    if (!best) { coa_mutex_unlock(&v->mtx); return coa_strdup("[]"); }
+    if (!best) {
+        coa_mutex_unlock(&v->mtx);
+        return coa_strdup("[]");
+    }
     for (int q = 0; q < nq; q++) {
-        if (!queries[q] || !*queries[q]) continue;
+        if (!queries[q] || !*queries[q])
+            continue;
         float *scores = (float *)malloc(v->count * sizeof(float));
-        if (!scores) continue;
+        if (!scores)
+            continue;
         score_all(v, queries[q], 1.0f, scores);
         for (size_t i = 0; i < v->count; i++)
-            if (scores[i] > best[i]) best[i] = scores[i];
+            if (scores[i] > best[i])
+                best[i] = scores[i];
         free(scores);
     }
     char *out = topk_json(v, best, k);

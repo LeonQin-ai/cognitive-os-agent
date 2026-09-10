@@ -26,7 +26,7 @@ int coa_fs_mkdirs(const char *path);
 int coa_fs_remove(const char *path);
 
 typedef struct coa_dir_entry {
-    char *name;   /* base name only */
+    char *name; /* base name only */
     int is_dir;
 } coa_dir_entry;
 

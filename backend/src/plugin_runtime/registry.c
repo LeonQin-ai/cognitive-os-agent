@@ -15,11 +15,17 @@ struct coa_plugin_registry {
 };
 
 static void meta_free(coa_plugin_meta *m) {
-    if (!m) return;
-    free(m->name); free(m->version); free(m->signature); free(m->description);
-    for (size_t i = 0; i < m->n_caps; i++) free(m->caps[i]);
+    if (!m)
+        return;
+    free(m->name);
+    free(m->version);
+    free(m->signature);
+    free(m->description);
+    for (size_t i = 0; i < m->n_caps; i++)
+        free(m->caps[i]);
     free(m->caps);
-    for (size_t i = 0; i < m->n_deps; i++) free(m->deps[i]);
+    for (size_t i = 0; i < m->n_deps; i++)
+        free(m->deps[i]);
     free(m->deps);
     memset(m, 0, sizeof(*m));
 }
@@ -46,15 +52,18 @@ static coa_plugin_meta meta_copy(const coa_plugin_meta *src) {
 
 coa_plugin_registry *coa_plugin_registry_new(void) {
     coa_plugin_registry *r = (coa_plugin_registry *)calloc(1, sizeof(coa_plugin_registry));
-    if (!r) return NULL;
+    if (!r)
+        return NULL;
     coa_mutex_init(&r->mtx);
     return r;
 }
 
 void coa_plugin_registry_free(coa_plugin_registry *r) {
-    if (!r) return;
+    if (!r)
+        return;
     coa_mutex_lock(&r->mtx);
-    for (size_t i = 0; i < r->count; i++) meta_free(&r->items[i]);
+    for (size_t i = 0; i < r->count; i++)
+        meta_free(&r->items[i]);
     free(r->items);
     coa_mutex_unlock(&r->mtx);
     coa_mutex_destroy(&r->mtx);
@@ -62,19 +71,22 @@ void coa_plugin_registry_free(coa_plugin_registry *r) {
 }
 
 int coa_plugin_registry_register(coa_plugin_registry *r, const coa_plugin_meta *meta) {
-    if (!r || !meta || !meta->name || !meta->version) return -1;
+    if (!r || !meta || !meta->name || !meta->version)
+        return -1;
     coa_mutex_lock(&r->mtx);
     /* reject exact duplicate (same name+version) */
     for (size_t i = 0; i < r->count; i++)
-        if (strcmp(r->items[i].name, meta->name) == 0 &&
-            strcmp(r->items[i].version, meta->version) == 0) {
+        if (strcmp(r->items[i].name, meta->name) == 0 && strcmp(r->items[i].version, meta->version) == 0) {
             coa_mutex_unlock(&r->mtx);
             return -1;
         }
     if (r->count == r->cap) {
         size_t ncap = r->cap ? r->cap * 2 : 8;
         coa_plugin_meta *ni = (coa_plugin_meta *)realloc(r->items, ncap * sizeof(coa_plugin_meta));
-        if (!ni) { coa_mutex_unlock(&r->mtx); return -1; }
+        if (!ni) {
+            coa_mutex_unlock(&r->mtx);
+            return -1;
+        }
         r->items = ni;
         r->cap = ncap;
     }
@@ -84,7 +96,8 @@ int coa_plugin_registry_register(coa_plugin_registry *r, const coa_plugin_meta *
 }
 
 int coa_plugin_registry_unregister(coa_plugin_registry *r, const char *name) {
-    if (!r || !name) return -1;
+    if (!r || !name)
+        return -1;
     coa_mutex_lock(&r->mtx);
     int found = 0;
     for (size_t i = 0; i < r->count; i++) {
@@ -102,10 +115,11 @@ int coa_plugin_registry_unregister(coa_plugin_registry *r, const char *name) {
 }
 
 int coa_plugin_registry_set_enabled(coa_plugin_registry *r, const char *name, int enabled) {
-    if (!r || !name) return -1;
+    if (!r || !name)
+        return -1;
     coa_mutex_lock(&r->mtx);
     int rc = -1;
-    for (size_t i = r->count; i-- > 0; ) {
+    for (size_t i = r->count; i-- > 0;) {
         if (strcmp(r->items[i].name, name) == 0) { /* latest first */
             r->items[i].enabled = enabled ? 1 : 0;
             rc = 0;
@@ -117,17 +131,22 @@ int coa_plugin_registry_set_enabled(coa_plugin_registry *r, const char *name, in
 }
 
 const coa_plugin_meta *coa_plugin_registry_find(coa_plugin_registry *r, const char *name) {
-    if (!r || !name) return NULL;
+    if (!r || !name)
+        return NULL;
     coa_mutex_lock(&r->mtx);
     const coa_plugin_meta *m = NULL;
-    for (size_t i = r->count; i-- > 0; )
-        if (strcmp(r->items[i].name, name) == 0) { m = &r->items[i]; break; }
+    for (size_t i = r->count; i-- > 0;)
+        if (strcmp(r->items[i].name, name) == 0) {
+            m = &r->items[i];
+            break;
+        }
     coa_mutex_unlock(&r->mtx);
     return m;
 }
 
 int coa_plugin_registry_count(coa_plugin_registry *r) {
-    if (!r) return 0;
+    if (!r)
+        return 0;
     coa_mutex_lock(&r->mtx);
     int n = (int)r->count;
     coa_mutex_unlock(&r->mtx);
@@ -135,7 +154,8 @@ int coa_plugin_registry_count(coa_plugin_registry *r) {
 }
 
 const coa_plugin_meta *coa_plugin_registry_get(coa_plugin_registry *r, size_t i) {
-    if (!r) return NULL;
+    if (!r)
+        return NULL;
     coa_mutex_lock(&r->mtx);
     const coa_plugin_meta *m = (i < r->count) ? &r->items[i] : NULL;
     coa_mutex_unlock(&r->mtx);
@@ -143,18 +163,28 @@ const coa_plugin_meta *coa_plugin_registry_get(coa_plugin_registry *r, size_t i)
 }
 
 int coa_plugin_registry_deps_met(coa_plugin_registry *r, const char *name) {
-    if (!r || !name) return 0;
+    if (!r || !name)
+        return 0;
     coa_mutex_lock(&r->mtx);
     const coa_plugin_meta *m = NULL;
-    for (size_t i = r->count; i-- > 0; )
-        if (strcmp(r->items[i].name, name) == 0) { m = &r->items[i]; break; }
+    for (size_t i = r->count; i-- > 0;)
+        if (strcmp(r->items[i].name, name) == 0) {
+            m = &r->items[i];
+            break;
+        }
     int ok = 1;
     if (m) {
         for (size_t d = 0; d < m->n_deps; d++) {
             int found = 0;
             for (size_t i = 0; i < r->count; i++)
-                if (strcmp(r->items[i].name, m->deps[d]) == 0) { found = 1; break; }
-            if (!found) { ok = 0; break; }
+                if (strcmp(r->items[i].name, m->deps[d]) == 0) {
+                    found = 1;
+                    break;
+                }
+            if (!found) {
+                ok = 0;
+                break;
+            }
         }
     } else {
         ok = 0;
@@ -166,22 +196,27 @@ int coa_plugin_registry_deps_met(coa_plugin_registry *r, const char *name) {
 static void add_meta_json(cJSON *arr, const coa_plugin_meta *m) {
     cJSON *o = cJSON_CreateObject();
     cJSON_AddStringToObject(o, "version", m->version);
-    if (m->signature) cJSON_AddStringToObject(o, "signature", m->signature);
-    if (m->description) cJSON_AddStringToObject(o, "description", m->description);
+    if (m->signature)
+        cJSON_AddStringToObject(o, "signature", m->signature);
+    if (m->description)
+        cJSON_AddStringToObject(o, "description", m->description);
     cJSON_AddBoolToObject(o, "enabled", m->enabled ? 1 : 0);
     cJSON_AddNumberToObject(o, "built_ms", (double)m->built_ms);
     cJSON *caps = cJSON_CreateArray();
-    for (size_t i = 0; i < m->n_caps; i++) cJSON_AddItemToArray(caps, cJSON_CreateString(m->caps[i]));
+    for (size_t i = 0; i < m->n_caps; i++)
+        cJSON_AddItemToArray(caps, cJSON_CreateString(m->caps[i]));
     cJSON_AddItemToObject(o, "capabilities", caps);
     cJSON *deps = cJSON_CreateArray();
-    for (size_t i = 0; i < m->n_deps; i++) cJSON_AddItemToArray(deps, cJSON_CreateString(m->deps[i]));
+    for (size_t i = 0; i < m->n_deps; i++)
+        cJSON_AddItemToArray(deps, cJSON_CreateString(m->deps[i]));
     cJSON_AddItemToObject(o, "dependencies", deps);
     cJSON_AddItemToArray(arr, o);
 }
 
 char *coa_plugin_registry_json(coa_plugin_registry *r) {
     cJSON *root = cJSON_CreateObject();
-    if (!r) return cJSON_PrintUnformatted(root);
+    if (!r)
+        return cJSON_PrintUnformatted(root);
     coa_mutex_lock(&r->mtx);
     for (size_t i = 0; i < r->count; i++) {
         coa_plugin_meta *m = &r->items[i];
@@ -205,13 +240,20 @@ char *coa_plugin_registry_json(coa_plugin_registry *r) {
 
 static char *slurp_file(const char *path) {
     FILE *f = fopen(path, "rb");
-    if (!f) return NULL;
+    if (!f)
+        return NULL;
     fseek(f, 0, SEEK_END);
     long n = ftell(f);
-    if (n < 0) { fclose(f); return NULL; }
+    if (n < 0) {
+        fclose(f);
+        return NULL;
+    }
     fseek(f, 0, SEEK_SET);
     char *buf = (char *)malloc((size_t)n + 1);
-    if (!buf) { fclose(f); return NULL; }
+    if (!buf) {
+        fclose(f);
+        return NULL;
+    }
     size_t rd = fread(buf, 1, (size_t)n, f);
     buf[rd] = '\0';
     fclose(f);
@@ -220,14 +262,16 @@ static char *slurp_file(const char *path) {
 
 static int dump_file(const char *path, const char *text) {
     FILE *f = fopen(path, "wb");
-    if (!f) return -1;
+    if (!f)
+        return -1;
     fwrite(text, 1, strlen(text), f);
     fclose(f);
     return 0;
 }
 
 int coa_plugin_registry_persist(coa_plugin_registry *r, const char *state_root) {
-    if (!r || !state_root) return -1;
+    if (!r || !state_root)
+        return -1;
     char path[1024];
     coa_path_join(path, sizeof(path), state_root, "plugins.json");
     cJSON *arr = cJSON_CreateArray();
@@ -237,15 +281,19 @@ int coa_plugin_registry_persist(coa_plugin_registry *r, const char *state_root) 
         cJSON *o = cJSON_CreateObject();
         cJSON_AddStringToObject(o, "name", m->name);
         cJSON_AddStringToObject(o, "version", m->version);
-        if (m->signature) cJSON_AddStringToObject(o, "signature", m->signature);
-        if (m->description) cJSON_AddStringToObject(o, "description", m->description);
+        if (m->signature)
+            cJSON_AddStringToObject(o, "signature", m->signature);
+        if (m->description)
+            cJSON_AddStringToObject(o, "description", m->description);
         cJSON_AddBoolToObject(o, "enabled", m->enabled ? 1 : 0);
         cJSON_AddNumberToObject(o, "built_ms", (double)m->built_ms);
         cJSON *caps = cJSON_CreateArray();
-        for (size_t c = 0; c < m->n_caps; c++) cJSON_AddItemToArray(caps, cJSON_CreateString(m->caps[c]));
+        for (size_t c = 0; c < m->n_caps; c++)
+            cJSON_AddItemToArray(caps, cJSON_CreateString(m->caps[c]));
         cJSON_AddItemToObject(o, "capabilities", caps);
         cJSON *deps = cJSON_CreateArray();
-        for (size_t d = 0; d < m->n_deps; d++) cJSON_AddItemToArray(deps, cJSON_CreateString(m->deps[d]));
+        for (size_t d = 0; d < m->n_deps; d++)
+            cJSON_AddItemToArray(deps, cJSON_CreateString(m->deps[d]));
         cJSON_AddItemToObject(o, "dependencies", deps);
         cJSON_AddItemToArray(arr, o);
     }
@@ -258,20 +306,28 @@ int coa_plugin_registry_persist(coa_plugin_registry *r, const char *state_root) 
 }
 
 int coa_plugin_registry_load(coa_plugin_registry *r, const char *state_root) {
-    if (!r || !state_root) return -1;
+    if (!r || !state_root)
+        return -1;
     char path[1024];
     coa_path_join(path, sizeof(path), state_root, "plugins.json");
     char *txt = slurp_file(path);
-    if (!txt) return 0;
+    if (!txt)
+        return 0;
     cJSON *arr = cJSON_Parse(txt);
     free(txt);
-    if (!arr || !cJSON_IsArray(arr)) { if (arr) cJSON_Delete(arr); return 0; }
+    if (!arr || !cJSON_IsArray(arr)) {
+        if (arr)
+            cJSON_Delete(arr);
+        return 0;
+    }
     for (int i = 0; i < cJSON_GetArraySize(arr); i++) {
         cJSON *o = cJSON_GetArrayItem(arr, i);
-        if (!cJSON_IsObject(o)) continue;
+        if (!cJSON_IsObject(o))
+            continue;
         cJSON *n = cJSON_GetObjectItemCaseSensitive(o, "name");
         cJSON *v = cJSON_GetObjectItemCaseSensitive(o, "version");
-        if (!n || !cJSON_IsString(n) || !v || !cJSON_IsString(v)) continue;
+        if (!n || !cJSON_IsString(n) || !v || !cJSON_IsString(v))
+            continue;
         coa_plugin_meta m;
         memset(&m, 0, sizeof(m));
         m.name = n->valuestring;
@@ -292,7 +348,8 @@ int coa_plugin_registry_load(coa_plugin_registry *r, const char *state_root) {
             }
         }
         coa_plugin_registry_register(r, &m);
-        for (size_t c = 0; c < m.n_caps; c++) free(m.caps[c]);
+        for (size_t c = 0; c < m.n_caps; c++)
+            free(m.caps[c]);
         free(m.caps);
     }
     cJSON_Delete(arr);

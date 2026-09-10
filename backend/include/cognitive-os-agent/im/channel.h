@@ -24,10 +24,10 @@ typedef struct coa_im_channels coa_im_channels;
 
 typedef struct coa_im_channel {
     char *name;
-    char *type;            /* feishu | wecom | generic | telegram */
-    char *endpoint;        /* webhook url, or telegram API base (http(s)://host) */
-    char *token;           /* telegram bot token */
-    char *target;          /* telegram chat_id (the phone-side chat) */
+    char *type;     /* feishu | wecom | generic | telegram */
+    char *endpoint; /* webhook url, or telegram API base (http(s)://host) */
+    char *token;    /* telegram bot token */
+    char *target;   /* telegram chat_id (the phone-side chat) */
     int enabled;
     int64_t last_update_id; /* telegram poll watermark (internal) */
 } coa_im_channel;
@@ -55,10 +55,8 @@ char *coa_im_channels_json(coa_im_channels *cs);
 /* Telegram inbound: poll getUpdates once for a channel and ingest new text
  * messages via `ingest(channel_name, sender, text, ud)`. Returns # ingested,
  * or -1 if the channel is missing/not telegram/unreachable. */
-typedef void (*coa_im_ingest_fn)(const char *channel_name, const char *sender,
-                                const char *text, void *ud);
-int coa_im_channel_poll_telegram(coa_im_channels *cs, const char *name,
-                                coa_im_ingest_fn ingest, void *ud);
+typedef void (*coa_im_ingest_fn)(const char *channel_name, const char *sender, const char *text, void *ud);
+int coa_im_channel_poll_telegram(coa_im_channels *cs, const char *name, coa_im_ingest_fn ingest, void *ud);
 
 #ifdef __cplusplus
 }

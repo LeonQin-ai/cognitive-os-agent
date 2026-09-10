@@ -1,0 +1,17 @@
+# Huawei C coding standard (DKBA 2826-2011.5) — formatting rules only.
+# Matches the codebase's existing style (K&R braces, 4-space indent, ~120 cols)
+# so the formatting diff only fixes actual violations of chapter 9 (排版与格式).
+Language: Cpp
+BasedOnStyle: LLVM
+IndentWidth: 4
+ColumnLimit: 120
+AccessModifierOffset: -4
+AllowShortIfStatementsOnASingleLine: false   # 规则9.5 if 独占一行
+AllowShortLoopsOnASingleLine: false          # 规则9.5 for/while 独占一行
+AllowShortFunctionsOnASingleLine: None       # 规则9.4 一行只写一条语句
+AllowShortCaseLabelsOnASingleLine: false     # 规则9.5 case 独占一行
+AllowShortBlocksOnASingleLine: Never
+SpaceBeforeParens: ControlStatements
+PointerAlignment: Right
+SortIncludes: Never                          # 不动 include 顺序，减小 diff
+MaxEmptyLinesToKeep: 1

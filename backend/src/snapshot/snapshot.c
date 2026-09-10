@@ -17,9 +17,9 @@
 
 typedef struct captured {
     char *path;
-    char hash[17];   /* content hash of the original; empty if file didn't exist */
+    char hash[17]; /* content hash of the original; empty if file didn't exist */
     int existed;
-    int skipped;     /* existed but too large to capture; rollback leaves it as-is */
+    int skipped; /* existed but too large to capture; rollback leaves it as-is */
 } captured;
 
 typedef struct snapshot_entry {
@@ -32,7 +32,7 @@ typedef struct snapshot_entry {
 struct coa_snapshot {
     char root[512];
     coa_cow *cow;
-    long long max_file;      /* capture size limit in bytes; 0 = unlimited */
+    long long max_file; /* capture size limit in bytes; 0 = unlimited */
     captured *pending;
     size_t pending_count, pending_cap;
     snapshot_entry *committed;
@@ -44,20 +44,25 @@ static int coa_snapshot_restore_from_manifest(coa_snapshot *s, const char *json_
 
 coa_snapshot *coa_snapshot_open(const char *state_root) {
     coa_snapshot *s = calloc(1, sizeof(coa_snapshot));
-    if (!s) return NULL;
+    if (!s)
+        return NULL;
     snprintf(s->root, sizeof(s->root), "%s", state_root);
     s->max_file = SNAPSHOT_DEFAULT_MAX_FILE;
     {
         const char *env = getenv("COA_SNAPSHOT_MAX_FILE");
         if (env && *env) {
             long long v = atoll(env);
-            if (v >= 0) s->max_file = v; /* 0 disables the limit entirely */
+            if (v >= 0)
+                s->max_file = v; /* 0 disables the limit entirely */
         }
     }
     char blocks[600];
     coa_path_join(blocks, sizeof(blocks), state_root, "snapshots/blocks");
     s->cow = coa_cow_open(blocks);
-    if (!s->cow) { free(s); return NULL; }
+    if (!s->cow) {
+        free(s);
+        return NULL;
+    }
 
     /* load committed snapshots from state_root/snapshots/ */
     char manifest_dir[600];
@@ -65,9 +70,11 @@ coa_snapshot *coa_snapshot_open(const char *state_root) {
     coa_dir_list dl;
     if (coa_fs_list_dir(manifest_dir, &dl) == 0) {
         for (size_t i = 0; i < dl.count; i++) {
-            if (dl.items[i].is_dir) continue;
+            if (dl.items[i].is_dir)
+                continue;
             size_t len = strlen(dl.items[i].name);
-            if (len < 5 || strcmp(dl.items[i].name + len - 5, ".json") != 0) continue;
+            if (len < 5 || strcmp(dl.items[i].name + len - 5, ".json") != 0)
+                continue;
             char mpath[700];
             coa_path_join(mpath, sizeof(mpath), manifest_dir, dl.items[i].name);
             char *text = coa_fs_read_file(mpath);
@@ -82,7 +89,8 @@ coa_snapshot *coa_snapshot_open(const char *state_root) {
 }
 
 void coa_snapshot_set_max_file(coa_snapshot *s, long long bytes) {
-    if (!s || bytes < 0) return;
+    if (!s || bytes < 0)
+        return;
     s->max_file = bytes;
 }
 
@@ -93,13 +101,21 @@ long long coa_snapshot_get_max_file(const coa_snapshot *s) {
 /* helper used above to rebuild committed list from a persisted manifest */
 static int coa_snapshot_restore_from_manifest(coa_snapshot *s, const char *json_text, const char *fname) {
     cJSON *root = cJSON_Parse(json_text);
-    if (!root || !cJSON_IsObject(root)) { if (root) cJSON_Delete(root); return -1; }
+    if (!root || !cJSON_IsObject(root)) {
+        if (root)
+            cJSON_Delete(root);
+        return -1;
+    }
     snapshot_entry *e = calloc(1, sizeof(snapshot_entry));
-    if (!e) { cJSON_Delete(root); return -1; }
+    if (!e) {
+        cJSON_Delete(root);
+        return -1;
+    }
     /* id from filename minus .json */
     snprintf(e->id, sizeof(e->id), "%.*s", (int)(strlen(fname) > 5 ? strlen(fname) - 5 : 0), fname);
     cJSON *created = cJSON_GetObjectItemCaseSensitive(root, "created");
-    if (created && cJSON_IsString(created)) snprintf(e->created, sizeof(e->created), "%s", created->valuestring);
+    if (created && cJSON_IsString(created))
+        snprintf(e->created, sizeof(e->created), "%s", created->valuestring);
     cJSON *files = cJSON_GetObjectItemCaseSensitive(root, "files");
     if (files && cJSON_IsArray(files)) {
         e->files = calloc((size_t)cJSON_GetArraySize(files), sizeof(captured));
@@ -113,7 +129,8 @@ static int coa_snapshot_restore_from_manifest(coa_snapshot *s, const char *json_
             cJSON *ex = cJSON_GetObjectItemCaseSensitive(it, "existed");
             cJSON *sk = cJSON_GetObjectItemCaseSensitive(it, "skipped");
             cap->path = (p && cJSON_IsString(p)) ? coa_strdup(p->valuestring) : coa_strdup("");
-            if (h && cJSON_IsString(h)) snprintf(cap->hash, sizeof(cap->hash), "%s", h->valuestring);
+            if (h && cJSON_IsString(h))
+                snprintf(cap->hash, sizeof(cap->hash), "%s", h->valuestring);
             cap->existed = ex ? cJSON_IsTrue(ex) : 1;
             cap->skipped = sk ? cJSON_IsTrue(sk) : 0;
         }
@@ -130,11 +147,14 @@ static int coa_snapshot_restore_from_manifest(coa_snapshot *s, const char *json_
 }
 
 void coa_snapshot_close(coa_snapshot *s) {
-    if (!s) return;
-    for (size_t i = 0; i < s->pending_count; i++) free(s->pending[i].path);
+    if (!s)
+        return;
+    for (size_t i = 0; i < s->pending_count; i++)
+        free(s->pending[i].path);
     free(s->pending);
     for (size_t i = 0; i < s->committed_count; i++) {
-        for (size_t j = 0; j < s->committed[i].nfiles; j++) free(s->committed[i].files[j].path);
+        for (size_t j = 0; j < s->committed[i].nfiles; j++)
+            free(s->committed[i].files[j].path);
         free(s->committed[i].files);
     }
     free(s->committed);
@@ -157,7 +177,8 @@ int coa_snapshot_capture(coa_snapshot *s, const char *path) {
             char *content = coa_fs_read_file(path);
             if (content) {
                 const char *h = coa_cow_put(s->cow, content, strlen(content));
-                if (h) snprintf(cap.hash, sizeof(cap.hash), "%s", h);
+                if (h)
+                    snprintf(cap.hash, sizeof(cap.hash), "%s", h);
                 free(content);
             }
         }
@@ -173,17 +194,23 @@ int coa_snapshot_capture(coa_snapshot *s, const char *path) {
 
 int coa_snapshot_capture_json(coa_snapshot *s, const char *paths_json) {
     cJSON *arr = cJSON_Parse(paths_json);
-    if (!arr || !cJSON_IsArray(arr)) { if (arr) cJSON_Delete(arr); return -1; }
+    if (!arr || !cJSON_IsArray(arr)) {
+        if (arr)
+            cJSON_Delete(arr);
+        return -1;
+    }
     cJSON *it;
     cJSON_ArrayForEach(it, arr) {
-        if (cJSON_IsString(it)) coa_snapshot_capture(s, it->valuestring);
+        if (cJSON_IsString(it))
+            coa_snapshot_capture(s, it->valuestring);
     }
     cJSON_Delete(arr);
     return 0;
 }
 
 const char *coa_snapshot_commit(coa_snapshot *s) {
-    if (s->pending_count == 0) return NULL;
+    if (s->pending_count == 0)
+        return NULL;
     char id[32];
     snprintf(id, sizeof(id), "s%lld", (long long)coa_time_now_ms());
     char created[40];
@@ -199,7 +226,8 @@ const char *coa_snapshot_commit(coa_snapshot *s) {
         cJSON_AddStringToObject(o, "path", s->pending[i].path);
         cJSON_AddStringToObject(o, "hash", s->pending[i].hash);
         cJSON_AddBoolToObject(o, "existed", s->pending[i].existed ? 1 : 0);
-        if (s->pending[i].skipped) cJSON_AddBoolToObject(o, "skipped", 1);
+        if (s->pending[i].skipped)
+            cJSON_AddBoolToObject(o, "skipped", 1);
         cJSON_AddItemToArray(files, o);
     }
     char *text = cJSON_PrintUnformatted(root);
@@ -236,7 +264,8 @@ const char *coa_snapshot_commit(coa_snapshot *s) {
 }
 
 void coa_snapshot_abort(coa_snapshot *s) {
-    for (size_t i = 0; i < s->pending_count; i++) free(s->pending[i].path);
+    for (size_t i = 0; i < s->pending_count; i++)
+        free(s->pending[i].path);
     free(s->pending);
     s->pending = NULL;
     s->pending_count = s->pending_cap = 0;
@@ -251,7 +280,8 @@ char *coa_snapshot_list(coa_snapshot *s) {
         cJSON_AddStringToObject(o, "created", e->created);
         cJSON_AddNumberToObject(o, "files", e->nfiles);
         cJSON *fl = cJSON_AddArrayToObject(o, "paths");
-        for (size_t j = 0; j < e->nfiles; j++) cJSON_AddItemToArray(fl, cJSON_CreateString(e->files[j].path));
+        for (size_t j = 0; j < e->nfiles; j++)
+            cJSON_AddItemToArray(fl, cJSON_CreateString(e->files[j].path));
         cJSON_AddItemToArray(arr, o);
     }
     char *s_out = cJSON_PrintUnformatted(arr);
@@ -282,7 +312,8 @@ static int restore_entry(coa_snapshot *s, snapshot_entry *e) {
 }
 
 int coa_snapshot_restore_latest(coa_snapshot *s) {
-    if (s->committed_count == 0) return -1;
+    if (s->committed_count == 0)
+        return -1;
     return restore_entry(s, &s->committed[s->committed_count - 1]);
 }
 

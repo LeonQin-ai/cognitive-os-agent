@@ -22,7 +22,8 @@ static const char *level_names[] = {
 };
 
 const char *coa_log_level_name(coa_loglevel lvl) {
-    if (lvl < COA_LOG_TRACE || lvl > COA_LOG_FATAL) return "?";
+    if (lvl < COA_LOG_TRACE || lvl > COA_LOG_FATAL)
+        return "?";
     return level_names[lvl];
 }
 
@@ -31,28 +32,38 @@ static const char *level_colors[] = {
 };
 
 int coa_log_init(const coa_log_opts *opts) {
-    if (g_log.inited) coa_log_shutdown();
+    if (g_log.inited)
+        coa_log_shutdown();
     coa_mutex_init(&g_log.mtx);
     g_log.level = opts ? opts->level : COA_LOG_INFO;
     g_log.file = NULL;
     g_log.color = opts ? opts->color : 1;
     if (opts && opts->file) {
         g_log.file = fopen(opts->file, "a");
-        if (!g_log.file) return -1;
+        if (!g_log.file)
+            return -1;
     }
     g_log.inited = 1;
     return 0;
 }
 
 void coa_log_shutdown(void) {
-    if (!g_log.inited) return;
-    if (g_log.file) { fclose(g_log.file); g_log.file = NULL; }
+    if (!g_log.inited)
+        return;
+    if (g_log.file) {
+        fclose(g_log.file);
+        g_log.file = NULL;
+    }
     coa_mutex_destroy(&g_log.mtx);
     memset(&g_log, 0, sizeof(g_log));
 }
 
-coa_loglevel coa_log_get_level(void) { return g_log.level; }
-void coa_log_set_level(coa_loglevel lvl) { g_log.level = lvl; }
+coa_loglevel coa_log_get_level(void) {
+    return g_log.level;
+}
+void coa_log_set_level(coa_loglevel lvl) {
+    g_log.level = lvl;
+}
 
 static void log_line_to(FILE *f, int color, coa_loglevel lvl, const char *text) {
     char ts[32];
@@ -65,9 +76,10 @@ static void log_line_to(FILE *f, int color, coa_loglevel lvl, const char *text) 
 }
 
 void coa_log_write(coa_loglevel lvl, const char *fmt, ...) {
-    if (lvl < g_log.level || lvl > COA_LOG_FATAL) return;
-    char text[16384];  /* tool plans embed whole file bodies; 2048 cut them
-                        * off mid-JSON and made LLM-plan diagnostics useless */
+    if (lvl < g_log.level || lvl > COA_LOG_FATAL)
+        return;
+    char text[16384]; /* tool plans embed whole file bodies; 2048 cut them
+                       * off mid-JSON and made LLM-plan diagnostics useless */
     va_list ap;
     va_start(ap, fmt);
     vsnprintf(text, sizeof(text), fmt, ap);
@@ -76,6 +88,7 @@ void coa_log_write(coa_loglevel lvl, const char *fmt, ...) {
     coa_mutex_lock(&g_log.mtx);
     int use_color = g_log.color && !g_log.file;
     log_line_to(stderr, use_color, lvl, text);
-    if (g_log.file) log_line_to(g_log.file, 0, lvl, text);
+    if (g_log.file)
+        log_line_to(g_log.file, 0, lvl, text);
     coa_mutex_unlock(&g_log.mtx);
 }

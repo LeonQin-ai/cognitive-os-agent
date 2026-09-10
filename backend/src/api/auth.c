@@ -18,18 +18,22 @@ coa_auth *coa_auth_new(void) {
 }
 
 void coa_auth_free(coa_auth *a) {
-    if (!a) return;
-    for (size_t i = 0; i < a->count; i++) free(a->keys[i]);
+    if (!a)
+        return;
+    for (size_t i = 0; i < a->count; i++)
+        free(a->keys[i]);
     free(a->keys);
     free(a);
 }
 
 void coa_auth_add_key(coa_auth *a, const char *key) {
-    if (!a || !key || !*key) return;
+    if (!a || !key || !*key)
+        return;
     if (a->count == a->cap) {
         size_t cap = a->cap ? a->cap * 2 : 4;
         char **nk = (char **)realloc(a->keys, cap * sizeof(char *));
-        if (!nk) return;
+        if (!nk)
+            return;
         a->keys = nk;
         a->cap = cap;
     }
@@ -55,9 +59,11 @@ static int ct_equal(const char *a, const char *b) {
 }
 
 int coa_auth_check(coa_auth *a, const char *token) {
-    if (!a || !token) return 0;
+    if (!a || !token)
+        return 0;
     for (size_t i = 0; i < a->count; i++)
-        if (ct_equal(a->keys[i], token)) return 1;
+        if (ct_equal(a->keys[i], token))
+            return 1;
     return 0;
 }
 
@@ -65,19 +71,26 @@ int coa_auth_check(coa_auth *a, const char *token) {
 static int prefix_ieq(const char *s, const char *prefix) {
     while (*prefix) {
         char a = *s++, b = *prefix++;
-        if (a >= 'A' && a <= 'Z') a = (char)(a - 'A' + 'a');
-        if (b >= 'A' && b <= 'Z') b = (char)(b - 'A' + 'a');
-        if (a != b) return 0;
+        if (a >= 'A' && a <= 'Z')
+            a = (char)(a - 'A' + 'a');
+        if (b >= 'A' && b <= 'Z')
+            b = (char)(b - 'A' + 'a');
+        if (a != b)
+            return 0;
     }
     return 1;
 }
 
 int coa_auth_check_header(coa_auth *a, const char *authorization) {
-    if (!a || !authorization) return 0;
+    if (!a || !authorization)
+        return 0;
     const char *tok = authorization;
-    if (prefix_ieq(authorization, "bearer ")) tok = authorization + 7;
-    while (*tok == ' ' || *tok == '\t') tok++;
-    if (!*tok) return 0;
+    if (prefix_ieq(authorization, "bearer "))
+        tok = authorization + 7;
+    while (*tok == ' ' || *tok == '\t')
+        tok++;
+    if (!*tok)
+        return 0;
     return coa_auth_check(a, tok);
 }
 
@@ -93,20 +106,22 @@ static unsigned long long xorshift64(unsigned long long *s) {
 }
 
 void coa_auth_generate_token(char *out, size_t bytes) {
-    if (!out || bytes == 0) return;
+    if (!out || bytes == 0)
+        return;
     static unsigned long long state;
     static int seeded = 0;
     if (!seeded) {
         unsigned long long a = (unsigned long long)time(NULL);
         unsigned long long b = (unsigned long long)(uintptr_t)&state;
         state = (a << 32) ^ b ^ 0x9E3779B97F4A7C15ULL;
-        if (state == 0) state = 1;
+        if (state == 0)
+            state = 1;
         seeded = 1;
     }
     static const char hexc[] = "0123456789abcdef";
     for (size_t i = 0; i < bytes; i++) {
         unsigned long long r = xorshift64(&state);
-        out[i * 2]     = hexc[(r >> 4) & 0xF];
+        out[i * 2] = hexc[(r >> 4) & 0xF];
         out[i * 2 + 1] = hexc[r & 0xF];
     }
     out[bytes * 2] = '\0';

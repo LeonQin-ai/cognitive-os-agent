@@ -8,9 +8,11 @@
 #include "cJSON.h"
 
 static int has_kw(const char *s, const char *kw) {
-    if (!s) return 0;
+    if (!s)
+        return 0;
     size_t klen = strlen(kw);
-    if (klen == 0) return 0;
+    if (klen == 0)
+        return 0;
     const char *p = s;
     while ((p = strstr(p, kw)) != NULL) {
         p += klen;
@@ -57,16 +59,20 @@ char *coa_analyzer_analyze(const char *spec_json) {
             cJSON_AddItemToArray(tools, cJSON_CreateString("mcp"));
             complexity += 1;
         }
-        if (complexity < 1) complexity = 1;
-        if (complexity > 10) complexity = 10;
+        if (complexity < 1)
+            complexity = 1;
+        if (complexity > 10)
+            complexity = 10;
 
         cJSON_AddItemToObject(out, "capabilities", caps);
         cJSON_AddItemToObject(out, "tools", tools);
         cJSON_AddNumberToObject(out, "complexity", complexity);
     }
 
-    if (root) cJSON_Delete(root);
+    if (root)
+        cJSON_Delete(root);
     char *s = out ? cJSON_PrintUnformatted(out) : NULL;
-    if (out) cJSON_Delete(out);
+    if (out)
+        cJSON_Delete(out);
     return s ? s : coa_strdup("{}");
 }

@@ -17,22 +17,39 @@ static void sha1_block(uint32_t h[5], const unsigned char *p) {
     uint32_t w[80];
     int t;
     for (t = 0; t < 16; t++)
-        w[t] = ((uint32_t)p[t * 4] << 24) | ((uint32_t)p[t * 4 + 1] << 16) |
-               ((uint32_t)p[t * 4 + 2] << 8) | (uint32_t)p[t * 4 + 3];
+        w[t] = ((uint32_t)p[t * 4] << 24) | ((uint32_t)p[t * 4 + 1] << 16) | ((uint32_t)p[t * 4 + 2] << 8) |
+               (uint32_t)p[t * 4 + 3];
     for (t = 16; t < 80; t++)
         w[t] = rol32(w[t - 3] ^ w[t - 8] ^ w[t - 14] ^ w[t - 16], 1);
 
     uint32_t a = h[0], b = h[1], c = h[2], d = h[3], e = h[4];
     for (t = 0; t < 80; t++) {
         uint32_t f, k;
-        if (t < 20)      { f = (b & c) | ((~b) & d);          k = 0x5A827999u; }
-        else if (t < 40) { f = b ^ c ^ d;                     k = 0x6ED9EBA1u; }
-        else if (t < 60) { f = (b & c) | (b & d) | (c & d);   k = 0x8F1BBCDCu; }
-        else             { f = b ^ c ^ d;                     k = 0xCA62C1D6u; }
+        if (t < 20) {
+            f = (b & c) | ((~b) & d);
+            k = 0x5A827999u;
+        } else if (t < 40) {
+            f = b ^ c ^ d;
+            k = 0x6ED9EBA1u;
+        } else if (t < 60) {
+            f = (b & c) | (b & d) | (c & d);
+            k = 0x8F1BBCDCu;
+        } else {
+            f = b ^ c ^ d;
+            k = 0xCA62C1D6u;
+        }
         uint32_t tmp = rol32(a, 5) + f + e + k + w[t];
-        e = d; d = c; c = rol32(b, 30); b = a; a = tmp;
+        e = d;
+        d = c;
+        c = rol32(b, 30);
+        b = a;
+        a = tmp;
     }
-    h[0] += a; h[1] += b; h[2] += c; h[3] += d; h[4] += e;
+    h[0] += a;
+    h[1] += b;
+    h[2] += c;
+    h[3] += d;
+    h[4] += e;
 }
 
 typedef struct {
@@ -43,8 +60,11 @@ typedef struct {
 } sha1_ctx;
 
 static void sha1_init(sha1_ctx *s) {
-    s->h[0] = 0x67452301u; s->h[1] = 0xEFCDAB89u; s->h[2] = 0x98BADCFEu;
-    s->h[3] = 0x10325476u; s->h[4] = 0xC3D2E1F0u;
+    s->h[0] = 0x67452301u;
+    s->h[1] = 0xEFCDAB89u;
+    s->h[2] = 0x98BADCFEu;
+    s->h[3] = 0x10325476u;
+    s->h[4] = 0xC3D2E1F0u;
     s->total = 0;
     s->block_len = 0;
 }
@@ -70,13 +90,15 @@ static void sha1_final(sha1_ctx *s, unsigned char out[20]) {
     unsigned char pad = 0x80;
     unsigned char zero = 0;
     sha1_update(s, &pad, 1);
-    while (s->block_len != 56) sha1_update(s, &zero, 1);
+    while (s->block_len != 56)
+        sha1_update(s, &zero, 1);
     unsigned char lenbuf[8];
     int i;
-    for (i = 0; i < 8; i++) lenbuf[i] = (unsigned char)(bitlen >> (56 - 8 * i));
+    for (i = 0; i < 8; i++)
+        lenbuf[i] = (unsigned char)(bitlen >> (56 - 8 * i));
     sha1_update(s, lenbuf, 8);
     for (i = 0; i < 5; i++) {
-        out[i * 4]     = (unsigned char)(s->h[i] >> 24);
+        out[i * 4] = (unsigned char)(s->h[i] >> 24);
         out[i * 4 + 1] = (unsigned char)(s->h[i] >> 16);
         out[i * 4 + 2] = (unsigned char)(s->h[i] >> 8);
         out[i * 4 + 3] = (unsigned char)(s->h[i]);
@@ -92,13 +114,13 @@ void coa_sha1(const unsigned char *data, size_t len, unsigned char out[20]) {
 
 /* ================= base64 ================= */
 
-static const char b64_tab[] =
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+static const char b64_tab[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 char *coa_base64_encode(const unsigned char *data, size_t len) {
     size_t olen = ((len + 2) / 3) * 4;
     char *out = (char *)malloc(olen + 1);
-    if (!out) return NULL;
+    if (!out)
+        return NULL;
     size_t i = 0, o = 0;
     while (i + 3 <= len) {
         uint32_t v = ((uint32_t)data[i] << 16) | ((uint32_t)data[i + 1] << 8) | data[i + 2];
@@ -127,11 +149,16 @@ char *coa_base64_encode(const unsigned char *data, size_t len) {
 }
 
 static int b64_val(char c) {
-    if (c >= 'A' && c <= 'Z') return c - 'A';
-    if (c >= 'a' && c <= 'z') return c - 'a' + 26;
-    if (c >= '0' && c <= '9') return c - '0' + 52;
-    if (c == '+') return 62;
-    if (c == '/') return 63;
+    if (c >= 'A' && c <= 'Z')
+        return c - 'A';
+    if (c >= 'a' && c <= 'z')
+        return c - 'a' + 26;
+    if (c >= '0' && c <= '9')
+        return c - '0' + 52;
+    if (c == '+')
+        return 62;
+    if (c == '/')
+        return 63;
     return -1;
 }
 
@@ -143,21 +170,25 @@ int coa_base64_decode(const char *in, unsigned char *out, size_t out_cap, size_t
     for (size_t i = 0; i < ilen; i++) {
         char c = in[i];
         if (c == '=' || c == '\n' || c == '\r') {
-            if (c == '=') continue; /* padding handled by bit count */
+            if (c == '=')
+                continue; /* padding handled by bit count */
             continue;
         }
         int v = b64_val(c);
-        if (v < 0) return -1;
+        if (v < 0)
+            return -1;
         acc = (acc << 6) | (uint32_t)v;
         bits += 6;
         if (bits >= 8) {
             bits -= 8;
             unsigned char b = (unsigned char)((acc >> bits) & 0xFF);
-            if (olen >= out_cap) return -1;
+            if (olen >= out_cap)
+                return -1;
             out[olen++] = b;
         }
     }
-    if (out_len) *out_len = olen;
+    if (out_len)
+        *out_len = olen;
     return 0;
 }
 
@@ -175,15 +206,18 @@ void coa_ws_accept_key(const char *client_key, char out[29]) {
     free(b64);
 }
 
-char *coa_ws_build_frame(int opcode, const unsigned char *payload, size_t len,
-                        int mask, size_t *out_len) {
+char *coa_ws_build_frame(int opcode, const unsigned char *payload, size_t len, int mask, size_t *out_len) {
     size_t header = 2;
-    if (len >= 126) header += 2;
-    if (len >= 65536) header += 8;
-    if (mask) header += 4;
+    if (len >= 126)
+        header += 2;
+    if (len >= 65536)
+        header += 8;
+    if (mask)
+        header += 4;
 
     unsigned char *buf = (unsigned char *)malloc(header + len);
-    if (!buf) return NULL;
+    if (!buf)
+        return NULL;
 
     buf[0] = (unsigned char)(0x80 | (opcode & 0x0F)); /* FIN=1 */
 
@@ -199,7 +233,8 @@ char *coa_ws_build_frame(int opcode, const unsigned char *payload, size_t len,
     } else {
         buf[1] = (unsigned char)((mask ? 0x80 : 0) | 127);
         int i;
-        for (i = 0; i < 8; i++) buf[2 + i] = (unsigned char)((len >> (56 - 8 * i)) & 0xFF);
+        for (i = 0; i < 8; i++)
+            buf[2 + i] = (unsigned char)((len >> (56 - 8 * i)) & 0xFF);
         off = 10;
     }
 
@@ -208,24 +243,28 @@ char *coa_ws_build_frame(int opcode, const unsigned char *payload, size_t len,
         uint64_t seed = (uint64_t)coa_time_now_us();
         int i;
         for (i = 0; i < 4; i++) {
-            seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17;
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
             key[i] = (unsigned char)(seed & 0xFF);
         }
         memcpy(buf + off, key, 4);
         off += 4;
-        for (size_t j = 0; j < len; j++) buf[off + j] = payload[j] ^ key[j & 3];
+        for (size_t j = 0; j < len; j++)
+            buf[off + j] = payload[j] ^ key[j & 3];
     } else {
         memcpy(buf + off, payload, len);
     }
 
-    if (out_len) *out_len = header + len;
+    if (out_len)
+        *out_len = header + len;
     return (char *)buf;
 }
 
-int coa_ws_parse_frame(const unsigned char *buf, size_t len,
-                      unsigned char *payload, size_t *payload_len,
-                      int *opcode, int *fin) {
-    if (len < 2) return -1;
+int coa_ws_parse_frame(const unsigned char *buf, size_t len, unsigned char *payload, size_t *payload_len, int *opcode,
+                       int *fin) {
+    if (len < 2)
+        return -1;
     int f = (buf[0] >> 7) & 1;
     int op = buf[0] & 0x0F;
     int masked = (buf[1] >> 7) & 1;
@@ -233,29 +272,37 @@ int coa_ws_parse_frame(const unsigned char *buf, size_t len,
     size_t off = 2;
 
     if (plen == 126) {
-        if (len < off + 2) return -1;
+        if (len < off + 2)
+            return -1;
         plen = ((size_t)buf[off] << 8) | buf[off + 1];
         off += 2;
     } else if (plen == 127) {
-        if (len < off + 8) return -1;
+        if (len < off + 8)
+            return -1;
         plen = 0;
-        for (int i = 0; i < 8; i++) plen = (plen << 8) | buf[off + i];
+        for (int i = 0; i < 8; i++)
+            plen = (plen << 8) | buf[off + i];
         off += 8;
     }
 
     unsigned char key[4] = {0, 0, 0, 0};
     if (masked) {
-        if (len < off + 4) return -1;
+        if (len < off + 4)
+            return -1;
         memcpy(key, buf + off, 4);
         off += 4;
     }
 
-    if (len < off + plen) return -1;
+    if (len < off + plen)
+        return -1;
     for (size_t i = 0; i < plen; i++)
         payload[i] = masked ? (buf[off + i] ^ key[i & 3]) : buf[off + i];
 
-    if (payload_len) *payload_len = plen;
-    if (opcode) *opcode = op;
-    if (fin) *fin = f;
+    if (payload_len)
+        *payload_len = plen;
+    if (opcode)
+        *opcode = op;
+    if (fin)
+        *fin = f;
     return 0;
 }

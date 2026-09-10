@@ -8,42 +8,47 @@
 
 typedef struct rule {
     const char *pattern;
-    int severity;          /* 1 low, 2 medium, 3 high */
+    int severity; /* 1 low, 2 medium, 3 high */
     const char *message;
 } rule;
 
 static const rule RULES[] = {
-    {"system(",       3, "direct shell execution via system()"},
-    {"exec",          3, "process execution"},
-    {"popen(",        3, "piped shell execution"},
-    {"eval",          2, "dynamic evaluation"},
-    {"rm -rf",        3, "destructive recursive delete"},
-    {"rm -fr",        3, "destructive recursive delete"},
-    {"chmod 777",     2, "overly permissive file mode"},
-    {"strcpy(",       2, "unbounded copy (buffer overflow risk)"},
-    {"strcat(",       2, "unbounded concat (buffer overflow risk)"},
-    {"gets(",         3, "unsafe input (buffer overflow)"},
-    {"sprintf(",      1, "unbounded format write (prefer snprintf)"},
-    {"sudo",          2, "privilege elevation"},
-    {"0.0.0.0",       1, "binds to all interfaces"},
-    {"password",      1, "possible hard-coded credential"},
-    {"api_key",       1, "possible hard-coded credential"},
+    {"system(", 3, "direct shell execution via system()"},
+    {"exec", 3, "process execution"},
+    {"popen(", 3, "piped shell execution"},
+    {"eval", 2, "dynamic evaluation"},
+    {"rm -rf", 3, "destructive recursive delete"},
+    {"rm -fr", 3, "destructive recursive delete"},
+    {"chmod 777", 2, "overly permissive file mode"},
+    {"strcpy(", 2, "unbounded copy (buffer overflow risk)"},
+    {"strcat(", 2, "unbounded concat (buffer overflow risk)"},
+    {"gets(", 3, "unsafe input (buffer overflow)"},
+    {"sprintf(", 1, "unbounded format write (prefer snprintf)"},
+    {"sudo", 2, "privilege elevation"},
+    {"0.0.0.0", 1, "binds to all interfaces"},
+    {"password", 1, "possible hard-coded credential"},
+    {"api_key", 1, "possible hard-coded credential"},
 };
 #define N_RULES (sizeof(RULES) / sizeof(RULES[0]))
 
 static int ci_strstr(const char *hay, const char *needle) {
     size_t nlen = strlen(needle);
     size_t hlen = strlen(hay);
-    if (nlen == 0 || hlen < nlen) return 0;
+    if (nlen == 0 || hlen < nlen)
+        return 0;
     for (size_t i = 0; i + nlen <= hlen; i++) {
         size_t j = 0;
         for (j = 0; j < nlen; j++) {
             int a = (unsigned char)hay[i + j], b = (unsigned char)needle[j];
-            if (a >= 'A' && a <= 'Z') a += 32;
-            if (b >= 'A' && b <= 'Z') b += 32;
-            if (a != b) break;
+            if (a >= 'A' && a <= 'Z')
+                a += 32;
+            if (b >= 'A' && b <= 'Z')
+                b += 32;
+            if (a != b)
+                break;
         }
-        if (j == nlen) return 1;
+        if (j == nlen)
+            return 1;
     }
     return 0;
 }
@@ -64,6 +69,7 @@ char *coa_security_audit(const char *text) {
         cJSON_AddItemToObject(out, "findings", findings);
     }
     char *s = out ? cJSON_PrintUnformatted(out) : NULL;
-    if (out) cJSON_Delete(out);
+    if (out)
+        cJSON_Delete(out);
     return s ? s : coa_strdup("{}");
 }

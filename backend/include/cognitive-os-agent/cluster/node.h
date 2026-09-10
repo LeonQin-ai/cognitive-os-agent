@@ -16,9 +16,9 @@ typedef struct coa_cluster_node {
     char *id;
     char *host;
     uint16_t port;
-    char *role;         /* "coordinator" | "worker" | "observer" */
-    char *status;       /* "up" | "down" | "suspect" */
-    char *caps;         /* comma-separated capability tags (e.g. "llm,tools") */
+    char *role;   /* "coordinator" | "worker" | "observer" */
+    char *status; /* "up" | "down" | "suspect" */
+    char *caps;   /* comma-separated capability tags (e.g. "llm,tools") */
     int64_t last_seen_ms;
 } coa_cluster_node;
 
@@ -26,11 +26,10 @@ coa_cluster *coa_cluster_new(void);
 void coa_cluster_free(coa_cluster *c);
 
 /* Register a node or update its endpoint/role (keeps liveness). 0 ok, -1 invalid. */
-int coa_cluster_upsert(coa_cluster *c, const char *id, const char *host,
-                      uint16_t port, const char *role);
+int coa_cluster_upsert(coa_cluster *c, const char *id, const char *host, uint16_t port, const char *role);
 /* Same, with capability tags (comma-separated; NULL/"" = none). */
-int coa_cluster_upsert_ex(coa_cluster *c, const char *id, const char *host,
-                         uint16_t port, const char *role, const char *caps);
+int coa_cluster_upsert_ex(coa_cluster *c, const char *id, const char *host, uint16_t port, const char *role,
+                          const char *caps);
 int coa_cluster_remove(coa_cluster *c, const char *id);
 
 /* Record a heartbeat: last_seen_ms = now, status = "up". 0 ok, -1 unknown id. */

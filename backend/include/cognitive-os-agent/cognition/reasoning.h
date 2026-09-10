@@ -22,41 +22,41 @@ typedef struct coa_metrics coa_metrics;
 typedef struct coa_state_machine coa_state_machine;
 typedef struct coa_hook_registry coa_hook_registry;
 
-struct coa_skill_registry;    /* skill.h */
-struct coa_index;             /* retrieval/engine.h */
-struct coa_plugin_registry;   /* plugin_runtime/registry.h */
+struct coa_skill_registry;  /* skill.h */
+struct coa_index;           /* retrieval/engine.h */
+struct coa_plugin_registry; /* plugin_runtime/registry.h */
 
 typedef struct coa_reasoning_config {
-    coa_llm *llm;                 /* required */
-    coa_tool_registry *tools;     /* required */
-    coa_memory *memory;           /* may be NULL */
-    coa_policy_engine *policy;    /* may be NULL = allow all */
-    coa_snapshot *snapshot;       /* may be NULL = no rollback */
-    coa_event_bus *bus;           /* may be NULL */
-    coa_metrics *metrics;         /* may be NULL */
-    const char *workspace;       /* base dir for relative tool paths */
-    int use_transaction;         /* wrap actions in a tx when snapshot present */
-    struct coa_skill_registry *skills;  /* advertised to the planner + skill tool (may be NULL) */
-    struct coa_mcp_manager *mcp;        /* MCP connections for the mcp tool + sync (may be NULL) */
-    struct coa_index *index;            /* code index; touched files are indexed (may be NULL) */
+    coa_llm *llm;                                /* required */
+    coa_tool_registry *tools;                    /* required */
+    coa_memory *memory;                          /* may be NULL */
+    coa_policy_engine *policy;                   /* may be NULL = allow all */
+    coa_snapshot *snapshot;                      /* may be NULL = no rollback */
+    coa_event_bus *bus;                          /* may be NULL */
+    coa_metrics *metrics;                        /* may be NULL */
+    const char *workspace;                       /* base dir for relative tool paths */
+    int use_transaction;                         /* wrap actions in a tx when snapshot present */
+    struct coa_skill_registry *skills;           /* advertised to the planner + skill tool (may be NULL) */
+    struct coa_mcp_manager *mcp;                 /* MCP connections for the mcp tool + sync (may be NULL) */
+    struct coa_index *index;                     /* code index; touched files are indexed (may be NULL) */
     struct coa_plugin_registry *plugin_registry; /* for missing-capability auto-generation */
-    const char *state_root;            /* state dir for plugin generation (may be NULL) */
-    int max_rounds;                    /* agent-loop rounds per run (0 = default 8; 1 = single-shot) */
-    coa_hook_registry *hooks;           /* horizontal hook system (may be NULL) */
+    const char *state_root;                      /* state dir for plugin generation (may be NULL) */
+    int max_rounds;                              /* agent-loop rounds per run (0 = default 8; 1 = single-shot) */
+    coa_hook_registry *hooks;                    /* horizontal hook system (may be NULL) */
     /* Context MMU budgets (chars per prompt section; 0 = default). Over budget
      * a section degrades automatically: hot drops oldest turns to one line,
      * warm sheds worklog -> errors/files, cold sheds retrieved items. */
-    int budget_hot;                    /* conversation history (default 8192) */
-    int budget_warm;                   /* summary + session notes (default 3072) */
-    int budget_cold;                   /* retrieved context + code index (default 4096) */
-    int hyde;                          /* 1 = HyDE retrieval: one LLM call per run
-                                        * generates a hypothetical answer passage
-                                        * used as the cold-tier query (default off) */
+    int budget_hot;  /* conversation history (default 8192) */
+    int budget_warm; /* summary + session notes (default 3072) */
+    int budget_cold; /* retrieved context + code index (default 4096) */
+    int hyde;        /* 1 = HyDE retrieval: one LLM call per run
+                      * generates a hypothetical answer passage
+                      * used as the cold-tier query (default off) */
     /* Execution backend (non-tx actions): "local" (default) | "wsl" | "remote".
      * wsl/remote wrap the local executor and route shell commands through
      * `wsl.exe` / `ssh <exec_host>`; other tools run unchanged on the host. */
-    const char *exec_backend;          /* NULL = local */
-    const char *exec_host;             /* ssh target for "remote" (user@host) */
+    const char *exec_backend; /* NULL = local */
+    const char *exec_host;    /* ssh target for "remote" (user@host) */
 } coa_reasoning_config;
 
 /* HyDE (Hypothetical Document Embeddings) primitive: ask the LLM for a short
@@ -76,8 +76,7 @@ int coa_reasoning_run(coa_reasoning *r, const char *prompt, char **answer);
  * summary and session notes are isolated per session_id (NULL/"" = the
  * shared default session used by coa_reasoning_run). Sessions are created
  * on demand (capped); runs must still be serialized by the caller. */
-int coa_reasoning_run_ex(coa_reasoning *r, const char *session_id,
-                         const char *prompt, char **answer);
+int coa_reasoning_run_ex(coa_reasoning *r, const char *session_id, const char *prompt, char **answer);
 
 /* The underlying state machine (borrowed; valid until coa_reasoning_free). */
 coa_state_machine *coa_reasoning_sm(coa_reasoning *r);
@@ -100,8 +99,7 @@ char *coa_reasoning_session_json(coa_reasoning *r);
 char *coa_reasoning_history_json(coa_reasoning *r, int max_turns);
 
 /* Per-session variant of the above; NULL session_id = default session. */
-char *coa_reasoning_history_json_ex(coa_reasoning *r, const char *session_id,
-                                    int max_turns);
+char *coa_reasoning_history_json_ex(coa_reasoning *r, const char *session_id, int max_turns);
 
 /* Chat session registry (multi-session support): list sessions as a JSON
  * array of {id, turns, task, last_active_ms}; clear one session's history

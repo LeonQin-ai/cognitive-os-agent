@@ -22,8 +22,7 @@ void coa_state_store_free(coa_state_store *s);
 
 /* Generic namespaced KV. val == NULL removes the key. Returns 0 ok,
  * -1 bad args. Borrowed values stay valid until the next mutation. */
-int coa_state_store_set(coa_state_store *s, const char *ns, const char *key,
-                       const char *val);
+int coa_state_store_set(coa_state_store *s, const char *ns, const char *key, const char *val);
 const char *coa_state_store_get(coa_state_store *s, const char *ns, const char *key);
 int coa_state_store_remove(coa_state_store *s, const char *ns, const char *key);
 int coa_state_store_count(coa_state_store *s);
@@ -32,10 +31,8 @@ int coa_state_store_count_ns(coa_state_store *s, const char *ns);
 /* Architecture state slots:
  *  - task:  key = "<id>", value = "<status>|<input>"   (queued -> terminal)
  *  - agent: key = name,   value = "<role>|<status>"    */
-int coa_state_store_task_set(coa_state_store *s, long long id, const char *status,
-                            const char *input);
-int coa_state_store_agent_set(coa_state_store *s, const char *name,
-                             const char *role, const char *status);
+int coa_state_store_task_set(coa_state_store *s, long long id, const char *status, const char *input);
+int coa_state_store_agent_set(coa_state_store *s, const char *name, const char *role, const char *status);
 
 /* Whole store as {"ns":{"key":"val",...},...} (malloc'd, caller frees). */
 char *coa_state_store_json(coa_state_store *s);

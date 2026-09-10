@@ -20,8 +20,8 @@ struct coa_tx {
     int all_ok;
     int n_actions;
     int rolled_back;
-    int git_managed;     /* workspace lives inside a git repo -> no snapshots */
-    char *output;        /* accumulated "[tool] output\n" lines */
+    int git_managed; /* workspace lives inside a git repo -> no snapshots */
+    char *output;    /* accumulated "[tool] output\n" lines */
     size_t output_len;
     size_t output_cap;
 };
@@ -30,20 +30,24 @@ struct coa_tx {
  * for git worktrees/submodules). Git already provides version control, so
  * the snapshot engine stays out of the way for git-managed workspaces. */
 static int is_git_managed(const char *dir) {
-    if (!dir || !*dir) return 0;
+    if (!dir || !*dir)
+        return 0;
     char buf[2048];
     snprintf(buf, sizeof(buf), "%s", dir);
     for (int depth = 0; depth < 32; depth++) {
         char gitp[2200];
         coa_path_join(gitp, sizeof(gitp), buf, ".git");
-        if (coa_fs_exists(gitp)) return 1;
+        if (coa_fs_exists(gitp))
+            return 1;
         /* strip the last path component */
         char *slash = strrchr(buf, '/');
 #if defined(_WIN32)
         char *bslash = strrchr(buf, '\\');
-        if (bslash && (!slash || bslash > slash)) slash = bslash;
+        if (bslash && (!slash || bslash > slash))
+            slash = bslash;
 #endif
-        if (!slash || slash == buf) break;
+        if (!slash || slash == buf)
+            break;
         *slash = '\0';
         /* drive root reached ("D:") — check the root itself, then stop */
         size_t n = strlen(buf);
@@ -59,17 +63,20 @@ coa_tx_manager *coa_tx_manager_new(void) {
     return calloc(1, sizeof(coa_tx_manager));
 }
 
-void coa_tx_manager_free(coa_tx_manager *m) { free(m); }
+void coa_tx_manager_free(coa_tx_manager *m) {
+    free(m);
+}
 
-coa_tx *coa_tx_begin(coa_tx_manager *m, coa_snapshot *snap, coa_tool_registry *tools,
-                   const coa_tool_ctx *ctx) {
+coa_tx *coa_tx_begin(coa_tx_manager *m, coa_snapshot *snap, coa_tool_registry *tools, const coa_tool_ctx *ctx) {
     (void)m;
     coa_tx *tx = calloc(1, sizeof(coa_tx));
-    if (!tx) return NULL;
+    if (!tx)
+        return NULL;
     tx->snap = snap;
     tx->tools = tools;
     tx->all_ok = 1;
-    if (ctx) tx->ctx = *ctx;
+    if (ctx)
+        tx->ctx = *ctx;
     tx->ctx.tx = tx;
     tx->git_managed = is_git_managed(tx->ctx.workspace);
     return tx;
@@ -80,9 +87,11 @@ coa_tx *coa_tx_begin(coa_tx_manager *m, coa_snapshot *snap, coa_tool_registry *t
  * the same files the tools actually write to. */
 static void extract_paths(const char *args_json, const char *workspace, char *paths[16], int *npaths) {
     *npaths = 0;
-    if (!args_json) return;
+    if (!args_json)
+        return;
     cJSON *args = cJSON_Parse(args_json);
-    if (!args) return;
+    if (!args)
+        return;
     cJSON *p = cJSON_GetObjectItemCaseSensitive(args, "path");
     if (p && cJSON_IsString(p) && *npaths < 16) {
         char full[2048];
@@ -109,21 +118,24 @@ static void tx_append_output(coa_tx *tx, const char *tool, const char *output) {
     size_t need = strlen(tool) + strlen(out) + 4; /* "[", "] ", "\n", NUL */
     if (tx->output_len + need > tx->output_cap) {
         size_t ncap = tx->output_cap ? tx->output_cap * 2 : 256;
-        while (ncap < tx->output_len + need) ncap *= 2;
+        while (ncap < tx->output_len + need)
+            ncap *= 2;
         char *nb = (char *)realloc(tx->output, ncap);
-        if (!nb) return;
+        if (!nb)
+            return;
         tx->output = nb;
         tx->output_cap = ncap;
     }
-    tx->output_len += (size_t)snprintf(tx->output + tx->output_len,
-                                       tx->output_cap - tx->output_len,
-                                       "[%s] %s\n", tool, out);
+    tx->output_len +=
+        (size_t)snprintf(tx->output + tx->output_len, tx->output_cap - tx->output_len, "[%s] %s\n", tool, out);
 }
 
 int coa_tx_run(coa_tx *tx, const char *tool_name, const char *args_json) {
-    if (!tx || !tx->tools) return -1;
+    if (!tx || !tx->tools)
+        return -1;
     const coa_tool *tool = coa_tool_find(tx->tools, tool_name);
-    if (!tool) return -1;
+    if (!tool)
+        return -1;
 
     /* pre-capture write targets so rollback can restore them. Skipped for
      * git-managed workspaces: git is the version control, duplicating file
@@ -140,34 +152,45 @@ int coa_tx_run(coa_tx *tx, const char *tool_name, const char *args_json) {
     }
 
     coa_tool_result *r = coa_tool_execute(tx->tools, tool_name, args_json, &tx->ctx);
-    if (!r) return -1;
+    if (!r)
+        return -1;
     tx->n_actions++;
     tx_append_output(tx, tool_name, r->output);
     int ok = r->ok;
-    if (!ok) tx->all_ok = 0;
+    if (!ok)
+        tx->all_ok = 0;
     coa_tool_result_free(r);
     return ok ? 0 : -1;
 }
 
-int coa_tx_validate(coa_tx *tx) { return tx ? tx->all_ok : 0; }
+int coa_tx_validate(coa_tx *tx) {
+    return tx ? tx->all_ok : 0;
+}
 
-const char *coa_tx_output(coa_tx *tx) { return tx ? tx->output : NULL; }
+const char *coa_tx_output(coa_tx *tx) {
+    return tx ? tx->output : NULL;
+}
 
 int coa_tx_commit(coa_tx *tx) {
-    if (!tx) return -1;
-    if (tx->snap) coa_snapshot_commit(tx->snap);
+    if (!tx)
+        return -1;
+    if (tx->snap)
+        coa_snapshot_commit(tx->snap);
     return 0;
 }
 
 int coa_tx_rollback(coa_tx *tx) {
-    if (!tx) return -1;
-    if (tx->snap) coa_snapshot_restore_pending(tx->snap);
+    if (!tx)
+        return -1;
+    if (tx->snap)
+        coa_snapshot_restore_pending(tx->snap);
     tx->rolled_back = 1;
     return 0;
 }
 
 void coa_tx_free(coa_tx *tx) {
-    if (!tx) return;
+    if (!tx)
+        return;
     free(tx->output);
     free(tx);
 }

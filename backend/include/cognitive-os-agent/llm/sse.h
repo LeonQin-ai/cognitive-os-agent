@@ -10,8 +10,8 @@ extern "C" {
 typedef struct coa_sse coa_sse;
 
 /* Send the request and begin reading the SSE stream. NULL on connection/head failure. */
-coa_sse *coa_sse_start(const char *base_url, const char *path, const char *body,
-                     const char *content_type, coa_strmap *extra_headers, int timeout_ms);
+coa_sse *coa_sse_start(const char *base_url, const char *path, const char *body, const char *content_type,
+                       coa_strmap *extra_headers, int timeout_ms);
 int coa_sse_status(const coa_sse *s);
 
 /* Read the next "data:" payload into out (NUL-terminated).

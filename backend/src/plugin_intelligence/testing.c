@@ -26,9 +26,11 @@ char *coa_testing_plan(const char *spec_json) {
         cJSON_AddItemToArray(cases, c2);
         cJSON_AddItemToObject(out, "cases", cases);
     }
-    if (root) cJSON_Delete(root);
+    if (root)
+        cJSON_Delete(root);
     char *s = out ? cJSON_PrintUnformatted(out) : NULL;
-    if (out) cJSON_Delete(out);
+    if (out)
+        cJSON_Delete(out);
     return s ? s : coa_strdup("{}");
 }
 
@@ -48,8 +50,10 @@ char *coa_testing_run(const char *cmd, int timeout_ms) {
             cJSON_AddStringToObject(out, "output", r->output ? r->output : "");
             if (r->files_json) {
                 cJSON *fj = cJSON_Parse(r->files_json);
-                if (fj) cJSON_AddItemToObject(out, "files", fj);
-                else cJSON_AddStringToObject(out, "files", r->files_json);
+                if (fj)
+                    cJSON_AddItemToObject(out, "files", fj);
+                else
+                    cJSON_AddStringToObject(out, "files", r->files_json);
             }
         } else {
             cJSON_AddBoolToObject(out, "ok", 0);
@@ -58,8 +62,10 @@ char *coa_testing_run(const char *cmd, int timeout_ms) {
             cJSON_AddStringToObject(out, "output", "(forbidden or spawn failed)");
         }
     }
-    if (r) coa_sandbox_result_free(r);
+    if (r)
+        coa_sandbox_result_free(r);
     char *s = out ? cJSON_PrintUnformatted(out) : NULL;
-    if (out) cJSON_Delete(out);
+    if (out)
+        cJSON_Delete(out);
     return s ? s : coa_strdup("{}");
 }

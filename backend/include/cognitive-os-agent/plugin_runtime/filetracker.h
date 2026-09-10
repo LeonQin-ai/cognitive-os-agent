@@ -17,10 +17,10 @@ extern "C" {
 typedef struct coa_filetracker coa_filetracker;
 
 /* operation bits (OR together) */
-#define COA_FT_READ  0x1
-#define COA_FT_WRITE 0x2   /* created or modified */
+#define COA_FT_READ 0x1
+#define COA_FT_WRITE 0x2 /* created or modified */
 #define COA_FT_DELETE 0x4
-#define COA_FT_EXEC  0x8
+#define COA_FT_EXEC 0x8
 
 coa_filetracker *coa_filetracker_new(void);
 void coa_filetracker_free(coa_filetracker *ft);
@@ -50,14 +50,12 @@ void coa_filetracker_snapshot_free(coa_ft_snapshot *s);
 /* Diff the current state of `dir` against `before`: new/size-changed files
  * record COA_FT_WRITE, vanished files record COA_FT_DELETE. Returns the number
  * of changes recorded (0 = identical). */
-int coa_filetracker_dir_diff(coa_filetracker *ft, const coa_ft_snapshot *before,
-                            const char *dir);
+int coa_filetracker_dir_diff(coa_filetracker *ft, const coa_ft_snapshot *before, const char *dir);
 
 /* Parse `cmd` for path tokens (whitespace/quote separated); tokens that exist
  * (as given, or resolved against `workspace` when relative) record COA_FT_READ.
  * Returns reads recorded. */
-int coa_filetracker_cmd_reads(coa_filetracker *ft, const char *cmd,
-                             const char *workspace);
+int coa_filetracker_cmd_reads(coa_filetracker *ft, const char *cmd, const char *workspace);
 
 #ifdef __cplusplus
 }

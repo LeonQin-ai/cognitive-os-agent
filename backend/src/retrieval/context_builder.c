@@ -18,42 +18,54 @@
 
 /* Append s to sb, truncating at a UTF-8 boundary and marking the cut. */
 static void append_capped(coa_strbuf *sb, const char *s, size_t cap) {
-    if (!s) return;
+    if (!s)
+        return;
     size_t n = strlen(s);
     int trunc = n > cap;
-    if (trunc) n = cap;
-    while (trunc && n > 0 && ((unsigned char)s[n] & 0xC0) == 0x80) n--;
+    if (trunc)
+        n = cap;
+    while (trunc && n > 0 && ((unsigned char)s[n] & 0xC0) == 0x80)
+        n--;
     coa_strbuf_append_n(sb, s, n);
-    if (trunc) coa_strbuf_append(sb, "…");
+    if (trunc)
+        coa_strbuf_append(sb, "…");
 }
 
 /* Append {kind,text,result,score,ts} if `text` is not already present. */
-static int append_unique(cJSON *arr, const char *kind, const char *text,
-                         const char *result, double score, long long ts) {
-    if (!arr || !text) return 0;
+static int append_unique(cJSON *arr, const char *kind, const char *text, const char *result, double score,
+                         long long ts) {
+    if (!arr || !text)
+        return 0;
     cJSON *it;
     cJSON_ArrayForEach(it, arr) {
         cJSON *t = cJSON_GetObjectItemCaseSensitive(it, "text");
-        if (t && cJSON_IsString(t) && strcmp(t->valuestring, text) == 0) return 0;
+        if (t && cJSON_IsString(t) && strcmp(t->valuestring, text) == 0)
+            return 0;
     }
     cJSON *o = cJSON_CreateObject();
     cJSON_AddStringToObject(o, "kind", kind);
     cJSON_AddStringToObject(o, "text", text);
     cJSON_AddStringToObject(o, "result", result ? result : "");
     cJSON_AddNumberToObject(o, "score", score);
-    if (ts > 0) cJSON_AddNumberToObject(o, "ts", (double)ts);
+    if (ts > 0)
+        cJSON_AddNumberToObject(o, "ts", (double)ts);
     cJSON_AddItemToArray(arr, o);
     return 1;
 }
 
 char *coa_context_build(coa_memory *m, const char *query, int max_items) {
-    if (max_items <= 0) max_items = 8;
+    if (max_items <= 0)
+        max_items = 8;
     char *search = m ? coa_memory_search(m, query ? query : "", max_items) : coa_strdup("[]");
     /* two-stage retrieval: hybrid recall -> rerank -> blended top-k */
-    char *retr   = m ? coa_memory_retrieve_ex(m, query ? query : "", max_items, 0.7f) : coa_strdup("[]");
+    char *retr = m ? coa_memory_retrieve_ex(m, query ? query : "", max_items, 0.7f) : coa_strdup("[]");
 
     cJSON *arr = cJSON_CreateArray();
-    if (!arr) { free(search); free(retr); return coa_strdup("[]"); }
+    if (!arr) {
+        free(search);
+        free(retr);
+        return coa_strdup("[]");
+    }
 
     /* long-term facts first (always relevant, small, explicitly stored) */
     if (m) {
@@ -63,7 +75,8 @@ char *coa_context_build(coa_memory *m, const char *query, int max_items) {
             int added = 0;
             cJSON *it;
             cJSON_ArrayForEach(it, root) {
-                if (added >= CTX_FACTS_MAX) break;
+                if (added >= CTX_FACTS_MAX)
+                    break;
                 if (it->string) {
                     char kv[600];
                     snprintf(kv, sizeof(kv), "%s: %s", it->string,
@@ -73,7 +86,8 @@ char *coa_context_build(coa_memory *m, const char *query, int max_items) {
                 }
             }
         }
-        if (root) cJSON_Delete(root);
+        if (root)
+            cJSON_Delete(root);
         free(facts);
     }
 
@@ -82,38 +96,39 @@ char *coa_context_build(coa_memory *m, const char *query, int max_items) {
     if (root && cJSON_IsArray(root)) {
         cJSON *it;
         cJSON_ArrayForEach(it, root) {
-            if (cap <= 0 || cJSON_GetArraySize(arr) >= cap) break;
+            if (cap <= 0 || cJSON_GetArraySize(arr) >= cap)
+                break;
             cJSON *kind = cJSON_GetObjectItemCaseSensitive(it, "kind");
             cJSON *text = cJSON_GetObjectItemCaseSensitive(it, "text");
             cJSON *result = cJSON_GetObjectItemCaseSensitive(it, "result");
             cJSON *score = cJSON_GetObjectItemCaseSensitive(it, "score");
             cJSON *ts = cJSON_GetObjectItemCaseSensitive(it, "ts");
-            append_unique(arr,
-                          kind && cJSON_IsString(kind) ? kind->valuestring : "match",
+            append_unique(arr, kind && cJSON_IsString(kind) ? kind->valuestring : "match",
                           text && cJSON_IsString(text) ? text->valuestring : NULL,
                           result && cJSON_IsString(result) ? result->valuestring : NULL,
                           score && cJSON_IsNumber(score) ? score->valuedouble : 0.0,
                           ts && cJSON_IsNumber(ts) ? (long long)ts->valuedouble : 0);
         }
     }
-    if (root) cJSON_Delete(root);
+    if (root)
+        cJSON_Delete(root);
 
     root = cJSON_Parse(retr);
     if (root && cJSON_IsArray(root)) {
         cJSON *it;
         cJSON_ArrayForEach(it, root) {
-            if (cap <= 0 || cJSON_GetArraySize(arr) >= cap) break;
+            if (cap <= 0 || cJSON_GetArraySize(arr) >= cap)
+                break;
             cJSON *text = cJSON_GetObjectItemCaseSensitive(it, "text");
             cJSON *meta = cJSON_GetObjectItemCaseSensitive(it, "meta");
             cJSON *score = cJSON_GetObjectItemCaseSensitive(it, "score");
-            append_unique(arr, "retrieved",
-                          text && cJSON_IsString(text) ? text->valuestring : NULL,
+            append_unique(arr, "retrieved", text && cJSON_IsString(text) ? text->valuestring : NULL,
                           meta && cJSON_IsString(meta) ? meta->valuestring : NULL,
-                          score && cJSON_IsNumber(score) ? score->valuedouble : 0.0,
-                          0);
+                          score && cJSON_IsNumber(score) ? score->valuedouble : 0.0, 0);
         }
     }
-    if (root) cJSON_Delete(root);
+    if (root)
+        cJSON_Delete(root);
 
     /* knowledge-graph associations distilled at LEARN (task→tool→file edges) */
     if (m) {
@@ -123,13 +138,15 @@ char *coa_context_build(coa_memory *m, const char *query, int max_items) {
             if (rroot && cJSON_IsArray(rroot)) {
                 cJSON *it;
                 cJSON_ArrayForEach(it, rroot) {
-                    if (cap <= 0 || cJSON_GetArraySize(arr) >= cap) break;
+                    if (cap <= 0 || cJSON_GetArraySize(arr) >= cap)
+                        break;
                     cJSON *t = cJSON_GetObjectItemCaseSensitive(it, "text");
                     if (t && cJSON_IsString(t))
                         append_unique(arr, "graph", t->valuestring, NULL, 900.0, 0);
                 }
             }
-            if (rroot) cJSON_Delete(rroot);
+            if (rroot)
+                cJSON_Delete(rroot);
             free(rel);
         }
     }
@@ -178,7 +195,9 @@ char *coa_context_render_text(const char *context_json) {
             }
         }
     }
-    if (root) cJSON_Delete(root);
-    if (sb.len == 0) coa_strbuf_append(&sb, "(no relevant memory)\n");
+    if (root)
+        cJSON_Delete(root);
+    if (sb.len == 0)
+        coa_strbuf_append(&sb, "(no relevant memory)\n");
     return coa_strbuf_detach(&sb);
 }

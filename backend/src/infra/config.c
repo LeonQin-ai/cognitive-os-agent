@@ -26,15 +26,18 @@ struct coa_config {
 
 coa_config *coa_config_new(void) {
     coa_config *c = calloc(1, sizeof(coa_config));
-    if (!c) return NULL;
+    if (!c)
+        return NULL;
     c->root = cJSON_CreateObject();
     return c;
 }
 
 int coa_config_apply_json(coa_config *c, const char *json_text) {
-    if (!c) return -1;
+    if (!c)
+        return -1;
     cJSON *parsed = cJSON_Parse(json_text);
-    if (!parsed) return -1;
+    if (!parsed)
+        return -1;
     cJSON *target = parsed;
     if (cJSON_IsObject(parsed)) {
         /* merge into existing root */
@@ -61,27 +64,33 @@ int coa_config_apply_json(coa_config *c, const char *json_text) {
 
 int coa_config_load_file(coa_config *c, const char *path) {
     char *text = coa_fs_read_file(path);
-    if (!text) return -1;
+    if (!text)
+        return -1;
     int r = coa_config_apply_json(c, text);
     free(text);
     return r;
 }
 
 void coa_config_apply_env(coa_config *c, const char *prefix) {
-    if (!c || !prefix || !*prefix) return;
+    if (!c || !prefix || !*prefix)
+        return;
     size_t plen = strlen(prefix);
     for (char **e = COA_ENVIRON; e && *e; e++) {
         const char *eq = strchr(*e, '=');
-        if (!eq) continue;
+        if (!eq)
+            continue;
         size_t klen = (size_t)(eq - *e);
-        if (klen < plen || strncmp(*e, prefix, plen) != 0) continue;
+        if (klen < plen || strncmp(*e, prefix, plen) != 0)
+            continue;
         /* build dotted key: "COA_LLM_PROVIDER" -> "llm.provider" */
         char key[512];
         size_t n = 0;
         for (size_t i = plen; i < klen && n < sizeof(key) - 1; i++) {
             char ch = (*e)[i];
-            if (ch == '_') ch = '.';
-            else ch = (char)tolower((unsigned char)ch);
+            if (ch == '_')
+                ch = '.';
+            else
+                ch = (char)tolower((unsigned char)ch);
             key[n++] = ch;
         }
         key[n] = '\0';
@@ -91,7 +100,8 @@ void coa_config_apply_env(coa_config *c, const char *prefix) {
 }
 
 void coa_config_free(coa_config *c) {
-    if (!c) return;
+    if (!c)
+        return;
     cJSON_Delete(c->root);
     free(c);
 }
@@ -103,17 +113,21 @@ void coa_config_free(coa_config *c) {
  * navigation. Without this order an empty-string default like "llm.base_url":""
  * would shadow a COA_LLM_BASE_URL env value. */
 static cJSON *config_get_path(const coa_config *c, const char *key) {
-    if (!c || !c->root || !cJSON_IsObject(c->root)) return NULL;
-    if (!key || !*key) return NULL;
+    if (!c || !c->root || !cJSON_IsObject(c->root))
+        return NULL;
+    if (!key || !*key)
+        return NULL;
     char flat[512];
     size_t j = 0;
     for (size_t i = 0; key[i] && j + 1 < sizeof(flat); i++)
         flat[j++] = (key[i] == '_') ? '.' : key[i];
     flat[j] = '\0';
     cJSON *n = cJSON_GetObjectItemCaseSensitive(c->root, flat);
-    if (n) return n;
+    if (n)
+        return n;
     n = cJSON_GetObjectItemCaseSensitive(c->root, key);
-    if (n) return n;
+    if (n)
+        return n;
     cJSON *node = c->root;
     char path[512];
     snprintf(path, sizeof(path), "%s", key);
@@ -121,10 +135,13 @@ static cJSON *config_get_path(const coa_config *c, const char *key) {
     char *seg = path;
     for (;;) {
         char *dot = strchr(seg, '.');
-        if (dot) *dot = '\0';
+        if (dot)
+            *dot = '\0';
         node = cJSON_GetObjectItemCaseSensitive(node, seg);
-        if (!dot) break;
-        if (!node) break;
+        if (!dot)
+            break;
+        if (!node)
+            break;
         seg = dot + 1;
     }
     return node;
@@ -132,25 +149,29 @@ static cJSON *config_get_path(const coa_config *c, const char *key) {
 
 const char *coa_config_get_str(const coa_config *c, const char *key, const char *def) {
     cJSON *n = config_get_path(c, key);
-    if (n && cJSON_IsString(n)) return n->valuestring;
+    if (n && cJSON_IsString(n))
+        return n->valuestring;
     return def;
 }
 
 int64_t coa_config_get_int(const coa_config *c, const char *key, int64_t def) {
     cJSON *n = config_get_path(c, key);
-    if (n && cJSON_IsNumber(n)) return (int64_t)n->valuedouble;
+    if (n && cJSON_IsNumber(n))
+        return (int64_t)n->valuedouble;
     return def;
 }
 
 double coa_config_get_dbl(const coa_config *c, const char *key, double def) {
     cJSON *n = config_get_path(c, key);
-    if (n && cJSON_IsNumber(n)) return n->valuedouble;
+    if (n && cJSON_IsNumber(n))
+        return n->valuedouble;
     return def;
 }
 
 int coa_config_get_bool(const coa_config *c, const char *key, int def) {
     cJSON *n = config_get_path(c, key);
-    if (n && cJSON_IsBool(n)) return cJSON_IsTrue(n);
+    if (n && cJSON_IsBool(n))
+        return cJSON_IsTrue(n);
     return def;
 }
 
@@ -159,13 +180,15 @@ int coa_config_has(const coa_config *c, const char *key) {
 }
 
 char *coa_config_to_json(const coa_config *c) {
-    if (!c || !c->root) return coa_strdup("{}");
+    if (!c || !c->root)
+        return coa_strdup("{}");
     char *s = cJSON_PrintUnformatted(c->root);
     return s; /* cJSON returns malloc'd string */
 }
 
 void coa_config_set_str(coa_config *c, const char *key, const char *value) {
-    if (!c || !c->root || !key || !*key) return;
+    if (!c || !c->root || !key || !*key)
+        return;
     if (value) {
         cJSON_DeleteItemFromObject(c->root, key);
         cJSON_AddStringToObject(c->root, key, value);
@@ -175,15 +198,18 @@ void coa_config_set_str(coa_config *c, const char *key, const char *value) {
 }
 
 void coa_config_set_int(coa_config *c, const char *key, int64_t value) {
-    if (!c || !c->root || !key || !*key) return;
+    if (!c || !c->root || !key || !*key)
+        return;
     cJSON_DeleteItemFromObject(c->root, key);
     cJSON_AddNumberToObject(c->root, key, (double)value);
 }
 
 int coa_config_save_file(coa_config *c, const char *path) {
-    if (!c || !path) return -1;
+    if (!c || !path)
+        return -1;
     char *js = coa_config_to_json(c);
-    if (!js) return -1;
+    if (!js)
+        return -1;
     int rc = coa_fs_write_file(path, js, strlen(js));
     free(js);
     return rc;

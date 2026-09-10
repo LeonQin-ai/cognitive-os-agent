@@ -16,7 +16,9 @@ typedef struct {
     char *model;
 } mock_impl;
 
-static mock_impl *impl_of(coa_llm *llm) { return (mock_impl *)llm->impl; }
+static mock_impl *impl_of(coa_llm *llm) {
+    return (mock_impl *)llm->impl;
+}
 
 static void mock_destroy(coa_llm *llm) {
     mock_impl *im = impl_of(llm);
@@ -30,7 +32,8 @@ static void mock_destroy(coa_llm *llm) {
 
 static char *dup_n(const char *s, size_t n) {
     char *out = malloc(n + 1);
-    if (!out) return NULL;
+    if (!out)
+        return NULL;
     memcpy(out, s, n);
     out[n] = '\0';
     return out;
@@ -51,13 +54,20 @@ static char *find_path(const char *msg) {
     const char *p = msg;
     const char *dir_s = NULL, *dir_e = NULL;
     while (*p) {
-        while (*p && !is_path_char(*p)) p++;
-        if (!*p) break;
+        while (*p && !is_path_char(*p))
+            p++;
+        if (!*p)
+            break;
         const char *s = p;
-        while (*p && is_path_char(*p)) p++;
+        while (*p && is_path_char(*p))
+            p++;
         const char *e = p;
         int has_dot = 0;
-        for (const char *q = s; q < e; q++) if (*q == '.') { has_dot = 1; break; }
+        for (const char *q = s; q < e; q++)
+            if (*q == '.') {
+                has_dot = 1;
+                break;
+            }
         if (has_dot) {
             size_t plen = (size_t)(e - s);
             if (dir_s && dir_e == s) {
@@ -70,7 +80,10 @@ static char *find_path(const char *msg) {
             }
             return dup_n(s, plen);
         }
-        if (e > s && (e[-1] == '/' || e[-1] == '\\')) { dir_s = s; dir_e = e; }
+        if (e > s && (e[-1] == '/' || e[-1] == '\\')) {
+            dir_s = s;
+            dir_e = e;
+        }
     }
     return NULL;
 }
@@ -81,23 +94,27 @@ static char *extract_content(const char *msg) {
     const char *best = NULL;
     for (size_t i = 0; i < sizeof(markers) / sizeof(char *); i++) {
         const char *hit = strstr(msg, markers[i]);
-        if (hit && (!best || hit > best)) best = hit + strlen(markers[i]);
+        if (hit && (!best || hit > best))
+            best = hit + strlen(markers[i]);
     }
-    if (!best) return NULL;
-    while (*best == ' ' || *best == '\t' || *best == '\n' || *best == '\r' ||
-           *best == '"' || *best == '\'')
+    if (!best)
+        return NULL;
+    while (*best == ' ' || *best == '\t' || *best == '\n' || *best == '\r' || *best == '"' || *best == '\'')
         best++;
     char *out = coa_strdup(best);
     /* stop at a task connector so multi-step prompts don't pollute the content */
     char *cut = strstr(out, "，");
-    if (!cut) cut = strstr(out, "然后");
-    if (!cut) cut = strstr(out, "接着");
-    if (!cut) cut = strchr(out, ',');
-    if (cut) *cut = '\0';
+    if (!cut)
+        cut = strstr(out, "然后");
+    if (!cut)
+        cut = strstr(out, "接着");
+    if (!cut)
+        cut = strchr(out, ',');
+    if (cut)
+        *cut = '\0';
     size_t n = strlen(out);
-    while (n > 0 && (out[n - 1] == ' ' || out[n - 1] == '\t' || out[n - 1] == '\n' ||
-                     out[n - 1] == '\r' || out[n - 1] == '"' || out[n - 1] == '\'' ||
-                     out[n - 1] == '.'))
+    while (n > 0 && (out[n - 1] == ' ' || out[n - 1] == '\t' || out[n - 1] == '\n' || out[n - 1] == '\r' ||
+                     out[n - 1] == '"' || out[n - 1] == '\'' || out[n - 1] == '.'))
         out[--n] = '\0';
     return out;
 }
@@ -107,32 +124,37 @@ static char *extract_content(const char *msg) {
  * a generic marker like "shell" must not win just because it appears later
  * in the text (e.g. inside "echo scen-shell-ok"). */
 static char *extract_command(const char *msg) {
-    static const char *markers[] = {"执行命令", "运行命令", "执行 ", "运行 ", "命令",
-                                    "搜索", "查找文件", "command", "shell"};
+    static const char *markers[] = {"执行命令", "运行命令", "执行 ",   "运行 ", "命令",
+                                    "搜索",     "查找文件", "command", "shell"};
     const char *best = NULL;
     for (size_t i = 0; i < sizeof(markers) / sizeof(char *); i++) {
         const char *hit = strstr(msg, markers[i]);
-        if (hit) { best = hit + strlen(markers[i]); break; }
+        if (hit) {
+            best = hit + strlen(markers[i]);
+            break;
+        }
     }
-    if (!best) return NULL;
-    while (*best == ' ' || *best == '\t') best++;
+    if (!best)
+        return NULL;
+    while (*best == ' ' || *best == '\t')
+        best++;
     char *out = coa_strdup(best);
     size_t n = strlen(out);
-    while (n > 0 && (out[n - 1] == ' ' || out[n - 1] == '\t' ||
-                     out[n - 1] == '\n' || out[n - 1] == '\r'))
+    while (n > 0 && (out[n - 1] == ' ' || out[n - 1] == '\t' || out[n - 1] == '\n' || out[n - 1] == '\r'))
         out[--n] = '\0';
     return out;
 }
 
 /* Build the mock response for a user message. */
 static char *mock_respond(const char *msg) {
-    if (!msg) return coa_strdup("[]");
+    if (!msg)
+        return coa_strdup("[]");
 
     /* multi-agent orchestration: the decompose prompt lists the roster under
      * "可用 agent"; the merge prompt aggregates under "各 agent 结果" */
     if (has_substr(msg, "可用 agent") || has_substr(msg, "可用agent")) {
         return coa_strdup("[{\"agent\":\"alpha\","
-                         "\"task\":\"创建 orch.txt 写入内容为 orch-ok\"}]");
+                          "\"task\":\"创建 orch.txt 写入内容为 orch-ok\"}]");
     }
     if (has_substr(msg, "各 agent 结果"))
         return coa_strdup("综合完成：子任务已由各 agent 协作处理完毕。");
@@ -150,7 +172,8 @@ static char *mock_respond(const char *msg) {
     int in_loop = strstr(msg, "## 之前轮次的动作结果") != NULL;
     const char *full = msg; /* full augmented prompt (results live here) */
     const char *cur = strstr(msg, "## Current request\n");
-    if (cur) msg = cur + strlen("## Current request\n");
+    if (cur)
+        msg = cur + strlen("## Current request\n");
 
     if (in_loop) {
         char *path = find_path(msg);
@@ -199,14 +222,11 @@ static char *mock_respond(const char *msg) {
         return out ? out : coa_strdup("[]");
     }
 
-    int want_write = has_substr(msg, "文件") || has_substr(msg, "file") ||
-                     has_substr(msg, "写") || has_substr(msg, "创建") ||
-                     has_substr(msg, "生成");
-    int want_read = has_substr(msg, "读取") || has_substr(msg, "读 ") ||
-                    has_substr(msg, "cat ") || has_substr(msg, "read ") ||
-                    has_substr(msg, "查看文件");
-    int want_shell = has_substr(msg, "命令") || has_substr(msg, "command") ||
-                     has_substr(msg, "shell");
+    int want_write = has_substr(msg, "文件") || has_substr(msg, "file") || has_substr(msg, "写") ||
+                     has_substr(msg, "创建") || has_substr(msg, "生成");
+    int want_read = has_substr(msg, "读取") || has_substr(msg, "读 ") || has_substr(msg, "cat ") ||
+                    has_substr(msg, "read ") || has_substr(msg, "查看文件");
+    int want_shell = has_substr(msg, "命令") || has_substr(msg, "command") || has_substr(msg, "shell");
     /* an explicit "execute this command" request wins over generic keywords
      * (e.g. "fsutil file createnew" contains "file" but is not a file op) */
     int explicit_cmd = has_substr(msg, "执行命令") || has_substr(msg, "运行命令");
@@ -342,10 +362,14 @@ static int mock_chat(coa_llm *llm, const coa_llm_request *req, coa_llm_response 
 static int mock_stream(coa_llm *llm, const coa_llm_request *req, coa_llm_stream_cb cb, void *ud) {
     const char *last = req->num_messages ? req->messages[req->num_messages - 1].content : "";
     char *text = mock_respond(last);
-    if (!text) return -1;
+    if (!text)
+        return -1;
     size_t len = strlen(text);
     for (size_t i = 0; i < len; i += 16) {
-        if (llm->cancel) { free(text); return -1; }
+        if (llm->cancel) {
+            free(text);
+            return -1;
+        }
         cb(text + i, ud);
     }
     free(text);
@@ -355,7 +379,11 @@ static int mock_stream(coa_llm *llm, const coa_llm_request *req, coa_llm_stream_
 coa_llm *coa_mock_create(const char *model) {
     coa_llm *llm = calloc(1, sizeof(coa_llm));
     mock_impl *im = calloc(1, sizeof(mock_impl));
-    if (!llm || !im) { free(llm); free(im); return NULL; }
+    if (!llm || !im) {
+        free(llm);
+        free(im);
+        return NULL;
+    }
     static const coa_llm_vtable vt = {mock_destroy, mock_chat, mock_stream};
     llm->vt = &vt;
     llm->provider = coa_strdup("mock");

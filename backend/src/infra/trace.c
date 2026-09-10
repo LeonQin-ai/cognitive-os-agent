@@ -12,16 +12,21 @@ struct coa_trace {
     coa_mutex mtx;
     coa_trace_span *spans;
     size_t count, cap;
-    size_t next;      /* insertion slot (ring) */
+    size_t next; /* insertion slot (ring) */
     int64_t next_id;
 };
 
 coa_trace *coa_trace_new(size_t capacity) {
-    if (capacity == 0) capacity = 256;
+    if (capacity == 0)
+        capacity = 256;
     coa_trace *t = (coa_trace *)calloc(1, sizeof(coa_trace));
-    if (!t) return NULL;
+    if (!t)
+        return NULL;
     t->spans = (coa_trace_span *)calloc(capacity, sizeof(coa_trace_span));
-    if (!t->spans) { free(t); return NULL; }
+    if (!t->spans) {
+        free(t);
+        return NULL;
+    }
     t->cap = capacity;
     t->next_id = 1;
     coa_mutex_init(&t->mtx);
@@ -29,9 +34,11 @@ coa_trace *coa_trace_new(size_t capacity) {
 }
 
 void coa_trace_free(coa_trace *t) {
-    if (!t) return;
+    if (!t)
+        return;
     coa_mutex_lock(&t->mtx);
-    for (size_t i = 0; i < t->count; i++) free(t->spans[i].name);
+    for (size_t i = 0; i < t->count; i++)
+        free(t->spans[i].name);
     free(t->spans);
     coa_mutex_unlock(&t->mtx);
     coa_mutex_destroy(&t->mtx);
@@ -39,10 +46,12 @@ void coa_trace_free(coa_trace *t) {
 }
 
 int64_t coa_trace_begin(coa_trace *t, const char *name) {
-    if (!t || !name) return 0;
+    if (!t || !name)
+        return 0;
     coa_mutex_lock(&t->mtx);
     coa_trace_span *s = &t->spans[t->next];
-    if (t->count < t->cap) t->count++;
+    if (t->count < t->cap)
+        t->count++;
     free(s->name);
     s->name = coa_strdup(name);
     s->id = t->next_id++;
@@ -56,7 +65,8 @@ int64_t coa_trace_begin(coa_trace *t, const char *name) {
 }
 
 void coa_trace_end(coa_trace *t, int64_t id, int status) {
-    if (!t) return;
+    if (!t)
+        return;
     coa_mutex_lock(&t->mtx);
     for (size_t i = 0; i < t->count; i++) {
         coa_trace_span *s = &t->spans[(t->next + t->cap - 1 - i) % t->cap];
@@ -70,7 +80,8 @@ void coa_trace_end(coa_trace *t, int64_t id, int status) {
 }
 
 int coa_trace_count(coa_trace *t) {
-    if (!t) return 0;
+    if (!t)
+        return 0;
     coa_mutex_lock(&t->mtx);
     int n = (int)t->count;
     coa_mutex_unlock(&t->mtx);
@@ -78,9 +89,11 @@ int coa_trace_count(coa_trace *t) {
 }
 
 void coa_trace_clear(coa_trace *t) {
-    if (!t) return;
+    if (!t)
+        return;
     coa_mutex_lock(&t->mtx);
-    for (size_t i = 0; i < t->count; i++) free(t->spans[i].name);
+    for (size_t i = 0; i < t->count; i++)
+        free(t->spans[i].name);
     t->count = 0;
     t->next = 0;
     coa_mutex_unlock(&t->mtx);
@@ -88,7 +101,8 @@ void coa_trace_clear(coa_trace *t) {
 
 char *coa_trace_json(coa_trace *t) {
     cJSON *arr = cJSON_CreateArray();
-    if (!t) return cJSON_PrintUnformatted(arr);
+    if (!t)
+        return cJSON_PrintUnformatted(arr);
     coa_mutex_lock(&t->mtx);
     for (size_t i = 0; i < t->count; i++) {
         /* oldest first: slots wrap, so iterate from (next - count) forward */

@@ -19,13 +19,20 @@
 
 char *coa_fs_read_file(const char *path) {
     FILE *f = fopen(path, "rb");
-    if (!f) return NULL;
+    if (!f)
+        return NULL;
     fseek(f, 0, SEEK_END);
     long n = ftell(f);
     fseek(f, 0, SEEK_SET);
-    if (n < 0) { fclose(f); return NULL; }
+    if (n < 0) {
+        fclose(f);
+        return NULL;
+    }
     char *buf = malloc((size_t)n + 1);
-    if (!buf) { fclose(f); return NULL; }
+    if (!buf) {
+        fclose(f);
+        return NULL;
+    }
     size_t rd = fread(buf, 1, (size_t)n, f);
     fclose(f);
     buf[rd] = '\0';
@@ -34,7 +41,8 @@ char *coa_fs_read_file(const char *path) {
 
 int coa_fs_write_file(const char *path, const void *data, size_t len) {
     FILE *f = fopen(path, "wb");
-    if (!f) return -1;
+    if (!f)
+        return -1;
     size_t w = fwrite(data, 1, len, f);
     int ok = (w == len) ? 0 : -1;
     fclose(f);
@@ -43,7 +51,8 @@ int coa_fs_write_file(const char *path, const void *data, size_t len) {
 
 int coa_fs_append_file(const char *path, const void *data, size_t len) {
     FILE *f = fopen(path, "ab");
-    if (!f) return -1;
+    if (!f)
+        return -1;
     size_t w = fwrite(data, 1, len, f);
     int ok = (w == len) ? 0 : -1;
     fclose(f);
@@ -64,20 +73,27 @@ int coa_fs_mkdirs(const char *path) {
     char tmp[1024];
     snprintf(tmp, sizeof(tmp), "%s", path);
     size_t len = strlen(tmp);
-    if (len == 0) return -1;
+    if (len == 0)
+        return -1;
     for (size_t i = 0; i <= len; i++) {
         if (tmp[i] == '/' || tmp[i] == '\\') {
-            if (i == 0) { continue; } /* skip drive root */
+            if (i == 0) {
+                continue;
+            } /* skip drive root */
             char ch = tmp[i];
             tmp[i] = '\0';
             if (!coa_fs_exists(tmp)) {
-                if (_mkdir(tmp) != 0) { tmp[i] = ch; return -1; }
+                if (_mkdir(tmp) != 0) {
+                    tmp[i] = ch;
+                    return -1;
+                }
             }
             tmp[i] = ch;
         }
     }
     if (!coa_fs_is_dir(path)) {
-        if (_mkdir(path) != 0 && !coa_fs_exists(path)) return -1;
+        if (_mkdir(path) != 0 && !coa_fs_exists(path))
+            return -1;
     }
     return 0;
 }
@@ -92,9 +108,11 @@ int coa_fs_list_dir(const char *path, coa_dir_list *out) {
     snprintf(pattern, sizeof(pattern), "%s\\*", path);
     WIN32_FIND_DATAA fd;
     HANDLE h = FindFirstFileA(pattern, &fd);
-    if (h == INVALID_HANDLE_VALUE) return -1;
+    if (h == INVALID_HANDLE_VALUE)
+        return -1;
     do {
-        if (strcmp(fd.cFileName, ".") == 0 || strcmp(fd.cFileName, "..") == 0) continue;
+        if (strcmp(fd.cFileName, ".") == 0 || strcmp(fd.cFileName, "..") == 0)
+            continue;
         if (out->count == out->cap) {
             size_t cap = out->cap ? out->cap * 2 : 16;
             out->items = realloc(out->items, cap * sizeof(coa_dir_entry));
@@ -118,13 +136,20 @@ int coa_fs_list_dir(const char *path, coa_dir_list *out) {
 
 char *coa_fs_read_file(const char *path) {
     FILE *f = fopen(path, "rb");
-    if (!f) return NULL;
+    if (!f)
+        return NULL;
     fseek(f, 0, SEEK_END);
     long n = ftell(f);
     fseek(f, 0, SEEK_SET);
-    if (n < 0) { fclose(f); return NULL; }
+    if (n < 0) {
+        fclose(f);
+        return NULL;
+    }
     char *buf = malloc((size_t)n + 1);
-    if (!buf) { fclose(f); return NULL; }
+    if (!buf) {
+        fclose(f);
+        return NULL;
+    }
     size_t rd = fread(buf, 1, (size_t)n, f);
     fclose(f);
     buf[rd] = '\0';
@@ -133,7 +158,8 @@ char *coa_fs_read_file(const char *path) {
 
 int coa_fs_write_file(const char *path, const void *data, size_t len) {
     FILE *f = fopen(path, "wb");
-    if (!f) return -1;
+    if (!f)
+        return -1;
     size_t w = fwrite(data, 1, len, f);
     int ok = (w == len) ? 0 : -1;
     fclose(f);
@@ -142,7 +168,8 @@ int coa_fs_write_file(const char *path, const void *data, size_t len) {
 
 int coa_fs_append_file(const char *path, const void *data, size_t len) {
     FILE *f = fopen(path, "ab");
-    if (!f) return -1;
+    if (!f)
+        return -1;
     size_t w = fwrite(data, 1, len, f);
     int ok = (w == len) ? 0 : -1;
     fclose(f);
@@ -163,15 +190,20 @@ int coa_fs_mkdirs(const char *path) {
     char tmp[1024];
     snprintf(tmp, sizeof(tmp), "%s", path);
     size_t len = strlen(tmp);
-    if (len == 0) return -1;
+    if (len == 0)
+        return -1;
     for (size_t i = 1; i < len; i++) {
         if (tmp[i] == '/') {
             tmp[i] = '\0';
-            if (mkdir(tmp, 0755) != 0 && errno != EEXIST) { tmp[i] = '/'; return -1; }
+            if (mkdir(tmp, 0755) != 0 && errno != EEXIST) {
+                tmp[i] = '/';
+                return -1;
+            }
             tmp[i] = '/';
         }
     }
-    if (mkdir(tmp, 0755) != 0 && errno != EEXIST) return -1;
+    if (mkdir(tmp, 0755) != 0 && errno != EEXIST)
+        return -1;
     return 0;
 }
 
@@ -182,10 +214,12 @@ int coa_fs_remove(const char *path) {
 int coa_fs_list_dir(const char *path, coa_dir_list *out) {
     memset(out, 0, sizeof(*out));
     DIR *d = opendir(path);
-    if (!d) return -1;
+    if (!d)
+        return -1;
     struct dirent *de;
     while ((de = readdir(d)) != NULL) {
-        if (strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0) continue;
+        if (strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0)
+            continue;
         if (out->count == out->cap) {
             size_t cap = out->cap ? out->cap * 2 : 16;
             out->items = realloc(out->items, cap * sizeof(coa_dir_entry));
@@ -206,17 +240,20 @@ int coa_fs_list_dir(const char *path, coa_dir_list *out) {
 long long coa_fs_file_size(const char *path) {
 #ifdef _WIN32
     struct __stat64 st;
-    if (_stat64(path, &st) != 0) return -1;
+    if (_stat64(path, &st) != 0)
+        return -1;
     return (long long)st.st_size;
 #else
     struct stat st;
-    if (stat(path, &st) != 0) return -1;
+    if (stat(path, &st) != 0)
+        return -1;
     return (long long)st.st_size;
 #endif
 }
 
 void coa_fs_list_free(coa_dir_list *l) {
-    for (size_t i = 0; i < l->count; i++) free(l->items[i].name);
+    for (size_t i = 0; i < l->count; i++)
+        free(l->items[i].name);
     free(l->items);
     memset(l, 0, sizeof(*l));
 }

@@ -16,13 +16,15 @@ struct coa_blackboard {
 
 coa_blackboard *coa_blackboard_new(void) {
     coa_blackboard *b = (coa_blackboard *)calloc(1, sizeof(*b));
-    if (!b) return NULL;
+    if (!b)
+        return NULL;
     coa_mutex_init(&b->mtx);
     return b;
 }
 
 void coa_blackboard_free(coa_blackboard *b) {
-    if (!b) return;
+    if (!b)
+        return;
     coa_mutex_lock(&b->mtx);
     for (size_t i = 0; i < b->count; i++) {
         free(b->items[i].key);
@@ -37,7 +39,8 @@ void coa_blackboard_free(coa_blackboard *b) {
 }
 
 void coa_blackboard_put(coa_blackboard *b, const char *key, const char *val) {
-    if (!b || !key) return;
+    if (!b || !key)
+        return;
     coa_mutex_lock(&b->mtx);
     for (size_t i = 0; i < b->count; i++) {
         if (strcmp(b->items[i].key, key) == 0) {
@@ -50,7 +53,10 @@ void coa_blackboard_put(coa_blackboard *b, const char *key, const char *val) {
     if (b->count == b->cap) {
         size_t cap = b->cap ? b->cap * 2 : 8;
         coa_kv *nb = (coa_kv *)realloc(b->items, cap * sizeof(coa_kv));
-        if (!nb) { coa_mutex_unlock(&b->mtx); return; }
+        if (!nb) {
+            coa_mutex_unlock(&b->mtx);
+            return;
+        }
         b->items = nb;
         b->cap = cap;
     }
@@ -61,7 +67,8 @@ void coa_blackboard_put(coa_blackboard *b, const char *key, const char *val) {
 }
 
 char *coa_blackboard_get(coa_blackboard *b, const char *key) {
-    if (!b || !key) return NULL;
+    if (!b || !key)
+        return NULL;
     coa_mutex_lock(&b->mtx);
     char *r = NULL;
     for (size_t i = 0; i < b->count; i++) {
@@ -75,7 +82,8 @@ char *coa_blackboard_get(coa_blackboard *b, const char *key) {
 }
 
 int coa_blackboard_remove(coa_blackboard *b, const char *key) {
-    if (!b || !key) return 0;
+    if (!b || !key)
+        return 0;
     coa_mutex_lock(&b->mtx);
     int found = 0;
     for (size_t i = 0; i < b->count; i++) {
@@ -83,8 +91,7 @@ int coa_blackboard_remove(coa_blackboard *b, const char *key) {
             free(b->items[i].key);
             free(b->items[i].val);
             if (b->count - i - 1 > 0)
-                memmove(&b->items[i], &b->items[i + 1],
-                        (b->count - i - 1) * sizeof(coa_kv));
+                memmove(&b->items[i], &b->items[i + 1], (b->count - i - 1) * sizeof(coa_kv));
             b->count--;
             found = 1;
             break;
@@ -95,7 +102,8 @@ int coa_blackboard_remove(coa_blackboard *b, const char *key) {
 }
 
 int coa_blackboard_count(coa_blackboard *b) {
-    if (!b) return 0;
+    if (!b)
+        return 0;
     coa_mutex_lock(&b->mtx);
     int n = (int)b->count;
     coa_mutex_unlock(&b->mtx);
@@ -103,18 +111,19 @@ int coa_blackboard_count(coa_blackboard *b) {
 }
 
 char *coa_blackboard_snapshot_json(coa_blackboard *b) {
-    if (!b) return coa_strdup("{}");
+    if (!b)
+        return coa_strdup("{}");
     coa_mutex_lock(&b->mtx);
     cJSON *o = cJSON_CreateObject();
     if (o) {
         for (size_t i = 0; i < b->count; i++) {
             if (b->items[i].key)
-                cJSON_AddStringToObject(o, b->items[i].key,
-                                        b->items[i].val ? b->items[i].val : "");
+                cJSON_AddStringToObject(o, b->items[i].key, b->items[i].val ? b->items[i].val : "");
         }
     }
     char *s = o ? cJSON_PrintUnformatted(o) : NULL;
-    if (o) cJSON_Delete(o);
+    if (o)
+        cJSON_Delete(o);
     coa_mutex_unlock(&b->mtx);
     return s ? s : coa_strdup("{}");
 }

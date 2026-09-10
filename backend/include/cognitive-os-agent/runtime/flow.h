@@ -25,8 +25,7 @@ int coa_flow_validate(const char *dag_json, char **err);
 /* Compile + execute a validated DAG. On success returns 0, sets *answer
  * (malloc'd; sink-node results joined) and, if trace_json != NULL, *trace_json
  * to the per-node trace array. Returns -1 and sets *err on failure. */
-int coa_flow_run(coa_ctx *ctx, const char *dag_json, char **answer,
-                char **trace_json);
+int coa_flow_run(coa_ctx *ctx, const char *dag_json, char **answer, char **trace_json);
 
 #ifdef __cplusplus
 }

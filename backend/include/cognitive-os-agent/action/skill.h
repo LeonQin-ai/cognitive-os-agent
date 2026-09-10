@@ -13,18 +13,18 @@ extern "C" {
 typedef struct coa_skill {
     const char *name;
     const char *description;
-    const char *kind;      /* "shell" | "python" | "prompt" (LLM template) */
-    const char *body;      /* shell command, python source, or prompt template
-                            * with {{placeholder}} args for kind=prompt */
-    const char *caps;      /* granted capability tokens, csv (e.g. "fs.read,net");
-                            * NULL = unrestricted legacy skill */
+    const char *kind; /* "shell" | "python" | "prompt" (LLM template) */
+    const char *body; /* shell command, python source, or prompt template
+                       * with {{placeholder}} args for kind=prompt */
+    const char *caps; /* granted capability tokens, csv (e.g. "fs.read,net");
+                       * NULL = unrestricted legacy skill */
 } coa_skill;
 
 typedef struct coa_skill_registry coa_skill_registry;
 
 typedef struct coa_skill_result {
-    int ok;            /* 1 = exit code 0 and not timed out */
-    char *output;      /* combined stdout+stderr (malloc'd) */
+    int ok;       /* 1 = exit code 0 and not timed out */
+    char *output; /* combined stdout+stderr (malloc'd) */
 } coa_skill_result;
 
 coa_skill_registry *coa_skill_registry_new(void);
@@ -46,16 +46,14 @@ const coa_skill *coa_skill_get(coa_skill_registry *r, size_t i);
  * coa_skill_result_free. args_json is reserved for future parameter binding.
  * kind="prompt" skills need an LLM and are NOT executed here — the caller
  * gets ok=0 with a hint to run them via coa_skill_render_prompt + LLM. */
-coa_skill_result *coa_skill_execute(coa_skill_registry *r, const char *name,
-                                  const char *args_json, const char *workspace,
-                                  int timeout_ms);
+coa_skill_result *coa_skill_execute(coa_skill_registry *r, const char *name, const char *args_json,
+                                    const char *workspace, int timeout_ms);
 void coa_skill_result_free(coa_skill_result *res);
 
 /* Render a kind="prompt" skill: substitute {{placeholders}} from args_json and
  * return the final prompt text (malloc'd; caller frees). NULL when the skill
  * is unknown or its kind is not "prompt". */
-char *coa_skill_render_prompt(coa_skill_registry *r, const char *name,
-                              const char *args_json);
+char *coa_skill_render_prompt(coa_skill_registry *r, const char *name, const char *args_json);
 
 /* JSON array of skills {name,description,kind} (malloc'd; caller frees). */
 char *coa_skill_list_json(coa_skill_registry *r);

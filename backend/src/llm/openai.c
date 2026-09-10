@@ -18,7 +18,9 @@ typedef struct {
     char *base_url;
 } openai_impl;
 
-static openai_impl *impl_of(coa_llm *llm) { return (openai_impl *)llm->impl; }
+static openai_impl *impl_of(coa_llm *llm) {
+    return (openai_impl *)llm->impl;
+}
 
 static void openai_destroy(coa_llm *llm) {
     openai_impl *im = impl_of(llm);
@@ -70,8 +72,10 @@ static char *build_request_body(const coa_llm_request *req, const char *model, i
         cJSON_AddItemToArray(msgs, o);
     }
     cJSON_AddNumberToObject(root, "temperature", req->temperature);
-    if (req->max_tokens > 0) cJSON_AddNumberToObject(root, "max_tokens", req->max_tokens);
-    if (stream) cJSON_AddBoolToObject(root, "stream", 1);
+    if (req->max_tokens > 0)
+        cJSON_AddNumberToObject(root, "max_tokens", req->max_tokens);
+    if (stream)
+        cJSON_AddBoolToObject(root, "stream", 1);
     char *s = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
     return s;
@@ -94,8 +98,7 @@ static char *normalize_base(const char *base, const char **path_out) {
         s[n - 3] = '\0';
         return s;
     }
-    if (n >= 3 && base[n - 3] == '/' && base[n - 2] == 'v' &&
-        base[n - 1] >= '0' && base[n - 1] <= '9') {
+    if (n >= 3 && base[n - 3] == '/' && base[n - 2] == 'v' && base[n - 1] >= '0' && base[n - 1] <= '9') {
         char *s = coa_strdup(base);
         *path_out = "/chat/completions";
         return s;
@@ -105,7 +108,10 @@ static char *normalize_base(const char *base, const char **path_out) {
 
 static int openai_chat(coa_llm *llm, const coa_llm_request *req, coa_llm_response *resp) {
     char *body = build_request_body(req, llm->model, 0);
-    if (!body) { set_error(resp, "request build failed"); return -1; }
+    if (!body) {
+        set_error(resp, "request build failed");
+        return -1;
+    }
 
     const char *path;
     char *base = normalize_base(impl_of(llm)->base_url, &path);
@@ -120,13 +126,18 @@ static int openai_chat(coa_llm *llm, const coa_llm_request *req, coa_llm_respons
     coa_http_response *r = coa_http_post(base, path, body, "application/json", hdrs, coa_llm_timeout_ms());
     free(body);
     free(base);
-    if (hdrs) { coa_strmap_free(hdrs); free(hdrs); }
-    if (!r) { set_error(resp, "http request failed"); return -1; }
+    if (hdrs) {
+        coa_strmap_free(hdrs);
+        free(hdrs);
+    }
+    if (!r) {
+        set_error(resp, "http request failed");
+        return -1;
+    }
 
     if (r->status != 200) {
         char err[512];
-        snprintf(err, sizeof(err), "openai http %d: %s", r->status,
-                 r->body && r->body[0] ? r->body : "(empty)");
+        snprintf(err, sizeof(err), "openai http %d: %s", r->status, r->body && r->body[0] ? r->body : "(empty)");
         set_error(resp, err);
         coa_http_response_free(r);
         return -1;
@@ -134,11 +145,13 @@ static int openai_chat(coa_llm *llm, const coa_llm_request *req, coa_llm_respons
 
     cJSON *root = cJSON_Parse(r->body);
     coa_http_response_free(r);
-    if (!root) { set_error(resp, "openai: invalid JSON response"); return -1; }
+    if (!root) {
+        set_error(resp, "openai: invalid JSON response");
+        return -1;
+    }
 
     cJSON *choices = cJSON_GetObjectItemCaseSensitive(root, "choices");
-    cJSON *msg = choices && choices->child
-        ? cJSON_GetObjectItemCaseSensitive(choices->child, "message") : NULL;
+    cJSON *msg = choices && choices->child ? cJSON_GetObjectItemCaseSensitive(choices->child, "message") : NULL;
     cJSON *content = msg ? cJSON_GetObjectItemCaseSensitive(msg, "content") : NULL;
     if (content && cJSON_IsString(content) && content->valuestring[0]) {
         resp->content = coa_strdup(content->valuestring);
@@ -147,15 +160,14 @@ static int openai_chat(coa_llm *llm, const coa_llm_request *req, coa_llm_respons
          * budget while thinking and return an empty content with the
          * answer text left in reasoning_content — use it as a fallback
          * rather than surfacing "no content in response". */
-        cJSON *reasoning = msg
-            ? cJSON_GetObjectItemCaseSensitive(msg, "reasoning_content") : NULL;
+        cJSON *reasoning = msg ? cJSON_GetObjectItemCaseSensitive(msg, "reasoning_content") : NULL;
         if (reasoning && cJSON_IsString(reasoning) && reasoning->valuestring[0]) {
             resp->content = coa_strdup(reasoning->valuestring);
         } else {
             cJSON *err_obj = cJSON_GetObjectItemCaseSensitive(root, "error");
             const char *em = err_obj && cJSON_IsObject(err_obj)
-                ? (err_obj->valuestring ? err_obj->valuestring : "unknown")
-                : "no content in response";
+                                 ? (err_obj->valuestring ? err_obj->valuestring : "unknown")
+                                 : "no content in response";
             set_error(resp, em);
         }
     }
@@ -165,7 +177,8 @@ static int openai_chat(coa_llm *llm, const coa_llm_request *req, coa_llm_respons
 
 static int openai_stream(coa_llm *llm, const coa_llm_request *req, coa_llm_stream_cb cb, void *ud) {
     char *body = build_request_body(req, llm->model, 1);
-    if (!body) return -1;
+    if (!body)
+        return -1;
 
     const char *path;
     char *base = normalize_base(impl_of(llm)->base_url, &path);
@@ -180,8 +193,12 @@ static int openai_stream(coa_llm *llm, const coa_llm_request *req, coa_llm_strea
     coa_sse *s = coa_sse_start(base, path, body, "application/json", hdrs, coa_llm_timeout_ms());
     free(body);
     free(base);
-    if (hdrs) { coa_strmap_free(hdrs); free(hdrs); }
-    if (!s) return -1;
+    if (hdrs) {
+        coa_strmap_free(hdrs);
+        free(hdrs);
+    }
+    if (!s)
+        return -1;
     if (coa_sse_status(s) != 200) {
         coa_log_warn("openai stream: http status %d", coa_sse_status(s));
         coa_sse_close(s);
@@ -191,9 +208,13 @@ static int openai_stream(coa_llm *llm, const coa_llm_request *req, coa_llm_strea
     char line[16384];
     int rc = 0;
     while (coa_sse_next(s, line, sizeof(line)) == 1) {
-        if (llm->cancel) { rc = -1; break; }
+        if (llm->cancel) {
+            rc = -1;
+            break;
+        }
         cJSON *root = cJSON_Parse(line);
-        if (!root) continue;
+        if (!root)
+            continue;
         cJSON *choices = cJSON_GetObjectItemCaseSensitive(root, "choices");
         cJSON *ch = choices && choices->child ? choices->child : NULL;
         cJSON *delta = ch ? cJSON_GetObjectItemCaseSensitive(ch, "delta") : NULL;
@@ -209,7 +230,11 @@ static int openai_stream(coa_llm *llm, const coa_llm_request *req, coa_llm_strea
 coa_llm *coa_openai_create(const char *base_url, const char *api_key, const char *model) {
     coa_llm *llm = calloc(1, sizeof(coa_llm));
     openai_impl *im = calloc(1, sizeof(openai_impl));
-    if (!llm || !im) { free(llm); free(im); return NULL; }
+    if (!llm || !im) {
+        free(llm);
+        free(im);
+        return NULL;
+    }
     static const coa_llm_vtable vt = {openai_destroy, openai_chat, openai_stream};
     llm->vt = &vt;
     llm->provider = coa_strdup("openai");

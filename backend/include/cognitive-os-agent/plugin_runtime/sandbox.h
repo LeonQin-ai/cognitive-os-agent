@@ -18,14 +18,14 @@ typedef struct coa_sandbox coa_sandbox;
 typedef struct coa_filetracker coa_filetracker;
 
 typedef struct coa_sandbox_result {
-    int ok;            /* 1 = exit code 0 and not timed out */
+    int ok; /* 1 = exit code 0 and not timed out */
     int exit_code;
     int timed_out;
-    char *output;      /* combined stdout+stderr (malloc'd) */
-    char *files_json;  /* touched-file audit "[{path,ops}]" or NULL (malloc'd) */
+    char *output;     /* combined stdout+stderr (malloc'd) */
+    char *files_json; /* touched-file audit "[{path,ops}]" or NULL (malloc'd) */
 } coa_sandbox_result;
 
-coa_sandbox *coa_sandbox_new(int timeout_ms);   /* timeout_ms <= 0 = none */
+coa_sandbox *coa_sandbox_new(int timeout_ms); /* timeout_ms <= 0 = none */
 void coa_sandbox_free(coa_sandbox *sb);
 
 /* Deny-list check: returns 1 if `cmd` is forbidden, 0 otherwise. */
@@ -49,8 +49,7 @@ coa_filetracker *coa_sandbox_filetracker(coa_sandbox *sb);
  * registers a runner callback here. The seam is the stable interface the
  * plugin runtime calls; until a runner is registered, Wasm execution reports
  * "unsupported" without crashing. */
-typedef char *(*coa_sandbox_wasm_fn)(const void *wasm, size_t wasm_len,
-                                    const char *fn_name, const char *args_json);
+typedef char *(*coa_sandbox_wasm_fn)(const void *wasm, size_t wasm_len, const char *fn_name, const char *args_json);
 
 /* Register a Wasm runner (set once, before any wasm execution). */
 void coa_sandbox_set_wasm_runner(coa_sandbox_wasm_fn fn);
@@ -58,8 +57,7 @@ void coa_sandbox_set_wasm_runner(coa_sandbox_wasm_fn fn);
 int coa_sandbox_wasm_supported(void);
 /* Invoke `fn_name` in `wasm` with JSON `args_json`. Returns a malloc'd JSON
  * result string (caller frees), or a malloc'd error string if unsupported. */
-char *coa_sandbox_run_wasm(const void *wasm, size_t wasm_len,
-                          const char *fn_name, const char *args_json);
+char *coa_sandbox_run_wasm(const void *wasm, size_t wasm_len, const char *fn_name, const char *args_json);
 
 #ifdef __cplusplus
 }

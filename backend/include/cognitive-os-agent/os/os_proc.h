@@ -7,9 +7,9 @@ extern "C" {
 #endif
 
 typedef struct coa_proc_result {
-    char *output;      /* combined stdout+stderr (malloc'd, may be empty) */
-    int exit_code;     /* process exit code; -1 if killed/timed out */
-    int timed_out;     /* 1 if killed due to timeout */
+    char *output;  /* combined stdout+stderr (malloc'd, may be empty) */
+    int exit_code; /* process exit code; -1 if killed/timed out */
+    int timed_out; /* 1 if killed due to timeout */
 } coa_proc_result;
 
 /* Run `cmd` through the platform shell, capture combined output.

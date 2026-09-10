@@ -18,7 +18,8 @@ static char *resolve_path(const coa_tool_ctx *ctx, const char *path) {
 static coa_tool_result *file_read_exec(const coa_tool *self, const coa_tool_ctx *ctx, const char *args_json) {
     (void)self;
     cJSON *args = cJSON_Parse(args_json);
-    if (!args) return coa_tool_result_new(0, "file_read: invalid args JSON");
+    if (!args)
+        return coa_tool_result_new(0, "file_read: invalid args JSON");
     cJSON *path_j = cJSON_GetObjectItemCaseSensitive(args, "path");
     if (!path_j || !cJSON_IsString(path_j)) {
         cJSON_Delete(args);
@@ -36,8 +37,7 @@ static coa_tool_result *file_read_exec(const coa_tool *self, const coa_tool_ctx 
             coa_strbuf_init(&sb);
             coa_strbuf_appendf(&sb, "Directory listing of %s:\n", rp);
             for (size_t i = 0; i < dl.count; i++) {
-                coa_strbuf_appendf(&sb, "%s%s\n", dl.items[i].name,
-                                  dl.items[i].is_dir ? "/" : "");
+                coa_strbuf_appendf(&sb, "%s%s\n", dl.items[i].name, dl.items[i].is_dir ? "/" : "");
             }
             coa_fs_list_free(&dl);
             char *out = coa_strbuf_detach(&sb);
@@ -66,7 +66,8 @@ static coa_tool_result *file_read_exec(const coa_tool *self, const coa_tool_ctx 
 static coa_tool_result *file_write_exec(const coa_tool *self, const coa_tool_ctx *ctx, const char *args_json) {
     (void)self;
     cJSON *args = cJSON_Parse(args_json);
-    if (!args) return coa_tool_result_new(0, "file_write: invalid args JSON");
+    if (!args)
+        return coa_tool_result_new(0, "file_write: invalid args JSON");
     cJSON *path_j = cJSON_GetObjectItemCaseSensitive(args, "path");
     cJSON *content_j = cJSON_GetObjectItemCaseSensitive(args, "content");
     if (!path_j || !cJSON_IsString(path_j)) {
@@ -80,7 +81,8 @@ static coa_tool_result *file_write_exec(const coa_tool *self, const coa_tool_ctx
     char *slash = strrchr(rp, '/');
 #if defined(_WIN32)
     char *bslash = strrchr(rp, '\\');
-    if (bslash && (!slash || bslash > slash)) slash = bslash;
+    if (bslash && (!slash || bslash > slash))
+        slash = bslash;
 #endif
     if (slash) {
         char dir[2048];
@@ -112,27 +114,32 @@ static coa_tool_result *file_write_exec(const coa_tool *self, const coa_tool_ctx
 static size_t count_occurrences(const char *hay, const char *needle) {
     size_t n = 0;
     size_t nl = strlen(needle);
-    if (nl == 0) return 0;
+    if (nl == 0)
+        return 0;
     const char *p = hay;
-    while ((p = strstr(p, needle)) != NULL) { n++; p += nl; }
+    while ((p = strstr(p, needle)) != NULL) {
+        n++;
+        p += nl;
+    }
     return n;
 }
 
 static coa_tool_result *file_edit_exec(const coa_tool *self, const coa_tool_ctx *ctx, const char *args_json) {
     (void)self;
     cJSON *args = cJSON_Parse(args_json);
-    if (!args) return coa_tool_result_new(0, "file_edit: invalid args JSON");
+    if (!args)
+        return coa_tool_result_new(0, "file_edit: invalid args JSON");
     cJSON *path_j = cJSON_GetObjectItemCaseSensitive(args, "path");
     cJSON *old_j = cJSON_GetObjectItemCaseSensitive(args, "old_string");
     cJSON *new_j = cJSON_GetObjectItemCaseSensitive(args, "new_string");
-    if (!path_j || !cJSON_IsString(path_j) || !old_j || !cJSON_IsString(old_j) ||
-        !new_j || !cJSON_IsString(new_j)) {
+    if (!path_j || !cJSON_IsString(path_j) || !old_j || !cJSON_IsString(old_j) || !new_j || !cJSON_IsString(new_j)) {
         cJSON_Delete(args);
         return coa_tool_result_new(0, "file_edit: requires string args 'path', 'old_string', 'new_string'");
     }
     int replace_all = 0;
     cJSON *ra_j = cJSON_GetObjectItemCaseSensitive(args, "replace_all");
-    if (ra_j && cJSON_IsTrue(ra_j)) replace_all = 1;
+    if (ra_j && cJSON_IsTrue(ra_j))
+        replace_all = 1;
 
     /* copy strings out before cJSON_Delete(args) frees the tree */
     char *old_s = coa_strdup(old_j->valuestring);
@@ -142,9 +149,10 @@ static coa_tool_result *file_edit_exec(const coa_tool *self, const coa_tool_ctx 
     cJSON_Delete(args);
     if (!content) {
         char msg[1200];
-        snprintf(msg, sizeof(msg),
-                 "file_edit: file does not exist: %s (use file_write to create it)", rp);
-        free(rp); free(old_s); free(new_s);
+        snprintf(msg, sizeof(msg), "file_edit: file does not exist: %s (use file_write to create it)", rp);
+        free(rp);
+        free(old_s);
+        free(new_s);
         return coa_tool_result_new(0, msg);
     }
     size_t old_len = strlen(old_s);
@@ -152,16 +160,25 @@ static coa_tool_result *file_edit_exec(const coa_tool *self, const coa_tool_ctx 
     if (occ == 0) {
         char msg[1200];
         snprintf(msg, sizeof(msg),
-                 "file_edit: old_string not found in %s (the edit will fail if old_string does not match exactly, including whitespace)", rp);
-        free(content); free(rp); free(old_s); free(new_s);
+                 "file_edit: old_string not found in %s (the edit will fail if old_string does not match exactly, "
+                 "including whitespace)",
+                 rp);
+        free(content);
+        free(rp);
+        free(old_s);
+        free(new_s);
         return coa_tool_result_new(0, msg);
     }
     if (occ > 1 && !replace_all) {
         char msg[1200];
         snprintf(msg, sizeof(msg),
-                 "file_edit: old_string is not unique in %s (%zu occurrences). Provide a larger string with more surrounding context to make it unique, or use replace_all to change every instance",
+                 "file_edit: old_string is not unique in %s (%zu occurrences). Provide a larger string with more "
+                 "surrounding context to make it unique, or use replace_all to change every instance",
                  rp, occ);
-        free(content); free(rp); free(old_s); free(new_s);
+        free(content);
+        free(rp);
+        free(old_s);
+        free(new_s);
         return coa_tool_result_new(0, msg);
     }
     coa_strbuf sb;
@@ -169,7 +186,10 @@ static coa_tool_result *file_edit_exec(const coa_tool *self, const coa_tool_ctx 
     const char *p = content;
     while (*p) {
         const char *hit = strstr(p, old_s);
-        if (!hit) { coa_strbuf_append(&sb, p); break; }
+        if (!hit) {
+            coa_strbuf_append(&sb, p);
+            break;
+        }
         coa_strbuf_append_n(&sb, p, (size_t)(hit - p));
         coa_strbuf_append(&sb, new_s);
         p = hit + old_len;

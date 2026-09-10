@@ -12,23 +12,29 @@ extern "C" {
 /* 64-byte opaque storage (pthread_cond_t is 48B on glibc/x86_64). */
 #define COA_OPAQUE64 _Alignas(16) unsigned char _d[64]
 
-typedef struct coa_mutex   { COA_OPAQUE64; } coa_mutex;
-typedef struct coa_cond    { COA_OPAQUE64; } coa_cond;
-typedef struct coa_thread  { COA_OPAQUE64; } coa_thread;
+typedef struct coa_mutex {
+    COA_OPAQUE64;
+} coa_mutex;
+typedef struct coa_cond {
+    COA_OPAQUE64;
+} coa_cond;
+typedef struct coa_thread {
+    COA_OPAQUE64;
+} coa_thread;
 
 /* ---------- mutex ---------- */
-int  coa_mutex_init(coa_mutex *m);
+int coa_mutex_init(coa_mutex *m);
 void coa_mutex_destroy(coa_mutex *m);
 void coa_mutex_lock(coa_mutex *m);
 void coa_mutex_unlock(coa_mutex *m);
 
 /* ---------- condition variable ---------- */
-int  coa_cond_init(coa_cond *c);
+int coa_cond_init(coa_cond *c);
 void coa_cond_destroy(coa_cond *c);
 /* Atomically unlock mtx and wait until signaled. Re-locks before returning. */
 void coa_cond_wait(coa_cond *c, coa_mutex *m);
 /* Like wait but with a timeout in milliseconds. Returns 0 on signal, -1 on timeout. */
-int  coa_cond_timedwait_ms(coa_cond *c, coa_mutex *m, int ms);
+int coa_cond_timedwait_ms(coa_cond *c, coa_mutex *m, int ms);
 void coa_cond_signal(coa_cond *c);
 void coa_cond_broadcast(coa_cond *c);
 

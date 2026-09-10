@@ -29,8 +29,7 @@ int64_t coa_time_now_us(void) {
     QueryPerformanceCounter(&c);
     /* avoid the QuadPart * 1e6 signed overflow once the counter grows past
      * ~9.2e12 ticks (days of uptime at typical QPC frequencies) */
-    return (int64_t)((c.QuadPart / f.QuadPart) * 1000000LL +
-                     ((c.QuadPart % f.QuadPart) * 1000000LL) / f.QuadPart);
+    return (int64_t)((c.QuadPart / f.QuadPart) * 1000000LL + ((c.QuadPart % f.QuadPart) * 1000000LL) / f.QuadPart);
 }
 
 static void win_epoch_utc(struct tm *out) {
@@ -41,9 +40,12 @@ static void win_epoch_utc(struct tm *out) {
     u.HighPart = ft.dwHighDateTime;
     /* 100ns ticks since 1601-01-01; convert to unix seconds */
     time_t secs = (time_t)((u.QuadPart / 10000000ULL) - 11644473600ULL);
-    out->tm_sec = (int)(secs % 60); secs /= 60;
-    out->tm_min = (int)(secs % 60); secs /= 60;
-    out->tm_hour = (int)(secs % 24); secs /= 24;
+    out->tm_sec = (int)(secs % 60);
+    secs /= 60;
+    out->tm_min = (int)(secs % 60);
+    secs /= 60;
+    out->tm_hour = (int)(secs % 24);
+    secs /= 24;
     /* civil_from_days */
     int z = (int)secs + 719468;
     int era = (z >= 0 ? z : z - 146096) / 146097;
@@ -75,17 +77,15 @@ static void fill_utc(struct tm *out) {
 void coa_time_now_str(char *out, size_t n) {
     struct tm tmv;
     fill_utc(&tmv);
-    snprintf(out, n, "%04d-%02d-%02d %02d:%02d:%02d",
-             tmv.tm_year + 1900, tmv.tm_mon + 1, tmv.tm_mday,
-             tmv.tm_hour, tmv.tm_min, tmv.tm_sec);
+    snprintf(out, n, "%04d-%02d-%02d %02d:%02d:%02d", tmv.tm_year + 1900, tmv.tm_mon + 1, tmv.tm_mday, tmv.tm_hour,
+             tmv.tm_min, tmv.tm_sec);
 }
 
 void coa_time_now_iso(char *out, size_t n) {
     struct tm tmv;
     fill_utc(&tmv);
-    snprintf(out, n, "%04d-%02d-%02dT%02d:%02d:%02d.000Z",
-             tmv.tm_year + 1900, tmv.tm_mon + 1, tmv.tm_mday,
-             tmv.tm_hour, tmv.tm_min, tmv.tm_sec);
+    snprintf(out, n, "%04d-%02d-%02dT%02d:%02d:%02d.000Z", tmv.tm_year + 1900, tmv.tm_mon + 1, tmv.tm_mday, tmv.tm_hour,
+             tmv.tm_min, tmv.tm_sec);
 }
 
 #else /* POSIX */
@@ -113,17 +113,15 @@ static void fill_utc(struct tm *out) {
 void coa_time_now_str(char *out, size_t n) {
     struct tm tmv;
     fill_utc(&tmv);
-    snprintf(out, n, "%04d-%02d-%02d %02d:%02d:%02d",
-             tmv.tm_year + 1900, tmv.tm_mon + 1, tmv.tm_mday,
-             tmv.tm_hour, tmv.tm_min, tmv.tm_sec);
+    snprintf(out, n, "%04d-%02d-%02d %02d:%02d:%02d", tmv.tm_year + 1900, tmv.tm_mon + 1, tmv.tm_mday, tmv.tm_hour,
+             tmv.tm_min, tmv.tm_sec);
 }
 
 void coa_time_now_iso(char *out, size_t n) {
     struct tm tmv;
     fill_utc(&tmv);
-    snprintf(out, n, "%04d-%02d-%02dT%02d:%02d:%02d.000Z",
-             tmv.tm_year + 1900, tmv.tm_mon + 1, tmv.tm_mday,
-             tmv.tm_hour, tmv.tm_min, tmv.tm_sec);
+    snprintf(out, n, "%04d-%02d-%02dT%02d:%02d:%02d.000Z", tmv.tm_year + 1900, tmv.tm_mon + 1, tmv.tm_mday, tmv.tm_hour,
+             tmv.tm_min, tmv.tm_sec);
 }
 
 #endif

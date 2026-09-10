@@ -11,9 +11,9 @@
 
 /* --- feature / platform helpers --- */
 #if defined(_WIN32) || defined(_WIN64)
-#  define COA_WINDOWS 1
+#define COA_WINDOWS 1
 #else
-#  define COA_POSIX 1
+#define COA_POSIX 1
 #endif
 
 /* Sub-layer public headers (all include-guarded). */
@@ -83,49 +83,49 @@ typedef struct coa_ctx {
     coa_reasoning *reasoning;
     coa_scheduler *scheduler;
     coa_http_server *http;
-    coa_blackboard *blackboard;  /* shared state space (multi-agent coordination) */
-    coa_agent_pool *agents;      /* registered agents sharing the blackboard */
-    coa_auth *auth;              /* NULL unless an auth.key is configured */
-    coa_trace *trace;            /* span-based tracing / observability */
-    coa_router *router;          /* multi-provider model route table */
-    coa_usage *usage;            /* per-model token accounting */
-    coa_plugin_registry *registry; /* versioned plugin metadata */
-    coa_skill_registry *skills;  /* static Shell/Python skills */
-    coa_mcp_manager *mcp;        /* named MCP server connections */
-    coa_cluster *cluster;        /* cluster node registry */
-    coa_hook_registry *hooks;    /* horizontal hook system (third-party extensions) */
-    coa_state_store *state;      /* Context layer: KV/Task/Agent state slots */
-    coa_memory_service *memsvc;  /* Memory Service interface (default backend) */
-    coa_attention *attention;    /* salience scoring / focus */
-    struct coa_index *index;     /* code index over session-touched files */
-    coa_im *im;                  /* instant messaging store (sessions/messages) */
-    coa_im_channels *channels;   /* external messaging channel adapters (IM bridge) */
+    coa_blackboard *blackboard;         /* shared state space (multi-agent coordination) */
+    coa_agent_pool *agents;             /* registered agents sharing the blackboard */
+    coa_auth *auth;                     /* NULL unless an auth.key is configured */
+    coa_trace *trace;                   /* span-based tracing / observability */
+    coa_router *router;                 /* multi-provider model route table */
+    coa_usage *usage;                   /* per-model token accounting */
+    coa_plugin_registry *registry;      /* versioned plugin metadata */
+    coa_skill_registry *skills;         /* static Shell/Python skills */
+    coa_mcp_manager *mcp;               /* named MCP server connections */
+    coa_cluster *cluster;               /* cluster node registry */
+    coa_hook_registry *hooks;           /* horizontal hook system (third-party extensions) */
+    coa_state_store *state;             /* Context layer: KV/Task/Agent state slots */
+    coa_memory_service *memsvc;         /* Memory Service interface (default backend) */
+    coa_attention *attention;           /* salience scoring / focus */
+    struct coa_index *index;            /* code index over session-touched files */
+    coa_im *im;                         /* instant messaging store (sessions/messages) */
+    coa_im_channels *channels;          /* external messaging channel adapters (IM bridge) */
     struct coa_thread *channels_poller; /* telegram inbound poller thread */
-    volatile int channels_stop; /* poller stop flag */
+    volatile int channels_stop;         /* poller stop flag */
     struct coa_thread *hb_poller;       /* cluster heartbeat thread */
-    volatile int hb_stop;              /* heartbeat stop flag */
-    coa_mutex run_lock;          /* serializes reasoning runs */
+    volatile int hb_stop;               /* heartbeat stop flag */
+    coa_mutex run_lock;                 /* serializes reasoning runs */
     char *state_root;
     char *workspace;
     char *provider;
-    char *http_bind;            /* bind address ("127.0.0.1" default) */
-    char *market_url;           /* networked marketplace base URL ("" = local only) */
+    char *http_bind;  /* bind address ("127.0.0.1" default) */
+    char *market_url; /* networked marketplace base URL ("" = local only) */
     int workers;
     int use_transaction;
     uint16_t http_port;
 } coa_ctx;
 
 typedef struct coa_config {
-    const char *state_root;     /* NULL = "state" */
-    const char *workspace;      /* NULL = "." */
-    const char *provider;       /* "mock" | "openai" | "anthropic" */
+    const char *state_root; /* NULL = "state" */
+    const char *workspace;  /* NULL = "." */
+    const char *provider;   /* "mock" | "openai" | "anthropic" */
     const char *model;
     const char *base_url;
     const char *api_key;
-    const char *market_url;     /* NULL = local-only marketplace */
-    uint16_t http_port;         /* 0 = no HTTP API */
-    int workers;                /* scheduler worker threads; 0 = default (2) */
-    int use_transaction;        /* 1 = wrap tool actions in a snapshot tx */
+    const char *market_url; /* NULL = local-only marketplace */
+    uint16_t http_port;     /* 0 = no HTTP API */
+    int workers;            /* scheduler worker threads; 0 = default (2) */
+    int use_transaction;    /* 1 = wrap tool actions in a snapshot tx */
 } coa_config;
 
 /* Build and wire all layers. Returns 0 ok, -1 error (ctx left zeroed). */
@@ -141,8 +141,7 @@ int coa_run(coa_ctx *ctx, const char *prompt, char **answer);
 /* Run one task AS a named agent (must be registered via /v1/agents). Executes
  * through the reasoning engine and publishes the result on the shared
  * blackboard under the agent's name. Returns 0 ok, -1 bad args, -2 unknown. */
-int coa_agent_run(coa_ctx *ctx, const char *agent, const char *task,
-                     char **answer);
+int coa_agent_run(coa_ctx *ctx, const char *agent, const char *task, char **answer);
 
 /* Run a task through the multi-agent orchestration pipeline: LLM decomposes
  * the task into subtasks compiled to a Flow DAG, coa_flow_run executes it (one
@@ -151,8 +150,7 @@ int coa_agent_run(coa_ctx *ctx, const char *agent, const char *task,
  * non-NULL) receives a malloc'd JSON array [{id,agent,task,status,result}].
  * Degrades to a plain single-agent run when no agents are registered or the
  * plan is unparseable. */
-int coa_orchestrate(coa_ctx *ctx, const char *task, char **answer,
-                       char **trace_json);
+int coa_orchestrate(coa_ctx *ctx, const char *task, char **answer, char **trace_json);
 
 /* Decompose a task into a Flow DAG without executing it: the LLM plan is
  * compiled to {"nodes":[{id,agent,task}...],"edges":[]} (malloc'd, caller
@@ -164,8 +162,7 @@ int coa_flow_decompose(coa_ctx *ctx, const char *task, char **dag_json);
  * the LLM adapter, swaps it into the reasoning engine under the run-lock, keeps
  * the route table in sync, and persists llm.* to <state_root>/cognitive-os-agent.json so it
  * survives restart. Returns 0 ok, -1 if the provider is invalid. */
-int coa_set_llm(coa_ctx *ctx, const char *provider, const char *base_url,
-                   const char *model, const char *api_key);
+int coa_set_llm(coa_ctx *ctx, const char *provider, const char *base_url, const char *model, const char *api_key);
 
 /* Serve the HTTP API until coa_stop. Returns 0 ok, -1 if no server. */
 int coa_serve(coa_ctx *ctx);

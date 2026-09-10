@@ -17,8 +17,7 @@
 
 /* ---------- shared path helpers ---------- */
 
-static void resolve_root(const coa_tool_ctx *ctx, const char *maybe_rel,
-                         char *out, size_t n) {
+static void resolve_root(const coa_tool_ctx *ctx, const char *maybe_rel, char *out, size_t n) {
     if (maybe_rel && *maybe_rel)
         coa_path_resolve(out, n, ctx ? ctx->workspace : NULL, maybe_rel);
     else if (ctx && ctx->workspace && *ctx->workspace)
@@ -30,11 +29,13 @@ static void resolve_root(const coa_tool_ctx *ctx, const char *maybe_rel,
 static long long file_mtime(const char *path) {
 #ifdef _WIN32
     struct _stat st;
-    if (_stat(path, &st) != 0) return 0;
+    if (_stat(path, &st) != 0)
+        return 0;
     return (long long)st.st_mtime;
 #else
     struct stat st;
-    if (stat(path, &st) != 0) return 0;
+    if (stat(path, &st) != 0)
+        return 0;
     return (long long)st.st_mtime;
 #endif
 }
@@ -45,7 +46,8 @@ static int ci_char(int c) {
 
 static int ci_strncmp(const char *a, const char *b, size_t n) {
     for (size_t i = 0; i < n; i++)
-        if (ci_char((unsigned char)a[i]) != ci_char((unsigned char)b[i])) return 1;
+        if (ci_char((unsigned char)a[i]) != ci_char((unsigned char)b[i]))
+            return 1;
     return 0;
 }
 
@@ -58,12 +60,20 @@ static int seg_match(const char *seg, size_t seglen, const char *s) {
     const char *star = NULL, *ss = s, *star_s = NULL;
     const char *p = seg, *pe = seg + seglen;
     while (*ss) {
-        if (p < pe && (*p == '?' || *p == *ss)) { p++; ss++; }
-        else if (p < pe && *p == '*') { star = p++; star_s = ss; }
-        else if (star) { p = star + 1; ss = ++star_s; }
-        else return 0;
+        if (p < pe && (*p == '?' || *p == *ss)) {
+            p++;
+            ss++;
+        } else if (p < pe && *p == '*') {
+            star = p++;
+            star_s = ss;
+        } else if (star) {
+            p = star + 1;
+            ss = ++star_s;
+        } else
+            return 0;
     }
-    while (p < pe && *p == '*') p++;
+    while (p < pe && *p == '*')
+        p++;
     return p == pe;
 }
 
@@ -76,12 +86,15 @@ static int glob_match_segs(char *pat_rest, char *path_rest) {
         if (plen == 2 && pat_rest[0] == '*' && pat_rest[1] == '*') {
             /* consume consecutive ** segments at once */
             pat_rest = pslash ? pslash + 1 : pat_rest + plen;
-            if (!*pat_rest) return 1; /* trailing ** matches everything left */
+            if (!*pat_rest)
+                return 1; /* trailing ** matches everything left */
             /* try matching the remainder at every remaining position */
             while (1) {
-                if (glob_match_segs(pat_rest, path_rest)) return 1;
+                if (glob_match_segs(pat_rest, path_rest))
+                    return 1;
                 char *qslash = strchr(path_rest, '/');
-                if (!qslash) return 0;
+                if (!qslash)
+                    return 0;
                 path_rest = qslash + 1;
             }
         }
@@ -90,11 +103,16 @@ static int glob_match_segs(char *pat_rest, char *path_rest) {
         /* no length pre-check here: wildcard segments (*, ?) legitimately
          * match segments of a different length (e.g. "*.cpp" vs "main.cpp") */
         char tmp[256];
-        if (alen >= sizeof(tmp)) return 0;
-        memcpy(tmp, path_rest, alen); tmp[alen] = '\0';
-        if (!seg_match(pat_rest, plen, tmp)) return 0;
-        if (!pslash) return aslash == NULL;
-        if (!aslash) return 0;
+        if (alen >= sizeof(tmp))
+            return 0;
+        memcpy(tmp, path_rest, alen);
+        tmp[alen] = '\0';
+        if (!seg_match(pat_rest, plen, tmp))
+            return 0;
+        if (!pslash)
+            return aslash == NULL;
+        if (!aslash)
+            return 0;
         pat_rest = pslash + 1;
         path_rest = aslash + 1;
     }
@@ -102,7 +120,7 @@ static int glob_match_segs(char *pat_rest, char *path_rest) {
 }
 
 typedef struct {
-    char *path;          /* relative path, '/'-separated */
+    char *path; /* relative path, '/'-separated */
     long long mtime;
 } found_entry;
 
@@ -115,7 +133,8 @@ static void found_push(found_list *fl, const char *rel, long long mt) {
     if (fl->count == fl->cap) {
         size_t nc = fl->cap ? fl->cap * 2 : 32;
         found_entry *ni = (found_entry *)realloc(fl->items, nc * sizeof(found_entry));
-        if (!ni) return;
+        if (!ni)
+            return;
         fl->items = ni;
         fl->cap = nc;
     }
@@ -127,24 +146,27 @@ static void found_push(found_list *fl, const char *rel, long long mt) {
 /* newest first (like GlobTool); ties broken by path for determinism */
 static int cmp_mtime_desc(const void *a, const void *b) {
     const found_entry *ea = (const found_entry *)a, *eb = (const found_entry *)b;
-    if (ea->mtime != eb->mtime) return ea->mtime > eb->mtime ? -1 : 1;
+    if (ea->mtime != eb->mtime)
+        return ea->mtime > eb->mtime ? -1 : 1;
     return strcmp(ea->path, eb->path);
 }
 
-static void walk_dir(const char *root, const char *rel, const char *pattern,
-                     found_list *fl) {
+static void walk_dir(const char *root, const char *rel, const char *pattern, found_list *fl) {
     char full[2048];
     coa_path_join(full, sizeof full, root, rel && *rel ? rel : "");
     coa_dir_list dl;
     memset(&dl, 0, sizeof dl);
-    if (coa_fs_list_dir(full, &dl) != 0) return;
+    if (coa_fs_list_dir(full, &dl) != 0)
+        return;
     for (size_t i = 0; i < dl.count; i++) {
         const char *name = dl.items[i].name;
         if (!name || !*name || strcmp(name, ".") == 0 || strcmp(name, "..") == 0)
             continue;
         char child[1024];
-        if (rel && *rel) snprintf(child, sizeof child, "%s/%s", rel, name);
-        else snprintf(child, sizeof child, "%s", name);
+        if (rel && *rel)
+            snprintf(child, sizeof child, "%s/%s", rel, name);
+        else
+            snprintf(child, sizeof child, "%s", name);
         if (dl.items[i].is_dir) {
             if (strcmp(name, ".git") == 0 || strcmp(name, "node_modules") == 0)
                 continue;
@@ -160,11 +182,11 @@ static void walk_dir(const char *root, const char *rel, const char *pattern,
     coa_fs_list_free(&dl);
 }
 
-static coa_tool_result *glob_exec(const coa_tool *self, const coa_tool_ctx *ctx,
-                                 const char *args_json) {
+static coa_tool_result *glob_exec(const coa_tool *self, const coa_tool_ctx *ctx, const char *args_json) {
     (void)self;
     cJSON *args = cJSON_Parse(args_json);
-    if (!args) return coa_tool_result_new(0, "glob: invalid args JSON");
+    if (!args)
+        return coa_tool_result_new(0, "glob: invalid args JSON");
     cJSON *pat_j = cJSON_GetObjectItemCaseSensitive(args, "pattern");
     if (!pat_j || !cJSON_IsString(pat_j)) {
         cJSON_Delete(args);
@@ -172,14 +194,14 @@ static coa_tool_result *glob_exec(const coa_tool *self, const coa_tool_ctx *ctx,
     }
     cJSON *path_j = cJSON_GetObjectItemCaseSensitive(args, "path");
     char root[1024];
-    resolve_root(ctx, (path_j && cJSON_IsString(path_j)) ? path_j->valuestring : NULL,
-                 root, sizeof root);
+    resolve_root(ctx, (path_j && cJSON_IsString(path_j)) ? path_j->valuestring : NULL, root, sizeof root);
     char *pat = coa_strdup(pat_j->valuestring);
     cJSON_Delete(args);
 
     /* normalize pattern separators to '/' */
     for (char *p = pat; *p; p++)
-        if (*p == '\\') *p = '/';
+        if (*p == '\\')
+            *p = '/';
 
     found_list fl;
     memset(&fl, 0, sizeof fl);
@@ -187,20 +209,22 @@ static coa_tool_result *glob_exec(const coa_tool *self, const coa_tool_ctx *ctx,
     free(pat);
 
     /* sort by modification time (newest first), like GlobTool */
-    if (fl.count > 1) qsort(fl.items, fl.count, sizeof(found_entry), cmp_mtime_desc);
+    if (fl.count > 1)
+        qsort(fl.items, fl.count, sizeof(found_entry), cmp_mtime_desc);
     const size_t LIMIT = 100;
     int truncated = fl.count > LIMIT;
     coa_strbuf sb;
     coa_strbuf_init(&sb);
-    if (fl.count == 0) coa_strbuf_append(&sb, "No files found");
+    if (fl.count == 0)
+        coa_strbuf_append(&sb, "No files found");
     size_t shown = fl.count < LIMIT ? fl.count : LIMIT;
     for (size_t i = 0; i < shown; i++)
         coa_strbuf_appendf(&sb, "%s\n", fl.items[i].path);
     if (truncated)
-        coa_strbuf_appendf(&sb,
-                          "(Results are truncated from %zu. Consider using a more specific path or pattern.)\n",
-                          fl.count);
-    for (size_t i = 0; i < fl.count; i++) free(fl.items[i].path);
+        coa_strbuf_appendf(&sb, "(Results are truncated from %zu. Consider using a more specific path or pattern.)\n",
+                           fl.count);
+    for (size_t i = 0; i < fl.count; i++)
+        free(fl.items[i].path);
     free(fl.items);
     char *out = coa_strbuf_detach(&sb);
     coa_tool_result *r = coa_tool_result_new(1, out ? out : "");
@@ -211,32 +235,35 @@ static coa_tool_result *glob_exec(const coa_tool *self, const coa_tool_ctx *ctx,
 /* ---------- grep (subset of GrepTool) ---------- */
 
 typedef struct {
-    const char *needle;      /* text to find */
+    const char *needle; /* text to find */
     size_t needle_len;
-    const char *file_glob;   /* optional file-name glob filter, may be NULL */
+    const char *file_glob; /* optional file-name glob filter, may be NULL */
     int ignore_case;
-    int mode;                /* 0 files_with_matches, 1 content, 2 count */
+    int mode; /* 0 files_with_matches, 1 content, 2 count */
     size_t head_limit;
-    coa_strbuf sb;            /* output */
-    size_t out_n;            /* entries emitted */
+    coa_strbuf sb; /* output */
+    size_t out_n;  /* entries emitted */
     int truncated;
 } grep_state;
 
 static int line_has_needle(const char *line, size_t len, const grep_state *g) {
-    if (g->needle_len == 0 || len < g->needle_len) return 0;
+    if (g->needle_len == 0 || len < g->needle_len)
+        return 0;
     for (size_t i = 0; i + g->needle_len <= len; i++) {
         if (g->ignore_case) {
             if (ci_char((unsigned char)line[i]) == ci_char((unsigned char)g->needle[0]) &&
-                ci_strncmp(line + i, g->needle, g->needle_len) == 0) return 1;
-        } else if (line[i] == g->needle[0] &&
-                   memcmp(line + i, g->needle, g->needle_len) == 0) return 1;
+                ci_strncmp(line + i, g->needle, g->needle_len) == 0)
+                return 1;
+        } else if (line[i] == g->needle[0] && memcmp(line + i, g->needle, g->needle_len) == 0)
+            return 1;
     }
     return 0;
 }
 
 static void grep_file(const char *rel, const char *full, grep_state *g) {
     char *text = coa_fs_read_file(full);
-    if (!text) return;
+    if (!text)
+        return;
     /* skip binary-looking files */
     if (memchr(text, '\0', strlen(text) < 8192 ? strlen(text) : 8192)) {
         free(text);
@@ -247,8 +274,11 @@ static void grep_file(const char *rel, const char *full, grep_state *g) {
     while (*p) {
         char *line = p;
         char *nl = strchr(p, '\n');
-        if (nl) { *nl = '\0'; p = nl + 1; }
-        else p += strlen(p);
+        if (nl) {
+            *nl = '\0';
+            p = nl + 1;
+        } else
+            p += strlen(p);
         lineno++;
         if (line_has_needle(line, strlen(line), g)) {
             hits++;
@@ -256,25 +286,34 @@ static void grep_file(const char *rel, const char *full, grep_state *g) {
                 if (g->out_n < g->head_limit) {
                     coa_strbuf_appendf(&g->sb, "%s:%zu:%s\n", rel, lineno, line);
                     g->out_n++;
-                } else g->truncated = 1;
+                } else
+                    g->truncated = 1;
             }
         }
-        if (!nl) break;
+        if (!nl)
+            break;
     }
     if (hits > 0) {
         if (g->mode == 0) {
-            if (g->out_n < g->head_limit) { coa_strbuf_appendf(&g->sb, "%s\n", rel); g->out_n++; }
-            else g->truncated = 1;
+            if (g->out_n < g->head_limit) {
+                coa_strbuf_appendf(&g->sb, "%s\n", rel);
+                g->out_n++;
+            } else
+                g->truncated = 1;
         } else if (g->mode == 2) {
-            if (g->out_n < g->head_limit) { coa_strbuf_appendf(&g->sb, "%s:%zu\n", rel, hits); g->out_n++; }
-            else g->truncated = 1;
+            if (g->out_n < g->head_limit) {
+                coa_strbuf_appendf(&g->sb, "%s:%zu\n", rel, hits);
+                g->out_n++;
+            } else
+                g->truncated = 1;
         }
     }
     free(text);
 }
 
 static int name_glob_ok(const char *name, const char *glob_pat) {
-    if (!glob_pat || !*glob_pat) return 1;
+    if (!glob_pat || !*glob_pat)
+        return 1;
     char tmp[256];
     snprintf(tmp, sizeof tmp, "%s", name);
     return glob_match_segs((char *)glob_pat, tmp);
@@ -286,7 +325,8 @@ static void grep_walk(const char *root, const char *rel, grep_state *g) {
     if (coa_fs_is_dir(full)) {
         coa_dir_list dl;
         memset(&dl, 0, sizeof dl);
-        if (coa_fs_list_dir(full, &dl) != 0) return;
+        if (coa_fs_list_dir(full, &dl) != 0)
+            return;
         for (size_t i = 0; i < dl.count; i++) {
             const char *name = dl.items[i].name;
             if (!name || !*name || strcmp(name, ".") == 0 || strcmp(name, "..") == 0)
@@ -294,8 +334,10 @@ static void grep_walk(const char *root, const char *rel, grep_state *g) {
             if (strcmp(name, ".git") == 0 || strcmp(name, "node_modules") == 0)
                 continue;
             char child[1024];
-            if (rel && *rel) snprintf(child, sizeof child, "%s/%s", rel, name);
-            else snprintf(child, sizeof child, "%s", name);
+            if (rel && *rel)
+                snprintf(child, sizeof child, "%s/%s", rel, name);
+            else
+                snprintf(child, sizeof child, "%s", name);
             grep_walk(root, child, g);
         }
         coa_fs_list_free(&dl);
@@ -303,16 +345,17 @@ static void grep_walk(const char *root, const char *rel, grep_state *g) {
         /* file: apply the optional glob name filter */
         const char *base = strrchr(rel, '/');
         base = base ? base + 1 : rel;
-        if (!name_glob_ok(base, g->file_glob)) return;
+        if (!name_glob_ok(base, g->file_glob))
+            return;
         grep_file(rel, full, g);
     }
 }
 
-static coa_tool_result *grep_exec(const coa_tool *self, const coa_tool_ctx *ctx,
-                                 const char *args_json) {
+static coa_tool_result *grep_exec(const coa_tool *self, const coa_tool_ctx *ctx, const char *args_json) {
     (void)self;
     cJSON *args = cJSON_Parse(args_json);
-    if (!args) return coa_tool_result_new(0, "grep: invalid args JSON");
+    if (!args)
+        return coa_tool_result_new(0, "grep: invalid args JSON");
     cJSON *pat_j = cJSON_GetObjectItemCaseSensitive(args, "pattern");
     if (!pat_j || !cJSON_IsString(pat_j)) {
         cJSON_Delete(args);
@@ -329,27 +372,28 @@ static coa_tool_result *grep_exec(const coa_tool *self, const coa_tool_ctx *ctx,
     /* copy strings out before cJSON_Delete(args) frees the tree */
     g.needle = coa_strdup(pat_j->valuestring);
     g.needle_len = strlen(g.needle);
-    g.file_glob = (glob_j && cJSON_IsString(glob_j) && *glob_j->valuestring)
-                      ? coa_strdup(glob_j->valuestring) : NULL;
+    g.file_glob = (glob_j && cJSON_IsString(glob_j) && *glob_j->valuestring) ? coa_strdup(glob_j->valuestring) : NULL;
     g.ignore_case = (ic_j && cJSON_IsTrue(ic_j)) ? 1 : 0;
     g.mode = 0;
     if (mode_j && cJSON_IsString(mode_j)) {
-        if (strcmp(mode_j->valuestring, "content") == 0) g.mode = 1;
-        else if (strcmp(mode_j->valuestring, "count") == 0) g.mode = 2;
+        if (strcmp(mode_j->valuestring, "content") == 0)
+            g.mode = 1;
+        else if (strcmp(mode_j->valuestring, "count") == 0)
+            g.mode = 2;
     }
-    g.head_limit = (hl_j && cJSON_IsNumber(hl_j) && hl_j->valuedouble > 0)
-                       ? (size_t)hl_j->valuedouble : 250;
+    g.head_limit = (hl_j && cJSON_IsNumber(hl_j) && hl_j->valuedouble > 0) ? (size_t)hl_j->valuedouble : 250;
 
     char root[1024];
-    resolve_root(ctx, (path_j && cJSON_IsString(path_j)) ? path_j->valuestring : NULL,
-                 root, sizeof root);
+    resolve_root(ctx, (path_j && cJSON_IsString(path_j)) ? path_j->valuestring : NULL, root, sizeof root);
     cJSON_Delete(args);
 
     coa_strbuf_init(&g.sb);
     grep_walk(root, NULL, &g);
-    if (g.out_n == 0) coa_strbuf_append(&g.sb, "No matches found");
+    if (g.out_n == 0)
+        coa_strbuf_append(&g.sb, "No matches found");
     if (g.truncated)
-        coa_strbuf_appendf(&g.sb, "(Results are truncated. Consider using a more specific path, pattern or head_limit.)\n");
+        coa_strbuf_appendf(&g.sb,
+                           "(Results are truncated. Consider using a more specific path, pattern or head_limit.)\n");
     free((void *)g.needle);
     free((void *)g.file_glob);
     char *out = coa_strbuf_detach(&g.sb);

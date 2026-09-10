@@ -12,19 +12,21 @@
 
 struct coa_ringbuf {
     _Atomic(void *) *data; /* slot payloads */
-    _Atomic(size_t) *seq; /* per-slot sequence numbers */
-    size_t capacity;  /* power of two */
+    _Atomic(size_t) *seq;  /* per-slot sequence numbers */
+    size_t capacity;       /* power of two */
     size_t mask;
     _Atomic size_t enqueue_pos;
     _Atomic size_t dequeue_pos;
 };
 
 coa_ringbuf *coa_ringbuf_new(size_t capacity) {
-    if (capacity < 2 || (capacity & (capacity - 1)) != 0) return NULL;
+    if (capacity < 2 || (capacity & (capacity - 1)) != 0)
+        return NULL;
     coa_ringbuf *r = (coa_ringbuf *)calloc(1, sizeof(*r));
-    if (!r) return NULL;
+    if (!r)
+        return NULL;
     r->data = (_Atomic(void *) *)calloc(capacity, sizeof(_Atomic(void *)));
-    r->seq  = (_Atomic(size_t) *)malloc(capacity * sizeof(_Atomic(size_t)));
+    r->seq = (_Atomic(size_t) *)malloc(capacity * sizeof(_Atomic(size_t)));
     if (!r->data || !r->seq) {
         free(r->data);
         free(r->seq);
@@ -33,14 +35,16 @@ coa_ringbuf *coa_ringbuf_new(size_t capacity) {
     }
     r->capacity = capacity;
     r->mask = capacity - 1;
-    for (size_t i = 0; i < capacity; i++) r->seq[i] = i;
+    for (size_t i = 0; i < capacity; i++)
+        r->seq[i] = i;
     atomic_init(&r->enqueue_pos, 0);
     atomic_init(&r->dequeue_pos, 0);
     return r;
 }
 
 void coa_ringbuf_free(coa_ringbuf *r) {
-    if (!r) return;
+    if (!r)
+        return;
     free(r->data);
     free(r->seq);
     free(r);
@@ -51,7 +55,8 @@ size_t coa_ringbuf_capacity(coa_ringbuf *r) {
 }
 
 int coa_ringbuf_push(coa_ringbuf *r, void *item) {
-    if (!r || !item) return -1;
+    if (!r || !item)
+        return -1;
     const size_t mask = r->mask;
     size_t pos = atomic_load_explicit(&r->enqueue_pos, memory_order_relaxed);
     for (;;) {
@@ -59,8 +64,7 @@ int coa_ringbuf_push(coa_ringbuf *r, void *item) {
         const size_t seq = atomic_load_explicit(&r->seq[cell], memory_order_acquire);
         const intptr_t diff = (intptr_t)seq - (intptr_t)pos;
         if (diff == 0) {
-            if (atomic_compare_exchange_weak_explicit(&r->enqueue_pos, &pos,
-                                                      pos + 1, memory_order_relaxed,
+            if (atomic_compare_exchange_weak_explicit(&r->enqueue_pos, &pos, pos + 1, memory_order_relaxed,
                                                       memory_order_relaxed)) {
                 atomic_store_explicit(&r->data[cell], item, memory_order_release);
                 atomic_store_explicit(&r->seq[cell], pos + 1, memory_order_release);
@@ -75,7 +79,8 @@ int coa_ringbuf_push(coa_ringbuf *r, void *item) {
 }
 
 int coa_ringbuf_pop(coa_ringbuf *r, void **out) {
-    if (!r || !out) return -1;
+    if (!r || !out)
+        return -1;
     const size_t mask = r->mask;
     size_t pos = atomic_load_explicit(&r->dequeue_pos, memory_order_relaxed);
     for (;;) {
@@ -83,8 +88,7 @@ int coa_ringbuf_pop(coa_ringbuf *r, void **out) {
         const size_t seq = atomic_load_explicit(&r->seq[cell], memory_order_acquire);
         const intptr_t diff = (intptr_t)seq - (intptr_t)(pos + 1);
         if (diff == 0) {
-            if (atomic_compare_exchange_weak_explicit(&r->dequeue_pos, &pos,
-                                                      pos + 1, memory_order_relaxed,
+            if (atomic_compare_exchange_weak_explicit(&r->dequeue_pos, &pos, pos + 1, memory_order_relaxed,
                                                       memory_order_relaxed)) {
                 *out = atomic_load_explicit(&r->data[cell], memory_order_relaxed);
                 atomic_store_explicit(&r->seq[cell], pos + mask + 1, memory_order_release);

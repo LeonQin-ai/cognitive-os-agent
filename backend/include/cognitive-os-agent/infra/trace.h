@@ -17,8 +17,8 @@ typedef struct coa_trace_span {
     int64_t id;
     char *name;
     int64_t start_ms;
-    int64_t end_ms;    /* 0 = still open */
-    int status;        /* 0 = running, 1 = ok, -1 = error */
+    int64_t end_ms; /* 0 = still open */
+    int status;     /* 0 = running, 1 = ok, -1 = error */
 } coa_trace_span;
 
 coa_trace *coa_trace_new(size_t capacity);

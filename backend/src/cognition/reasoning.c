@@ -55,16 +55,21 @@ struct coa_session {
 
 static struct coa_session *session_new(const char *id) {
     struct coa_session *s = calloc(1, sizeof(*s));
-    if (!s) return NULL;
+    if (!s)
+        return NULL;
     s->id = coa_strdup(id && *id ? id : "default");
-    if (!s->id) { free(s); return NULL; }
+    if (!s->id) {
+        free(s);
+        return NULL;
+    }
     coa_mutex_init(&s->mtx);
     s->last_active_ms = (long long)coa_time_now_ms();
     return s;
 }
 
 static void session_free(struct coa_session *s) {
-    if (!s) return;
+    if (!s)
+        return;
     for (size_t i = 0; i < s->hist_n; i++) {
         free(s->hist_q[i]);
         free(s->hist_a[i]);
@@ -121,7 +126,7 @@ struct coa_reasoning {
     /* missing-capability auto-generation (self-evolution loop) */
     struct coa_plugin_registry *plugin_registry;
     char *state_root;
-    int gen_attempted;     /* one auto-generation attempt per run */
+    int gen_attempted; /* one auto-generation attempt per run */
 
     coa_state_machine *sm;
     coa_hook_registry *hooks; /* horizontal hook system (borrowed, may be NULL) */
@@ -132,20 +137,20 @@ struct coa_reasoning {
     char *last_prompt;
     int all_actions_ok;
     int ok_actions;
-    int denied_actions;  /* blocked by policy this run (not a failure) */
-    struct coa_skill_registry *skills;  /* advertised to planner + skill tool */
-    struct coa_mcp_manager *mcp;        /* handed to tool ctx for mcp tool calls */
+    int denied_actions;                /* blocked by policy this run (not a failure) */
+    struct coa_skill_registry *skills; /* advertised to planner + skill tool */
+    struct coa_mcp_manager *mcp;       /* handed to tool ctx for mcp tool calls */
 
     /* agent loop: bounded plan->act->observe->replan rounds per run. Results of
      * executed rounds are fed back into the next round's planner context; the
      * loop ends when the LLM stops proposing actions (final text answer). */
-    int max_rounds;          /* from config (default AGENT_LOOP_MAX_ROUNDS) */
-    int round_idx;           /* 1-based round currently executing */
-    int stall_nudged;        /* one-shot stall-recovery nudge already given */
-    int had_plan;            /* last REASON produced tool actions (vs final text) */
-    char *last_plan_raw;     /* this round's raw plan (stall detection) */
-    char *prev_plan;         /* previous round's raw plan (stall detection) */
-    char *round_log;         /* accumulated action results of previous rounds */
+    int max_rounds;      /* from config (default AGENT_LOOP_MAX_ROUNDS) */
+    int round_idx;       /* 1-based round currently executing */
+    int stall_nudged;    /* one-shot stall-recovery nudge already given */
+    int had_plan;        /* last REASON produced tool actions (vs final text) */
+    char *last_plan_raw; /* this round's raw plan (stall detection) */
+    char *prev_plan;     /* previous round's raw plan (stall detection) */
+    char *round_log;     /* accumulated action results of previous rounds */
     size_t round_log_len, round_log_cap;
 };
 
@@ -162,15 +167,22 @@ static struct coa_session *session_get(coa_reasoning *r, const char *id) {
     if (r->nsessions < COA_SESSION_MAX) {
         s = session_new(want);
         if (s) {
-            struct coa_session **na =
-                realloc(r->sessions, (r->nsessions + 1) * sizeof(*na));
-            if (na) { r->sessions = na; r->sessions[r->nsessions++] = s; }
-            else { session_free(s); s = NULL; }
+            struct coa_session **na = realloc(r->sessions, (r->nsessions + 1) * sizeof(*na));
+            if (na) {
+                r->sessions = na;
+                r->sessions[r->nsessions++] = s;
+            } else {
+                session_free(s);
+                s = NULL;
+            }
         }
     }
     if (!s) { /* cap reached or alloc failed: fall back to default */
         for (size_t i = 0; i < r->nsessions; i++)
-            if (strcmp(r->sessions[i]->id, "default") == 0) { s = r->sessions[i]; break; }
+            if (strcmp(r->sessions[i]->id, "default") == 0) {
+                s = r->sessions[i];
+                break;
+            }
     }
     coa_mutex_unlock(&r->sess_mtx);
     return s;
@@ -188,25 +200,29 @@ static void clear_actions(coa_reasoning *r) {
 
 /* Copy at most `cap` bytes of s, cutting back to a UTF-8 boundary and adding
  * an ellipsis when truncated. Caller frees. NULL only on OOM. */
-#define HIST_TURN_CAP 500     /* per-turn chars kept in history */
-#define HIST_BUDGET 8192      /* total chars of history injected per run */
-#define LEARN_RESULT_CAP 300  /* chars of a result kept as a memory episode */
+#define HIST_TURN_CAP 500        /* per-turn chars kept in history */
+#define HIST_BUDGET 8192         /* total chars of history injected per run */
+#define LEARN_RESULT_CAP 300     /* chars of a result kept as a memory episode */
 #define COMPACT_SUMMARY_CAP 2000 /* rolling compaction summary cap */
-#define AGENT_LOOP_MAX_ROUNDS 32 /* default rounds when config does not set it;
-                                    config "reasoning.max_rounds" < 0 = unlimited */
-#define ROUND_LOG_CAP 16384       /* tail-keep cap for accumulated round results */
+#define AGENT_LOOP_MAX_ROUNDS                                                                                          \
+    32                      /* default rounds when config does not set it;                                             \
+                               config "reasoning.max_rounds" < 0 = unlimited */
+#define ROUND_LOG_CAP 16384 /* tail-keep cap for accumulated round results */
 
 /* Append text to the round log, tail-keeping: once past ROUND_LOG_CAP the
  * oldest half is dropped so recent action results always stay available. */
 static void round_log_append(coa_reasoning *r, const char *text) {
-    if (!text || !*text) return;
+    if (!text || !*text)
+        return;
     size_t add = strlen(text);
     size_t need = r->round_log_len + add + 1;
     if (need > r->round_log_cap) {
         size_t ncap = r->round_log_cap ? r->round_log_cap * 2 : 2048;
-        while (ncap < need) ncap *= 2;
+        while (ncap < need)
+            ncap *= 2;
         char *nb = (char *)realloc(r->round_log, ncap);
-        if (!nb) return;
+        if (!nb)
+            return;
         r->round_log = nb;
         r->round_log_cap = ncap;
     }
@@ -220,28 +236,37 @@ static void round_log_append(coa_reasoning *r, const char *text) {
 }
 
 static void round_log_reset(coa_reasoning *r) {
-    if (r->round_log) r->round_log[0] = '\0';
+    if (r->round_log)
+        r->round_log[0] = '\0';
     r->round_log_len = 0;
 }
 
 /* session notes: append "line\n" to a fixed-size buffer, keeping the TAIL
  * (oldest lines are dropped from the front when the cap would be exceeded). */
 static void sn_append_line(char *dst, size_t cap, const char *line) {
-    if (!dst || !line || !*line) return;
+    if (!dst || !line || !*line)
+        return;
     size_t cur = strlen(dst);
     size_t add = strlen(line) + 1; /* line chars + '\n' */
     while (cur + add + 1 > cap) {
         char *nl = strchr(dst, '\n');
-        if (!nl) { dst[0] = '\0'; cur = 0; break; }
+        if (!nl) {
+            dst[0] = '\0';
+            cur = 0;
+            break;
+        }
         size_t cut = (size_t)(nl - dst) + 1;
         memmove(dst, dst + cut, cur - cut + 1);
         cur -= cut;
     }
     size_t room = cap - 1 - cur;
-    if (room < 2) return;
-    if (add > room) add = room;
+    if (room < 2)
+        return;
+    if (add > room)
+        add = room;
     size_t keep = add - 1;
-    while (keep > 0 && ((unsigned char)line[keep] & 0xC0) == 0x80) keep--; /* utf-8 boundary */
+    while (keep > 0 && ((unsigned char)line[keep] & 0xC0) == 0x80)
+        keep--; /* utf-8 boundary */
     memcpy(dst + cur, line, keep);
     dst[cur + keep] = '\n';
     dst[cur + keep + 1] = '\0';
@@ -249,9 +274,11 @@ static void sn_append_line(char *dst, size_t cap, const char *line) {
 
 /* Track a file touched by a file_* action (extract "path" from its args). */
 static void sn_note_file(coa_reasoning *r, const char *args_json) {
-    if (!args_json || !*args_json) return;
+    if (!args_json || !*args_json)
+        return;
     cJSON *o = cJSON_Parse(args_json);
-    if (!o) return;
+    if (!o)
+        return;
     cJSON *p = cJSON_GetObjectItemCaseSensitive(o, "path");
     if (p && cJSON_IsString(p) && p->valuestring)
         sn_append_line(r->cur->sn_files, sizeof(r->cur->sn_files), p->valuestring);
@@ -259,16 +286,21 @@ static void sn_note_file(coa_reasoning *r, const char *args_json) {
 }
 
 static char *str_head(const char *s, size_t cap) {
-    if (!s) return NULL;
+    if (!s)
+        return NULL;
     size_t n = strlen(s);
     int trunc = n > cap;
-    if (trunc) n = cap;
-    while (trunc && n > 0 && ((unsigned char)s[n] & 0xC0) == 0x80) n--; /* utf-8 boundary */
+    if (trunc)
+        n = cap;
+    while (trunc && n > 0 && ((unsigned char)s[n] & 0xC0) == 0x80)
+        n--; /* utf-8 boundary */
     char *out = (char *)malloc(n + 4);
-    if (!out) return NULL;
+    if (!out)
+        return NULL;
     memcpy(out, s, n);
     out[n] = '\0';
-    if (trunc) memcpy(out + n, "…", 4);
+    if (trunc)
+        memcpy(out + n, "…", 4);
     return out;
 }
 
@@ -289,16 +321,17 @@ static char *build_context(coa_reasoning *r, const char *prompt) {
         coa_strbuf_append(&b, "\n\n");
         warm_used += strlen(r->cur->summary) + 34;
     }
-    if (r->cur->sn_task[0] || r->cur->sn_state[0] || r->cur->sn_files[0] ||
-        r->cur->sn_errors[0] || r->cur->sn_worklog[0]) {
-        size_t budget_left = (warm_used < (size_t)r->budget_warm)
-            ? (size_t)r->budget_warm - warm_used : 0;
+    if (r->cur->sn_task[0] || r->cur->sn_state[0] || r->cur->sn_files[0] || r->cur->sn_errors[0] ||
+        r->cur->sn_worklog[0]) {
+        size_t budget_left = (warm_used < (size_t)r->budget_warm) ? (size_t)r->budget_warm - warm_used : 0;
         for (int lv = 0; lv < 3; lv++) { /* 0=full 1=no worklog 2=minimal */
             coa_strbuf nb;
             coa_strbuf_init(&nb);
             coa_strbuf_append(&nb, "## Session notes\n");
-            if (r->cur->sn_task[0]) coa_strbuf_appendf(&nb, "- 任务: %s\n", r->cur->sn_task);
-            if (r->cur->sn_state[0]) coa_strbuf_appendf(&nb, "- 状态: %s\n", r->cur->sn_state);
+            if (r->cur->sn_task[0])
+                coa_strbuf_appendf(&nb, "- 任务: %s\n", r->cur->sn_task);
+            if (r->cur->sn_state[0])
+                coa_strbuf_appendf(&nb, "- 状态: %s\n", r->cur->sn_state);
             if (lv < 2 && r->cur->sn_files[0])
                 coa_strbuf_appendf(&nb, "- 本会话涉及文件:\n%s", r->cur->sn_files);
             if (lv < 2 && r->cur->sn_errors[0])
@@ -328,22 +361,27 @@ static char *build_context(coa_reasoning *r, const char *prompt) {
         size_t keep_from = start;
         size_t total = 0;
         int over = 0;
-        for (size_t i = r->cur->hist_n; i-- > start; ) {
+        for (size_t i = r->cur->hist_n; i-- > start;) {
             size_t cost = (r->cur->hist_q[i] ? strlen(r->cur->hist_q[i]) : 0) +
                           (r->cur->hist_a[i] ? strlen(r->cur->hist_a[i]) : 0) + 24;
             total += cost;
-            if (total > (size_t)r->budget_hot) { keep_from = i + 1; over = 1; break; }
+            if (total > (size_t)r->budget_hot) {
+                keep_from = i + 1;
+                over = 1;
+                break;
+            }
         }
         for (size_t i = start; i < r->cur->hist_n; i++) {
             if (over && i < keep_from) {
                 char *qh = str_head(r->cur->hist_q[i], 120);
-                coa_strbuf_appendf(&b, "User: %s → Assistant: [earlier turn omitted]\n",
-                                  qh ? qh : "");
+                coa_strbuf_appendf(&b, "User: %s → Assistant: [earlier turn omitted]\n", qh ? qh : "");
                 free(qh);
                 continue;
             }
-            if (r->cur->hist_q[i]) coa_strbuf_appendf(&b, "User: %s\n", r->cur->hist_q[i]);
-            if (r->cur->hist_a[i]) coa_strbuf_appendf(&b, "Assistant: %s\n", r->cur->hist_a[i]);
+            if (r->cur->hist_q[i])
+                coa_strbuf_appendf(&b, "User: %s\n", r->cur->hist_q[i]);
+            if (r->cur->hist_a[i])
+                coa_strbuf_appendf(&b, "Assistant: %s\n", r->cur->hist_a[i]);
         }
         coa_strbuf_append(&b, "\n");
     }
@@ -376,23 +414,23 @@ static char *build_context(coa_reasoning *r, const char *prompt) {
                     cJSON *it = cJSON_GetArrayItem(arr, i);
                     cJSON *t = cJSON_GetObjectItem(it, "text");
                     cJSON *res = cJSON_GetObjectItem(it, "result");
-                    const char *txt = (t && t->valuestring) ? t->valuestring
-                        : (res && res->valuestring) ? res->valuestring : "";
+                    const char *txt = (t && t->valuestring)       ? t->valuestring
+                                      : (res && res->valuestring) ? res->valuestring
+                                                                  : "";
                     cands[i].text = txt;
                     cands[i].tags = "";
                     cands[i].boost = 0.0;
                 }
                 coa_attention_result ress[6];
-                int kmax = r->budget_cold >= 2400 ? 6
-                         : (r->budget_cold >= 1000 ? 3 : 1);
-                int k = coa_attention_select(r->attention, prompt, cands, (size_t)n,
-                                            ress, kmax);
+                int kmax = r->budget_cold >= 2400 ? 6 : (r->budget_cold >= 1000 ? 3 : 1);
+                int k = coa_attention_select(r->attention, prompt, cands, (size_t)n, ress, kmax);
                 char *rendered = NULL;
                 if (k > 0) {
                     cJSON *sel = cJSON_CreateArray();
                     for (int i = 0; i < k; i++) {
                         cJSON *it = cJSON_GetArrayItem(arr, ress[i].index);
-                        if (it) cJSON_AddItemToArray(sel, cJSON_Duplicate(it, 1));
+                        if (it)
+                            cJSON_AddItemToArray(sel, cJSON_Duplicate(it, 1));
                     }
                     char *sel_json = cJSON_PrintUnformatted(sel);
                     rendered = coa_context_render_text(sel_json);
@@ -416,7 +454,8 @@ static char *build_context(coa_reasoning *r, const char *prompt) {
                     free(rendered);
                 }
             }
-            if (arr) cJSON_Delete(arr);
+            if (arr)
+                cJSON_Delete(arr);
             free(ctx_json);
         }
     }
@@ -434,14 +473,14 @@ static char *build_context(coa_reasoning *r, const char *prompt) {
                     cJSON *l = cJSON_GetObjectItemCaseSensitive(it, "line");
                     cJSON *t = cJSON_GetObjectItemCaseSensitive(it, "term");
                     if (f && cJSON_IsString(f))
-                        coa_strbuf_appendf(&b, "- %s:%d (term: %s)\n",
-                                          f->valuestring,
-                                          l && cJSON_IsNumber(l) ? (int)l->valuedouble : 0,
-                                          t && cJSON_IsString(t) ? t->valuestring : "");
+                        coa_strbuf_appendf(&b, "- %s:%d (term: %s)\n", f->valuestring,
+                                           l && cJSON_IsNumber(l) ? (int)l->valuedouble : 0,
+                                           t && cJSON_IsString(t) ? t->valuestring : "");
                 }
                 coa_strbuf_append(&b, "\n");
             }
-            if (hroot) cJSON_Delete(hroot);
+            if (hroot)
+                cJSON_Delete(hroot);
         }
         free(hits);
     }
@@ -452,26 +491,23 @@ static char *build_context(coa_reasoning *r, const char *prompt) {
         coa_strbuf_appendf(&b, "## 之前轮次的动作结果 (第 %d/%d 轮)\n", r->round_idx - 1, r->max_rounds);
         coa_strbuf_append(&b, r->round_log);
         if (r->round_idx >= r->max_rounds)
-            coa_strbuf_append(&b,
-                "\n这是最后一轮。不要再调用任何工具，也不要输出 JSON 动作；"
-                "直接基于以上动作结果用纯文本给出最终答案（说明完成了什么、"
-                "或还缺什么信息）。\n\n");
+            coa_strbuf_append(&b, "\n这是最后一轮。不要再调用任何工具，也不要输出 JSON 动作；"
+                                  "直接基于以上动作结果用纯文本给出最终答案（说明完成了什么、"
+                                  "或还缺什么信息）。\n\n");
         else
-            coa_strbuf_append(&b,
-                "\n你是多轮 agent 循环：根据以上动作结果，(a) 任务已完成 → 直接用纯文本回答；"
-                "(b) 未完成 → 给出下一批 JSON 动作。不要重复已成功的动作。\n\n");
+            coa_strbuf_append(&b, "\n你是多轮 agent 循环：根据以上动作结果，(a) 任务已完成 → 直接用纯文本回答；"
+                                  "(b) 未完成 → 给出下一批 JSON 动作。不要重复已成功的动作。\n\n");
     }
 
     /* anti-pollution caution: history/notes/retrieved context are reference
      * only — the current request must always be planned and executed fresh */
-    coa_strbuf_append(&b,
-        "## 重要约束\n"
-        "- 上面的会话摘要、Session notes、Conversation history、Retrieved context 都只是背景参考，"
-        "不代表当前请求已经完成。\n"
-        "- 即使历史记录里出现过相似的任务，也必须针对「Current request」重新规划并实际执行动作，"
-        "不允许凭历史记录直接回答\"已完成\"。\n"
-        "- 回答中声称对文件做过任何改动，必须以本轮实际出现的 [tool] 动作结果为依据；"
-        "没有实际执行过对应动作，就不得声称做过。\n\n");
+    coa_strbuf_append(&b, "## 重要约束\n"
+                          "- 上面的会话摘要、Session notes、Conversation history、Retrieved context 都只是背景参考，"
+                          "不代表当前请求已经完成。\n"
+                          "- 即使历史记录里出现过相似的任务，也必须针对「Current request」重新规划并实际执行动作，"
+                          "不允许凭历史记录直接回答\"已完成\"。\n"
+                          "- 回答中声称对文件做过任何改动，必须以本轮实际出现的 [tool] 动作结果为依据；"
+                          "没有实际执行过对应动作，就不得声称做过。\n\n");
 
     /* Context MMU accounting: per-tier bytes of this prompt */
     if (r->metrics) {
@@ -493,22 +529,24 @@ static int h_reason(coa_state_machine *sm, void *ud, const char *input, char **o
     r->ok_actions = 0;
     r->denied_actions = 0;
     char *aug = build_context(r, input);
-    if (!r->llm) { free(aug); *out = coa_strdup("(no LLM provider configured)"); return 0; }
+    if (!r->llm) {
+        free(aug);
+        *out = coa_strdup("(no LLM provider configured)");
+        return 0;
+    }
     char *raw = NULL;
     char *plan_err = NULL;
-    int rc = coa_planner_plan_ex(r->llm, r->tools, r->skills, r->policy,
-                                aug ? aug : input,
-                                &r->actions, &r->n_actions, &raw, &plan_err);
+    int rc = coa_planner_plan_ex(r->llm, r->tools, r->skills, r->policy, aug ? aug : input, &r->actions, &r->n_actions,
+                                 &raw, &plan_err);
     free(aug);
     if (rc != 0 || !raw) {
         free(raw);
-        char *msg = plan_err
-            ? coa_strdup(plan_err)
-            : coa_strdup("(LLM 调用失败：请先用「测试」按钮验证模型配置 provider/key/base_url/model)");
+        char *msg = plan_err ? coa_strdup(plan_err)
+                             : coa_strdup("(LLM 调用失败：请先用「测试」按钮验证模型配置 provider/key/base_url/model)");
         free(plan_err);
         coa_log_error("reasoning: LLM returned no plan: %s", msg);
-        *out = msg;           /* surfaced as the task result on FAILED */
-        return -1; /* move to FAILED */
+        *out = msg; /* surfaced as the task result on FAILED */
+        return -1;  /* move to FAILED */
     }
     coa_log_info("reasoning: LLM plan: %s", raw);
     r->had_plan = r->n_actions > 0;
@@ -562,7 +600,8 @@ static int h_act(coa_state_machine *sm, void *ud, const char *input, char **out)
     tctx.mcp = r->mcp;
 
     coa_tx *tx = NULL;
-    if (r->use_transaction && r->snap) tx = coa_tx_begin(r->txm, r->snap, r->tools, &tctx);
+    if (r->use_transaction && r->snap)
+        tx = coa_tx_begin(r->txm, r->snap, r->tools, &tctx);
 
     /* Execution Runtime: all non-tx actions run behind the executor interface.
      * exec_backend routes shell commands through WSL / ssh by wrapping the
@@ -570,11 +609,12 @@ static int h_act(coa_state_machine *sm, void *ud, const char *input, char **out)
     coa_executor *exec = tx ? NULL : coa_executor_new_local(r->tools, &tctx, r->snap);
     if (exec && r->exec_backend && strcmp(r->exec_backend, "wsl") == 0) {
         coa_executor *w = coa_executor_new_wsl(exec, r->exec_host);
-        if (w) exec = w;
-    } else if (exec && r->exec_backend && strcmp(r->exec_backend, "remote") == 0 &&
-               r->exec_host && *r->exec_host) {
+        if (w)
+            exec = w;
+    } else if (exec && r->exec_backend && strcmp(r->exec_backend, "remote") == 0 && r->exec_host && *r->exec_host) {
         coa_executor *w = coa_executor_new_remote(exec, r->exec_host);
-        if (w) exec = w;
+        if (w)
+            exec = w;
     }
 
     for (int i = 0; i < r->n_actions; i++) {
@@ -585,17 +625,16 @@ static int h_act(coa_state_machine *sm, void *ud, const char *input, char **out)
          * pipeline (the planner sees the refusal in the next round). */
         if (r->policy) {
             const char *preason = NULL;
-            if (coa_policy_check(r->policy, r->actions[i].tool,
-                                r->actions[i].args_json, &preason) == COA_POLICY_DENY) {
+            if (coa_policy_check(r->policy, r->actions[i].tool, r->actions[i].args_json, &preason) == COA_POLICY_DENY) {
                 r->denied_actions++;
-                coa_strbuf_appendf(&b, "[%s] denied by policy (%s)\n",
-                                  r->actions[i].tool, preason ? preason : "rule");
+                coa_strbuf_appendf(&b, "[%s] denied by policy (%s)\n", r->actions[i].tool, preason ? preason : "rule");
                 char el[128];
                 snprintf(el, sizeof(el), "%s 被策略拒绝", r->actions[i].tool);
                 sn_append_line(r->cur->sn_errors, sizeof(r->cur->sn_errors), el);
                 snprintf(el, sizeof(el), "[%s] DENIED", r->actions[i].tool);
                 sn_append_line(r->cur->sn_worklog, sizeof(r->cur->sn_worklog), el);
-                if (r->metrics) coa_metrics_inc(r->metrics, "tools.denied");
+                if (r->metrics)
+                    coa_metrics_inc(r->metrics, "tools.denied");
                 continue;
             }
         }
@@ -620,18 +659,16 @@ static int h_act(coa_state_machine *sm, void *ud, const char *input, char **out)
                 cJSON *pj = g ? cJSON_GetObjectItemCaseSensitive(g, "plugin") : NULL;
                 cJSON *nj = pj ? cJSON_GetObjectItemCaseSensitive(pj, "name") : NULL;
                 if (okj && cJSON_IsTrue(okj) && nj && cJSON_IsString(nj) &&
-                    coa_tool_register_generated(r->tools, r->skills,
-                                               r->actions[i].tool, nj->valuestring) == 0) {
-                    coa_log_info("reasoning: auto-generated plugin '%s' bound as tool '%s'",
-                                nj->valuestring, r->actions[i].tool);
+                    coa_tool_register_generated(r->tools, r->skills, r->actions[i].tool, nj->valuestring) == 0) {
+                    coa_log_info("reasoning: auto-generated plugin '%s' bound as tool '%s'", nj->valuestring,
+                                 r->actions[i].tool);
                     /* persist the tool -> skill binding so the capability
                      * re-binds at startup instead of regenerating */
                     if (r->state_root)
-                        coa_tool_generated_save_mapping(r->state_root,
-                                                       r->actions[i].tool,
-                                                       nj->valuestring);
+                        coa_tool_generated_save_mapping(r->state_root, r->actions[i].tool, nj->valuestring);
                 }
-                if (g) cJSON_Delete(g);
+                if (g)
+                    cJSON_Delete(g);
                 free(gjson);
             }
         }
@@ -642,9 +679,9 @@ static int h_act(coa_state_machine *sm, void *ud, const char *input, char **out)
             cJSON *wrap = cJSON_CreateObject();
             if (wrap) {
                 cJSON_AddStringToObject(wrap, "tool", r->actions[i].tool);
-                cJSON *ho = r->actions[i].args_json
-                    ? cJSON_Parse(r->actions[i].args_json) : NULL;
-                if (ho) cJSON_AddItemToObject(wrap, "args", ho);
+                cJSON *ho = r->actions[i].args_json ? cJSON_Parse(r->actions[i].args_json) : NULL;
+                if (ho)
+                    cJSON_AddItemToObject(wrap, "args", ho);
                 hp = cJSON_PrintUnformatted(wrap);
                 cJSON_Delete(wrap);
             }
@@ -655,7 +692,8 @@ static int h_act(coa_state_machine *sm, void *ud, const char *input, char **out)
                 char el[128];
                 snprintf(el, sizeof(el), "%s 被 hook 拦截", r->actions[i].tool);
                 sn_append_line(r->cur->sn_errors, sizeof(r->cur->sn_errors), el);
-                if (r->metrics) coa_metrics_inc(r->metrics, "tools.hook_blocked");
+                if (r->metrics)
+                    coa_metrics_inc(r->metrics, "tools.hook_blocked");
                 continue;
             }
             free(hp);
@@ -665,13 +703,11 @@ static int h_act(coa_state_machine *sm, void *ud, const char *input, char **out)
             rc = coa_tx_run(tx, r->actions[i].tool, r->actions[i].args_json);
         } else if (exec) {
             coa_executor_result *er = NULL;
-            int erc = coa_executor_execute(exec, r->actions[i].tool,
-                                          r->actions[i].args_json, &er);
+            int erc = coa_executor_execute(exec, r->actions[i].tool, r->actions[i].args_json, &er);
             rc = (erc == 0 && er && er->ok) ? 0 : -1;
             if (er) {
                 /* executor output is already UTF-8 sanitized */
-                coa_strbuf_appendf(&b, "[%s] %s\n", r->actions[i].tool,
-                                 er->output ? er->output : "");
+                coa_strbuf_appendf(&b, "[%s] %s\n", r->actions[i].tool, er->output ? er->output : "");
                 coa_executor_result_free(er);
             }
         } else {
@@ -705,7 +741,8 @@ static int h_act(coa_state_machine *sm, void *ud, const char *input, char **out)
                         free(content);
                     }
                 }
-                if (ao) cJSON_Delete(ao);
+                if (ao)
+                    cJSON_Delete(ao);
             }
         }
         if (rc != 0) {
@@ -714,13 +751,11 @@ static int h_act(coa_state_machine *sm, void *ud, const char *input, char **out)
             sn_append_line(r->cur->sn_errors, sizeof(r->cur->sn_errors), el);
         }
         char wl[128];
-        snprintf(wl, sizeof(wl), "[%s] %s", r->actions[i].tool,
-                 rc == 0 ? "ok" : "FAILED");
+        snprintf(wl, sizeof(wl), "[%s] %s", r->actions[i].tool, rc == 0 ? "ok" : "FAILED");
         sn_append_line(r->cur->sn_worklog, sizeof(r->cur->sn_worklog), wl);
     }
     if (r->n_actions > 0) {
-        snprintf(r->cur->sn_state, sizeof(r->cur->sn_state), "%d/%d 个动作已执行%s",
-                 r->ok_actions, r->n_actions,
+        snprintf(r->cur->sn_state, sizeof(r->cur->sn_state), "%d/%d 个动作已执行%s", r->ok_actions, r->n_actions,
                  r->all_actions_ok ? "" : "，部分失败");
     }
     coa_executor_free(exec);
@@ -741,7 +776,8 @@ static int h_act(coa_state_machine *sm, void *ud, const char *input, char **out)
         }
         coa_tx_free(tx);
     }
-    if (r->metrics) coa_metrics_add(r->metrics, "actions.executed", (double)r->n_actions);
+    if (r->metrics)
+        coa_metrics_add(r->metrics, "actions.executed", (double)r->n_actions);
 
     *out = coa_strbuf_detach(&b);
     return 0;
@@ -759,8 +795,7 @@ static int h_verify(coa_state_machine *sm, void *ud, const char *input, char **o
     if (!coa_evaluator_verify(r->eval, r->all_actions_ok, eff_total, r->ok_actions)) {
         coa_strbuf b;
         coa_strbuf_init(&b);
-        coa_strbuf_appendf(&b, "%d/%d 个动作执行失败，各动作结果：\n",
-                          eff_total - r->ok_actions, eff_total);
+        coa_strbuf_appendf(&b, "%d/%d 个动作执行失败，各动作结果：\n", eff_total - r->ok_actions, eff_total);
         coa_strbuf_append(&b, (input && *input) ? input : "(无工具输出)");
         *out = coa_strbuf_detach(&b);
         return -1;
@@ -778,7 +813,10 @@ static int h_learn(coa_state_machine *sm, void *ud, const char *input, char **ou
     /* session notes: current task + end-of-run state */
     if (r->last_prompt && *r->last_prompt) {
         char *t = str_head(r->last_prompt, 200);
-        if (t) { snprintf(r->cur->sn_task, sizeof(r->cur->sn_task), "%s", t); free(t); }
+        if (t) {
+            snprintf(r->cur->sn_task, sizeof(r->cur->sn_task), "%s", t);
+            free(t);
+        }
     }
     snprintf(r->cur->sn_state, sizeof(r->cur->sn_state), "%s",
              r->all_actions_ok ? "上一任务已完成" : "上一任务部分失败");
@@ -787,9 +825,7 @@ static int h_learn(coa_state_machine *sm, void *ud, const char *input, char **ou
          * raw tool output into episodic memory; KG edges stay per-round */
         if (!r->had_plan || r->round_idx >= r->max_rounds) {
             char *shaped = str_head(input, LEARN_RESULT_CAP);
-            coa_memory_record_experience(r->mem,
-                                        r->last_prompt ? r->last_prompt : "(task)",
-                                        shaped ? shaped : input);
+            coa_memory_record_experience(r->mem, r->last_prompt ? r->last_prompt : "(task)", shaped ? shaped : input);
             free(shaped);
             /* consolidation automation: threshold+interval gated pass over the
              * episodes (semantic themes + procedural tool facts) */
@@ -800,15 +836,12 @@ static int h_learn(coa_state_machine *sm, void *ud, const char *input, char **ou
         if (r->last_prompt && r->n_actions > 0) {
             char *th = str_head(r->last_prompt, 80);
             for (int i = 0; i < r->n_actions; i++) {
-                coa_memory_record_edge(r->mem, th ? th : "(task)",
-                                      r->actions[i].tool, "used_tool");
-                if (strncmp(r->actions[i].tool, "file_", 5) == 0 &&
-                    r->actions[i].args_json) {
+                coa_memory_record_edge(r->mem, th ? th : "(task)", r->actions[i].tool, "used_tool");
+                if (strncmp(r->actions[i].tool, "file_", 5) == 0 && r->actions[i].args_json) {
                     cJSON *ao = cJSON_Parse(r->actions[i].args_json);
                     cJSON *pj = ao ? cJSON_GetObjectItemCaseSensitive(ao, "path") : NULL;
                     if (pj && cJSON_IsString(pj) && pj->valuestring)
-                        coa_memory_record_edge(r->mem, r->actions[i].tool,
-                                              pj->valuestring, "touched");
+                        coa_memory_record_edge(r->mem, r->actions[i].tool, pj->valuestring, "touched");
                     cJSON_Delete(ao);
                 }
             }
@@ -817,8 +850,7 @@ static int h_learn(coa_state_machine *sm, void *ud, const char *input, char **ou
         coa_memory_flush(r->mem);
     }
     if (r->metrics) {
-        double q = coa_evaluator_score(r->eval, r->n_actions, r->ok_actions,
-                                      r->all_actions_ok, input);
+        double q = coa_evaluator_score(r->eval, r->n_actions, r->ok_actions, r->all_actions_ok, input);
         coa_metrics_set(r->metrics, "reasoning.quality", q);
     }
     if (r->bus) {
@@ -831,9 +863,11 @@ static int h_learn(coa_state_machine *sm, void *ud, const char *input, char **ou
 }
 
 coa_reasoning *coa_reasoning_new(const coa_reasoning_config *cfg) {
-    if (!cfg || !cfg->llm || !cfg->tools) return NULL;
+    if (!cfg || !cfg->llm || !cfg->tools)
+        return NULL;
     coa_reasoning *r = calloc(1, sizeof(coa_reasoning));
-    if (!r) return NULL;
+    if (!r)
+        return NULL;
     coa_mutex_init(&r->sess_mtx);
     r->cur = session_get(r, NULL); /* default session, always present */
     r->llm = cfg->llm;
@@ -845,9 +879,9 @@ coa_reasoning *coa_reasoning_new(const coa_reasoning_config *cfg) {
     r->metrics = cfg->metrics;
     r->workspace = cfg->workspace ? coa_strdup(cfg->workspace) : NULL;
     r->use_transaction = cfg->use_transaction;
-    r->budget_hot   = cfg->budget_hot   > 0 ? cfg->budget_hot   : HIST_BUDGET;
-    r->budget_warm  = cfg->budget_warm  > 0 ? cfg->budget_warm  : 3072;
-    r->budget_cold  = cfg->budget_cold  > 0 ? cfg->budget_cold  : 4096;
+    r->budget_hot = cfg->budget_hot > 0 ? cfg->budget_hot : HIST_BUDGET;
+    r->budget_warm = cfg->budget_warm > 0 ? cfg->budget_warm : 3072;
+    r->budget_cold = cfg->budget_cold > 0 ? cfg->budget_cold : 4096;
     r->hyde = cfg->hyde ? 1 : 0;
     r->exec_backend = (cfg->exec_backend && *cfg->exec_backend) ? cfg->exec_backend : NULL;
     r->exec_host = (cfg->exec_host && *cfg->exec_host) ? cfg->exec_host : NULL;
@@ -859,9 +893,11 @@ coa_reasoning *coa_reasoning_new(const coa_reasoning_config *cfg) {
     /* 0 = use default; negative = unlimited (loop guards on round_idx only
      * hitting INT_MAX, so clamp to a practical upper bound) */
     r->max_rounds = cfg->max_rounds != 0 ? cfg->max_rounds : AGENT_LOOP_MAX_ROUNDS;
-    if (r->max_rounds < 0) r->max_rounds = 1000000;
+    if (r->max_rounds < 0)
+        r->max_rounds = 1000000;
     r->hooks = cfg->hooks;
-    if (r->hooks) coa_state_machine_set_hooks(r->sm, r->hooks);
+    if (r->hooks)
+        coa_state_machine_set_hooks(r->sm, r->hooks);
     r->txm = coa_tx_manager_new();
     r->eval = coa_evaluator_new();
     r->attention = coa_attention_new();
@@ -876,7 +912,8 @@ coa_reasoning *coa_reasoning_new(const coa_reasoning_config *cfg) {
 }
 
 void coa_reasoning_free(coa_reasoning *r) {
-    if (!r) return;
+    if (!r)
+        return;
     clear_actions(r);
     free(r->last_prompt);
     free(r->workspace);
@@ -895,17 +932,21 @@ void coa_reasoning_free(coa_reasoning *r) {
     free(r);
 }
 
-coa_state_machine *coa_reasoning_sm(coa_reasoning *r) { return r ? r->sm : NULL; }
+coa_state_machine *coa_reasoning_sm(coa_reasoning *r) {
+    return r ? r->sm : NULL;
+}
 
 void coa_reasoning_set_llm(coa_reasoning *r, coa_llm *llm) {
-    if (!r || !llm) return;
+    if (!r || !llm)
+        return;
     r->llm = llm;
 }
 
 /* Optional: route each run through the multi-provider router (weighted
  * round-robin). Pass NULL to revert to the single configured LLM. */
 void coa_reasoning_set_router(coa_reasoning *r, coa_router *router) {
-    if (!r) return;
+    if (!r)
+        return;
     r->router = router;
 }
 
@@ -914,49 +955,48 @@ void coa_reasoning_set_router(coa_reasoning *r, coa_router *router) {
  * summary, then drop those turns. On LLM failure the turns are kept and the
  * attempt is retried next threshold; 3 consecutive failures trip the breaker. */
 static void compact_history(coa_reasoning *r, size_t n_drop) {
-    if (!r || r->cur->hist_n == 0) return;
-    if (n_drop > r->cur->hist_n) n_drop = r->cur->hist_n;
-    if (n_drop == 0) return;
+    if (!r || r->cur->hist_n == 0)
+        return;
+    if (n_drop > r->cur->hist_n)
+        n_drop = r->cur->hist_n;
+    if (n_drop == 0)
+        return;
 
     coa_strbuf tb;
     coa_strbuf_init(&tb);
     for (size_t i = 0; i < n_drop; i++) {
-        coa_strbuf_appendf(&tb, "User: %s\nAssistant: %s\n\n",
-                          r->cur->hist_q[i] ? r->cur->hist_q[i] : "",
-                          r->cur->hist_a[i] ? r->cur->hist_a[i] : "");
+        coa_strbuf_appendf(&tb, "User: %s\nAssistant: %s\n\n", r->cur->hist_q[i] ? r->cur->hist_q[i] : "",
+                           r->cur->hist_a[i] ? r->cur->hist_a[i] : "");
     }
     char *turns = coa_strbuf_detach(&tb);
 
     coa_strbuf pb;
     coa_strbuf_init(&pb);
-    coa_strbuf_append(&pb,
-        "将以下早期对话压缩为结构化纪要，严格按以下 9 个小节输出（Markdown，"
-        "每节 1-4 行，没有内容的写「无」）：\n"
-        "1. 用户核心意图\n2. 技术概念与术语\n3. 涉及文件与代码\n4. 错误与修复\n"
-        "5. 用户全部消息要点\n6. 已完成事项\n7. 未完成待办\n8. 当前工作状态\n"
-        "9. 下一步建议\n"
-        "总长度不超过 2000 字，只输出纪要本身，不要任何前言。\n\n## 待压缩对话\n");
+    coa_strbuf_append(&pb, "将以下早期对话压缩为结构化纪要，严格按以下 9 个小节输出（Markdown，"
+                           "每节 1-4 行，没有内容的写「无」）：\n"
+                           "1. 用户核心意图\n2. 技术概念与术语\n3. 涉及文件与代码\n4. 错误与修复\n"
+                           "5. 用户全部消息要点\n6. 已完成事项\n7. 未完成待办\n8. 当前工作状态\n"
+                           "9. 下一步建议\n"
+                           "总长度不超过 2000 字，只输出纪要本身，不要任何前言。\n\n## 待压缩对话\n");
     coa_strbuf_append(&pb, turns ? turns : "");
     free(turns);
     char *user_prompt = coa_strbuf_detach(&pb);
 
-    char *sum = coa_llm_chat_simple(r->llm,
-                                   "你是会话压缩器。输出简体中文 Markdown 纪要。",
-                                   user_prompt);
+    char *sum = coa_llm_chat_simple(r->llm, "你是会话压缩器。输出简体中文 Markdown 纪要。", user_prompt);
     free(user_prompt);
     if (sum && *sum) {
         free(r->cur->summary);
         r->cur->summary = str_head(sum, COMPACT_SUMMARY_CAP);
-        if (!r->cur->summary) r->cur->summary = coa_strdup(sum);
+        if (!r->cur->summary)
+            r->cur->summary = coa_strdup(sum);
         r->cur->compact_fails = 0;
-        coa_log_info("reasoning: compacted %zu turns into a %zu-char summary",
-                    n_drop, strlen(r->cur->summary));
+        coa_log_info("reasoning: compacted %zu turns into a %zu-char summary", n_drop, strlen(r->cur->summary));
     } else {
         free(sum);
         r->cur->compact_fails++;
-        if (r->cur->compact_fails >= 3) r->cur->compact_disabled = 1; /* circuit breaker */
-        coa_log_warn("reasoning: compaction LLM call failed (%d consecutive)",
-                    r->cur->compact_fails);
+        if (r->cur->compact_fails >= 3)
+            r->cur->compact_disabled = 1; /* circuit breaker */
+        coa_log_warn("reasoning: compaction LLM call failed (%d consecutive)", r->cur->compact_fails);
         return; /* keep the turns; retry at the next threshold */
     }
     for (size_t i = 0; i < n_drop; i++) {
@@ -977,24 +1017,33 @@ static void compact_history(coa_reasoning *r, size_t n_drop) {
  * Short intent-sounding text on the first round is a premature loop stop —
  * the model meant to act. Long text is treated as a genuine answer. */
 static int looks_like_intent(const char *text) {
-    if (!text) return 0;
-    if (strlen(text) > 512) return 0;   /* long output is a real answer */
+    if (!text)
+        return 0;
+    if (strlen(text) > 512)
+        return 0; /* long output is a real answer */
     static const char *const marks[] = {
-        "I need to", "Let me", "I will", "I'll", "First,", "First ",
+        "I need to",
+        "Let me",
+        "I will",
+        "I'll",
+        "First,",
+        "First ",
         "I'm going to",
-        "\xe6\x88\x91\xe9\x9c\x80\xe8\xa6\x81",   /* 我需要 */
-        "\xe8\xae\xa9\xe6\x88\x91",               /* 让我   */
-        "\xe6\x88\x91\xe5\xb0\x86",               /* 我将   */
-        "\xe6\x88\x91\xe5\x85\x88",               /* 我先   */
-        "\xe7\xac\xac\xe4\xb8\x80\xe6\xad\xa5",   /* 第一步 */
+        "\xe6\x88\x91\xe9\x9c\x80\xe8\xa6\x81", /* 我需要 */
+        "\xe8\xae\xa9\xe6\x88\x91",             /* 让我   */
+        "\xe6\x88\x91\xe5\xb0\x86",             /* 我将   */
+        "\xe6\x88\x91\xe5\x85\x88",             /* 我先   */
+        "\xe7\xac\xac\xe4\xb8\x80\xe6\xad\xa5", /* 第一步 */
     };
     for (size_t i = 0; i < sizeof(marks) / sizeof(marks[0]); i++)
-        if (strstr(text, marks[i])) return 1;
+        if (strstr(text, marks[i]))
+            return 1;
     return 0;
 }
 
 static void record_turn(coa_reasoning *r, const char *q, const char *a) {
-    if (!r || !q || !a) return;
+    if (!r || !q || !a)
+        return;
     coa_mutex_lock(&r->cur->mtx);
     if (r->cur->hist_cap == 0) {
         r->cur->hist_cap = 16;
@@ -1010,8 +1059,10 @@ static void record_turn(coa_reasoning *r, const char *q, const char *a) {
     }
     r->cur->hist_q[r->cur->hist_n] = str_head(q, HIST_TURN_CAP);
     r->cur->hist_a[r->cur->hist_n] = str_head(a, HIST_TURN_CAP);
-    if (!r->cur->hist_q[r->cur->hist_n]) r->cur->hist_q[r->cur->hist_n] = coa_strdup(q);
-    if (!r->cur->hist_a[r->cur->hist_n]) r->cur->hist_a[r->cur->hist_n] = coa_strdup(a);
+    if (!r->cur->hist_q[r->cur->hist_n])
+        r->cur->hist_q[r->cur->hist_n] = coa_strdup(q);
+    if (!r->cur->hist_a[r->cur->hist_n])
+        r->cur->hist_a[r->cur->hist_n] = coa_strdup(a);
     r->cur->hist_n++;
     /* ring full → compact the oldest half via LLM instead of silent loss */
     if (r->cur->hist_n >= r->cur->hist_cap && !r->cur->compact_disabled && r->llm)
@@ -1019,12 +1070,14 @@ static void record_turn(coa_reasoning *r, const char *q, const char *a) {
     coa_mutex_unlock(&r->cur->mtx);
 }
 
-char *coa_reasoning_history_json_ex(coa_reasoning *r, const char *session_id,
-                                    int max_turns) {
-    if (!r) return coa_strdup("[]");
-    if (max_turns <= 0) max_turns = 20;
+char *coa_reasoning_history_json_ex(coa_reasoning *r, const char *session_id, int max_turns) {
+    if (!r)
+        return coa_strdup("[]");
+    if (max_turns <= 0)
+        max_turns = 20;
     struct coa_session *s = session_get(r, session_id);
-    if (!s) return coa_strdup("[]");
+    if (!s)
+        return coa_strdup("[]");
     coa_mutex_lock(&s->mtx);
     size_t start = (s->hist_n > (size_t)max_turns) ? s->hist_n - (size_t)max_turns : 0;
     cJSON *arr = cJSON_CreateArray();
@@ -1046,7 +1099,8 @@ char *coa_reasoning_history_json(coa_reasoning *r, int max_turns) {
 
 /* Sessions listing for the UI: [{id, turns, last_active_ms, task}]. */
 char *coa_reasoning_sessions_json(coa_reasoning *r) {
-    if (!r) return coa_strdup("[]");
+    if (!r)
+        return coa_strdup("[]");
     coa_mutex_lock(&r->sess_mtx);
     cJSON *arr = cJSON_CreateArray();
     for (size_t i = 0; i < r->nsessions; i++) {
@@ -1068,14 +1122,19 @@ char *coa_reasoning_sessions_json(coa_reasoning *r) {
 
 /* Clear one session's conversation (keeps the session itself). */
 int coa_reasoning_session_clear(coa_reasoning *r, const char *session_id) {
-    if (!r) return -1;
+    if (!r)
+        return -1;
     const char *want = (session_id && *session_id) ? session_id : "default";
     coa_mutex_lock(&r->sess_mtx);
     struct coa_session *s = NULL;
     for (size_t i = 0; i < r->nsessions; i++)
-        if (strcmp(r->sessions[i]->id, want) == 0) { s = r->sessions[i]; break; }
+        if (strcmp(r->sessions[i]->id, want) == 0) {
+            s = r->sessions[i];
+            break;
+        }
     coa_mutex_unlock(&r->sess_mtx);
-    if (!s) return -1;
+    if (!s)
+        return -1;
     coa_mutex_lock(&s->mtx);
     for (size_t i = 0; i < s->hist_n; i++) {
         free(s->hist_q[i]);
@@ -1094,19 +1153,21 @@ int coa_reasoning_run(coa_reasoning *r, const char *prompt, char **answer) {
     return coa_reasoning_run_ex(r, NULL, prompt, answer);
 }
 
-int coa_reasoning_run_ex(coa_reasoning *r, const char *session_id,
-                         const char *prompt, char **answer) {
-    if (!r || !prompt) return -1;
+int coa_reasoning_run_ex(coa_reasoning *r, const char *session_id, const char *prompt, char **answer) {
+    if (!r || !prompt)
+        return -1;
 
     /* select (or create) the chat session this run belongs to; the ctx
      * run-lock serializes runs, so swapping r->cur here is race-free */
     r->cur = session_get(r, session_id);
-    if (r->cur) r->cur->last_active_ms = (long long)coa_time_now_ms();
+    if (r->cur)
+        r->cur->last_active_ms = (long long)coa_time_now_ms();
 
     /* Ingestion guard: a prompt with invalid UTF-8 (e.g. a non-UTF-8 API
      * client) would poison memory/history and break every later LLM call. */
     char *safe_prompt = coa_str_utf8_sanitize(prompt);
-    if (safe_prompt) prompt = safe_prompt;
+    if (safe_prompt)
+        prompt = safe_prompt;
 
     /* Router: pick a provider for this run (weighted round-robin). */
     coa_llm *picked = NULL;
@@ -1115,14 +1176,18 @@ int coa_reasoning_run_ex(coa_reasoning *r, const char *session_id,
         const coa_route *rt = coa_router_pick(r->router);
         if (rt) {
             picked = coa_llm_create(rt->provider, rt->base_url, rt->api_key, rt->model);
-            if (picked) { saved = r->llm; r->llm = picked; }
+            if (picked) {
+                saved = r->llm;
+                r->llm = picked;
+            }
         }
     }
 
     free(r->last_prompt);
     r->last_prompt = coa_strdup(prompt);
     r->gen_attempted = 0; /* one auto-generation attempt per run */
-    if (r->mem) coa_memory_working_push(r->mem, prompt);
+    if (r->mem)
+        coa_memory_working_push(r->mem, prompt);
 
     /* lifecycle hook: a blocking before_run skips the whole run (a legitimate
      * refusal, like a policy denial — surfaced as the answer, not a failure) */
@@ -1137,8 +1202,10 @@ int coa_reasoning_run_ex(coa_reasoning *r, const char *session_id,
         int hb = coa_hook_dispatch(r->hooks, "agent.before_run", pj);
         free(pj);
         if (hb == 1) {
-            if (r->metrics) coa_metrics_inc(r->metrics, "tasks.hook_blocked");
-            if (answer) *answer = coa_strdup("(run blocked by hook)");
+            if (r->metrics)
+                coa_metrics_inc(r->metrics, "tasks.hook_blocked");
+            if (answer)
+                *answer = coa_strdup("(run blocked by hook)");
             free(safe_prompt);
             return 0;
         }
@@ -1149,12 +1216,14 @@ int coa_reasoning_run_ex(coa_reasoning *r, const char *session_id,
      * ends when the LLM stops proposing actions (final text answer) or the
      * round budget is exhausted. */
     round_log_reset(r);
-    free(r->last_plan_raw); r->last_plan_raw = NULL;
-    free(r->prev_plan);     r->prev_plan = NULL;
+    free(r->last_plan_raw);
+    r->last_plan_raw = NULL;
+    free(r->prev_plan);
+    r->prev_plan = NULL;
     r->stall_nudged = 0;
 
-    char *final_text = NULL;   /* LLM's plain-text answer (had_plan == 0) */
-    char *result = NULL;       /* per-round pipeline output */
+    char *final_text = NULL; /* LLM's plain-text answer (had_plan == 0) */
+    char *result = NULL;     /* per-round pipeline output */
     coa_state st = COA_ST_FAILED;
     int stalled = 0;
     for (r->round_idx = 1; r->round_idx <= r->max_rounds; r->round_idx++) {
@@ -1169,7 +1238,8 @@ int coa_reasoning_run_ex(coa_reasoning *r, const char *session_id,
              * retry with a fixed path). Terminal only when the budget is
              * exhausted, and the report stays in the answer either way. */
             round_log_append(r, result && *result ? result : "(run failed)");
-            if (r->round_idx >= r->max_rounds) break;
+            if (r->round_idx >= r->max_rounds)
+                break;
             continue;
         }
         if (!r->had_plan) { /* no actions planned → this is the final answer */
@@ -1182,11 +1252,10 @@ int coa_reasoning_run_ex(coa_reasoning *r, const char *session_id,
              * tasks keep their single-round answer. */
             if (r->round_idx == 1 && r->max_rounds > 1 && looks_like_intent(result)) {
                 round_log_append(r, result && *result ? result : "");
-                round_log_append(r,
-                    "[system] 上一轮只输出了意向说明，没有执行任何工具动作。"
-                    "如果任务还需要操作（读写文件、执行命令、生成文件等），"
-                    "请输出 JSON 动作数组并实际执行；"
-                    "只有任务确实无需任何工具即可回答时，才直接给出最终答案。");
+                round_log_append(r, "[system] 上一轮只输出了意向说明，没有执行任何工具动作。"
+                                    "如果任务还需要操作（读写文件、执行命令、生成文件等），"
+                                    "请输出 JSON 动作数组并实际执行；"
+                                    "只有任务确实无需任何工具即可回答时，才直接给出最终答案。");
                 continue;
             }
             final_text = coa_strdup(result ? result : "");
@@ -1199,16 +1268,14 @@ int coa_reasoning_run_ex(coa_reasoning *r, const char *session_id,
          * succeeded; answer from the observations instead of repeating them")
          * before giving up — models often re-emit a successful plan because
          * they lost track of the feedback, not because they are stuck. */
-        if (r->prev_plan && r->last_plan_raw &&
-            strcmp(r->prev_plan, r->last_plan_raw) == 0) {
+        if (r->prev_plan && r->last_plan_raw && strcmp(r->prev_plan, r->last_plan_raw) == 0) {
             if (!r->stall_nudged && r->round_idx < r->max_rounds) {
                 r->stall_nudged = 1;
                 free(r->prev_plan);
                 r->prev_plan = NULL;
-                round_log_append(r,
-                    "[system] 连续两轮计划完全相同，但这些动作都已成功执行，结果就在上面。"
-                    "不要重复已执行的动作：如果观察结果足以回答任务，直接用纯文本给出最终答案；"
-                    "否则给出与之前不同的下一步动作。");
+                round_log_append(r, "[system] 连续两轮计划完全相同，但这些动作都已成功执行，结果就在上面。"
+                                    "不要重复已执行的动作：如果观察结果足以回答任务，直接用纯文本给出最终答案；"
+                                    "否则给出与之前不同的下一步动作。");
                 continue;
             }
             stalled = 1;
@@ -1232,11 +1299,13 @@ int coa_reasoning_run_ex(coa_reasoning *r, const char *session_id,
         snprintf(tail, sizeof(tail), "%s", r->round_log + start);
         char *user = (char *)malloc(strlen(prompt) + sizeof(tail) + 64);
         if (user) {
-            snprintf(user, strlen(prompt) + sizeof(tail) + 64,
-                     "任务: %s\n\n已执行动作的观察记录（末段）:\n%s", prompt, tail);
+            snprintf(user, strlen(prompt) + sizeof(tail) + 64, "任务: %s\n\n已执行动作的观察记录（末段）:\n%s", prompt,
+                     tail);
             char *ans = coa_llm_chat_simple(r->llm, sys, user);
-            if (ans && *ans) final_text = ans;
-            else free(ans);
+            if (ans && *ans)
+                final_text = ans;
+            else
+                free(ans);
             free(user);
         }
     }
@@ -1244,28 +1313,34 @@ int coa_reasoning_run_ex(coa_reasoning *r, const char *session_id,
     /* compose the answer: everything that happened + the final reply */
     coa_strbuf out;
     coa_strbuf_init(&out);
-    if (r->round_log_len > 0) coa_strbuf_append(&out, r->round_log);
+    if (r->round_log_len > 0)
+        coa_strbuf_append(&out, r->round_log);
     if (final_text && *final_text) {
-        if (r->round_log_len > 0) coa_strbuf_append(&out, "\n回答: ");
+        if (r->round_log_len > 0)
+            coa_strbuf_append(&out, "\n回答: ");
         coa_strbuf_append(&out, final_text);
     } else if (r->round_log_len > 0) {
         if (stalled)
-            coa_strbuf_appendf(&out, "\n(连续两轮计划相同，已停止；任务可能未完全完成，第 %d/%d 轮)",
-                              r->round_idx, r->max_rounds);
+            coa_strbuf_appendf(&out, "\n(连续两轮计划相同，已停止；任务可能未完全完成，第 %d/%d 轮)", r->round_idx,
+                               r->max_rounds);
         else
             coa_strbuf_appendf(&out, "\n(已达到最大轮数 %d，任务可能未完全完成)", r->max_rounds);
     }
     free(final_text);
     free(result);
-    free(r->last_plan_raw); r->last_plan_raw = NULL;
-    free(r->prev_plan);     r->prev_plan = NULL;
+    free(r->last_plan_raw);
+    r->last_plan_raw = NULL;
+    free(r->prev_plan);
+    r->prev_plan = NULL;
     char *combined = coa_strbuf_detach(&out);
 
-    if (r->metrics) coa_metrics_inc(r->metrics, st == COA_ST_DONE ? "tasks.done" : "tasks.failed");
+    if (r->metrics)
+        coa_metrics_inc(r->metrics, st == COA_ST_DONE ? "tasks.done" : "tasks.failed");
 
     int ret = -1;
     if (st == COA_ST_DONE) {
-        if (r->mem) coa_memory_working_push(r->mem, combined);
+        if (r->mem)
+            coa_memory_working_push(r->mem, combined);
         record_turn(r, prompt, combined);
         if (r->hooks) {
             cJSON *o = cJSON_CreateObject();
@@ -1279,8 +1354,10 @@ int coa_reasoning_run_ex(coa_reasoning *r, const char *session_id,
                 cJSON_Delete(o);
             }
         }
-        if (answer) *answer = combined;
-        else free(combined);
+        if (answer)
+            *answer = combined;
+        else
+            free(combined);
         ret = 0;
     } else {
         if (r->hooks) {
@@ -1294,21 +1371,28 @@ int coa_reasoning_run_ex(coa_reasoning *r, const char *session_id,
                 cJSON_Delete(o);
             }
         }
-        if (answer) *answer = combined ? combined : coa_strdup("(pipeline failed)");
-        else free(combined);
+        if (answer)
+            *answer = combined ? combined : coa_strdup("(pipeline failed)");
+        else
+            free(combined);
         ret = -1;
     }
 
-    if (picked) { r->llm = saved; coa_llm_destroy(picked); }
+    if (picked) {
+        r->llm = saved;
+        coa_llm_destroy(picked);
+    }
     free(safe_prompt);
     return ret;
 }
 
 /* Session-memory snapshot: fixed-section notes + compaction state (JSON). */
 char *coa_reasoning_session_json(coa_reasoning *r) {
-    if (!r) return coa_strdup("{}");
+    if (!r)
+        return coa_strdup("{}");
     cJSON *o = cJSON_CreateObject();
-    if (!o) return coa_strdup("{}");
+    if (!o)
+        return coa_strdup("{}");
     cJSON_AddStringToObject(o, "task", r->cur->sn_task);
     cJSON_AddStringToObject(o, "state", r->cur->sn_state);
     cJSON_AddStringToObject(o, "files", r->cur->sn_files);
@@ -1325,14 +1409,15 @@ char *coa_reasoning_session_json(coa_reasoning *r) {
 /* HyDE primitive: LLM writes a hypothetical answer passage for `query`; the
  * caller embeds passage-to-passage for retrieval (see reasoning.h). */
 char *coa_hyde_passage(coa_llm *llm, const char *query) {
-    if (!llm || !query || !*query) return NULL;
+    if (!llm || !query || !*query)
+        return NULL;
     char prompt[1200];
     snprintf(prompt, sizeof(prompt),
              "Write a short passage (3-5 sentences) that directly answers the "
              "question. Output only the passage, no preamble.\n\nQuestion: %.900s",
              query);
     return coa_llm_chat_simple(llm,
-                              "You generate concise hypothetical answer passages "
-                              "used for semantic retrieval.",
-                              prompt);
+                               "You generate concise hypothetical answer passages "
+                               "used for semantic retrieval.",
+                               prompt);
 }

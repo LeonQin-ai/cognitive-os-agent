@@ -15,15 +15,18 @@ struct coa_capability {
 
 coa_capability *coa_capability_new(void) {
     coa_capability *c = (coa_capability *)calloc(1, sizeof(coa_capability));
-    if (!c) return NULL;
+    if (!c)
+        return NULL;
     coa_mutex_init(&c->mtx);
     return c;
 }
 
 void coa_capability_free(coa_capability *c) {
-    if (!c) return;
+    if (!c)
+        return;
     coa_mutex_lock(&c->mtx);
-    for (size_t i = 0; i < c->count; i++) free(c->caps[i]);
+    for (size_t i = 0; i < c->count; i++)
+        free(c->caps[i]);
     free(c->caps);
     c->caps = NULL;
     c->count = c->cap = 0;
@@ -34,18 +37,26 @@ void coa_capability_free(coa_capability *c) {
 
 static int find_cap(coa_capability *c, const char *cap) {
     for (size_t i = 0; i < c->count; i++)
-        if (strcmp(c->caps[i], cap) == 0) return (int)i;
+        if (strcmp(c->caps[i], cap) == 0)
+            return (int)i;
     return -1;
 }
 
 int coa_capability_grant(coa_capability *c, const char *cap) {
-    if (!c || !cap || !*cap) return -1;
+    if (!c || !cap || !*cap)
+        return -1;
     coa_mutex_lock(&c->mtx);
-    if (find_cap(c, cap) >= 0) { coa_mutex_unlock(&c->mtx); return -1; }
+    if (find_cap(c, cap) >= 0) {
+        coa_mutex_unlock(&c->mtx);
+        return -1;
+    }
     if (c->count == c->cap) {
         size_t ncap = c->cap ? c->cap * 2 : 8;
         char **nc = (char **)realloc(c->caps, ncap * sizeof(char *));
-        if (!nc) { coa_mutex_unlock(&c->mtx); return -1; }
+        if (!nc) {
+            coa_mutex_unlock(&c->mtx);
+            return -1;
+        }
         c->caps = nc;
         c->cap = ncap;
     }
@@ -55,10 +66,14 @@ int coa_capability_grant(coa_capability *c, const char *cap) {
 }
 
 int coa_capability_revoke(coa_capability *c, const char *cap) {
-    if (!c || !cap) return 0;
+    if (!c || !cap)
+        return 0;
     coa_mutex_lock(&c->mtx);
     int i = find_cap(c, cap);
-    if (i < 0) { coa_mutex_unlock(&c->mtx); return 0; }
+    if (i < 0) {
+        coa_mutex_unlock(&c->mtx);
+        return 0;
+    }
     free(c->caps[i]);
     if (c->count - i - 1 > 0)
         memmove(&c->caps[i], &c->caps[i + 1], (c->count - i - 1) * sizeof(char *));
@@ -68,7 +83,8 @@ int coa_capability_revoke(coa_capability *c, const char *cap) {
 }
 
 int coa_capability_has(coa_capability *c, const char *cap) {
-    if (!c || !cap) return 0;
+    if (!c || !cap)
+        return 0;
     coa_mutex_lock(&c->mtx);
     int r = find_cap(c, cap) >= 0;
     coa_mutex_unlock(&c->mtx);
@@ -76,7 +92,8 @@ int coa_capability_has(coa_capability *c, const char *cap) {
 }
 
 int coa_capability_count(coa_capability *c) {
-    if (!c) return 0;
+    if (!c)
+        return 0;
     coa_mutex_lock(&c->mtx);
     int n = (int)c->count;
     coa_mutex_unlock(&c->mtx);
@@ -86,27 +103,35 @@ int coa_capability_count(coa_capability *c) {
 /* prefix wildcard: "fs.*" matches "fs.read", "net.*" matches "net" and "net.http". */
 static int wild_match(const char *pat, const char *s) {
     const char *star = strchr(pat, '*');
-    if (!star) return strcmp(pat, s) == 0;
+    if (!star)
+        return strcmp(pat, s) == 0;
     size_t plen = (size_t)(star - pat);
     /* drop a trailing '.' so "net.*" also matches a bare "net" capability */
     size_t pfix = plen;
-    if (pfix > 0 && pat[pfix - 1] == '.') pfix--;
-    if (strlen(s) < pfix) return 0;
+    if (pfix > 0 && pat[pfix - 1] == '.')
+        pfix--;
+    if (strlen(s) < pfix)
+        return 0;
     return strncmp(pat, s, pfix) == 0;
 }
 
 int coa_capability_match(coa_capability *c, const char *pattern) {
-    if (!c || !pattern) return 0;
+    if (!c || !pattern)
+        return 0;
     coa_mutex_lock(&c->mtx);
     int r = 0;
     for (size_t i = 0; i < c->count; i++)
-        if (wild_match(pattern, c->caps[i])) { r = 1; break; }
+        if (wild_match(pattern, c->caps[i])) {
+            r = 1;
+            break;
+        }
     coa_mutex_unlock(&c->mtx);
     return r;
 }
 
 char *coa_capability_json(coa_capability *c) {
-    if (!c) return coa_strdup("[]");
+    if (!c)
+        return coa_strdup("[]");
     coa_mutex_lock(&c->mtx);
     cJSON *arr = cJSON_CreateArray();
     if (arr)
@@ -114,6 +139,7 @@ char *coa_capability_json(coa_capability *c) {
             cJSON_AddItemToArray(arr, cJSON_CreateString(c->caps[i]));
     coa_mutex_unlock(&c->mtx);
     char *s = arr ? cJSON_PrintUnformatted(arr) : NULL;
-    if (arr) cJSON_Delete(arr);
+    if (arr)
+        cJSON_Delete(arr);
     return s ? s : coa_strdup("[]");
 }

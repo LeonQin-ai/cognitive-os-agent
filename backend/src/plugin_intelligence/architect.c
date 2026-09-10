@@ -42,6 +42,7 @@ char *coa_architect_design(const char *goal) {
         cJSON_AddItemToObject(out, "interfaces", ifaces);
     }
     char *s = out ? cJSON_PrintUnformatted(out) : NULL;
-    if (out) cJSON_Delete(out);
+    if (out)
+        cJSON_Delete(out);
     return s ? s : coa_strdup("{}");
 }
