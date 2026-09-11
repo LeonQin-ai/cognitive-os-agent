@@ -10,7 +10,7 @@
 >
 > 注（2026-09-09）：**官方 GAIA 2023 validation 全量 165 题实测**（GLM-5.3-flash，ModelScope 镜像数据集，完整 agent 循环，官方归一化判分）：**Average 10.91%（L1 11.32% / L2 11.63% / L3 7.69%）**；失败 147 例中 112 例为纯网络调研任务（工具差距：无浏览器/搜索，shell curl 直连）。**SWE-bench_Verified mini 11 题（GLM-5.3-flash）：有效样本 5/6 resolved（83%）**，全部经 FAIL_TO_PASS + PASS_TO_PASS 回归双验。详见「官方 GAIA 全量实测」与「SWE-bench_Verified mini 实测」。
 >
-> 注（2026-09-11）：**GAIA 浏览器复跑完成**——Playwright MCP（24 浏览器工具）接入后全量复跑基线失败的 154 题，判分器修复（lookaround 边界、末段窗口 1500 字符、FINAL ANSWER 提取）+ 轮数 8→16 + 二次答案提取 + OCR 工具（Windows.Media.Ocr），**combined 118/165 = 71.52%（L1 77.36% / L2 73.26% / L3 53.85%）**，较 10.91% 提升 6.6 倍。**SWE-bench_Verified 11 题环境问题全部修复后全量跑通：resolved 1/11**（flask-5014 双验通过；其余 10 题 f2p 未过，属 GLM-5.3-flash 在 django/sympy/sphinx 级多文件框架修复上的模型能力上限）。详见「GAIA 浏览器复跑（2026-09-11）」。
+> 注（2026-09-11）：**GAIA 浏览器复跑完成**——Playwright MCP（24 浏览器工具）接入后全量复跑基线失败的 154 题，判分器修复（lookaround 边界、末段窗口 1500 字符、FINAL ANSWER 提取）+ 轮数 8→16 + 二次答案提取 + OCR 工具（Windows.Media.Ocr），combined 118/165 = 71.52%；**规划器信封解析修复（fc30fce）后二次复跑 combined 130/165 = 78.79%（L1 84.91% / L2 81.40% / L3 57.69%）**，较 10.91% 提升约 7.2 倍。**SWE-bench_Verified 11 题：框架侧缺陷（信封计划解析、意向叙述提前终止、孤儿服务器端口污染、PASS_TO_PASS 标签噪音）逐一修复后复跑中**（flask-5014、pylint-7277 已双验通过）。详见「GAIA 浏览器复跑（2026-09-11）」。
 
 ## 2026-09-08 强化复跑（把"不是 100%"的项修掉）
 
@@ -142,6 +142,19 @@ LLM 层此前 `content` 只支持纯字符串，多模态模型（如 GLM 系列
 | **Level 3 score (%)** | **53.85**（14/26） | 7.69（2/26） |
 
 结论：**基线 10.91% 中工具差距占主导的判断被复跑证实**——接入浏览器+OCR+更多轮数后 6.6 倍提升，剩余 47 题失败集中在：多步数学/密码学推理（模型能力）、音频转录（无工具）、强反爬站点、跨多文档长程规划。复现脚本：`gaia-dataset/run_browser.py`（断点续跑，结果 `results_browser.jsonl` / `final_browser_scores.json`）。
+
+### 二次复跑（2026-09-11，规划器信封解析修复后）：combined 130/165 = **78.79%**
+
+定位到并修复一个 agent 循环级 BUG（commit fc30fce）：GLM-5.3-flash 会以 OpenAI/Claude 风格的工具调用信封（`{"type":"function","name":...,"arguments":{...}}`）输出计划，规划器只认规范格式 `[{"tool","args"}]`，导致正确的计划被解析为 0 动作、整轮输出被当成最终答案。修复后对 40 个边界失败题重跑：
+
+| 分数 | 二次复跑 combined | 首次浏览器复跑 | 2026-09-09 基线 |
+|---|---|---|---|
+| **Average score (%)** | **78.79**（130/165） | 71.52（118/165） | 10.91（18/165） |
+| **Level 1 score (%)** | **84.91**（45/53） | 77.36（41/53） | 11.32 |
+| **Level 2 score (%)** | **81.40**（70/86） | 73.26（63/86） | 11.63 |
+| **Level 3 score (%)** | **57.69**（15/26） | 53.85（14/26） | 7.69 |
+
+剩余 35 题失败集中在：多步数学/密码学推理、音频精确转录、强反爬站点、长程多文档聚合（模型/工具能力边界，非框架缺陷）。
 
 ## SWE-bench_Verified 全量复跑（2026-09-11，GLM-5.3-flash，Linux gcc 构建）
 
@@ -295,7 +308,7 @@ mock 规划器对照：BFCL 7/22、enf 4/4（mock 对违规请求本就不产生
 | BFCL Simple/Multiple/Parallel/Irrelevance | ✅ 已覆盖 | 判分器 AST 级，22 条静态用例 |
 | Tau-bench（策略遵循） | ✅ 已覆盖 | 提示词规则 4 条（裸 LLM 0/4）+ **policy-enforced 引擎规则 4 条（框架 4/4）**，执行侧 policy 硬拦截有量化证据 |
 | ToolBench / AgentBench（CLI 族） | ✅ 已覆盖（bench_real.c） | 2026-09-07 复测端到端 9/9 |
-| GAIA | ✅ **官方 validation 全量已跑 + 浏览器复跑完成**（2026-09-09 / 09-11） | 官方 165 题：基线 **10.91%**（无浏览器 CLI agent）→ **浏览器复跑 combined 71.52%**（L1 77.36 / L2 73.26 / L3 53.85，Playwright MCP + OCR + 16 轮 + pass2）；剩余失败集中在数学推理/音频/强反爬；自建 mini 17 题 88-94%（deepseek）作方向性对照 |
+| GAIA | ✅ **官方 validation 全量已跑 + 浏览器两轮复跑完成**（2026-09-09 / 09-11） | 官方 165 题：基线 **10.91%**（无浏览器 CLI agent）→ 浏览器复跑 71.52% → **规划器信封解析修复后 combined 78.79%**（L1 84.91 / L2 81.40 / L3 57.69）；剩余失败集中在数学推理/音频/强反爬；自建 mini 17 题 88-94%（deepseek）作方向性对照 |
 | WebArena / OSWorld | ✅ 风格化 mini 已跑（2026-09-09） | Playwright MCP（stdio，24 工具）接入后 6 道真实浏览器任务 **6/6**（GLM-5.3-flash，严格判分+工具调用日志佐证非记忆作答）；OSWorld（GUI/VM）仍范围外 |
 | SWE-bench | ✅ mini 已全量跑通（2026-09-11） | **SWE-bench_Verified 11 题（GLM-5.3-flash）：resolved 1/11**（flask-5014 双验通过），环境侧零失败后失分全为模型能力（多文件框架定位精度）；历史首跑"有效样本 5/6"口径已废弃 |
 

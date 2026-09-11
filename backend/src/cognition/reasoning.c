@@ -147,6 +147,7 @@ struct reasoning {
     int max_rounds;      /* from config (default AGENT_LOOP_MAX_ROUNDS) */
     int round_idx;       /* 1-based round currently executing */
     int stall_nudged;    /* one-shot stall-recovery nudge already given */
+    int intent_nudged;   /* intent-narration nudges given this run (bounded) */
     int had_plan;        /* last REASON produced tool actions (vs final text) */
     char *last_plan_raw; /* this round's raw plan (stall detection) */
     char *prev_plan;     /* previous round's raw plan (stall detection) */
@@ -1011,12 +1012,13 @@ static void compact_history(reasoning *r, size_t n_drop) {
 /* Heuristic: the model narrated what it is about to do ("Let me check…",
  * "我需要先…") instead of emitting a JSON action array or a real answer.
  * Short intent-sounding text on the first round is a premature loop stop —
- * the model meant to act. Long text is treated as a genuine answer. */
+ * the model meant to act. NOTE: no length cap — chatty reasoning models
+ * (e.g. GLM) emit multi-KB deliberation prose that is still narration, not
+ * an answer; a nudge that wrongly fires on a real answer costs one round
+ * (the bound re-accepts the text), while missing narration ends the run. */
 static int looks_like_intent(const char *text) {
     if (!text)
         return 0;
-    if (strlen(text) > 512)
-        return 0; /* long output is a real answer */
     static const char *const marks[] = {
         "I need to",
         "Let me",
@@ -1025,6 +1027,11 @@ static int looks_like_intent(const char *text) {
         "First,",
         "First ",
         "I'm going to",
+        "Let's",
+        "I should",
+        "Hmm",
+        "I recall",
+        "Wait,",
         "\xe6\x88\x91\xe9\x9c\x80\xe8\xa6\x81", /* 我需要 */
         "\xe8\xae\xa9\xe6\x88\x91",             /* 让我   */
         "\xe6\x88\x91\xe5\xb0\x86",             /* 我将   */
@@ -1217,6 +1224,7 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     free(r->prev_plan);
     r->prev_plan = NULL;
     r->stall_nudged = 0;
+    r->intent_nudged = 0;
 
     char *final_text = NULL; /* LLM's plain-text answer (had_plan == 0) */
     char *result = NULL;     /* per-round pipeline output */
@@ -1239,19 +1247,25 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
             continue;
         }
         if (!r->had_plan) { /* no actions planned → this is the final answer */
-            /* Round-1 intent narration ("Let me check the files…") without a
-             * single action is a premature stop: the model announced its plan
-             * instead of emitting the JSON action array. Give it one nudge
-             * round — the narration and a corrective note go into the round
-             * log, which the next round's planner context shows. Only fires
-             * once (round 1) and only when more rounds remain, so chat-style
-             * tasks keep their single-round answer. */
-            if (r->round_idx == 1 && r->max_rounds > 1 && looks_like_intent(result)) {
+            /* Intent narration ("Let me check the files…") without a single
+             * action is a premature stop: the model announced its plan
+             * instead of emitting the JSON action array. Narration is NOT
+             * confined to round 1, and chatty models narrate repeatedly, so
+             * nudge on ANY round — bounded by CONSECUTIVE narration rounds
+             * (reset whenever a round executes a plan), not a per-run total:
+             * a narration → plan → narration pattern is normal thinking
+             * aloud, while the model stuck narrating 4 rounds in a row will
+             * not recover. After the bound, the text is accepted as the
+             * final answer. */
+            if (r->max_rounds > 1 && r->intent_nudged < 4 &&
+                r->round_idx < r->max_rounds && looks_like_intent(result)) {
+                r->intent_nudged++;
                 round_log_append(r, result && *result ? result : "");
                 round_log_append(r, "[system] 上一轮只输出了意向说明，没有执行任何工具动作。"
                                     "如果任务还需要操作（读写文件、执行命令、生成文件等），"
                                     "请输出 JSON 动作数组并实际执行；"
-                                    "只有任务确实无需任何工具即可回答时，才直接给出最终答案。");
+                                    "如果任务已经完成或确实无需任何工具，"
+                                    "请直接给出最终答案文本。");
                 continue;
             }
             final_text = xstrdup(result ? result : "");
@@ -1259,6 +1273,7 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
         }
         /* executed a planned round: keep the observation for the next round */
         round_log_append(r, result ? result : "");
+        r->intent_nudged = 0; /* narration recovered: reset the consecutive bound */
         /* stall detection: the LLM proposed the exact same plan twice — no
          * progress is possible. Give ONE recovery nudge ("the actions already
          * succeeded; answer from the observations instead of repeating them")
