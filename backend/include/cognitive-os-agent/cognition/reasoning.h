@@ -23,7 +23,7 @@ typedef struct state_machine state_machine;
 typedef struct hook_registry hook_registry;
 
 struct skill_registry;  /* skill.h */
-struct index;           /* retrieval/engine.h */
+struct ret_index;         /* retrieval/engine.h */
 struct plugin_registry; /* plugin_runtime/registry.h */
 
 typedef struct reasoning_config {
@@ -38,7 +38,7 @@ typedef struct reasoning_config {
     int use_transaction;                         /* wrap actions in a tx when snapshot present */
     struct skill_registry *skills;           /* advertised to the planner + skill tool (may be NULL) */
     struct mcp_manager *mcp;                 /* MCP connections for the mcp tool + sync (may be NULL) */
-    struct index *index;                     /* code index; touched files are indexed (may be NULL) */
+    struct ret_index *index;                  /* code index; touched files are indexed (may be NULL) */
     struct plugin_registry *plugin_registry; /* for missing-capability auto-generation */
     const char *state_root;                      /* state dir for plugin generation (may be NULL) */
     int max_rounds;                              /* agent-loop rounds per run (0 = default 8; 1 = single-shot) */

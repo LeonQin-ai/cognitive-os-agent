@@ -850,7 +850,7 @@ static void test_executor_family(void) {
 /* ---------- knowledge index ---------- */
 static void test_index(void) {
     section("knowledge");
-    index *idx = index_new();
+    ret_index *idx = index_new();
     CHECK(idx != NULL);
     CHECK(index_add_file(idx, "src/a.c", "int widget_init(void) { return 0; }") == 0);
     /* indexing and query tokenization are consistent (underscore is a word char) */

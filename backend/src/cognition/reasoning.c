@@ -121,7 +121,7 @@ struct reasoning {
     struct session *cur;
 
     /* code index: touched files are indexed for term -> file:line recall */
-    struct index *index;
+    struct ret_index *index;
 
     /* missing-capability auto-generation (self-evolution loop) */
     struct plugin_registry *plugin_registry;
