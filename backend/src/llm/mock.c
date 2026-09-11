@@ -316,6 +316,16 @@ static char *mock_respond(const char *msg) {
         return out ? out : xstrdup("[]");
     }
 
+    /* regression fixture: OpenAI tool-call envelope plan — planner.c must
+     * parse this into real actions instead of dropping it (SWE-bench bug) */
+    if (strstr(msg, "信封计划")) {
+        return xstrdup(
+            "[{\"type\":\"function\",\"name\":\"file_write\","
+            "\"arguments\":{\"path\":\"test/env.txt\",\"content\":\"hi\"}},"
+            "{\"type\":\"function\",\"name\":\"file_read\","
+            "\"arguments\":{\"path\":\"test/env.txt\"}}]");
+    }
+
     if (want_write || want_read) {
         char *path = find_path(msg);
         cJSON *arr = cJSON_CreateArray();

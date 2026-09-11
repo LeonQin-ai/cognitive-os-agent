@@ -1357,6 +1357,20 @@ static void test_planner(void) {
     CHECK(raw != NULL);
     planner_actions_free(actions, n);
     free(raw);
+
+    /* regression: OpenAI/Claude tool-call envelope plans must parse into
+     * actions, not be silently dropped as a final answer (SWE-bench f2p=0) */
+    actions = NULL;
+    n = -1;
+    raw = NULL;
+    CHECK(planner_plan(llm, "信封计划: 写 test/env.txt", &actions, &n, &raw, NULL) == 0);
+    CHECK(n == 2);
+    if (n == 2 && actions) {
+        CHECK_STR(actions[0].tool, "file_write");
+        CHECK_STR(actions[1].tool, "file_read");
+    }
+    planner_actions_free(actions, n);
+    free(raw);
     llm_destroy(llm);
 }
 

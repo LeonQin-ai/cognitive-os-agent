@@ -181,6 +181,25 @@ static char *extract_json_span(const char *plan) {
 /* Try to parse a reply into tool actions. Returns 1 when actions were built
  * (possibly zero if the array was empty), 0 when the reply is prose without
  * any tool plan. */
+/* Normalize an args value to a JSON-object string. Accepts an object as-is
+ * and a string that itself contains JSON (OpenAI wire format). */
+static char *args_to_json(cJSON *args) {
+    if (!args)
+        return xstrdup("{}");
+    if (cJSON_IsObject(args))
+        return cJSON_PrintUnformatted(args);
+    if (cJSON_IsString(args) && args->valuestring) {
+        cJSON *p = cJSON_Parse(args->valuestring);
+        if (p) {
+            char *s = cJSON_IsObject(p) ? cJSON_PrintUnformatted(p) : NULL;
+            cJSON_Delete(p);
+            if (s)
+                return s;
+        }
+    }
+    return xstrdup("{}");
+}
+
 static int parse_plan_actions(const char *plan, planned_action **actions, int *n_actions) {
     *actions = NULL;
     *n_actions = 0;
@@ -211,12 +230,28 @@ static int parse_plan_actions(const char *plan, planned_action **actions, int *n
         if (!cJSON_IsObject(it))
             continue;
         cJSON *tool = cJSON_GetObjectItemCaseSensitive(it, "tool");
+        cJSON *args = cJSON_GetObjectItemCaseSensitive(it, "args");
+        if (!tool || !cJSON_IsString(tool)) {
+            /* models occasionally drift into the OpenAI/Claude tool-call
+             * envelope; a plan parsed to zero actions used to be treated as
+             * the final answer, silently dropping real edits (SWE-bench
+             * f2p=0 failures). Accept:
+             *   {"type":"function","name":"<tool>","arguments":{...}}
+             *   {"function":{"name":"<tool>","arguments":"{...}"}}  */
+            cJSON *fn = cJSON_GetObjectItemCaseSensitive(it, "function");
+            if (!fn && cJSON_GetObjectItemCaseSensitive(it, "name") &&
+                cJSON_GetObjectItemCaseSensitive(it, "arguments"))
+                fn = it; /* flat envelope */
+            if (fn) {
+                tool = cJSON_GetObjectItemCaseSensitive(fn, "name");
+                args = cJSON_GetObjectItemCaseSensitive(fn, "arguments");
+            } else if (tool && cJSON_IsString(tool) && !args) {
+                args = cJSON_GetObjectItemCaseSensitive(it, "arguments");
+            }
+        }
         if (!tool || !cJSON_IsString(tool))
             continue;
-        cJSON *args = cJSON_GetObjectItemCaseSensitive(it, "args");
-        char *args_json = (args && cJSON_IsObject(args)) ? cJSON_PrintUnformatted(args) : xstrdup("{}");
-        if (!args_json)
-            args_json = xstrdup("{}");
+        char *args_json = args_to_json(args);
         planned_action *na = (planned_action *)realloc(a, (size_t)(n + 1) * sizeof(planned_action));
         if (!na) {
             free(args_json);
