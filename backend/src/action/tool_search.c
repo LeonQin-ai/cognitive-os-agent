@@ -342,12 +342,18 @@ static void grep_walk(const char *root, const char *rel, grep_state *g) {
         }
         fs_list_free(&dl);
     } else {
-        /* file: apply the optional glob name filter */
-        const char *base = strrchr(rel, '/');
-        base = base ? base + 1 : rel;
+        /* file: apply the optional glob name filter. rel is NULL on the
+         * top-level call; when the resolved root itself is a FILE (the
+         * model plans grep with path=<a .py file>) the old
+         * strrchr(rel, '/') dereferenced NULL and crashed the server
+         * (SWE-bench sympy instances died mid-run with SIGSEGV in
+         * libc). Guard it and display the resolved path instead. */
+        const char *disp = rel ? rel : full;
+        const char *base = strrchr(disp, '/');
+        base = base ? base + 1 : disp;
         if (!name_glob_ok(base, g->file_glob))
             return;
-        grep_file(rel, full, g);
+        grep_file(disp, full, g);
     }
 }
 
