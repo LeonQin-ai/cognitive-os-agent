@@ -65,6 +65,21 @@ const coa_tool *coa_tool_find(coa_tool_registry *reg, const char *name) {
     return NULL;
 }
 
+int coa_tool_unregister(coa_tool_registry *reg, const char *name) {
+    if (!reg || !name)
+        return 0;
+    for (size_t i = 0; i < reg->count; i++) {
+        if (strcmp(reg->tools[i]->name, name) == 0) {
+            if (i < reg->count - 1)
+                memmove(reg->tools + i, reg->tools + i + 1,
+                        (reg->count - i - 1) * sizeof(coa_tool *));
+            reg->count--;
+            return 1;
+        }
+    }
+    return 0;
+}
+
 int coa_tool_registry_count(const coa_tool_registry *reg) {
     return reg ? (int)reg->count : 0;
 }

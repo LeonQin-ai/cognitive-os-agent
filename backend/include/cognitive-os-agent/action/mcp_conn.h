@@ -35,7 +35,10 @@ int coa_mcp_manager_add_ex(coa_mcp_manager *m, const coa_mcp_conn *conn);
 
 /* Legacy thin wrapper: adds an "http" connection. 0 ok, -1 invalid. */
 int coa_mcp_manager_add(coa_mcp_manager *m, const char *name, const char *url, const char *token);
-int coa_mcp_manager_remove(coa_mcp_manager *m, const char *name);
+/* Remove a connection; when reg is given the server's dynamic tools
+ * (mcp__<slug>__*) are unregistered and freed as well. */
+int coa_mcp_manager_remove(coa_mcp_manager *m, const char *name,
+                           struct coa_tool_registry *reg);
 
 /* Borrowed lookups (valid until next mutation). */
 const coa_mcp_conn *coa_mcp_manager_find(coa_mcp_manager *m, const char *name);

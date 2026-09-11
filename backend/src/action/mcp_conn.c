@@ -50,6 +50,8 @@ struct coa_mcp_manager {
 
 static long g_jsonrpc_id = 1;
 
+static void mcp_server_slug(const char *server, char *out, size_t cap); /* defined below */
+
 static void conn_free(coa_mcp_conn *c) {
     free(c->name);
     free(c->transport);
@@ -173,7 +175,8 @@ int coa_mcp_manager_add(coa_mcp_manager *m, const char *name, const char *url, c
     return coa_mcp_manager_add_ex(m, &c);
 }
 
-int coa_mcp_manager_remove(coa_mcp_manager *m, const char *name) {
+int coa_mcp_manager_remove(coa_mcp_manager *m, const char *name,
+                           struct coa_tool_registry *reg) {
     if (!m || !name)
         return -1;
     coa_mutex_lock(&m->mtx);
@@ -189,6 +192,29 @@ int coa_mcp_manager_remove(coa_mcp_manager *m, const char *name) {
         memmove(&m->sess[i], &m->sess[i + 1], (m->count - (size_t)i - 1) * sizeof(coa_mcp_session));
     }
     m->count--;
+    /* unregister the server's dynamic tools (mcp__<slug>__*) so deleted
+     * servers do not leave zombie entries the agent can still call */
+    if (reg) {
+        char slug[128];
+        mcp_server_slug(name, slug, sizeof(slug));
+        char prefix[160];
+        snprintf(prefix, sizeof(prefix), "mcp__%s__", slug);
+        size_t plen = strlen(prefix);
+        for (size_t k = m->n_owned; k-- > 0;) {
+            const char *tn = m->owned[k]->name;
+            if (tn && strncmp(tn, prefix, plen) == 0) {
+                coa_tool_unregister(reg, tn);
+                free((void *)m->owned[k]->name);
+                free((void *)m->owned[k]->description);
+                free((void *)m->owned[k]->json_schema);
+                free(m->owned[k]->ud);
+                free(m->owned[k]);
+                memmove(m->owned + k, m->owned + k + 1,
+                        (m->n_owned - k - 1) * sizeof(*m->owned));
+                m->n_owned--;
+            }
+        }
+    }
     coa_mutex_unlock(&m->mtx);
     return 0;
 }
@@ -216,12 +242,14 @@ int coa_mcp_manager_count(coa_mcp_manager *m) {
 
 /* ---- stdio transport helpers ---- */
 
-/* Split args_csv on whitespace into a NULL-terminated argv. */
+/* Split args_csv on whitespace/commas into a NULL-terminated argv. */
 static char **stdio_argv(const coa_mcp_conn *c) {
     size_t max = 4;
     if (c->args_csv)
+        /* count every possible separator: strtok_r below splits on all of
+         * these, so undercounting would overflow the argv allocation */
         for (const char *p = c->args_csv; *p; p++)
-            if (*p == ' ')
+            if (*p == ' ' || *p == '\t' || *p == ',')
                 max++;
     char **argv = (char **)calloc(max + 2, sizeof(char *));
     if (!argv)
@@ -634,8 +662,15 @@ static coa_tool_result *mcp_remote_exec(const coa_tool *self, const coa_tool_ctx
     mcp_tool_ud *ud = self ? (mcp_tool_ud *)self->ud : NULL;
     if (!ud || !ud->mgr)
         return coa_tool_result_new(0, "mcp: broken dynamic tool binding");
+    /* copy the binding out before taking the manager lock: a concurrent
+     * re-sync (which holds the lock) may retire this tool generation and
+     * free the ud while we wait */
+    coa_mcp_manager *mgr = ud->mgr;
+    char server[sizeof(ud->server)], tool[sizeof(ud->tool)];
+    snprintf(server, sizeof(server), "%s", ud->server);
+    snprintf(tool, sizeof(tool), "%s", ud->tool);
     char *out = NULL, *err = NULL;
-    int rc = coa_mcp_manager_call(ud->mgr, ud->server, ud->tool, args_json, &out, &err);
+    int rc = coa_mcp_manager_call(mgr, server, tool, args_json, &out, &err);
     coa_tool_result *r;
     if (rc == 0)
         r = coa_tool_result_new(1, out ? out : "");
@@ -689,6 +724,19 @@ static int sync_server(coa_mcp_manager *m, struct coa_tool_registry *reg, size_t
         snprintf(desc, sizeof(desc), "[mcp:%s] %s", srv,
                  (tdesc && cJSON_IsString(tdesc) && tdesc->valuestring) ? tdesc->valuestring : "MCP tool");
 
+        /* capture the previous generation BEFORE registering: this manager
+         * owns it if it came from an earlier sync of this server */
+        coa_tool *prev = (coa_tool *)coa_tool_find(reg, full);
+        int prev_owned = 0;
+        if (prev && prev->execute == mcp_remote_exec && prev->ud) {
+            for (size_t k = 0; k < m->n_owned; k++) {
+                if (m->owned[k] == prev) {
+                    prev_owned = 1;
+                    break;
+                }
+            }
+        }
+
         coa_tool *t = (coa_tool *)calloc(1, sizeof(*t));
         mcp_tool_ud *ud = (mcp_tool_ud *)calloc(1, sizeof(*ud));
         char *schema_str = tschema ? cJSON_PrintUnformatted(tschema) : NULL;
@@ -707,49 +755,44 @@ static int sync_server(coa_mcp_manager *m, struct coa_tool_registry *reg, size_t
         t->is_write = 1;             /* remote side effects unknown */
         t->execute = mcp_remote_exec;
         t->ud = ud;
-        if (coa_tool_register_ex(reg, t, 1) == 0) {
-            if (m->n_owned == m->cap_owned) {
-                size_t nc = m->cap_owned ? m->cap_owned * 2 : 16;
-                coa_tool **no = (coa_tool **)realloc(m->owned, nc * sizeof(*no));
-                if (!no) {
-                    free(schema_str);
-                    continue;
-                }
-                m->owned = no;
-                m->cap_owned = nc;
-            }
-            m->owned[m->n_owned++] = t;
-            registered++;
-        } else {
-            /* already registered and unchanged: replace in place */
-            coa_tool *prev = (coa_tool *)coa_tool_find(reg, full);
-            if (prev && prev->ud && prev->execute == mcp_remote_exec) {
-                mcp_tool_ud *pud = (mcp_tool_ud *)prev->ud;
-                if (strcmp(pud->server, srv) == 0 && strcmp(pud->tool, tname->valuestring) == 0) {
-                    /* replace contents of the previously owned struct */
-                    for (size_t k = 0; k < m->n_owned; k++) {
-                        if (m->owned[k] == prev) {
-                            free((void *)prev->name);
-                            free((void *)prev->description);
-                            free((void *)prev->json_schema);
-                            free(prev->ud);
-                            prev->name = coa_strdup(full);
-                            prev->description = coa_strdup(desc);
-                            prev->json_schema = schema_str;
-                            prev->ud = ud;
-                            registered++;
-                            break;
-                        }
-                    }
-                    continue;
-                }
-            }
+        if (coa_tool_register_ex(reg, t, 1) != 0) {
+            /* registry update failed (OOM): keep the previous generation */
             free((void *)t->name);
             free((void *)t->description);
             free(schema_str);
             free(t->ud);
             free(t);
+            continue;
         }
+        if (prev_owned) {
+            /* the registry now points at t: retire the stale owned struct so
+             * repeated re-syncs do not grow the owned table without bound.
+             * Safe vs in-flight calls: mcp_remote_exec holds m->mtx (which
+             * this function already holds) for the whole call. */
+            for (size_t k = 0; k < m->n_owned; k++) {
+                if (m->owned[k] == prev) {
+                    free((void *)prev->name);
+                    free((void *)prev->description);
+                    free((void *)prev->json_schema);
+                    free(prev->ud);
+                    free(prev);
+                    memmove(m->owned + k, m->owned + k + 1,
+                            (m->n_owned - k - 1) * sizeof(*m->owned));
+                    m->n_owned--;
+                    break;
+                }
+            }
+        }
+        if (m->n_owned == m->cap_owned) {
+            size_t nc = m->cap_owned ? m->cap_owned * 2 : 16;
+            coa_tool **no = (coa_tool **)realloc(m->owned, nc * sizeof(*no));
+            if (!no)
+                continue; /* t stays registered but unowned: OOM-path leak only */
+            m->owned = no;
+            m->cap_owned = nc;
+        }
+        m->owned[m->n_owned++] = t;
+        registered++;
     }
     return registered;
 }
@@ -810,7 +853,15 @@ char *coa_mcp_manager_json(coa_mcp_manager *m) {
         cJSON_AddStringToObject(o, "transport", e->transport ? e->transport : "http");
         if (e->url)
             cJSON_AddStringToObject(o, "url", e->url);
-        cJSON_AddBoolToObject(o, "has_token", (e->token && *e->token) ? 1 : 0);
+        /* persist the token itself (alongside has_token for the UI): the
+         * state root already holds llm.api_key in plain text, and a token
+         * that silently disappears on restart breaks auth */
+        if (e->token && *e->token) {
+            cJSON_AddBoolToObject(o, "has_token", 1);
+            cJSON_AddStringToObject(o, "token", e->token);
+        } else {
+            cJSON_AddBoolToObject(o, "has_token", 0);
+        }
         if (e->command)
             cJSON_AddStringToObject(o, "command", e->command);
         if (e->args_csv)

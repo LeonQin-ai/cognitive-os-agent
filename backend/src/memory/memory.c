@@ -30,6 +30,7 @@ static int token_match(const char *text, const char *tok, size_t tlen);
 
 typedef struct {
     char **items; /* newest first */
+    char **ids;   /* parallel vector-store ids ("w:<seq>"), newest first */
     size_t count;
 } working_mem;
 
@@ -142,6 +143,25 @@ coa_memory *coa_memory_new(const char *state_root) {
         free(ep_json);
     }
 
+    /* mirror reloaded episodes into the vector store so RAG recall
+     * (coa_memory_retrieve/_ex, used by the context builder) still finds
+     * pre-restart experience — keyword search alone saw them before, which
+     * made the agent "forget" after a restart. Rebuild ids from the shared
+     * sequence so newly recorded episodes cannot collide. */
+    {
+        int n = coa_episodic_count(m->episodes);
+        coa_mutex_lock(&m->mtx);
+        for (int i = 0; i < n; i++) {
+            const char *t = coa_episodic_task(m->episodes, i);
+            if (!t || !*t)
+                continue;
+            char id[32];
+            snprintf(id, sizeof(id), "e:%zu", m->seq++);
+            coa_vectorstore_add(m->vectors, id, t, "episode");
+        }
+        coa_mutex_unlock(&m->mtx);
+    }
+
     /* load persisted entity graph */
     char *g_json = mem_read(m, "graph.json");
     if (g_json) {
@@ -171,9 +191,13 @@ coa_memory *coa_memory_new(const char *state_root) {
 void coa_memory_free(coa_memory *m) {
     if (!m)
         return;
-    for (size_t i = 0; i < m->working.count; i++)
+    for (size_t i = 0; i < m->working.count; i++) {
         free(m->working.items[i]);
+        if (m->working.ids)
+            free(m->working.ids[i]);
+    }
     free(m->working.items);
+    free(m->working.ids);
     coa_kvstore_free(m->facts);
     coa_episodic_free(m->episodes);
     coa_vectorstore_free(m->vectors);
@@ -186,14 +210,24 @@ void coa_memory_working_push(coa_memory *m, const char *text) {
     if (!m || !text)
         return;
     char id[32];
+    char *evict_id = NULL; /* vector-store id of the evicted ring item */
     coa_mutex_lock(&m->mtx);
+    /* id list mirrors the ring 1:1 (ring never exceeds WORKING_CAP, so one
+     * lazy allocation is enough); NULL entries mean "not tracked" (OOM). */
+    if (!m->working.ids)
+        m->working.ids = (char **)calloc(WORKING_CAP, sizeof(char *));
     if (m->working.count == WORKING_CAP) {
         free(m->working.items[WORKING_CAP - 1]);
+        if (m->working.ids) {
+            evict_id = m->working.ids[WORKING_CAP - 1];
+            m->working.ids[WORKING_CAP - 1] = NULL;
+        }
         m->working.count--;
     }
     char **ni = (char **)realloc(m->working.items, (m->working.count + 1) * sizeof(char *));
     if (!ni) {
         coa_mutex_unlock(&m->mtx);
+        free(evict_id);
         return;
     }
     m->working.items = ni;
@@ -201,9 +235,19 @@ void coa_memory_working_push(coa_memory *m, const char *text) {
     m->working.items[0] = coa_strdup(text);
     m->working.count++;
     snprintf(id, sizeof(id), "w:%zu", m->seq++);
+    if (m->working.ids) {
+        memmove(m->working.ids + 1, m->working.ids, (m->working.count - 1) * sizeof(char *));
+        m->working.ids[0] = coa_strdup(id);
+    }
     coa_mutex_unlock(&m->mtx);
 
     coa_vectorstore_add(m->vectors, id, text, "working");
+    if (evict_id) {
+        /* the ring evicted the oldest item: drop its vector mirror too,
+         * otherwise the store grows without bound in long sessions */
+        coa_vectorstore_remove(m->vectors, evict_id);
+        free(evict_id);
+    }
 }
 
 int coa_memory_working_count(coa_memory *m) {

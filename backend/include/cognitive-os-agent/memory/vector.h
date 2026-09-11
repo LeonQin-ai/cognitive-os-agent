@@ -15,6 +15,8 @@ void coa_vectorstore_free(coa_vectorstore *v);
 
 /* Add/update an entry (text embedded internally; meta may be NULL). Returns 0 ok. */
 int coa_vectorstore_add(coa_vectorstore *v, const char *id, const char *text, const char *meta);
+/* Remove an entry by id. Returns 1 removed, 0 not found, -1 bad args. */
+int coa_vectorstore_remove(coa_vectorstore *v, const char *id);
 int coa_vectorstore_count(coa_vectorstore *v);
 
 /* Top-k nearest entries to `query` by cosine similarity.

@@ -70,6 +70,9 @@ int coa_tool_validate_args(const coa_tool *tool, const char *args_json, char **e
 /* Register with upsert semantics: when replace is 1 an existing tool with the
  * same name is swapped out (used for dynamic MCP tool registration). */
 int coa_tool_register_ex(coa_tool_registry *reg, const coa_tool *tool, int replace);
+/* Remove a tool by name (registry drops its pointer only; the struct itself
+ * stays owned by whoever registered it). Returns 1 removed, 0 not found. */
+int coa_tool_unregister(coa_tool_registry *reg, const char *name);
 void coa_tool_result_free(coa_tool_result *r);
 
 /* Convenience constructor used by tool implementations. Caller frees. */

@@ -338,10 +338,24 @@ int coa_plugin_registry_load(coa_plugin_registry *r, const char *state_root) {
                 m.caps[c] = (ci && cJSON_IsString(ci)) ? coa_strdup(ci->valuestring) : coa_strdup("");
             }
         }
+        /* dependencies are persisted too: without loading them back,
+         * dependency enforcement silently disappears after a restart */
+        cJSON *deps = cJSON_GetObjectItemCaseSensitive(o, "dependencies");
+        if (deps && cJSON_IsArray(deps)) {
+            m.n_deps = (size_t)cJSON_GetArraySize(deps);
+            m.deps = (char **)calloc(m.n_deps ? m.n_deps : 1, sizeof(char *));
+            for (size_t d = 0; d < m.n_deps; d++) {
+                cJSON *di = cJSON_GetArrayItem(deps, d);
+                m.deps[d] = (di && cJSON_IsString(di)) ? coa_strdup(di->valuestring) : coa_strdup("");
+            }
+        }
         coa_plugin_registry_register(r, &m);
         for (size_t c = 0; c < m.n_caps; c++)
             free(m.caps[c]);
         free(m.caps);
+        for (size_t d = 0; d < m.n_deps; d++)
+            free(m.deps[d]);
+        free(m.deps);
     }
     cJSON_Delete(arr);
     return 0;

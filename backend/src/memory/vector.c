@@ -87,6 +87,24 @@ int coa_vectorstore_add(coa_vectorstore *v, const char *id, const char *text, co
     return 0;
 }
 
+int coa_vectorstore_remove(coa_vectorstore *v, const char *id) {
+    if (!v || !id)
+        return -1;
+    coa_mutex_lock(&v->mtx);
+    for (size_t i = 0; i < v->count; i++) {
+        if (strcmp(v->items[i].id, id) == 0) {
+            entry_clear(&v->items[i]);
+            memmove(v->items + i, v->items + i + 1,
+                    (v->count - i - 1) * sizeof(vec_entry));
+            v->count--;
+            coa_mutex_unlock(&v->mtx);
+            return 1;
+        }
+    }
+    coa_mutex_unlock(&v->mtx);
+    return 0;
+}
+
 int coa_vectorstore_count(coa_vectorstore *v) {
     if (!v)
         return 0;

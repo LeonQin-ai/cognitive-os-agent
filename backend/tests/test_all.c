@@ -1200,11 +1200,49 @@ static void test_memory_persist(void) {
             char *ej = coa_memory_episodes_json(m2);
             CHECK(ej && strstr(ej, "check repo") != NULL);
             free(ej);
+            /* reloaded episodes must be mirrored into the vector store so RAG
+             * recall (retrieve/_ex, used by the context builder) still finds
+             * pre-restart experience */
+            char *r1 = coa_memory_retrieve(m2, "check repo", 5);
+            CHECK(r1 && strstr(r1, "check repo") != NULL);
+            free(r1);
+            char *r2 = coa_memory_retrieve_ex(m2, "check repo", 5, 0.7f);
+            CHECK(r2 && strstr(r2, "check repo") != NULL);
+            free(r2);
             /* facts are injected into built context */
             char *ctx = coa_context_build(m2, "anything", 8);
             CHECK(ctx && strstr(ctx, "user.name") != NULL);
             free(ctx);
             coa_memory_free(m2);
+        }
+    }
+    /* working ring eviction must unmirror its vector entries (bounded store) */
+    {
+        coa_memory *m = coa_memory_new("state-test/memory-wb");
+        CHECK(m != NULL);
+        if (m) {
+            for (int i = 0; i < 300; i++) {
+                char t[64];
+                snprintf(t, sizeof(t), "work item %d status report", i);
+                coa_memory_working_push(m, t);
+            }
+            CHECK(coa_memory_working_count(m) == 64);
+            char *j = coa_memory_retrieve(m, "work item status", 1000);
+            int w = 0;
+            if (j) {
+                cJSON *arr = cJSON_Parse(j);
+                cJSON *it;
+                cJSON_ArrayForEach(it, arr) {
+                    cJSON *id = cJSON_GetObjectItemCaseSensitive(it, "id");
+                    if (id && cJSON_IsString(id) && id->valuestring &&
+                        strncmp(id->valuestring, "w:", 2) == 0)
+                        w++;
+                }
+                cJSON_Delete(arr);
+            }
+            CHECK(w <= 64);
+            free(j);
+            coa_memory_free(m);
         }
     }
 }
@@ -1558,6 +1596,35 @@ static void test_registry(void) {
     CHECK(coa_plugin_registry_unregister(r, "base") == 0);
     CHECK(coa_plugin_registry_count(r) == 1);
     coa_plugin_registry_free(r);
+    /* persist + load round-trip must keep dependencies: without them,
+     * dependency enforcement silently disappears after a restart */
+    {
+        coa_plugin_registry *r2 = coa_plugin_registry_new();
+        coa_plugin_meta base2;
+        memset(&base2, 0, sizeof(base2));
+        base2.name = "base";
+        base2.version = "1.0.0";
+        coa_plugin_registry_register(r2, &base2);
+        coa_plugin_meta m2;
+        memset(&m2, 0, sizeof(m2));
+        m2.name = "p2";
+        m2.version = "2.0.0";
+        char *d2[] = { "base" };
+        m2.deps = d2;
+        m2.n_deps = 1;
+        coa_plugin_registry_register(r2, &m2);
+        coa_fs_mkdirs("state-test-plugins");
+        CHECK(coa_plugin_registry_persist(r2, "state-test-plugins") == 0);
+        coa_plugin_registry *r3 = coa_plugin_registry_new();
+        CHECK(coa_plugin_registry_load(r3, "state-test-plugins") == 0);
+        CHECK(coa_plugin_registry_deps_met(r3, "p2") == 1);
+        coa_plugin_registry_unregister(r3, "base");
+        CHECK(coa_plugin_registry_deps_met(r3, "p2") == 0);
+        coa_plugin_registry_free(r2);
+        coa_plugin_registry_free(r3);
+        coa_fs_remove("state-test-plugins/plugins.json");
+        coa_fs_remove("state-test-plugins");
+    }
 }
 
 /* ---------- skills ---------- */
@@ -1606,7 +1673,7 @@ static void test_mcp(void) {
         free(out);
         free(err);
     }
-    CHECK(coa_mcp_manager_remove(m, "srv1") == 0);
+    CHECK(coa_mcp_manager_remove(m, "srv1", NULL) == 0);
     CHECK(coa_mcp_manager_count(m) == 0);
     coa_mcp_manager_free(m);
 }
@@ -2655,8 +2722,32 @@ static void test_mcp_standard(void) {
         if (c) CHECK(strcmp(c->transport, "http") == 0);
         coa_mcp_manager_free(m2);
     }
+    /* tokens must survive persist/load (auth silently broken after restart) */
+    {
+        coa_mcp_manager *mt = coa_mcp_manager_new();
+        coa_mcp_conn tc;
+        memset(&tc, 0, sizeof(tc));
+        tc.name = (char *)"toksrv";
+        tc.transport = (char *)"http";
+        tc.url = (char *)"http://127.0.0.1:9321/mcp";
+        tc.token = (char *)"secret-token-123";
+        CHECK(coa_mcp_manager_add_ex(mt, &tc) == 0);
+        CHECK(coa_mcp_manager_persist(mt, "state-test-mcp") == 0);
+        coa_mcp_manager *m2 = coa_mcp_manager_new();
+        CHECK(coa_mcp_manager_load(m2, "state-test-mcp") == 0);
+        const coa_mcp_conn *ct = coa_mcp_manager_find(m2, "toksrv");
+        CHECK(ct && ct->token && strcmp(ct->token, "secret-token-123") == 0);
+        coa_mcp_manager_free(m2);
+        coa_mcp_manager_free(mt);
+    }
     coa_fs_remove("state-test-mcp/mcp.json");
     coa_fs_remove("state-test-mcp");
+
+    /* repeated re-sync must not disturb the registry */
+    CHECK(coa_mcp_manager_sync_tools(m, reg) >= 1);
+    CHECK(coa_tool_find(reg, "mcp__mock__echo") != NULL);
+    CHECK(coa_mcp_manager_sync_tools(m, reg) >= 1);
+    CHECK(coa_tool_find(reg, "mcp__mock__echo") != NULL);
 
     /* graceful shutdown of the mock server via its shutdown tool */
     {
@@ -2664,6 +2755,10 @@ static void test_mcp_standard(void) {
         coa_mcp_manager_call(m, "mock", "shutdown", "{}", &out, &err);
         free(out); free(err);
     }
+    /* removing the server must unregister its dynamic tools (no zombie
+     * tools left callable by the agent) */
+    CHECK(coa_mcp_manager_remove(m, "mock", reg) == 0);
+    CHECK(coa_tool_find(reg, "mcp__mock__echo") == NULL);
     coa_tool_registry_free(reg);
     coa_mcp_manager_free(m);
 }
@@ -2679,7 +2774,9 @@ static void test_mcp_stdio(void) {
     c.name = (char *)"mocks";
     c.transport = (char *)"stdio";
     c.command = (char *)"node";
-    c.args_csv = (char *)"tools/mock_mcp_server.js --stdio";
+    /* comma-separated args with no spaces: argv sizing must account for
+     * every separator, not just spaces */
+    c.args_csv = (char *)"tools/mock_mcp_server.js,--stdio,--probe-a,--probe-b,--probe-c";
     CHECK(coa_mcp_manager_add_ex(m, &c) == 0);
 
     /* first call spawns the child lazily and runs the handshake */

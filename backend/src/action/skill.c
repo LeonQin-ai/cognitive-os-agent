@@ -260,6 +260,11 @@ coa_skill_result *coa_skill_execute(coa_skill_registry *r, const char *name, con
         }
         return res;
     }
+    /* the workspace may not exist yet (first action of a fresh session);
+     * create it BEFORE python skills write their temp file there, otherwise
+     * the write fails and the raw python source falls through to the shell */
+    if (workspace && *workspace)
+        coa_fs_mkdirs(workspace);
     char pyfile[1024] = "";
     if (strcmp(s->kind, "python") == 0) {
         /* Write the substituted source to a temp file instead of a fragile
@@ -284,10 +289,6 @@ coa_skill_result *coa_skill_execute(coa_skill_registry *r, const char *name, con
 
     if (!cmd)
         return NULL;
-    /* the workspace may not exist yet (first action of a fresh session);
-     * python skills also write their temp file there */
-    if (workspace && *workspace)
-        coa_fs_mkdirs(workspace);
     char denied[64] = "";
     if (!caps_allow(s->caps, cmd, denied, sizeof(denied))) {
         free(cmd);

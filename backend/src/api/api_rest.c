@@ -2012,7 +2012,7 @@ static int h_mcp_delete(const coa_http_request *req, coa_http_response *resp, vo
     if (!authz_ok(ctx, req, resp))
         return 0;
     const char *name = req->path + strlen("/v1/mcp/");
-    int rc = ctx->mcp ? coa_mcp_manager_remove(ctx->mcp, name) : -1;
+    int rc = ctx->mcp ? coa_mcp_manager_remove(ctx->mcp, name, ctx->tools) : -1;
     if (rc == 0 && ctx->mcp)
         coa_mcp_manager_persist(ctx->mcp, ctx->state_root);
     coa_http_resp_appendf(resp, "{\"removed\":%s}", rc == 0 ? "true" : "false");
