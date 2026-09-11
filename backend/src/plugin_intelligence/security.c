@@ -53,7 +53,7 @@ static int ci_strstr(const char *hay, const char *needle) {
     return 0;
 }
 
-char *coa_security_audit(const char *text) {
+char *security_audit(const char *text) {
     cJSON *out = cJSON_CreateObject();
     if (out) {
         cJSON *findings = cJSON_CreateArray();
@@ -71,5 +71,5 @@ char *coa_security_audit(const char *text) {
     char *s = out ? cJSON_PrintUnformatted(out) : NULL;
     if (out)
         cJSON_Delete(out);
-    return s ? s : coa_strdup("{}");
+    return s ? s : xstrdup("{}");
 }

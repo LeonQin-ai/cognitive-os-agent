@@ -21,7 +21,7 @@ static int has_kw(const char *s, const char *kw) {
     return 0;
 }
 
-char *coa_analyzer_analyze(const char *spec_json) {
+char *analyzer_analyze(const char *spec_json) {
     cJSON *root = cJSON_Parse(spec_json ? spec_json : "{}");
     cJSON *name = root ? cJSON_GetObjectItemCaseSensitive(root, "name") : NULL;
     cJSON *desc = root ? cJSON_GetObjectItemCaseSensitive(root, "description") : NULL;
@@ -74,5 +74,5 @@ char *coa_analyzer_analyze(const char *spec_json) {
     char *s = out ? cJSON_PrintUnformatted(out) : NULL;
     if (out)
         cJSON_Delete(out);
-    return s ? s : coa_strdup("{}");
+    return s ? s : xstrdup("{}");
 }

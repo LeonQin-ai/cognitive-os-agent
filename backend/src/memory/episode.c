@@ -12,8 +12,8 @@
 #define EPISODES_CAP 512 /* bounded store: oldest entries dropped first */
 #define DECAY_MAX_HALVINGS 30
 
-struct coa_episodic {
-    coa_mutex mtx;
+struct episodic {
+    mutex_t mtx;
     char **task;
     char **result;
     long long *ts;    /* ms since epoch */
@@ -22,18 +22,18 @@ struct coa_episodic {
     size_t cap;
 };
 
-coa_episodic *coa_episodic_new(void) {
-    coa_episodic *e = (coa_episodic *)calloc(1, sizeof(*e));
+episodic *episodic_new(void) {
+    episodic *e = (episodic *)calloc(1, sizeof(*e));
     if (!e)
         return NULL;
-    coa_mutex_init(&e->mtx);
+    mutex_init(&e->mtx);
     return e;
 }
 
-void coa_episodic_free(coa_episodic *e) {
+void episodic_free(episodic *e) {
     if (!e)
         return;
-    coa_mutex_lock(&e->mtx);
+    mutex_lock(&e->mtx);
     for (size_t i = 0; i < e->count; i++) {
         free(e->task[i]);
         free(e->result[i]);
@@ -46,31 +46,31 @@ void coa_episodic_free(coa_episodic *e) {
     e->ts = NULL;
     e->strength = NULL;
     e->count = e->cap = 0;
-    coa_mutex_unlock(&e->mtx);
-    coa_mutex_destroy(&e->mtx);
+    mutex_unlock(&e->mtx);
+    mutex_destroy(&e->mtx);
     free(e);
 }
 
-void coa_episodic_add_ts(coa_episodic *e, const char *task, const char *result, long long ts) {
-    coa_episodic_add_full(e, task, result, ts, 0);
+void episodic_add_ts(episodic *e, const char *task, const char *result, long long ts) {
+    episodic_add_full(e, task, result, ts, 0);
 }
 
-void coa_episodic_add_full(coa_episodic *e, const char *task, const char *result, long long ts, double strength) {
+void episodic_add_full(episodic *e, const char *task, const char *result, long long ts, double strength) {
     if (!e || !task)
         return;
-    long long now = ts > 0 ? ts : coa_time_now_ms();
-    coa_mutex_lock(&e->mtx);
+    long long now = ts > 0 ? ts : time_now_ms();
+    mutex_lock(&e->mtx);
     /* dedup: same task -> REINFORCE (+1 strength) and refresh instead of dup */
     for (size_t i = e->count; i-- > 0;) {
         if (e->task[i] && strcmp(e->task[i], task) == 0) {
-            char *nr = coa_strdup(result ? result : "");
+            char *nr = xstrdup(result ? result : "");
             if (nr) {
                 free(e->result[i]);
                 e->result[i] = nr;
                 e->ts[i] = now;
                 e->strength[i] += 1.0;
             }
-            coa_mutex_unlock(&e->mtx);
+            mutex_unlock(&e->mtx);
             return;
         }
     }
@@ -85,7 +85,7 @@ void coa_episodic_add_full(coa_episodic *e, const char *task, const char *result
             free(nr);
             free(ns);
             free(nw);
-            coa_mutex_unlock(&e->mtx);
+            mutex_unlock(&e->mtx);
             return;
         }
         e->task = nt;
@@ -94,12 +94,12 @@ void coa_episodic_add_full(coa_episodic *e, const char *task, const char *result
         e->strength = nw;
         e->cap = cap;
     }
-    char *t2 = coa_strdup(task);
-    char *r2 = coa_strdup(result ? result : "");
+    char *t2 = xstrdup(task);
+    char *r2 = xstrdup(result ? result : "");
     if (!t2 || !r2) {
         free(t2);
         free(r2);
-        coa_mutex_unlock(&e->mtx);
+        mutex_unlock(&e->mtx);
         return;
     }
     /* bounded: drop the oldest entry when at capacity */
@@ -117,79 +117,79 @@ void coa_episodic_add_full(coa_episodic *e, const char *task, const char *result
     e->ts[e->count] = now;
     e->strength[e->count] = strength > 0 ? strength : 1.0;
     e->count++;
-    coa_mutex_unlock(&e->mtx);
+    mutex_unlock(&e->mtx);
 }
 
-void coa_episodic_add(coa_episodic *e, const char *task, const char *result) {
-    coa_episodic_add_full(e, task, result, 0, 0);
+void episodic_add(episodic *e, const char *task, const char *result) {
+    episodic_add_full(e, task, result, 0, 0);
 }
 
-int coa_episodic_count(coa_episodic *e) {
+int episodic_count(episodic *e) {
     if (!e)
         return 0;
-    coa_mutex_lock(&e->mtx);
+    mutex_lock(&e->mtx);
     int n = (int)e->count;
-    coa_mutex_unlock(&e->mtx);
+    mutex_unlock(&e->mtx);
     return n;
 }
 
-const char *coa_episodic_task(coa_episodic *e, int i) {
+const char *episodic_task(episodic *e, int i) {
     if (!e || i < 0)
         return NULL;
-    coa_mutex_lock(&e->mtx);
+    mutex_lock(&e->mtx);
     const char *v = ((size_t)i < e->count) ? e->task[i] : NULL;
-    coa_mutex_unlock(&e->mtx);
+    mutex_unlock(&e->mtx);
     return v;
 }
 
-const char *coa_episodic_result(coa_episodic *e, int i) {
+const char *episodic_result(episodic *e, int i) {
     if (!e || i < 0)
         return NULL;
-    coa_mutex_lock(&e->mtx);
+    mutex_lock(&e->mtx);
     const char *v = ((size_t)i < e->count) ? e->result[i] : NULL;
-    coa_mutex_unlock(&e->mtx);
+    mutex_unlock(&e->mtx);
     return v;
 }
 
-long long coa_episodic_ts(coa_episodic *e, int i) {
+long long episodic_ts(episodic *e, int i) {
     if (!e || i < 0)
         return 0;
-    coa_mutex_lock(&e->mtx);
+    mutex_lock(&e->mtx);
     long long v = ((size_t)i < e->count) ? e->ts[i] : 0;
-    coa_mutex_unlock(&e->mtx);
+    mutex_unlock(&e->mtx);
     return v;
 }
 
-double coa_episodic_strength(coa_episodic *e, int i) {
+double episodic_strength(episodic *e, int i) {
     if (!e || i < 0)
         return 0.0;
-    coa_mutex_lock(&e->mtx);
+    mutex_lock(&e->mtx);
     double v = ((size_t)i < e->count) ? e->strength[i] : 0.0;
-    coa_mutex_unlock(&e->mtx);
+    mutex_unlock(&e->mtx);
     return v;
 }
 
-void coa_episodic_reinforce(coa_episodic *e, const char *task) {
+void episodic_reinforce(episodic *e, const char *task) {
     if (!e || !task)
         return;
-    coa_mutex_lock(&e->mtx);
+    mutex_lock(&e->mtx);
     for (size_t i = e->count; i-- > 0;) {
         if (e->task[i] && strcmp(e->task[i], task) == 0) {
             e->strength[i] += 1.0;
-            e->ts[i] = coa_time_now_ms();
+            e->ts[i] = time_now_ms();
             break;
         }
     }
-    coa_mutex_unlock(&e->mtx);
+    mutex_unlock(&e->mtx);
 }
 
-int coa_episodic_decay(coa_episodic *e, long long now_ms, long long half_life_ms, double floor_strength) {
+int episodic_decay(episodic *e, long long now_ms, long long half_life_ms, double floor_strength) {
     if (!e || half_life_ms <= 0)
         return 0;
     if (floor_strength <= 0)
         floor_strength = 0.001;
     int decayed = 0;
-    coa_mutex_lock(&e->mtx);
+    mutex_lock(&e->mtx);
     for (size_t i = 0; i < e->count; i++) {
         long long age = now_ms - e->ts[i];
         if (age < half_life_ms)
@@ -207,15 +207,15 @@ int coa_episodic_decay(coa_episodic *e, long long now_ms, long long half_life_ms
             decayed++;
         }
     }
-    coa_mutex_unlock(&e->mtx);
+    mutex_unlock(&e->mtx);
     return decayed;
 }
 
-int coa_episodic_drop_below(coa_episodic *e, double min_strength) {
+int episodic_drop_below(episodic *e, double min_strength) {
     if (!e || min_strength <= 0)
         return 0;
     int dropped = 0;
-    coa_mutex_lock(&e->mtx);
+    mutex_lock(&e->mtx);
     size_t w = 0;
     for (size_t i = 0; i < e->count; i++) {
         if (e->strength[i] < min_strength) {
@@ -231,14 +231,14 @@ int coa_episodic_drop_below(coa_episodic *e, double min_strength) {
         w++;
     }
     e->count = w;
-    coa_mutex_unlock(&e->mtx);
+    mutex_unlock(&e->mtx);
     return dropped;
 }
 
-char *coa_episodic_below_json(coa_episodic *e, double min_strength) {
+char *episodic_below_json(episodic *e, double min_strength) {
     if (!e)
-        return coa_strdup("[]");
-    coa_mutex_lock(&e->mtx);
+        return xstrdup("[]");
+    mutex_lock(&e->mtx);
     cJSON *arr = cJSON_CreateArray();
     if (arr) {
         for (size_t i = 0; i < e->count; i++) {
@@ -255,14 +255,14 @@ char *coa_episodic_below_json(coa_episodic *e, double min_strength) {
     char *s = arr ? cJSON_PrintUnformatted(arr) : NULL;
     if (arr)
         cJSON_Delete(arr);
-    coa_mutex_unlock(&e->mtx);
-    return s ? s : coa_strdup("[]");
+    mutex_unlock(&e->mtx);
+    return s ? s : xstrdup("[]");
 }
 
-char *coa_episodic_json(coa_episodic *e) {
+char *episodic_json(episodic *e) {
     if (!e)
-        return coa_strdup("[]");
-    coa_mutex_lock(&e->mtx);
+        return xstrdup("[]");
+    mutex_lock(&e->mtx);
     cJSON *arr = cJSON_CreateArray();
     if (arr) {
         for (size_t i = 0; i < e->count; i++) {
@@ -277,6 +277,6 @@ char *coa_episodic_json(coa_episodic *e) {
     char *s = arr ? cJSON_PrintUnformatted(arr) : NULL;
     if (arr)
         cJSON_Delete(arr);
-    coa_mutex_unlock(&e->mtx);
-    return s ? s : coa_strdup("[]");
+    mutex_unlock(&e->mtx);
+    return s ? s : xstrdup("[]");
 }

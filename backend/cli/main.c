@@ -19,7 +19,7 @@
 #define STATE_ROOT "state"
 
 static void print_usage(void) {
-    printf("cognitive-os-agent %s — Cognitive OS Runtime\n", coa_version());
+    printf("cognitive-os-agent %s — Cognitive OS Runtime\n", version());
     printf("usage:\n");
     printf("  cognitive-os-agent run \"<prompt>\"         run one prompt through the cognitive pipeline\n");
     printf("  cognitive-os-agent serve [port]            serve HTTP API + web console (default 8080)\n");
@@ -31,43 +31,43 @@ static void print_usage(void) {
 }
 
 static int cmd_tools(void) {
-    coa_tool_registry *reg = coa_tool_registry_new();
-    coa_tool_register_builtins(reg);
-    int n = coa_tool_registry_count(reg);
+    tool_registry *reg = tool_registry_new();
+    tool_register_builtins(reg);
+    int n = tool_registry_count(reg);
     printf("%d tools:\n", n);
     for (int i = 0; i < n; i++) {
-        const coa_tool *t = coa_tool_registry_get(reg, (size_t)i);
+        const tool *t = tool_registry_get(reg, (size_t)i);
         printf("  %-12s %s%s\n", t->name, t->description ? t->description : "",
                t->is_write ? "  [write]" : "");
     }
-    coa_tool_registry_free(reg);
+    tool_registry_free(reg);
     return 0;
 }
 
 static int cmd_snapshot(const char *sub) {
-    coa_snapshot *s = coa_snapshot_open(STATE_ROOT);
+    snapshot *s = snapshot_open(STATE_ROOT);
     if (!s) {
         printf("error: cannot open snapshot store at %s\n", STATE_ROOT);
         return 1;
     }
     int rc = 0;
     if (strcmp(sub, "list") == 0) {
-        char *j = coa_snapshot_list(s);
+        char *j = snapshot_list(s);
         printf("%s\n", j ? j : "[]");
         free(j);
     } else if (strcmp(sub, "rollback") == 0 || strcmp(sub, "restore") == 0) {
-        rc = coa_snapshot_restore_latest(s);
+        rc = snapshot_restore_latest(s);
         printf(rc == 0 ? "rolled back to latest snapshot\n" : "no snapshot to restore\n");
     } else {
         printf("usage: snapshot list|rollback\n");
     }
-    coa_snapshot_close(s);
+    snapshot_close(s);
     return rc;
 }
 
-static int run_prompt(coa_ctx *ctx, const char *prompt) {
+static int run_prompt(runtime_ctx *ctx, const char *prompt) {
     char *answer = NULL;
-    int rc = coa_run(ctx, prompt, &answer);
+    int rc = run(ctx, prompt, &answer);
     printf("\n==== answer (%s) ====\n", rc == 0 ? "ok" : "failed");
     if (answer) {
         printf("%s\n", answer);
@@ -76,9 +76,9 @@ static int run_prompt(coa_ctx *ctx, const char *prompt) {
     return rc;
 }
 
-static void print_memory(coa_ctx *ctx) {
-    char *w = coa_memory_working_json(ctx->memory);
-    char *l = coa_memory_longterm_json(ctx->memory);
+static void print_memory(runtime_ctx *ctx) {
+    char *w = memory_working_json(ctx->memory);
+    char *l = memory_longterm_json(ctx->memory);
     printf("working:\n  %s\nlongterm:\n  %s\n", w ? w : "[]", l ? l : "{}");
     free(w);
     free(l);
@@ -86,7 +86,7 @@ static void print_memory(coa_ctx *ctx) {
 
 int main(int argc, char **argv) {
     if (argc > 1 && (strcmp(argv[1], "-v") == 0 || strcmp(argv[1], "--version") == 0)) {
-        printf("cognitive-os-agent %s\n", coa_version());
+        printf("cognitive-os-agent %s\n", version());
         return 0;
     }
     if (argc > 1 && (strcmp(argv[1], "-h") == 0 || strcmp(argv[1], "--help") == 0 ||
@@ -103,46 +103,46 @@ int main(int argc, char **argv) {
             printf("usage: cognitive-os-agent run \"<prompt>\"\n");
             return 1;
         }
-        coa_ctx ctx;
-        coa_config cfg;
+        runtime_ctx ctx;
+        config cfg;
         memset(&cfg, 0, sizeof(cfg));
         /* provider/model/base_url resolved from config defaults -> state/cognitive-os-agent.json
          * -> COA_* env vars (defaults to the offline "mock" provider) */
-        if (coa_init(&ctx, &cfg) != 0) { printf("init failed\n"); return 1; }
+        if (init(&ctx, &cfg) != 0) { printf("init failed\n"); return 1; }
         int rc = run_prompt(&ctx, argv[2]);
-        coa_shutdown(&ctx);
+        runtime_shutdown(&ctx);
         return rc;
     }
     if (argc > 1 && strcmp(argv[1], "serve") == 0) {
         uint16_t port = argc > 2 ? (uint16_t)atoi(argv[2]) : 8080;
-        coa_ctx ctx;
-        coa_config cfg;
+        runtime_ctx ctx;
+        config cfg;
         memset(&cfg, 0, sizeof(cfg));
         cfg.http_port = port;
-        if (coa_init(&ctx, &cfg) != 0) { printf("init failed\n"); return 1; }
+        if (init(&ctx, &cfg) != 0) { printf("init failed\n"); return 1; }
         printf("cognitive-os-agent serving at http://localhost:%u  (Ctrl+C to stop)\n", (unsigned)port);
-        coa_serve(&ctx);
-        coa_shutdown(&ctx);
+        serve(&ctx);
+        runtime_shutdown(&ctx);
         return 0;
     }
     if (argc > 1 && strcmp(argv[1], "memory") == 0) {
-        coa_ctx ctx;
-        coa_config cfg;
+        runtime_ctx ctx;
+        config cfg;
         memset(&cfg, 0, sizeof(cfg));
-        if (coa_init(&ctx, &cfg) != 0) { printf("init failed\n"); return 1; }
+        if (init(&ctx, &cfg) != 0) { printf("init failed\n"); return 1; }
         print_memory(&ctx);
-        coa_shutdown(&ctx);
+        runtime_shutdown(&ctx);
         return 0;
     }
     if (argc > 1 && strcmp(argv[1], "config") == 0) {
-        coa_ctx ctx;
-        coa_config cfg;
+        runtime_ctx ctx;
+        config cfg;
         memset(&cfg, 0, sizeof(cfg));
-        if (coa_init(&ctx, &cfg) != 0) { printf("init failed\n"); return 1; }
-        char *j = coa_config_to_json(ctx.config);
+        if (init(&ctx, &cfg) != 0) { printf("init failed\n"); return 1; }
+        char *j = config_to_json(ctx.config);
         printf("%s\n", j ? j : "{}");
         free(j);
-        coa_shutdown(&ctx);
+        runtime_shutdown(&ctx);
         return 0;
     }
     if (argc > 1) {
@@ -152,11 +152,11 @@ int main(int argc, char **argv) {
     }
 
     /* interactive shell */
-    coa_ctx ctx;
-    coa_config cfg;
+    runtime_ctx ctx;
+    config cfg;
     memset(&cfg, 0, sizeof(cfg));
-    if (coa_init(&ctx, &cfg) != 0) { printf("init failed\n"); return 1; }
-    printf("cognitive-os-agent %s — Cognitive OS Runtime. Type 'help' for commands.\n", coa_version());
+    if (init(&ctx, &cfg) != 0) { printf("init failed\n"); return 1; }
+    printf("cognitive-os-agent %s — Cognitive OS Runtime. Type 'help' for commands.\n", version());
 
     char line[4096];
     for (;;) {
@@ -172,6 +172,6 @@ int main(int argc, char **argv) {
         if (strncmp(line, "snapshot ", 9) == 0) { cmd_snapshot(line + 9); continue; }
         printf("unknown command: %s\n", line);
     }
-    coa_shutdown(&ctx);
+    runtime_shutdown(&ctx);
     return 0;
 }

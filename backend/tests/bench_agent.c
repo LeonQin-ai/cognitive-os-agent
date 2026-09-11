@@ -3,8 +3,8 @@
  * correctness, multi-step completion and latency. Two modes:
  *   --mock  (default)  offline deterministic mock planner (tool selection only
  *                      is meaningful; e2e/side-effects are exercised locally)
- *   --real  use a real LLM endpoint via COA_LLM_PROVIDER / COA_LLM_BASE_URL /
- *           COA_LLM_MODEL / COA_LLM_API_KEY (accuracy + success + latency + multistep)
+ *   --real  use a real LLM endpoint via LLM_PROVIDER / LLM_BASE_URL /
+ *           LLM_MODEL / LLM_API_KEY (accuracy + success + latency + multistep)
  * Prints per-task lines, a summary table, and a one-line JSON summary.
  */
 #include "cognitive-os-agent/cognitive-os-agent.h"
@@ -82,24 +82,24 @@ int main(int argc, char **argv) {
         else { fprintf(stderr, "usage: %s [--mock|--real]\n", argv[0]); return 2; }
     }
 
-    coa_config cfg;
+    config cfg;
     memset(&cfg, 0, sizeof(cfg));
     cfg.state_root = "state-bench";
     cfg.workspace  = "state-bench/ws";
     cfg.http_port  = 0;                 /* no HTTP API for the benchmark */
     if (real) {
-        cfg.provider = getenv("COA_LLM_PROVIDER");
-        cfg.base_url = getenv("COA_LLM_BASE_URL");
-        cfg.api_key  = getenv("COA_LLM_API_KEY");
-        cfg.model    = getenv("COA_LLM_MODEL");
+        cfg.provider = getenv("LLM_PROVIDER");
+        cfg.base_url = getenv("LLM_BASE_URL");
+        cfg.api_key  = getenv("LLM_API_KEY");
+        cfg.model    = getenv("LLM_MODEL");
         if (!cfg.provider || !*cfg.provider) cfg.provider = "openai";
     } else {
         cfg.provider = "mock";
     }
 
-    coa_ctx ctx;
-    if (coa_init(&ctx, &cfg) != 0) {
-        fprintf(stderr, "bench: coa_init failed (provider=%s)\n",
+    runtime_ctx ctx;
+    if (init(&ctx, &cfg) != 0) {
+        fprintf(stderr, "bench: init failed (provider=%s)\n",
                 cfg.provider ? cfg.provider : "?");
         return 1;
     }
@@ -107,13 +107,13 @@ int main(int argc, char **argv) {
            real ? "REAL" : "MOCK", ctx.provider ? ctx.provider : "?");
 
     /* clean prior side effects for a deterministic run */
-    coa_fs_mkdirs("state-bench/ws");
-    coa_fs_remove("state-bench/ws/test/note.txt");
-    coa_fs_remove("state-bench/ws/a.txt");
+    fs_mkdirs("state-bench/ws");
+    fs_remove("state-bench/ws/test/note.txt");
+    fs_remove("state-bench/ws/a.txt");
 
     int sel_correct = 0, e2e_ok = 0, side_ok = 0, side_n = 0, multi_ok = 0;
     int64_t lat[N_TASKS];
-    int64_t t0 = coa_time_now_ms();
+    int64_t t0 = time_now_ms();
 
     for (int i = 0; i < N_TASKS; i++) {
         const bench_task *t = &TASKS[i];
@@ -121,16 +121,16 @@ int main(int argc, char **argv) {
         /* 1) tool selection — direct planner probe */
         char tools[8][64];
         int nt = 0;
-        char *plan = coa_llm_chat_simple(ctx.llm, SYS_PROMPT, t->prompt);
+        char *plan = llm_chat_simple(ctx.llm, SYS_PROMPT, t->prompt);
         if (plan) { nt = plan_tools(plan, tools); free(plan); }
         int sel = selection_ok(t, tools, nt);
         if (sel) sel_correct++;
 
         /* 2) end-to-end — full reasoning pipeline (latency + success) */
         char *answer = NULL;
-        int64_t s0 = coa_time_now_ms();
-        int rc = coa_run(&ctx, t->prompt, &answer);
-        lat[i] = coa_time_now_ms() - s0;
+        int64_t s0 = time_now_ms();
+        int rc = run(&ctx, t->prompt, &answer);
+        lat[i] = time_now_ms() - s0;
         if (rc == 0) e2e_ok++;
         free(answer);
 
@@ -139,8 +139,8 @@ int main(int argc, char **argv) {
         if (t->path) {
             side_n++;
             char full[1024];
-            coa_path_resolve(full, sizeof(full), "state-bench/ws", t->path);
-            char *data = coa_fs_read_file(full);
+            path_resolve(full, sizeof(full), "state-bench/ws", t->path);
+            char *data = fs_read_file(full);
             side = (data != NULL) && (!t->contains || strstr(data, t->contains) != NULL);
             free(data);
             if (side) side_ok++;
@@ -154,8 +154,8 @@ int main(int argc, char **argv) {
                (long long)lat[i]);
     }
 
-    int64_t total = coa_time_now_ms() - t0;
-    coa_shutdown(&ctx);
+    int64_t total = time_now_ms() - t0;
+    runtime_shutdown(&ctx);
 
     /* latency percentiles (nearest-rank over the small sample) */
     int64_t sorted[N_TASKS];

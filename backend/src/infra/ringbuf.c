@@ -10,7 +10,7 @@
 #include <stdint.h>
 #include <stdatomic.h>
 
-struct coa_ringbuf {
+struct ringbuf {
     _Atomic(void *) *data; /* slot payloads */
     _Atomic(size_t) *seq;  /* per-slot sequence numbers */
     size_t capacity;       /* power of two */
@@ -19,10 +19,10 @@ struct coa_ringbuf {
     _Atomic size_t dequeue_pos;
 };
 
-coa_ringbuf *coa_ringbuf_new(size_t capacity) {
+ringbuf *ringbuf_new(size_t capacity) {
     if (capacity < 2 || (capacity & (capacity - 1)) != 0)
         return NULL;
-    coa_ringbuf *r = (coa_ringbuf *)calloc(1, sizeof(*r));
+    ringbuf *r = (ringbuf *)calloc(1, sizeof(*r));
     if (!r)
         return NULL;
     r->data = (_Atomic(void *) *)calloc(capacity, sizeof(_Atomic(void *)));
@@ -42,7 +42,7 @@ coa_ringbuf *coa_ringbuf_new(size_t capacity) {
     return r;
 }
 
-void coa_ringbuf_free(coa_ringbuf *r) {
+void ringbuf_free(ringbuf *r) {
     if (!r)
         return;
     free(r->data);
@@ -50,7 +50,7 @@ void coa_ringbuf_free(coa_ringbuf *r) {
     free(r);
 }
 
-int coa_ringbuf_push(coa_ringbuf *r, void *item) {
+int ringbuf_push(ringbuf *r, void *item) {
     if (!r || !item)
         return -1;
     const size_t mask = r->mask;
@@ -74,7 +74,7 @@ int coa_ringbuf_push(coa_ringbuf *r, void *item) {
     }
 }
 
-int coa_ringbuf_pop(coa_ringbuf *r, void **out) {
+int ringbuf_pop(ringbuf *r, void **out) {
     if (!r || !out)
         return -1;
     const size_t mask = r->mask;

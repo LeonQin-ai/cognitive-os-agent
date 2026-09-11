@@ -9,70 +9,71 @@
 #include <stdio.h>
 #include "cJSON.h"
 
-struct coa_tool_registry {
-    const coa_tool **tools;
+struct tool_registry {
+    const tool **tools;
     size_t count, cap;
 };
 
-coa_tool_registry *coa_tool_registry_new(void) {
-    return calloc(1, sizeof(coa_tool_registry));
+tool_registry *tool_registry_new(void) {
+    return calloc(1, sizeof(tool_registry));
 }
 
-void coa_tool_registry_free(coa_tool_registry *reg) {
+void tool_registry_free(tool_registry *reg) {
     if (!reg)
         return;
     free(reg->tools);
     free(reg);
 }
 
-int coa_tool_register(coa_tool_registry *reg, const coa_tool *tool) {
-    return coa_tool_register_ex(reg, tool, 0);
+int tool_register(tool_registry *reg, const tool *tool) {
+    return tool_register_ex(reg, tool, 0);
 }
 
-int coa_tool_register_ex(coa_tool_registry *reg, const coa_tool *tool, int replace) {
-    if (!reg || !tool)
+int tool_register_ex(tool_registry *reg, const tool *t, int replace) {
+    if (!reg || !t)
         return -1;
     int i = -1;
     for (size_t k = 0; k < reg->count; k++)
-        if (strcmp(reg->tools[k]->name, tool->name) == 0) {
+        if (strcmp(reg->tools[k]->name, t->name) == 0) {
             i = (int)k;
             break;
         }
     if (i >= 0) {
         if (!replace)
             return -1; /* already registered */
-        reg->tools[i] = tool;
+        reg->tools[i] = t;
         return 0;
     }
     if (reg->count == reg->cap) {
         size_t cap = reg->cap ? reg->cap * 2 : 8;
-        const coa_tool **nt = realloc(reg->tools, cap * sizeof(coa_tool *));
+        const tool **nt = realloc(reg->tools, cap * sizeof(tool *));
         if (!nt)
             return -1;
         reg->tools = nt;
         reg->cap = cap;
     }
-    reg->tools[reg->count++] = tool;
+    reg->tools[reg->count++] = t;
     return 0;
 }
 
-const coa_tool *coa_tool_find(coa_tool_registry *reg, const char *name) {
+const tool *tool_find(tool_registry *reg, const char *name) {
     if (!reg)
         return NULL;
-    for (size_t i = 0; i < reg->count; i++)
+    for (size_t i = 0; i < reg->count; i++) {
         if (strcmp(reg->tools[i]->name, name) == 0)
             return reg->tools[i];
+    }
     return NULL;
 }
 
-int coa_tool_unregister(coa_tool_registry *reg, const char *name) {
+int tool_unregister(tool_registry *reg, const char *name) {
     if (!reg || !name)
         return 0;
     for (size_t i = 0; i < reg->count; i++) {
         if (strcmp(reg->tools[i]->name, name) == 0) {
             if (i < reg->count - 1)
                 memmove(reg->tools + i, reg->tools + i + 1,
-                        (reg->count - i - 1) * sizeof(coa_tool *));
+                        (reg->count - i - 1) * sizeof(tool *));
             reg->count--;
             return 1;
         }
@@ -80,36 +81,36 @@ int coa_tool_unregister(coa_tool_registry *reg, const char *name) {
     return 0;
 }
 
-int coa_tool_registry_count(const coa_tool_registry *reg) {
+int tool_registry_count(const tool_registry *reg) {
     return reg ? (int)reg->count : 0;
 }
 
-const coa_tool *coa_tool_registry_get(const coa_tool_registry *reg, size_t i) {
+const tool *tool_registry_get(const tool_registry *reg, size_t i) {
     return (reg && i < reg->count) ? reg->tools[i] : NULL;
 }
 
-void coa_tool_register_builtins(coa_tool_registry *reg) {
-    coa_tool_register(reg, coa_tool_file_read());
-    coa_tool_register(reg, coa_tool_file_write());
-    coa_tool_register(reg, coa_tool_file_edit());
-    coa_tool_register(reg, coa_tool_shell());
-    coa_tool_register(reg, coa_tool_git());
-    coa_tool_register(reg, coa_tool_mcp());
-    coa_tool_register(reg, coa_tool_skill());
-    coa_tool_register(reg, coa_tool_glob());
-    coa_tool_register(reg, coa_tool_grep());
+void tool_register_builtins(tool_registry *reg) {
+    tool_register(reg, tool_file_read());
+    tool_register(reg, tool_file_write());
+    tool_register(reg, tool_file_edit());
+    tool_register(reg, tool_shell());
+    tool_register(reg, tool_git());
+    tool_register(reg, tool_mcp());
+    tool_register(reg, tool_skill());
+    tool_register(reg, tool_glob());
+    tool_register(reg, tool_grep());
 }
 
-coa_tool_result *coa_tool_result_new(int ok, const char *output) {
-    coa_tool_result *r = calloc(1, sizeof(coa_tool_result));
+tool_result *tool_result_new(int ok, const char *output) {
+    tool_result *r = calloc(1, sizeof(tool_result));
     if (!r)
         return NULL;
     r->ok = ok;
-    r->output = coa_strdup(output ? output : "");
+    r->output = xstrdup(output ? output : "");
     return r;
 }
 
-void coa_tool_result_free(coa_tool_result *r) {
+void tool_result_free(tool_result *r) {
     if (!r)
         return;
     free(r->output);
@@ -138,7 +139,7 @@ static int json_type_matches(const cJSON *v, const char *type) {
     return 1; /* unknown type keyword: don't reject */
 }
 
-int coa_tool_validate_args(const coa_tool *tool, const char *args_json, char **err_out) {
+int tool_validate_args(const tool *tool, const char *args_json, char **err_out) {
     if (err_out)
         *err_out = NULL;
     if (!tool || !tool->json_schema || !*tool->json_schema)
@@ -159,7 +160,7 @@ int coa_tool_validate_args(const coa_tool *tool, const char *args_json, char **e
     cJSON *args = cJSON_Parse(args_json && *args_json ? args_json : "{}");
     if (!args || !cJSON_IsObject(args)) {
         if (err_out)
-            *err_out = coa_strdup("args is not a JSON object");
+            *err_out = xstrdup("args is not a JSON object");
         rc = -1;
     }
 
@@ -171,11 +172,11 @@ int coa_tool_validate_args(const coa_tool *tool, const char *args_json, char **e
                 if (!cJSON_IsString(it))
                     continue;
                 if (!cJSON_GetObjectItemCaseSensitive(args, it->valuestring)) {
-                    coa_strbuf b;
-                    coa_strbuf_init(&b);
-                    coa_strbuf_appendf(&b, "missing required arg '%s'", it->valuestring);
+                    strbuf b;
+                    strbuf_init(&b);
+                    strbuf_appendf(&b, "missing required arg '%s'", it->valuestring);
                     if (err_out)
-                        *err_out = coa_strbuf_detach(&b);
+                        *err_out = strbuf_detach(&b);
                     rc = -1;
                     break;
                 }
@@ -193,12 +194,12 @@ int coa_tool_validate_args(const coa_tool *tool, const char *args_json, char **e
                 cJSON *ptype = cJSON_GetObjectItemCaseSensitive(pspec, "type");
                 const char *tname = (ptype && cJSON_IsString(ptype)) ? ptype->valuestring : NULL;
                 if (!json_type_matches(child, tname)) {
-                    coa_strbuf b;
-                    coa_strbuf_init(&b);
-                    coa_strbuf_appendf(&b, "arg '%s' expected type %s", child->string ? child->string : "?",
+                    strbuf b;
+                    strbuf_init(&b);
+                    strbuf_appendf(&b, "arg '%s' expected type %s", child->string ? child->string : "?",
                                        tname ? tname : "any");
                     if (err_out)
-                        *err_out = coa_strbuf_detach(&b);
+                        *err_out = strbuf_detach(&b);
                     rc = -1;
                     break;
                 }
@@ -228,40 +229,40 @@ static char *truncate_output(const char *out, size_t limit) {
     return msg;
 }
 
-coa_tool_result *coa_tool_execute(coa_tool_registry *reg, const char *name, const char *args_json,
-                                  const coa_tool_ctx *ctx) {
-    const coa_tool *tool = coa_tool_find(reg, name);
+tool_result *tool_execute(tool_registry *reg, const char *name, const char *args_json,
+                                  const tool_ctx *ctx) {
+    const tool *tool = tool_find(reg, name);
     if (!tool) {
         char msg[256];
         snprintf(msg, sizeof(msg), "unknown tool: %s", name);
-        return coa_tool_result_new(0, msg);
+        return tool_result_new(0, msg);
     }
 
     /* lightweight args schema validation (fail fast, before policy/execute) */
     char *verr = NULL;
-    if (coa_tool_validate_args(tool, args_json, &verr) != 0) {
+    if (tool_validate_args(tool, args_json, &verr) != 0) {
         char msg[512];
         snprintf(msg, sizeof(msg), "args schema mismatch: %s", verr ? verr : "invalid");
         free(verr);
-        return coa_tool_result_new(0, msg);
+        return tool_result_new(0, msg);
     }
 
     /* policy check */
     if (ctx && ctx->policy) {
         const char *reason = NULL;
-        coa_policy_decision d = coa_policy_check(ctx->policy, name, args_json, &reason);
-        if (d != COA_POLICY_ALLOW) {
+        policy_decision d = policy_check(ctx->policy, name, args_json, &reason);
+        if (d != POLICY_ALLOW) {
             char msg[512];
             snprintf(msg, sizeof(msg), "denied by policy (%s): %s", reason ? reason : "no reason", name);
             if (ctx->metrics)
-                coa_metrics_inc(ctx->metrics, "tools.denied");
-            return coa_tool_result_new(0, msg);
+                metrics_inc(ctx->metrics, "tools.denied");
+            return tool_result_new(0, msg);
         }
     }
 
-    coa_tool_result *r = tool->execute(tool, ctx, args_json);
+    tool_result *r = tool->execute(tool, ctx, args_json);
     if (!r)
-        r = coa_tool_result_new(0, "tool returned NULL");
+        r = tool_result_new(0, "tool returned NULL");
 
     /* cap output size before it enters the LLM context */
     if (r->output) {
@@ -273,10 +274,10 @@ coa_tool_result *coa_tool_execute(coa_tool_registry *reg, const char *name, cons
     }
 
     if (ctx && ctx->metrics) {
-        coa_metrics_inc(ctx->metrics, "tools.executed");
+        metrics_inc(ctx->metrics, "tools.executed");
         char mname[128];
         snprintf(mname, sizeof(mname), "tools.%s", name);
-        coa_metrics_inc(ctx->metrics, mname);
+        metrics_inc(ctx->metrics, mname);
     }
     if (ctx && ctx->bus) {
         cJSON *ev = cJSON_CreateObject();
@@ -284,7 +285,7 @@ coa_tool_result *coa_tool_execute(coa_tool_registry *reg, const char *name, cons
         cJSON_AddBoolToObject(ev, "ok", r->ok ? 1 : 0);
         const char *out = r->output ? r->output : "";
         cJSON_AddStringToObject(ev, "output", strlen(out) > 300 ? (out + strlen(out) - 300) : out);
-        coa_event_bus_publish(ctx->bus, COA_EV_TOOL, "tools", ev);
+        event_bus_publish(ctx->bus, EV_TOOL, "tools", ev);
     }
     return r;
 }

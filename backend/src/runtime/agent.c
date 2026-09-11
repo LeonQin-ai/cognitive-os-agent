@@ -9,41 +9,41 @@
 #include <stdio.h>
 #include "cJSON.h"
 
-typedef struct coa_agent_entry {
+typedef struct agent_entry {
     char *name;
     char *role;
     char *provider;
     char *model;
-} coa_agent_entry;
+} agent_entry;
 
-struct coa_agent_pool {
-    coa_mutex mtx;
-    coa_blackboard *bb;
+struct agent_pool {
+    mutex_t mtx;
+    blackboard *bb;
     int owns_bb; /* 1 = pool created (and frees) the blackboard */
-    coa_agent_entry *agents;
+    agent_entry *agents;
     size_t count;
     size_t cap;
 };
 
-coa_agent_pool *coa_agent_pool_new(void) {
-    coa_agent_pool *p = (coa_agent_pool *)calloc(1, sizeof(*p));
+agent_pool *agent_pool_new(void) {
+    agent_pool *p = (agent_pool *)calloc(1, sizeof(*p));
     if (!p)
         return NULL;
-    coa_mutex_init(&p->mtx);
+    mutex_init(&p->mtx);
     p->owns_bb = 1;
-    p->bb = coa_blackboard_new();
+    p->bb = blackboard_new();
     if (!p->bb) {
-        coa_mutex_destroy(&p->mtx);
+        mutex_destroy(&p->mtx);
         free(p);
         return NULL;
     }
     return p;
 }
 
-void coa_agent_pool_free(coa_agent_pool *p) {
+void agent_pool_free(agent_pool *p) {
     if (!p)
         return;
-    coa_mutex_lock(&p->mtx);
+    mutex_lock(&p->mtx);
     for (size_t i = 0; i < p->count; i++) {
         free(p->agents[i].name);
         free(p->agents[i].role);
@@ -53,125 +53,125 @@ void coa_agent_pool_free(coa_agent_pool *p) {
     free(p->agents);
     p->agents = NULL;
     p->count = p->cap = 0;
-    coa_mutex_unlock(&p->mtx);
+    mutex_unlock(&p->mtx);
     if (p->owns_bb)
-        coa_blackboard_free(p->bb);
-    coa_mutex_destroy(&p->mtx);
+        blackboard_free(p->bb);
+    mutex_destroy(&p->mtx);
     free(p);
 }
 
 /* Replace the pool's blackboard with an externally owned one (ctx owns and
  * frees it; the pool only borrows). Lets /v1/blackboard and agent runs share
  * a single state space. */
-void coa_agent_pool_adopt_blackboard(coa_agent_pool *p, coa_blackboard *b) {
+void agent_pool_adopt_blackboard(agent_pool *p, blackboard *b) {
     if (!p || !b || p->bb == b)
         return;
     if (p->owns_bb)
-        coa_blackboard_free(p->bb);
+        blackboard_free(p->bb);
     p->bb = b;
     p->owns_bb = 0;
 }
 
 /* Returns index of name, or -1. Caller must hold p->mtx. */
-static int find_agent(coa_agent_pool *p, const char *name) {
+static int find_agent(agent_pool *p, const char *name) {
     for (size_t i = 0; i < p->count; i++)
         if (strcmp(p->agents[i].name, name) == 0)
             return (int)i;
     return -1;
 }
 
-int coa_agent_pool_add(coa_agent_pool *p, const char *name, const char *role) {
-    return coa_agent_pool_add_model(p, name, role, NULL, NULL);
+int agent_pool_add(agent_pool *p, const char *name, const char *role) {
+    return agent_pool_add_model(p, name, role, NULL, NULL);
 }
 
-int coa_agent_pool_add_model(coa_agent_pool *p, const char *name, const char *role, const char *provider,
+int agent_pool_add_model(agent_pool *p, const char *name, const char *role, const char *provider,
                              const char *model) {
     if (!p || !name || !*name)
         return -1;
-    coa_mutex_lock(&p->mtx);
+    mutex_lock(&p->mtx);
     if (find_agent(p, name) >= 0) {
-        coa_mutex_unlock(&p->mtx);
+        mutex_unlock(&p->mtx);
         return -1; /* duplicate */
     }
     if (p->count == p->cap) {
         size_t cap = p->cap ? p->cap * 2 : 8;
-        coa_agent_entry *na = (coa_agent_entry *)realloc(p->agents, cap * sizeof(coa_agent_entry));
+        agent_entry *na = (agent_entry *)realloc(p->agents, cap * sizeof(agent_entry));
         if (!na) {
-            coa_mutex_unlock(&p->mtx);
+            mutex_unlock(&p->mtx);
             return -1;
         }
         p->agents = na;
         p->cap = cap;
     }
-    p->agents[p->count].name = coa_strdup(name);
-    p->agents[p->count].role = role ? coa_strdup(role) : coa_strdup("");
-    p->agents[p->count].provider = provider ? coa_strdup(provider) : NULL;
-    p->agents[p->count].model = model ? coa_strdup(model) : NULL;
+    p->agents[p->count].name = xstrdup(name);
+    p->agents[p->count].role = role ? xstrdup(role) : xstrdup("");
+    p->agents[p->count].provider = provider ? xstrdup(provider) : NULL;
+    p->agents[p->count].model = model ? xstrdup(model) : NULL;
     int idx = (int)p->count;
     p->count++;
-    coa_mutex_unlock(&p->mtx);
+    mutex_unlock(&p->mtx);
     return idx;
 }
 
 /* Remove a registered agent by name (frees its strings, shifts the tail).
  * Returns 0 on success, -1 when the pool or name is unknown. */
-int coa_agent_pool_remove(coa_agent_pool *p, const char *name) {
+int agent_pool_remove(agent_pool *p, const char *name) {
     if (!p || !name || !*name)
         return -1;
-    coa_mutex_lock(&p->mtx);
+    mutex_lock(&p->mtx);
     int idx = find_agent(p, name);
     if (idx < 0) {
-        coa_mutex_unlock(&p->mtx);
+        mutex_unlock(&p->mtx);
         return -1;
     }
     free(p->agents[idx].name);
     free(p->agents[idx].role);
     free(p->agents[idx].provider);
     free(p->agents[idx].model);
-    memmove(&p->agents[idx], &p->agents[idx + 1], (p->count - (size_t)idx - 1) * sizeof(coa_agent_entry));
+    memmove(&p->agents[idx], &p->agents[idx + 1], (p->count - (size_t)idx - 1) * sizeof(agent_entry));
     p->count--;
-    coa_mutex_unlock(&p->mtx);
+    mutex_unlock(&p->mtx);
     return 0;
 }
 
-int coa_agent_pool_count(coa_agent_pool *p) {
+int agent_pool_count(agent_pool *p) {
     if (!p)
         return 0;
-    coa_mutex_lock(&p->mtx);
+    mutex_lock(&p->mtx);
     int n = (int)p->count;
-    coa_mutex_unlock(&p->mtx);
+    mutex_unlock(&p->mtx);
     return n;
 }
 
-int coa_agent_pool_find(coa_agent_pool *p, const char *name) {
+int agent_pool_find(agent_pool *p, const char *name) {
     if (!p || !name)
         return -1;
-    coa_mutex_lock(&p->mtx);
+    mutex_lock(&p->mtx);
     int idx = find_agent(p, name);
-    coa_mutex_unlock(&p->mtx);
+    mutex_unlock(&p->mtx);
     return idx;
 }
 
-coa_blackboard *coa_agent_pool_blackboard(coa_agent_pool *p) {
+blackboard *agent_pool_blackboard(agent_pool *p) {
     return p ? p->bb : NULL;
 }
 
-int coa_agent_post(coa_agent_pool *p, const char *agent, const char *key, const char *val) {
+int agent_post(agent_pool *p, const char *agent, const char *key, const char *val) {
     if (!p || !agent || !key || !val)
         return -1;
-    coa_mutex_lock(&p->mtx);
+    mutex_lock(&p->mtx);
     int ok = find_agent(p, agent) >= 0;
-    coa_mutex_unlock(&p->mtx);
+    mutex_unlock(&p->mtx);
     if (!ok)
         return -1;
-    coa_blackboard_put(p->bb, key, val);
+    blackboard_put(p->bb, key, val);
     return 0;
 }
 
-char *coa_agent_pool_snapshot_json(coa_agent_pool *p) {
+char *agent_pool_snapshot_json(agent_pool *p) {
     if (!p)
-        return coa_strdup("{}");
-    coa_mutex_lock(&p->mtx);
+        return xstrdup("{}");
+    mutex_lock(&p->mtx);
     cJSON *root = cJSON_CreateObject();
     cJSON *arr = cJSON_CreateArray();
     if (root && arr) {
@@ -185,9 +185,9 @@ char *coa_agent_pool_snapshot_json(coa_agent_pool *p) {
             cJSON_AddItemToArray(arr, o);
         }
     }
-    coa_mutex_unlock(&p->mtx);
+    mutex_unlock(&p->mtx);
 
-    char *facts = coa_blackboard_snapshot_json(p->bb);
+    char *facts = blackboard_snapshot_json(p->bb);
     if (root && facts) {
         cJSON *fj = cJSON_Parse(facts);
         cJSON_AddItemToObject(root, "facts", fj ? fj : cJSON_CreateObject());
@@ -197,15 +197,15 @@ char *coa_agent_pool_snapshot_json(coa_agent_pool *p) {
     char *s = root ? cJSON_PrintUnformatted(root) : NULL;
     if (root)
         cJSON_Delete(root);
-    return s ? s : coa_strdup("{}");
+    return s ? s : xstrdup("{}");
 }
 
 /* ---------- roster persistence (<state_root>/agents.json) ---------- */
 
-int coa_agent_pool_save(coa_agent_pool *p, const char *dir) {
+int agent_pool_save(agent_pool *p, const char *dir) {
     if (!p || !dir || !*dir)
         return -1;
-    coa_mutex_lock(&p->mtx);
+    mutex_lock(&p->mtx);
     cJSON *root = cJSON_CreateObject();
     cJSON *arr = cJSON_CreateArray();
     int ok = 0;
@@ -227,7 +227,7 @@ int coa_agent_pool_save(coa_agent_pool *p, const char *dir) {
         if (s) {
             char path[512];
             if (snprintf(path, sizeof(path), "%s/agents.json", dir) < (int)sizeof(path))
-                ok = coa_fs_write_file(path, s, strlen(s)) == 0;
+                ok = fs_write_file(path, s, strlen(s)) == 0;
             free(s);
         }
     } else if (arr) {
@@ -235,17 +235,17 @@ int coa_agent_pool_save(coa_agent_pool *p, const char *dir) {
     }
     if (root)
         cJSON_Delete(root);
-    coa_mutex_unlock(&p->mtx);
+    mutex_unlock(&p->mtx);
     return ok ? 0 : -1;
 }
 
-int coa_agent_pool_load(coa_agent_pool *p, const char *dir) {
+int agent_pool_load(agent_pool *p, const char *dir) {
     if (!p || !dir || !*dir)
         return -1;
     char path[512];
     if (snprintf(path, sizeof(path), "%s/agents.json", dir) >= (int)sizeof(path))
         return -1;
-    char *s = coa_fs_read_file(path);
+    char *s = fs_read_file(path);
     if (!s)
         return -1;
     cJSON *root = cJSON_Parse(s);
@@ -263,7 +263,7 @@ int coa_agent_pool_load(coa_agent_pool *p, const char *dir) {
             cJSON *r = cJSON_GetObjectItemCaseSensitive(it, "role");
             cJSON *prov = cJSON_GetObjectItemCaseSensitive(it, "provider");
             cJSON *mod = cJSON_GetObjectItemCaseSensitive(it, "model");
-            if (coa_agent_pool_add_model(p, n->valuestring, (r && cJSON_IsString(r)) ? r->valuestring : "",
+            if (agent_pool_add_model(p, n->valuestring, (r && cJSON_IsString(r)) ? r->valuestring : "",
                                          (prov && cJSON_IsString(prov)) ? prov->valuestring : NULL,
                                          (mod && cJSON_IsString(mod)) ? mod->valuestring : NULL) >= 0)
                 loaded++;

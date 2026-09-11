@@ -7,38 +7,38 @@
 #include <stdlib.h>
 #include <string.h>
 
-struct coa_sandbox {
+struct sandbox {
     int timeout_ms;
     char *workspace;     /* dir scanned before/after each run (may be NULL) */
-    coa_filetracker *ft; /* created lazily with workspace */
+    filetracker *ft; /* created lazily with workspace */
 };
 
-coa_sandbox *coa_sandbox_new(int timeout_ms) {
-    coa_sandbox *sb = (coa_sandbox *)calloc(1, sizeof(coa_sandbox));
+sandbox *sandbox_new(int timeout_ms) {
+    sandbox *sb = (sandbox *)calloc(1, sizeof(sandbox));
     if (sb)
         sb->timeout_ms = timeout_ms;
     return sb;
 }
 
-void coa_sandbox_free(coa_sandbox *sb) {
+void sandbox_free(sandbox *sb) {
     if (!sb)
         return;
     free(sb->workspace);
     if (sb->ft)
-        coa_filetracker_free(sb->ft);
+        filetracker_free(sb->ft);
     free(sb);
 }
 
-void coa_sandbox_set_workspace(coa_sandbox *sb, const char *dir) {
+void sandbox_set_workspace(sandbox *sb, const char *dir) {
     if (!sb)
         return;
     free(sb->workspace);
-    sb->workspace = (dir && *dir) ? coa_strdup(dir) : NULL;
+    sb->workspace = (dir && *dir) ? xstrdup(dir) : NULL;
     if (sb->workspace && !sb->ft)
-        sb->ft = coa_filetracker_new();
+        sb->ft = filetracker_new();
 }
 
-coa_filetracker *coa_sandbox_filetracker(coa_sandbox *sb) {
+filetracker *sandbox_filetracker(sandbox *sb) {
     return sb ? sb->ft : NULL;
 }
 
@@ -69,7 +69,7 @@ static int ci_contains(const char *hay, const char *needle) {
     return 0;
 }
 
-int coa_sandbox_forbidden(const char *cmd) {
+int sandbox_forbidden(const char *cmd) {
     if (!cmd)
         return 0;
     for (size_t i = 0; i < N_FORBIDDEN; i++)
@@ -78,44 +78,44 @@ int coa_sandbox_forbidden(const char *cmd) {
     return 0;
 }
 
-coa_sandbox_result *coa_sandbox_run(coa_sandbox *sb, const char *cmd) {
-    if (!cmd || coa_sandbox_forbidden(cmd))
+sandbox_result *sandbox_run(sandbox *sb, const char *cmd) {
+    if (!cmd || sandbox_forbidden(cmd))
         return NULL;
     /* file tracking: capture the workspace state + command reads before the
      * run, diff after (see filetracker.h) */
-    coa_ft_snapshot *snap = NULL;
+    ft_snapshot *snap = NULL;
     if (sb && sb->ft && sb->workspace) {
-        coa_filetracker_cmd_reads(sb->ft, cmd, sb->workspace);
-        snap = coa_filetracker_dir_snapshot(sb->workspace);
+        filetracker_cmd_reads(sb->ft, cmd, sb->workspace);
+        snap = filetracker_dir_snapshot(sb->workspace);
     }
-    coa_proc_result *pr = coa_proc_run(cmd, sb ? sb->timeout_ms : 0);
+    proc_result *pr = proc_run(cmd, sb ? sb->timeout_ms : 0);
     if (!pr) {
         if (snap)
-            coa_filetracker_snapshot_free(snap);
+            filetracker_snapshot_free(snap);
         return NULL;
     }
-    coa_sandbox_result *r = (coa_sandbox_result *)calloc(1, sizeof(coa_sandbox_result));
+    sandbox_result *r = (sandbox_result *)calloc(1, sizeof(sandbox_result));
     if (!r) {
         if (snap)
-            coa_filetracker_snapshot_free(snap);
-        coa_proc_result_free(pr);
+            filetracker_snapshot_free(snap);
+        proc_result_free(pr);
         return NULL;
     }
     r->exit_code = pr->exit_code;
     r->timed_out = pr->timed_out;
     r->ok = (pr->exit_code == 0 && !pr->timed_out) ? 1 : 0;
-    r->output = pr->output ? coa_strdup(pr->output) : coa_strdup("");
-    coa_proc_result_free(pr);
+    r->output = pr->output ? xstrdup(pr->output) : xstrdup("");
+    proc_result_free(pr);
     if (snap && sb->ft) {
-        coa_filetracker_dir_diff(sb->ft, snap, sb->workspace);
-        r->files_json = coa_filetracker_json(sb->ft);
+        filetracker_dir_diff(sb->ft, snap, sb->workspace);
+        r->files_json = filetracker_json(sb->ft);
     }
     if (snap)
-        coa_filetracker_snapshot_free(snap);
+        filetracker_snapshot_free(snap);
     return r;
 }
 
-void coa_sandbox_result_free(coa_sandbox_result *r) {
+void sandbox_result_free(sandbox_result *r) {
     if (!r)
         return;
     free(r->output);
@@ -124,18 +124,18 @@ void coa_sandbox_result_free(coa_sandbox_result *r) {
 }
 
 /* --- Wasm seam --- */
-static coa_sandbox_wasm_fn g_wasm_runner = NULL;
+static sandbox_wasm_fn g_wasm_runner = NULL;
 
-void coa_sandbox_set_wasm_runner(coa_sandbox_wasm_fn fn) {
+void sandbox_set_wasm_runner(sandbox_wasm_fn fn) {
     g_wasm_runner = fn;
 }
 
-int coa_sandbox_wasm_supported(void) {
+int sandbox_wasm_supported(void) {
     return g_wasm_runner != NULL;
 }
 
-char *coa_sandbox_run_wasm(const void *wasm, size_t wasm_len, const char *fn_name, const char *args_json) {
+char *sandbox_run_wasm(const void *wasm, size_t wasm_len, const char *fn_name, const char *args_json) {
     if (!g_wasm_runner)
-        return coa_strdup("{\"error\":\"wasm runtime not registered\"}");
+        return xstrdup("{\"error\":\"wasm runtime not registered\"}");
     return g_wasm_runner(wasm, wasm_len, fn_name, args_json);
 }

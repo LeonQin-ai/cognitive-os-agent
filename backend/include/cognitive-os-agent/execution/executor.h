@@ -15,42 +15,42 @@
 extern "C" {
 #endif
 
-typedef struct coa_executor coa_executor;
+typedef struct executor executor;
 
 /* Result of one execution. `output` is heap; free with
- * coa_executor_result_free. */
-typedef struct coa_executor_result {
+ * executor_result_free. */
+typedef struct executor_result {
     int ok;
     char *output;
-} coa_executor_result;
+} executor_result;
 
-void coa_executor_result_free(coa_executor_result *r);
+void executor_result_free(executor_result *r);
 
 /* vtable — impl is the executor's private state. */
-typedef struct coa_executor_ops {
+typedef struct executor_ops {
     const char *name; /* "local", "sandbox", "vm", ... */
     int (*start)(void *impl);
     /* run one action; returns 0 and fills *result (always non-NULL on rc 0),
      * nonzero on infrastructure failure (tool-level failure stays in result.ok) */
-    int (*execute)(void *impl, const char *tool, const char *args_json, coa_executor_result **result);
+    int (*execute)(void *impl, const char *tool, const char *args_json, executor_result **result);
     int (*stop)(void *impl);
     void (*destroy)(void *impl);
     /* optional state capture for executors that own their environment;
      * return -1 when unsupported */
     int (*snapshot)(void *impl, char **snapshot_id);
     int (*restore)(void *impl, const char *snapshot_id);
-} coa_executor_ops;
+} executor_ops;
 
-struct coa_executor {
-    const coa_executor_ops *ops;
+struct executor {
+    const executor_ops *ops;
     void *impl;
 };
 
 /* --- LocalExecutor: delegates to the tool registry (tool registry ctx) --- */
-struct coa_tool_registry;
-struct coa_tool_ctx;
-coa_executor *coa_executor_new_local(struct coa_tool_registry *reg, struct coa_tool_ctx *tctx,
-                                     void *snapshot /* coa_snapshot*, may be NULL */);
+struct tool_registry;
+struct tool_ctx;
+executor *executor_new_local(struct tool_registry *reg, struct tool_ctx *tctx,
+                                     void *snapshot /* snapshot*, may be NULL */);
 
 /* --- Routing executors (architecture v1.0 §9 Executor family) ---
  * Wrap an inner executor and forward every action to it, rewriting `shell`
@@ -58,20 +58,20 @@ coa_executor *coa_executor_new_local(struct coa_tool_registry *reg, struct coa_t
  * host over ssh, POSIX-quoted). Non-shell tools pass through unchanged.
  * The wrapper owns `inner` (destroyed with the wrapper). `distro` may be
  * NULL for the WSL default. */
-coa_executor *coa_executor_new_wsl(coa_executor *inner, const char *distro);
-coa_executor *coa_executor_new_remote(coa_executor *inner, const char *host);
+executor *executor_new_wsl(executor *inner, const char *distro);
+executor *executor_new_remote(executor *inner, const char *host);
 
 /* Generic lifecycle over any vtable. */
-coa_executor *coa_executor_new(const coa_executor_ops *ops, void *impl);
-void coa_executor_free(coa_executor *e);
-const char *coa_executor_name(const coa_executor *e);
+executor *executor_new(const executor_ops *ops, void *impl);
+void executor_free(executor *e);
+const char *executor_name(const executor *e);
 
 /* Run one action. Returns 0 ok (*result filled, caller frees), -1 infra error. */
-int coa_executor_execute(coa_executor *e, const char *tool, const char *args_json, coa_executor_result **result);
-int coa_executor_start(coa_executor *e);
-int coa_executor_stop(coa_executor *e);
-int coa_executor_snapshot(coa_executor *e, char **snapshot_id);
-int coa_executor_restore(coa_executor *e, const char *snapshot_id);
+int executor_execute(executor *e, const char *tool, const char *args_json, executor_result **result);
+int executor_start(executor *e);
+int executor_stop(executor *e);
+int executor_snapshot(executor *e, char **snapshot_id);
+int executor_restore(executor *e, const char *snapshot_id);
 
 #ifdef __cplusplus
 }

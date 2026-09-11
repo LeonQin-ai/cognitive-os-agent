@@ -8,16 +8,16 @@
 extern "C" {
 #endif
 
-typedef struct coa_index coa_index;
+typedef struct index index;
 
-coa_index *coa_index_new(void);
-void coa_index_free(coa_index *idx);
+index *index_new(void);
+void index_free(index *idx);
 
 /* Index a single file's content (term -> file:line). */
-int coa_index_add_file(coa_index *idx, const char *path, const char *content);
+int index_add_file(index *idx, const char *path, const char *content);
 
 /* Search: returns a JSON array of {"term","file","line"} matches (caller frees). */
-char *coa_index_search(coa_index *idx, const char *query, int limit);
+char *index_search(index *idx, const char *query, int limit);
 
 #ifdef __cplusplus
 }

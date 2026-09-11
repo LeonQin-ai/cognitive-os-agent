@@ -26,7 +26,7 @@ extern "C" {
 
 /* Create the HTTP server (if ctx->http_port > 0) and register routes.
  * Returns 0 ok, -1 if the server could not be started. */
-int coa_api_attach(coa_ctx *ctx);
+int api_attach(runtime_ctx *ctx);
 
 #ifdef __cplusplus
 }

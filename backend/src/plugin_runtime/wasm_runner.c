@@ -16,21 +16,21 @@
 
 #define MAX_ARGS 16
 
-int coa_wasm3_available(void) {
+int wasm3_available(void) {
     return 1;
 }
 
-char *coa_wasm3_run(const void *wasm, size_t wasm_len, const char *fn_name, const char *args_json) {
+char *wasm3_run(const void *wasm, size_t wasm_len, const char *fn_name, const char *args_json) {
     if (!wasm || !fn_name)
-        return coa_strdup("{\"ok\":false,\"error\":\"bad arguments\"}");
+        return xstrdup("{\"ok\":false,\"error\":\"bad arguments\"}");
 
     IM3Environment env = m3_NewEnvironment();
     if (!env)
-        return coa_strdup("{\"ok\":false,\"error\":\"m3 environment failed\"}");
+        return xstrdup("{\"ok\":false,\"error\":\"m3 environment failed\"}");
     IM3Runtime rt = m3_NewRuntime(env, 64 * 1024, NULL);
     if (!rt) {
         m3_FreeEnvironment(env);
-        return coa_strdup("{\"ok\":false,\"error\":\"m3 runtime failed\"}");
+        return xstrdup("{\"ok\":false,\"error\":\"m3 runtime failed\"}");
     }
 
     IM3Module mod = NULL;
@@ -103,5 +103,5 @@ char *coa_wasm3_run(const void *wasm, size_t wasm_len, const char *fn_name, cons
         m3_FreeModule(mod);
     m3_FreeRuntime(rt);
     m3_FreeEnvironment(env);
-    return coa_strdup(out);
+    return xstrdup(out);
 }

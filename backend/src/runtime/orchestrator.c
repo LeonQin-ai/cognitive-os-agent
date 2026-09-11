@@ -1,12 +1,12 @@
 /* orchestrator.c — auto-mode multi-agent orchestration on top of the Flow
  * engine.
  *
- * coa_flow_decompose: the LLM splits a top-level task into 2-4 subtasks
+ * flow_decompose: the LLM splits a top-level task into 2-4 subtasks
  * assigned to registered agents and compiles them into a Flow DAG JSON (one
  * parallel node per subtask). The caller can inspect/modify the DAG before
- * running it with coa_flow_run.
+ * running it with flow_run.
  *
- * coa_orchestrate: decompose + coa_flow_run (one isolated reasoning
+ * orchestrate: decompose + flow_run (one isolated reasoning
  * instance per node, parallel) + a final LLM merge into a single answer.
  * Falls back to a plain single-agent run when no agents are registered or
  * the plan is unparseable. */
@@ -24,8 +24,8 @@
 
 /* Roster lines for the decompose prompt, from the pool snapshot JSON.
  * Returns malloc'd text ("name (role)" per line) or NULL. */
-static char *roster_text(coa_ctx *ctx) {
-    char *snap = coa_agent_pool_snapshot_json(ctx->agents);
+static char *roster_text(runtime_ctx *ctx) {
+    char *snap = agent_pool_snapshot_json(ctx->agents);
     if (!snap)
         return NULL;
     cJSON *root = cJSON_Parse(snap);
@@ -68,7 +68,7 @@ static char *roster_text(coa_ctx *ctx) {
  * registered are kept. `after[][ORCH_MAX_STEPS]` receives 0-based prerequisite
  * step indices per step (1-based "after" in the plan text, converted here).
  * Returns the number of valid steps (0 = parse fail). */
-static int parse_plan(coa_ctx *ctx, const char *raw, char agents[][64], char tasks[][512],
+static int parse_plan(runtime_ctx *ctx, const char *raw, char agents[][64], char tasks[][512],
                       int after[][ORCH_MAX_STEPS]) {
     if (!raw)
         return 0;
@@ -101,7 +101,7 @@ static int parse_plan(coa_ctx *ctx, const char *raw, char agents[][64], char tas
             continue;
         if (!t || !cJSON_IsString(t) || !t->valuestring || !*t->valuestring)
             continue;
-        if (coa_agent_pool_find(ctx->agents, a->valuestring) < 0)
+        if (agent_pool_find(ctx->agents, a->valuestring) < 0)
             continue; /* unknown */
         snprintf(agents[n], 64, "%s", a->valuestring);
         snprintf(tasks[n], 512, "%s", t->valuestring);
@@ -196,9 +196,9 @@ static char *build_dag_json(char agents[][64], char tasks[][512], int after[][OR
 
 /* LLM decomposition: roster + task in, parsed plan out. Returns the number of
  * valid steps (0 = no roster / no parseable plan). */
-static int decompose_task(coa_ctx *ctx, const char *task, char (*agents)[64], char (*tasks)[512],
+static int decompose_task(runtime_ctx *ctx, const char *task, char (*agents)[64], char (*tasks)[512],
                           int (*after)[ORCH_MAX_STEPS]) {
-    char *roster = ctx->llm && ctx->agents && coa_agent_pool_count(ctx->agents) > 0 ? roster_text(ctx) : NULL;
+    char *roster = ctx->llm && ctx->agents && agent_pool_count(ctx->agents) > 0 ? roster_text(ctx) : NULL;
     int nsteps = 0;
     if (roster && *roster) {
         char sys[] = "你是多 agent 编排器。把用户任务分解为 2-4 个有依赖关系的子任务并分配给可用的 agent。"
@@ -213,12 +213,12 @@ static int decompose_task(coa_ctx *ctx, const char *task, char (*agents)[64], ch
         char *user = (char *)malloc(ulen);
         if (user) {
             snprintf(user, ulen, "可用 agent:\n%s\n任务: %s", roster, task);
-            char *raw = coa_llm_chat_simple(ctx->llm, sys, user);
+            char *raw = llm_chat_simple(ctx->llm, sys, user);
             free(user);
             if (raw) {
-                coa_log_info("orchestrator: decompose raw: %s", raw);
+                log_info("orchestrator: decompose raw: %s", raw);
                 nsteps = parse_plan(ctx, raw, agents, tasks, after);
-                coa_log_info("orchestrator: parsed %d steps", nsteps);
+                log_info("orchestrator: parsed %d steps", nsteps);
                 free(raw);
             }
         }
@@ -229,7 +229,7 @@ static int decompose_task(coa_ctx *ctx, const char *task, char (*agents)[64], ch
 
 /* Compile a task into a Flow DAG without executing it (0 ok, -1 no plan).
  * *dag_json receives a malloc'd {"nodes":[...],"edges":[]} document. */
-int coa_flow_decompose(coa_ctx *ctx, const char *task, char **dag_json) {
+int flow_decompose(runtime_ctx *ctx, const char *task, char **dag_json) {
     if (!ctx || !task || !*task || !dag_json)
         return -1;
     *dag_json = NULL;
@@ -256,7 +256,7 @@ int coa_flow_decompose(coa_ctx *ctx, const char *task, char **dag_json) {
     return *dag_json ? 0 : -1;
 }
 
-int coa_orchestrate(coa_ctx *ctx, const char *task, char **answer, char **trace_json) {
+int orchestrate(runtime_ctx *ctx, const char *task, char **answer, char **trace_json) {
     if (!ctx || !task || !*task || !answer)
         return -1;
     *answer = NULL;
@@ -280,8 +280,8 @@ int coa_orchestrate(coa_ctx *ctx, const char *task, char **answer, char **trace_
         free(agents);
         free(tasks);
         free(after);
-        coa_log_info("orchestrator: no multi-agent plan, running single-agent");
-        return coa_run(ctx, task, answer);
+        log_info("orchestrator: no multi-agent plan, running single-agent");
+        return run(ctx, task, answer);
     }
     char *dag = build_dag_json(agents, tasks, after, nsteps);
     free(agents);
@@ -293,7 +293,7 @@ int coa_orchestrate(coa_ctx *ctx, const char *task, char **answer, char **trace_
     /* ---- EXECUTE through the Flow engine (parallel, isolated per node) ---- */
     char *flow_answer = NULL;
     char *trace = NULL;
-    int rc = coa_flow_run(ctx, dag, &flow_answer, &trace);
+    int rc = flow_run(ctx, dag, &flow_answer, &trace);
     free(dag);
     if (rc != 0)
         return -1;
@@ -304,9 +304,9 @@ int coa_orchestrate(coa_ctx *ctx, const char *task, char **answer, char **trace_
     if (trace) {
         cJSON *arr = cJSON_Parse(trace);
         if (arr) {
-            coa_strbuf b;
-            coa_strbuf_init(&b);
-            coa_strbuf_appendf(&b, "任务: %s\n\n各 agent 结果:\n", task);
+            strbuf b;
+            strbuf_init(&b);
+            strbuf_appendf(&b, "任务: %s\n\n各 agent 结果:\n", task);
             cJSON *it;
             int i = 1;
             cJSON_ArrayForEach(it, arr) {
@@ -316,7 +316,7 @@ int coa_orchestrate(coa_ctx *ctx, const char *task, char **answer, char **trace_
                 const char *ag = (a && cJSON_IsString(a)) ? a->valuestring : "?";
                 const char *st = (s && cJSON_IsString(s)) ? s->valuestring : "?";
                 const char *rs = (r && cJSON_IsString(r)) ? r->valuestring : "";
-                coa_strbuf_appendf(&b, "%d. [%s/status=%s] %s\n", i++, ag, st, rs);
+                strbuf_appendf(&b, "%d. [%s/status=%s] %s\n", i++, ag, st, rs);
             }
             cJSON_Delete(arr);
             merged = b.buf;
@@ -330,14 +330,14 @@ int coa_orchestrate(coa_ctx *ctx, const char *task, char **answer, char **trace_
                       "若某步骤 status 不是 ok，或其结果只是意向说明而没有任何实际执行证据"
                       "（没有工具输出、没有验证过文件生成、没有真实测试运行结果），"
                       "必须如实报告该部分未完成，并说明缺失了什么，不得声称成功。";
-        final = coa_llm_chat_simple(ctx->llm, sys2, merged);
+        final = llm_chat_simple(ctx->llm, sys2, merged);
     }
     if (!final || !*final)
-        final = coa_strdup(merged && *merged ? merged : flow_answer);
+        final = xstrdup(merged && *merged ? merged : flow_answer);
 
     if (trace_json && trace)
-        *trace_json = coa_strdup(trace);
-    coa_blackboard_put(ctx->blackboard, "flow/final", final);
+        *trace_json = xstrdup(trace);
+    blackboard_put(ctx->blackboard, "flow/final", final);
     free(trace);
     free(merged);
     free(flow_answer);

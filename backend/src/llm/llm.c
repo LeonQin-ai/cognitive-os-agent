@@ -6,23 +6,23 @@
 #include <stdio.h>
 
 /* provider constructors */
-coa_llm *coa_openai_create(const char *base_url, const char *api_key, const char *model);
-coa_llm *coa_anthropic_create(const char *base_url, const char *api_key, const char *model);
-coa_llm *coa_mock_create(const char *model);
+llm *openai_create(const char *base_url, const char *api_key, const char *model);
+llm *anthropic_create(const char *base_url, const char *api_key, const char *model);
+llm *mock_create(const char *model);
 
-coa_llm *coa_llm_create(const char *provider, const char *base_url, const char *api_key, const char *model) {
+llm *llm_create(const char *provider, const char *base_url, const char *api_key, const char *model) {
     if (!provider)
         return NULL;
     if (strcmp(provider, "openai") == 0)
-        return coa_openai_create(base_url, api_key, model);
+        return openai_create(base_url, api_key, model);
     if (strcmp(provider, "anthropic") == 0)
-        return coa_anthropic_create(base_url, api_key, model);
+        return anthropic_create(base_url, api_key, model);
     if (strcmp(provider, "mock") == 0)
-        return coa_mock_create(model);
+        return mock_create(model);
     return NULL;
 }
 
-void coa_llm_destroy(coa_llm *llm) {
+void llm_destroy(llm *llm) {
     if (!llm)
         return;
     if (llm->vt && llm->vt->destroy)
@@ -31,9 +31,9 @@ void coa_llm_destroy(coa_llm *llm) {
 
 /* LLM HTTP timeout (ms). Reasoning models think for minutes before the
  * first byte, so a 60s default aborted mid-reasoning ("http request
- * failed" with no server error). Override via COA_LLM_TIMEOUT_MS
+ * failed" with no server error). Override via LLM_TIMEOUT_MS
  * (the COA_* env mapping exposes it as the "llm.timeout_ms" key). */
-int coa_llm_timeout_ms(void) {
+int llm_timeout_ms(void) {
     const char *e = getenv("COA_LLM_TIMEOUT_MS");
     if (e && *e) {
         long v = atol(e);
@@ -43,13 +43,13 @@ int coa_llm_timeout_ms(void) {
     return 300000;
 }
 
-int coa_llm_chat(coa_llm *llm, const coa_llm_request *req, coa_llm_response *resp) {
+int llm_chat(llm *llm, const llm_request *req, llm_response *resp) {
     if (!llm || !llm->vt || !llm->vt->chat)
         return -1;
     return llm->vt->chat(llm, req, resp);
 }
 
-int coa_llm_stream(coa_llm *llm, const coa_llm_request *req, coa_llm_stream_cb cb, void *ud) {
+int llm_stream(llm *llm, const llm_request *req, llm_stream_cb cb, void *ud) {
     if (!llm || !llm->vt || !llm->vt->stream)
         return -1;
     int rc = llm->vt->stream(llm, req, cb, ud);
@@ -57,16 +57,16 @@ int coa_llm_stream(coa_llm *llm, const coa_llm_request *req, coa_llm_stream_cb c
     return rc;
 }
 
-void coa_llm_cancel(coa_llm *llm) {
+void llm_cancel(llm *llm) {
     if (llm)
         llm->cancel = 1;
 }
 
-const coa_llm_caps *coa_llm_capabilities(coa_llm *llm) {
-    static const coa_llm_caps openai_caps = {1, 1, 128000};
-    static const coa_llm_caps anthropic_caps = {1, 1, 200000};
-    static const coa_llm_caps mock_caps = {1, 0, 8192};
-    static const coa_llm_caps unknown_caps = {1, 1, 0};
+const llm_caps *llm_capabilities(llm *llm) {
+    static const llm_caps openai_caps = {1, 1, 128000};
+    static const llm_caps anthropic_caps = {1, 1, 200000};
+    static const llm_caps mock_caps = {1, 0, 8192};
+    static const llm_caps unknown_caps = {1, 1, 0};
     if (!llm || !llm->provider)
         return &unknown_caps;
     if (strcmp(llm->provider, "openai") == 0)
@@ -78,24 +78,24 @@ const coa_llm_caps *coa_llm_capabilities(coa_llm *llm) {
     return &unknown_caps;
 }
 
-char *coa_llm_chat_simple(coa_llm *llm, const char *system_prompt, const char *user_prompt) {
-    return coa_llm_chat_simple_ex(llm, system_prompt, user_prompt, 1024);
+char *llm_chat_simple(llm *llm, const char *system_prompt, const char *user_prompt) {
+    return llm_chat_simple_ex(llm, system_prompt, user_prompt, 1024);
 }
 
-char *coa_llm_chat_simple_ex(coa_llm *llm, const char *system_prompt, const char *user_prompt, int max_tokens) {
-    coa_llm_message msgs[2] = {
+char *llm_chat_simple_ex(llm *llm, const char *system_prompt, const char *user_prompt, int max_tokens) {
+    llm_message msgs[2] = {
         {"system", system_prompt ? system_prompt : ""},
         {"user", user_prompt ? user_prompt : ""},
     };
-    coa_llm_request req = {0};
+    llm_request req = {0};
     req.messages = msgs;
     req.num_messages = 2;
     req.temperature = 0.2;
     req.max_tokens = max_tokens > 0 ? max_tokens : 1024;
-    coa_llm_response resp = {0};
-    if (coa_llm_chat(llm, &req, &resp) != 0) {
+    llm_response resp = {0};
+    if (llm_chat(llm, &req, &resp) != 0) {
         if (resp.error) {
-            coa_log_warn("llm: chat_simple failed: %s", resp.error);
+            log_warn("llm: chat_simple failed: %s", resp.error);
             char *e = resp.error;
             resp.error = NULL;
             free(e);

@@ -1,9 +1,9 @@
 /* memory.c — cognitive memory facade.
  * Composes fine-grained sub-stores:
  *  - working memory:  short-term ring buffer of recent items (inline)
- *  - long-term facts: coa_kvstore (memory/kv.h)
- *  - episodes:        coa_episodic (memory/episode.h)
- *  - vector-lite:     coa_vectorstore (memory/vector.h), mirroring working + episodes
+ *  - long-term facts: kvstore (memory/kv.h)
+ *  - episodes:        episodic (memory/episode.h)
+ *  - vector-lite:     vectorstore (memory/vector.h), mirroring working + episodes
  * Long-term facts are persisted as JSON under the state root. */
 #include "cognitive-os-agent/memory/memory.h"
 #include "cognitive-os-agent/memory/kv.h"
@@ -34,13 +34,13 @@ typedef struct {
     size_t count;
 } working_mem;
 
-struct coa_memory {
+struct memory {
     char root[512];
     working_mem working;      /* guarded by mtx */
-    coa_kvstore *facts;       /* own mutex */
-    coa_episodic *episodes;   /* own mutex */
-    coa_vectorstore *vectors; /* own mutex */
-    coa_graph *graph;         /* entity graph: task -used-> tool -touched-> file */
+    kvstore *facts;       /* own mutex */
+    episodic *episodes;   /* own mutex */
+    vectorstore *vectors; /* own mutex */
+    graph *graph;         /* entity graph: task -used-> tool -touched-> file */
     size_t seq;               /* monotonic id for vector mirroring (guarded by mtx) */
     /* automatic consolidation bookkeeping (guarded by mtx) */
     size_t consolidated_at; /* episode count at the last pass */
@@ -50,59 +50,59 @@ struct coa_memory {
     long long lc_half_life_ms; /* <= 0 = auto lifecycle off */
     double lc_min_strength;
     int lc_archive;
-    coa_mutex mtx;
+    mutex_t mtx;
 };
 
 /* Per-instance persistence paths: memory files live under
  * <state_root>/memory/. With no state_root the instance is ephemeral
  * (in-memory only) -- this keeps contexts and tests isolated instead of
  * sharing a single global directory. */
-static void mem_path(const coa_memory *m, char *out, size_t n, const char *file) {
+static void mem_path(const memory *m, char *out, size_t n, const char *file) {
     if (m->root[0] && file && *file) {
-        coa_path_join(out, n, m->root, "memory");
-        coa_path_join(out, n, out, file);
+        path_join(out, n, m->root, "memory");
+        path_join(out, n, out, file);
         return;
     }
     out[0] = 0;
 }
 
-static char *mem_read(const coa_memory *m, const char *file) {
+static char *mem_read(const memory *m, const char *file) {
     char p[1024];
     mem_path(m, p, sizeof p, file);
-    return p[0] ? coa_fs_read_file(p) : NULL;
+    return p[0] ? fs_read_file(p) : NULL;
 }
 
-static int mem_write(const coa_memory *m, const char *file, const char *text) {
+static int mem_write(const memory *m, const char *file, const char *text) {
     char p[1024];
     mem_path(m, p, sizeof p, file);
     if (!p[0])
         return -1;
     char dir[1024];
-    coa_path_join(dir, sizeof dir, m->root, "memory");
-    coa_fs_mkdirs(dir);
-    return coa_fs_write_file(p, text, strlen(text));
+    path_join(dir, sizeof dir, m->root, "memory");
+    fs_mkdirs(dir);
+    return fs_write_file(p, text, strlen(text));
 }
 
-coa_memory *coa_memory_new(const char *state_root) {
-    coa_memory *m = (coa_memory *)calloc(1, sizeof(coa_memory));
+memory *memory_new(const char *state_root) {
+    memory *m = (memory *)calloc(1, sizeof(memory));
     if (!m)
         return NULL;
     snprintf(m->root, sizeof(m->root), "%s", state_root);
-    coa_mutex_init(&m->mtx);
-    m->facts = coa_kvstore_new();
-    m->episodes = coa_episodic_new();
-    m->vectors = coa_vectorstore_new();
-    m->graph = coa_graph_new();
+    mutex_init(&m->mtx);
+    m->facts = kvstore_new();
+    m->episodes = episodic_new();
+    m->vectors = vectorstore_new();
+    m->graph = graph_new();
     if (!m->facts || !m->episodes || !m->vectors || !m->graph) {
         if (m->facts)
-            coa_kvstore_free(m->facts);
+            kvstore_free(m->facts);
         if (m->episodes)
-            coa_episodic_free(m->episodes);
+            episodic_free(m->episodes);
         if (m->vectors)
-            coa_vectorstore_free(m->vectors);
+            vectorstore_free(m->vectors);
         if (m->graph)
-            coa_graph_free(m->graph);
-        coa_mutex_destroy(&m->mtx);
+            graph_free(m->graph);
+        mutex_destroy(&m->mtx);
         free(m);
         return NULL;
     }
@@ -113,7 +113,7 @@ coa_memory *coa_memory_new(const char *state_root) {
         cJSON *root = cJSON_Parse(facts_json);
         if (root && cJSON_IsObject(root)) {
             cJSON *it;
-            cJSON_ArrayForEach(it, root) coa_kvstore_set(m->facts, it->string, it->valuestring ? it->valuestring : "");
+            cJSON_ArrayForEach(it, root) kvstore_set(m->facts, it->string, it->valuestring ? it->valuestring : "");
         }
         if (root)
             cJSON_Delete(root);
@@ -132,7 +132,7 @@ coa_memory *coa_memory_new(const char *state_root) {
                 cJSON *ts = cJSON_GetObjectItemCaseSensitive(it, "ts");
                 cJSON *st = cJSON_GetObjectItemCaseSensitive(it, "strength");
                 if (tk && cJSON_IsString(tk))
-                    coa_episodic_add_full(m->episodes, tk->valuestring,
+                    episodic_add_full(m->episodes, tk->valuestring,
                                           (rs && cJSON_IsString(rs)) ? rs->valuestring : "",
                                           (ts && cJSON_IsNumber(ts)) ? (long long)ts->valuedouble : 0,
                                           (st && cJSON_IsNumber(st)) ? st->valuedouble : 0);
@@ -144,22 +144,22 @@ coa_memory *coa_memory_new(const char *state_root) {
     }
 
     /* mirror reloaded episodes into the vector store so RAG recall
-     * (coa_memory_retrieve/_ex, used by the context builder) still finds
+     * (memory_retrieve/_ex, used by the context builder) still finds
      * pre-restart experience — keyword search alone saw them before, which
      * made the agent "forget" after a restart. Rebuild ids from the shared
      * sequence so newly recorded episodes cannot collide. */
     {
-        int n = coa_episodic_count(m->episodes);
-        coa_mutex_lock(&m->mtx);
+        int n = episodic_count(m->episodes);
+        mutex_lock(&m->mtx);
         for (int i = 0; i < n; i++) {
-            const char *t = coa_episodic_task(m->episodes, i);
+            const char *t = episodic_task(m->episodes, i);
             if (!t || !*t)
                 continue;
             char id[32];
             snprintf(id, sizeof(id), "e:%zu", m->seq++);
-            coa_vectorstore_add(m->vectors, id, t, "episode");
+            vectorstore_add(m->vectors, id, t, "episode");
         }
-        coa_mutex_unlock(&m->mtx);
+        mutex_unlock(&m->mtx);
     }
 
     /* load persisted entity graph */
@@ -174,9 +174,9 @@ coa_memory *coa_memory_new(const char *state_root) {
                 cJSON *t = cJSON_GetObjectItemCaseSensitive(it, "to");
                 cJSON *r = cJSON_GetObjectItemCaseSensitive(it, "relation");
                 if (f && cJSON_IsString(f) && t && cJSON_IsString(t)) {
-                    coa_graph_add_node(m->graph, f->valuestring, f->valuestring);
-                    coa_graph_add_node(m->graph, t->valuestring, t->valuestring);
-                    coa_graph_add_edge(m->graph, f->valuestring, t->valuestring,
+                    graph_add_node(m->graph, f->valuestring, f->valuestring);
+                    graph_add_node(m->graph, t->valuestring, t->valuestring);
+                    graph_add_edge(m->graph, f->valuestring, t->valuestring,
                                        (r && cJSON_IsString(r)) ? r->valuestring : "");
                 }
             }
@@ -188,7 +188,7 @@ coa_memory *coa_memory_new(const char *state_root) {
     return m;
 }
 
-void coa_memory_free(coa_memory *m) {
+void memory_free(memory *m) {
     if (!m)
         return;
     for (size_t i = 0; i < m->working.count; i++) {
@@ -198,20 +198,20 @@ void coa_memory_free(coa_memory *m) {
     }
     free(m->working.items);
     free(m->working.ids);
-    coa_kvstore_free(m->facts);
-    coa_episodic_free(m->episodes);
-    coa_vectorstore_free(m->vectors);
-    coa_graph_free(m->graph);
-    coa_mutex_destroy(&m->mtx);
+    kvstore_free(m->facts);
+    episodic_free(m->episodes);
+    vectorstore_free(m->vectors);
+    graph_free(m->graph);
+    mutex_destroy(&m->mtx);
     free(m);
 }
 
-void coa_memory_working_push(coa_memory *m, const char *text) {
+void memory_working_push(memory *m, const char *text) {
     if (!m || !text)
         return;
     char id[32];
     char *evict_id = NULL; /* vector-store id of the evicted ring item */
-    coa_mutex_lock(&m->mtx);
+    mutex_lock(&m->mtx);
     /* id list mirrors the ring 1:1 (ring never exceeds WORKING_CAP, so one
      * lazy allocation is enough); NULL entries mean "not tracked" (OOM). */
     if (!m->working.ids)
@@ -226,78 +226,78 @@ void coa_memory_working_push(coa_memory *m, const char *text) {
     }
     char **ni = (char **)realloc(m->working.items, (m->working.count + 1) * sizeof(char *));
     if (!ni) {
-        coa_mutex_unlock(&m->mtx);
+        mutex_unlock(&m->mtx);
         free(evict_id);
         return;
     }
     m->working.items = ni;
     memmove(m->working.items + 1, m->working.items, m->working.count * sizeof(char *));
-    m->working.items[0] = coa_strdup(text);
+    m->working.items[0] = xstrdup(text);
     m->working.count++;
     snprintf(id, sizeof(id), "w:%zu", m->seq++);
     if (m->working.ids) {
         memmove(m->working.ids + 1, m->working.ids, (m->working.count - 1) * sizeof(char *));
-        m->working.ids[0] = coa_strdup(id);
+        m->working.ids[0] = xstrdup(id);
     }
-    coa_mutex_unlock(&m->mtx);
+    mutex_unlock(&m->mtx);
 
-    coa_vectorstore_add(m->vectors, id, text, "working");
+    vectorstore_add(m->vectors, id, text, "working");
     if (evict_id) {
         /* the ring evicted the oldest item: drop its vector mirror too,
          * otherwise the store grows without bound in long sessions */
-        coa_vectorstore_remove(m->vectors, evict_id);
+        vectorstore_remove(m->vectors, evict_id);
         free(evict_id);
     }
 }
 
-int coa_memory_working_count(coa_memory *m) {
+int memory_working_count(memory *m) {
     if (!m)
         return 0;
-    coa_mutex_lock(&m->mtx);
+    mutex_lock(&m->mtx);
     int n = (int)m->working.count;
-    coa_mutex_unlock(&m->mtx);
+    mutex_unlock(&m->mtx);
     return n;
 }
 
-const char *coa_memory_working_at(coa_memory *m, int i) {
+const char *memory_working_at(memory *m, int i) {
     if (!m || i < 0)
         return NULL;
-    coa_mutex_lock(&m->mtx);
+    mutex_lock(&m->mtx);
     const char *v = ((size_t)i < m->working.count) ? m->working.items[i] : NULL;
-    coa_mutex_unlock(&m->mtx);
+    mutex_unlock(&m->mtx);
     return v;
 }
 
-void coa_memory_remember(coa_memory *m, const char *key, const char *value) {
+void memory_remember(memory *m, const char *key, const char *value) {
     if (!m || !key || !*key)
         return;
-    coa_kvstore_set(m->facts, key, value);
+    kvstore_set(m->facts, key, value);
 }
 
-const char *coa_memory_recall(coa_memory *m, const char *key) {
+const char *memory_recall(memory *m, const char *key) {
     if (!m || !key)
         return NULL;
-    return coa_kvstore_get(m->facts, key);
+    return kvstore_get(m->facts, key);
 }
 
-void coa_memory_record_experience(coa_memory *m, const char *task, const char *result) {
+void memory_record_experience(memory *m, const char *task, const char *result) {
     if (!m || !task)
         return;
     char id[32];
-    coa_mutex_lock(&m->mtx);
+    mutex_lock(&m->mtx);
     snprintf(id, sizeof(id), "e:%zu", m->seq++);
-    coa_mutex_unlock(&m->mtx);
+    mutex_unlock(&m->mtx);
 
-    coa_episodic_add(m->episodes, task, result);
-    coa_vectorstore_add(m->vectors, id, task, result ? result : "");
+    episodic_add(m->episodes, task, result);
+    vectorstore_add(m->vectors, id, task, result ? result : "");
 }
 
 /* ---- RAG document indexing (uploads) ---- */
 
-int coa_memory_index_document(coa_memory *m, const char *id, const char *text, const char *meta) {
+int memory_index_document(memory *m, const char *id, const char *text, const char *meta) {
     if (!m || !text || !*text)
         return -1;
-    return coa_vectorstore_add(m->vectors, id, text, meta);
+    return vectorstore_add(m->vectors, id, text, meta);
 }
 
 #define UPLOAD_CHUNK_TARGET 600             /* chunk chars before flushing a paragraph run */
@@ -305,9 +305,9 @@ int coa_memory_index_document(coa_memory *m, const char *id, const char *text, c
 
 /* Split `text` into ~UPLOAD_CHUNK_TARGET chunks at paragraph boundaries
  * (blank lines) and index each with id "<base>#<i>". Returns chunks added. */
-int coa_memory_index_text(coa_memory *m, const char *base, const char *text) {
-    coa_strbuf cur;
-    coa_strbuf_init(&cur);
+int memory_index_text(memory *m, const char *base, const char *text) {
+    strbuf cur;
+    strbuf_init(&cur);
     int n = 0, idx = 0;
     const char *p = text;
     while (*p) {
@@ -317,67 +317,67 @@ int coa_memory_index_text(coa_memory *m, const char *base, const char *text) {
         if (cur.len > 0 && cur.len + plen > UPLOAD_CHUNK_TARGET) {
             char id[128];
             snprintf(id, sizeof(id), "%s#%d", base, idx++);
-            coa_memory_index_document(m, id, cur.buf, "upload");
+            memory_index_document(m, id, cur.buf, "upload");
             n++;
-            coa_strbuf_free(&cur);
-            coa_strbuf_init(&cur);
+            strbuf_free(&cur);
+            strbuf_init(&cur);
         }
-        coa_strbuf_append_n(&cur, p, plen);
-        coa_strbuf_append(&cur, "\n");
+        strbuf_append_n(&cur, p, plen);
+        strbuf_append(&cur, "\n");
         p += nl ? (size_t)(nl - p) + 2 : plen;
     }
     if (cur.len > 0) {
         char id[128];
         snprintf(id, sizeof(id), "%s#%d", base, idx++);
-        coa_memory_index_document(m, id, cur.buf, "upload");
+        memory_index_document(m, id, cur.buf, "upload");
         n++;
     }
-    coa_strbuf_free(&cur);
+    strbuf_free(&cur);
     return n;
 }
 
-int coa_memory_index_uploads(coa_memory *m, const char *dir) {
+int memory_index_uploads(memory *m, const char *dir) {
     if (!m || !dir || !*dir)
         return 0;
-    coa_dir_list dl;
-    if (coa_fs_list_dir(dir, &dl) != 0)
+    dir_list dl;
+    if (fs_list_dir(dir, &dl) != 0)
         return 0;
     int total = 0;
     for (size_t i = 0; i < dl.count; i++) {
         if (dl.items[i].is_dir)
             continue;
         char fpath[1024];
-        coa_path_join(fpath, sizeof(fpath), dir, dl.items[i].name);
-        long long sz = coa_fs_file_size(fpath);
+        path_join(fpath, sizeof(fpath), dir, dl.items[i].name);
+        long long sz = fs_file_size(fpath);
         if (sz <= 0 || sz > UPLOAD_MAX_FILE)
             continue;
-        char *text = coa_fs_read_file(fpath);
+        char *text = fs_read_file(fpath);
         if (!text)
             continue;
         char base[256];
         snprintf(base, sizeof(base), "upload:%s", dl.items[i].name);
-        total += coa_memory_index_text(m, base, text);
+        total += memory_index_text(m, base, text);
         free(text);
     }
-    coa_fs_list_free(&dl);
+    fs_list_free(&dl);
     return total;
 }
 
 /* ---- entity knowledge graph (task -used-> tool -touched-> file) ---- */
 
-void coa_memory_record_edge(coa_memory *m, const char *from, const char *to, const char *relation) {
+void memory_record_edge(memory *m, const char *from, const char *to, const char *relation) {
     if (!m || !from || !*from || !to || !*to)
         return;
     /* nodes are id = label; existing nodes are folded (add_node returns -1) */
-    coa_graph_add_node(m->graph, from, from);
-    coa_graph_add_node(m->graph, to, to);
-    coa_graph_add_edge(m->graph, from, to, relation ? relation : "");
+    graph_add_node(m->graph, from, from);
+    graph_add_node(m->graph, to, to);
+    graph_add_edge(m->graph, from, to, relation ? relation : "");
 }
 
-char *coa_memory_graph_json(coa_memory *m) {
+char *memory_graph_json(memory *m) {
     if (!m)
-        return coa_strdup("{}");
-    return coa_graph_snapshot_json(m->graph);
+        return xstrdup("{}");
+    return graph_snapshot_json(m->graph);
 }
 
 /* Edges whose endpoint labels share a token with the query. Reuses the
@@ -391,17 +391,17 @@ static int label_hit(const char *label, const char **tokens, const int *tlens, i
     return 0;
 }
 
-char *coa_memory_graph_related(coa_memory *m, const char *query, int limit) {
+char *memory_graph_related(memory *m, const char *query, int limit) {
     if (!m || !query || limit <= 0)
-        return coa_strdup("[]");
+        return xstrdup("[]");
     const char *tokens[64];
     int tlens[64];
     int ntok = 0;
     tokenize(query, tokens, tlens, &ntok);
     if (ntok == 0)
-        return coa_strdup("[]");
+        return xstrdup("[]");
 
-    char *snap = coa_graph_snapshot_json(m->graph);
+    char *snap = graph_snapshot_json(m->graph);
     cJSON *root = snap ? cJSON_Parse(snap) : NULL;
     free(snap);
     cJSON *arr = cJSON_CreateArray();
@@ -433,12 +433,12 @@ char *coa_memory_graph_related(coa_memory *m, const char *query, int limit) {
     char *s = arr ? cJSON_PrintUnformatted(arr) : NULL;
     if (arr)
         cJSON_Delete(arr);
-    return s ? s : coa_strdup("[]");
+    return s ? s : xstrdup("[]");
 }
 
 /* ---- consolidation engine: recurring episode themes -> long-term facts ---- */
 
-int coa_memory_consolidate(coa_memory *m) {
+int memory_consolidate(memory *m) {
     if (!m)
         return 0;
     /* token -> how many distinct episodes contain it (episodes are oldest
@@ -451,9 +451,9 @@ int coa_memory_consolidate(coa_memory *m) {
     topic acc[128];
     size_t n_acc = 0;
 
-    int n = coa_episodic_count(m->episodes);
+    int n = episodic_count(m->episodes);
     for (int i = 0; i < n; i++) {
-        const char *task = coa_episodic_task(m->episodes, i);
+        const char *task = episodic_task(m->episodes, i);
         if (!task)
             continue;
         const char *tokens[64];
@@ -506,25 +506,25 @@ int coa_memory_consolidate(coa_memory *m) {
         snprintf(val, sizeof(val), "seen in %d tasks", acc[a].eps);
         char key[80];
         snprintf(key, sizeof(key), "topic.%s", acc[a].tok);
-        coa_kvstore_set(m->facts, key, val);
+        kvstore_set(m->facts, key, val);
         written++;
     }
     return written;
 }
 
-int coa_memory_consolidation_count(coa_memory *m) {
+int memory_consolidation_count(memory *m) {
     if (!m)
         return 0;
-    coa_mutex_lock(&m->mtx);
+    mutex_lock(&m->mtx);
     int n = m->consol_count;
-    coa_mutex_unlock(&m->mtx);
+    mutex_unlock(&m->mtx);
     return n;
 }
 
 /* Procedural distillation: count used_tool edges per tool from the graph
  * snapshot; tools recurring in >= min tasks become procedure.* facts. */
-static int consolidate_procedural(coa_memory *m, int min_tasks) {
-    char *snap = coa_graph_snapshot_json(m->graph);
+static int consolidate_procedural(memory *m, int min_tasks) {
+    char *snap = graph_snapshot_json(m->graph);
     cJSON *root = snap ? cJSON_Parse(snap) : NULL;
     free(snap);
     if (!root)
@@ -566,104 +566,104 @@ static int consolidate_procedural(coa_memory *m, int min_tasks) {
         char key[96], val[64];
         snprintf(key, sizeof(key), "procedure.%s", seen[a].tool);
         snprintf(val, sizeof(val), "used in %d tasks", seen[a].n);
-        coa_kvstore_set(m->facts, key, val);
+        kvstore_set(m->facts, key, val);
         written++;
     }
     cJSON_Delete(root);
     return written;
 }
 
-int coa_memory_maybe_consolidate(coa_memory *m, int threshold_eps, long long interval_ms) {
+int memory_maybe_consolidate(memory *m, int threshold_eps, long long interval_ms) {
     if (!m || threshold_eps <= 0)
         return -1;
-    long long now = coa_time_now_ms();
-    coa_mutex_lock(&m->mtx);
+    long long now = time_now_ms();
+    mutex_lock(&m->mtx);
     if (m->last_consol_ms && interval_ms > 0 && now - m->last_consol_ms < interval_ms) {
-        coa_mutex_unlock(&m->mtx);
+        mutex_unlock(&m->mtx);
         return 0;
     }
-    int n = coa_episodic_count(m->episodes);
+    int n = episodic_count(m->episodes);
     if (n - (int)m->consolidated_at < threshold_eps) {
-        coa_mutex_unlock(&m->mtx);
+        mutex_unlock(&m->mtx);
         return 0;
     }
     m->last_consol_ms = now;
     m->consolidated_at = (size_t)n;
     m->consol_count++;
-    coa_mutex_unlock(&m->mtx);
+    mutex_unlock(&m->mtx);
 
     /* distillation itself runs on the sub-stores' own locks */
-    coa_memory_consolidate(m);    /* semantic: recurring themes */
+    memory_consolidate(m);    /* semantic: recurring themes */
     consolidate_procedural(m, 2); /* procedural: recurring tools */
     /* automatic lifecycle pass rides along with consolidation (decay+forget) */
-    coa_mutex_lock(&m->mtx);
+    mutex_lock(&m->mtx);
     long long hl = m->lc_half_life_ms;
     double ms = m->lc_min_strength;
     int arc = m->lc_archive;
-    coa_mutex_unlock(&m->mtx);
+    mutex_unlock(&m->mtx);
     if (hl > 0 || ms > 0) {
-        coa_memory_lifecycle_cfg lc = {0};
+        memory_lifecycle_cfg lc = {0};
         lc.now_ms = now;
         lc.half_life_ms = hl;
         lc.min_strength = ms;
         lc.archive = arc;
-        coa_memory_lifecycle_pass(m, &lc);
+        memory_lifecycle_pass(m, &lc);
     }
     return 1;
 }
 
 /* ---------- memory lifecycle: reinforce / decay / forget / archive ---------- */
 
-void coa_memory_set_lifecycle(coa_memory *m, long long half_life_ms, double min_strength, int archive) {
+void memory_set_lifecycle(memory *m, long long half_life_ms, double min_strength, int archive) {
     if (!m)
         return;
-    coa_mutex_lock(&m->mtx);
+    mutex_lock(&m->mtx);
     m->lc_half_life_ms = half_life_ms;
     m->lc_min_strength = min_strength;
     m->lc_archive = archive;
-    coa_mutex_unlock(&m->mtx);
+    mutex_unlock(&m->mtx);
 }
 
-void coa_memory_reinforce(coa_memory *m, const char *task) {
+void memory_reinforce(memory *m, const char *task) {
     if (m)
-        coa_episodic_reinforce(m->episodes, task);
+        episodic_reinforce(m->episodes, task);
 }
 
-int coa_memory_episode_count(coa_memory *m) {
-    return m ? coa_episodic_count(m->episodes) : 0;
+int memory_episode_count(memory *m) {
+    return m ? episodic_count(m->episodes) : 0;
 }
 
-int coa_memory_lifecycle_pass(coa_memory *m, const coa_memory_lifecycle_cfg *cfg) {
+int memory_lifecycle_pass(memory *m, const memory_lifecycle_cfg *cfg) {
     if (!m)
         return -1;
-    long long now = (cfg && cfg->now_ms > 0) ? cfg->now_ms : coa_time_now_ms();
+    long long now = (cfg && cfg->now_ms > 0) ? cfg->now_ms : time_now_ms();
     long long hl = cfg ? cfg->half_life_ms : 0;
     double ms = cfg ? cfg->min_strength : 0;
     if (hl > 0)
-        coa_episodic_decay(m->episodes, now, hl, 0.001);
+        episodic_decay(m->episodes, now, hl, 0.001);
     if (ms <= 0)
         return 0;
     int dropped = 0;
     if (cfg && cfg->archive) {
-        char *below = coa_episodic_below_json(m->episodes, ms);
+        char *below = episodic_below_json(m->episodes, ms);
         if (below && strcmp(below, "[]") != 0) {
             char p[1024];
             mem_path(m, p, sizeof p, "archive.jsonl");
             if (p[0]) {
                 char dir[1024];
-                coa_path_join(dir, sizeof dir, m->root, "memory");
-                coa_fs_mkdirs(dir);
+                path_join(dir, sizeof dir, m->root, "memory");
+                fs_mkdirs(dir);
                 char *line = (char *)malloc(strlen(below) + 2);
                 if (line) {
                     snprintf(line, strlen(below) + 2, "%s\n", below);
-                    coa_fs_append_file(p, line, strlen(line));
+                    fs_append_file(p, line, strlen(line));
                     free(line);
                 }
             }
         }
         free(below);
     }
-    dropped = coa_episodic_drop_below(m->episodes, ms);
+    dropped = episodic_drop_below(m->episodes, ms);
     return dropped;
 }
 
@@ -719,20 +719,20 @@ static int token_match(const char *text, const char *tok, size_t tlen) {
     return 0;
 }
 
-char *coa_memory_search(coa_memory *m, const char *query, int limit) {
+char *memory_search(memory *m, const char *query, int limit) {
     const char *tokens[64];
     int tlens[64];
     int ntok = 0;
     tokenize(query, tokens, tlens, &ntok);
     if (ntok == 0)
-        return coa_strdup("[]");
+        return xstrdup("[]");
 
     cJSON *arr = cJSON_CreateArray();
     if (!arr)
-        return coa_strdup("[]");
+        return xstrdup("[]");
 
     /* score working memory */
-    coa_mutex_lock(&m->mtx);
+    mutex_lock(&m->mtx);
     for (size_t i = 0; i < m->working.count; i++) {
         int hits = 0;
         for (int t = 0; t < ntok; t++)
@@ -748,14 +748,14 @@ char *coa_memory_search(coa_memory *m, const char *query, int limit) {
                 break;
         }
     }
-    coa_mutex_unlock(&m->mtx);
+    mutex_unlock(&m->mtx);
 
     /* score experiences */
     if (limit <= 0 || cJSON_GetArraySize(arr) < limit) {
-        int n = coa_episodic_count(m->episodes);
+        int n = episodic_count(m->episodes);
         for (int i = 0; i < n; i++) {
-            const char *task = coa_episodic_task(m->episodes, i);
-            const char *result = coa_episodic_result(m->episodes, i);
+            const char *task = episodic_task(m->episodes, i);
+            const char *result = episodic_result(m->episodes, i);
             int hits = 0;
             for (int t = 0; t < ntok; t++)
                 if (task && token_match(task, tokens[t], (size_t)tlens[t]))
@@ -765,7 +765,7 @@ char *coa_memory_search(coa_memory *m, const char *query, int limit) {
                 cJSON_AddStringToObject(o, "kind", "experience");
                 cJSON_AddStringToObject(o, "text", task ? task : "");
                 cJSON_AddStringToObject(o, "result", result ? result : "");
-                cJSON_AddNumberToObject(o, "ts", (double)coa_episodic_ts(m->episodes, i));
+                cJSON_AddNumberToObject(o, "ts", (double)episodic_ts(m->episodes, i));
                 cJSON_AddNumberToObject(o, "score", hits);
                 cJSON_AddItemToArray(arr, o);
                 if (limit > 0 && cJSON_GetArraySize(arr) >= limit)
@@ -776,36 +776,36 @@ char *coa_memory_search(coa_memory *m, const char *query, int limit) {
 
     char *s = cJSON_PrintUnformatted(arr);
     cJSON_Delete(arr);
-    return s ? s : coa_strdup("[]");
+    return s ? s : xstrdup("[]");
 }
 
-char *coa_memory_retrieve(coa_memory *m, const char *query, int k) {
+char *memory_retrieve(memory *m, const char *query, int k) {
     if (!m || !query)
-        return coa_strdup("[]");
-    return coa_vectorstore_nearest(m->vectors, query, k);
+        return xstrdup("[]");
+    return vectorstore_nearest(m->vectors, query, k);
 }
 
-char *coa_memory_retrieve_ex(coa_memory *m, const char *query, int k, float w_vec) {
+char *memory_retrieve_ex(memory *m, const char *query, int k, float w_vec) {
     if (!m || !query || k <= 0)
-        return coa_strdup("[]");
+        return xstrdup("[]");
     if (w_vec < 0)
         w_vec = 0;
     if (w_vec > 1)
         w_vec = 1;
     /* stage 1: hybrid recall of an oversized candidate pool */
-    char *cand_json = coa_vectorstore_nearest_hybrid(m->vectors, query, k * 3, w_vec);
+    char *cand_json = vectorstore_nearest_hybrid(m->vectors, query, k * 3, w_vec);
     if (!cand_json)
-        return coa_strdup("[]");
+        return xstrdup("[]");
     cJSON *cand = cJSON_Parse(cand_json);
     free(cand_json);
     if (!cand || !cJSON_IsArray(cand)) {
         cJSON_Delete(cand);
-        return coa_strdup("[]");
+        return xstrdup("[]");
     }
     int nc = cJSON_GetArraySize(cand);
     if (nc == 0) {
         cJSON_Delete(cand);
-        return coa_strdup("[]");
+        return xstrdup("[]");
     }
 
     /* stage 2: rerank the candidates, blend with the recall score */
@@ -817,7 +817,7 @@ char *coa_memory_retrieve_ex(coa_memory *m, const char *query, int k, float w_ve
         free(rel);
         free(recall);
         cJSON_Delete(cand);
-        return coa_strdup("[]");
+        return xstrdup("[]");
     }
     int i = 0;
     cJSON *it;
@@ -828,7 +828,7 @@ char *coa_memory_retrieve_ex(coa_memory *m, const char *query, int k, float w_ve
         recall[i] = (s && cJSON_IsNumber(s)) ? (float)s->valuedouble : 0.0f;
         i++;
     }
-    coa_embed_rerank(query, docs, (size_t)nc, rel);
+    embed_rerank(query, docs, (size_t)nc, rel);
     /* final = 0.6*rerank + 0.4*recall(hybrid) — rerank dominates but a strong
      * vector match survives a weak keyword overlap */
     for (int j = 0; j < nc; j++)
@@ -841,7 +841,7 @@ char *coa_memory_retrieve_ex(coa_memory *m, const char *query, int k, float w_ve
         free(rel);
         free(recall);
         cJSON_Delete(cand);
-        return coa_strdup("[]");
+        return xstrdup("[]");
     }
     for (int j = 0; j < nc; j++)
         order[j] = j;
@@ -871,58 +871,58 @@ char *coa_memory_retrieve_ex(coa_memory *m, const char *query, int k, float w_ve
     char *s = out ? cJSON_PrintUnformatted(out) : NULL;
     if (out)
         cJSON_Delete(out);
-    return s ? s : coa_strdup("[]");
+    return s ? s : xstrdup("[]");
 }
 
-char *coa_memory_retrieve_mqe(coa_memory *m, const char *const *queries, int nq, int k) {
+char *memory_retrieve_mqe(memory *m, const char *const *queries, int nq, int k) {
     if (!m)
-        return coa_strdup("[]");
-    return coa_vectorstore_nearest_multi(m->vectors, queries, nq, k);
+        return xstrdup("[]");
+    return vectorstore_nearest_multi(m->vectors, queries, nq, k);
 }
 
-void coa_memory_flush(coa_memory *m) {
+void memory_flush(memory *m) {
     if (!m)
         return;
-    char *s = coa_kvstore_snapshot_json(m->facts);
+    char *s = kvstore_snapshot_json(m->facts);
     if (s) {
         mem_write(m, "facts.json", s);
         free(s);
     }
-    char *e = coa_episodic_json(m->episodes);
+    char *e = episodic_json(m->episodes);
     if (e) {
         mem_write(m, "episodes.json", e);
         free(e);
     }
-    char *g = coa_graph_snapshot_json(m->graph);
+    char *g = graph_snapshot_json(m->graph);
     if (g) {
         mem_write(m, "graph.json", g);
         free(g);
     }
 }
 
-char *coa_memory_working_json(coa_memory *m) {
+char *memory_working_json(memory *m) {
     if (!m)
-        return coa_strdup("[]");
-    coa_mutex_lock(&m->mtx);
+        return xstrdup("[]");
+    mutex_lock(&m->mtx);
     cJSON *arr = cJSON_CreateArray();
     if (arr)
         for (size_t i = 0; i < m->working.count; i++)
             cJSON_AddItemToArray(arr, cJSON_CreateString(m->working.items[i]));
-    coa_mutex_unlock(&m->mtx);
+    mutex_unlock(&m->mtx);
     char *s = arr ? cJSON_PrintUnformatted(arr) : NULL;
     if (arr)
         cJSON_Delete(arr);
-    return s ? s : coa_strdup("[]");
+    return s ? s : xstrdup("[]");
 }
 
-char *coa_memory_longterm_json(coa_memory *m) {
+char *memory_longterm_json(memory *m) {
     if (!m)
-        return coa_strdup("{}");
-    return coa_kvstore_snapshot_json(m->facts);
+        return xstrdup("{}");
+    return kvstore_snapshot_json(m->facts);
 }
 
-char *coa_memory_episodes_json(coa_memory *m) {
+char *memory_episodes_json(memory *m) {
     if (!m)
-        return coa_strdup("[]");
-    return coa_episodic_json(m->episodes);
+        return xstrdup("[]");
+    return episodic_json(m->episodes);
 }

@@ -7,18 +7,18 @@
 extern "C" {
 #endif
 
-typedef struct coa_usage coa_usage;
+typedef struct usage usage;
 
-coa_usage *coa_usage_new(void);
-void coa_usage_free(coa_usage *u);
+usage *usage_new(void);
+void usage_free(usage *u);
 
 /* Record a completion for a model. */
-void coa_usage_add(coa_usage *u, const char *model, long prompt_tokens, long completion_tokens);
+void usage_add(usage *u, const char *model, long prompt_tokens, long completion_tokens);
 
-long coa_usage_prompt_total(coa_usage *u);
-long coa_usage_completion_total(coa_usage *u);
+long usage_prompt_total(usage *u);
+long usage_completion_total(usage *u);
 /* JSON object: {models:{<model>:{prompt,completion,calls}}, total:{prompt,completion}} (caller frees). */
-char *coa_usage_json(coa_usage *u);
+char *usage_json(usage *u);
 
 #ifdef __cplusplus
 }

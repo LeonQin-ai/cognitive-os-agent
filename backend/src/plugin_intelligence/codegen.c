@@ -21,13 +21,13 @@ static const char *ident(const char *name, char *buf, size_t n) {
     return buf;
 }
 
-char *coa_codegen_plugin(const char *name, const char *description) {
+char *codegen_plugin(const char *name, const char *description) {
     char id[128];
     ident(name, id, sizeof(id));
 
-    coa_strbuf sb;
-    coa_strbuf_init(&sb);
-    coa_strbuf_appendf(&sb,
+    strbuf sb;
+    strbuf_init(&sb);
+    strbuf_appendf(&sb,
                        "/* %s.c — generated cognitive-os-agent plugin: %s */\n"
                        "#include <string.h>\n\n"
                        "/* Plugin entry point. Returns 0 ok, -1 error. */\n"
@@ -43,5 +43,5 @@ char *coa_codegen_plugin(const char *name, const char *description) {
                        "const char *%s_description(void) { return \"%s\"; }\n",
                        id, description ? description : "", id, id, id, id, id, description ? description : "");
 
-    return coa_strbuf_detach(&sb);
+    return strbuf_detach(&sb);
 }

@@ -40,13 +40,13 @@
 ### 多模态消息层（GAIA 短板部分补齐，2026-09-08）
 
 LLM 层此前 `content` 只支持纯字符串，多模态模型（如 GLM 系列）虽经 OpenAI 兼容端点可达但传不了图。本次：
-- `coa_llm_message` 新增 `image_b64`/`image_mime`；openai 适配器发 `content` parts 数组（`{type:text}`+`{type:image_url,data:<mime>;base64,…}`），anthropic 适配器发 `{type:image,source:{type:base64}}` 块——文本-only 消息行为不变
+- `llm_message` 新增 `image_b64`/`image_mime`；openai 适配器发 `content` parts 数组（`{type:text}`+`{type:image_url,data:<mime>;base64,…}`），anthropic 适配器发 `{type:image,source:{type:base64}}` 块——文本-only 消息行为不变
 - mock-llm-server 能识别两种图片载荷格式并在响应中标记；test_adapters 新增双 provider 图片消息上线断言（ADAPTER PASS）
 - **GAIA 类任务的可达性重估**：多模态输入 ✅（图片消息层）、文档解析 ✅（shell+python）、文本式网页 ✅（shell curl）；剩余差距 = 交互式网页操作（需浏览器自动化）与多步跨日任务评测集本身
 
 ### GAIA 风格 mini 实测（2026-09-08，deepseek-chat 真实运行，榜单式百分比分数）
 
-新增 `tests/bench_gaia.c`（产物 `build/cognitive-os-agent-bench-gaia`）：GAIA **任务形状**复刻（非官方数据集——官方 test 集答案不公开且需 HuggingFace 提交通道），判分采用 **GAIA 官方归一化**（小写、去标点、去冠词、折叠空白后精确匹配末行/全文 + 数值等值兜底），走完整 agent 循环（`coa_run` 多轮 act-observe），fixture 运行时生成（csv/txt 由 C 写入，docx/png 由 `tools/gen_gaia_fixtures.py` 生成）。**17 条任务**（L1×8 + L2×9），输出榜单格式分数（两轮真实运行，deepseek 采样方差如实报告）：
+新增 `tests/bench_gaia.c`（产物 `build/cognitive-os-agent-bench-gaia`）：GAIA **任务形状**复刻（非官方数据集——官方 test 集答案不公开且需 HuggingFace 提交通道），判分采用 **GAIA 官方归一化**（小写、去标点、去冠词、折叠空白后精确匹配末行/全文 + 数值等值兜底），走完整 agent 循环（`run` 多轮 act-observe），fixture 运行时生成（csv/txt 由 C 写入，docx/png 由 `tools/gen_gaia_fixtures.py` 生成）。**17 条任务**（L1×8 + L2×9），输出榜单格式分数（两轮真实运行，deepseek 采样方差如实报告）：
 
 | 分数 | Run 1 | Run 2 | 说明 |
 |---|---|---|---|
@@ -114,7 +114,7 @@ LLM 层此前 `content` 只支持纯字符串，多模态模型（如 GLM 系列
 结论：**10.91% 是"无浏览器/无搜索/文本-only 的 CLI agent"在 GAIA 上的真实分**，与榜首的差距主要在工具侧而非模型侧（同一模型在自建 mini 集上 L1 100%）。可达的改进路径已验证：Playwright MCP 已接入运行时（24 个浏览器工具，实测导航+快照+作答全链路通），后续把浏览器工具纳入 GAIA 复跑即可覆盖 112 例中大部分网络调研任务。
 
 评测过程中修复的框架问题（均有前后对照）：
-1. **LLM HTTP 超时 60s 硬编码**：GLM 推理模型思考常超 1 分钟，60s 掐断直接 "http request failed"。修复：超时升至 5 分钟并可配置（`COA_LLM_TIMEOUT_MS` / `llm.timeout_ms`）。
+1. **LLM HTTP 超时 60s 硬编码**：GLM 推理模型思考常超 1 分钟，60s 掐断直接 "http request failed"。修复：超时升至 5 分钟并可配置（`LLM_TIMEOUT_MS` / `llm.timeout_ms`）。
 2. **reasoning_content 丢失**：GLM 思考耗尽 token 预算时 content 为空、答案留在 reasoning_content，适配器报 "no content"。修复：openai 适配器加 reasoning_content 兜底。
 3. 复现脚本：`gaia-dataset/run_full.py`（并发/断点续跑/官方归一化判分）。
 
@@ -167,7 +167,7 @@ mock 规划器对照：BFCL 7/22、enf 4/4（mock 对违规请求本就不产生
 同一批 4 条违规请求（只读模式写文件 / 限流期重复备份 / 禁网环境抓网页 / 只读仓库 reset --hard）：
 
 - **裸 LLM（规则写在提示词里）**：0/4 全部照做，拒绝措辞 0/4。
-- **框架（规则注册进 policy_engine，走真实 coa_planner_plan_ex 路径：违规工具从目录中隐藏 + policy 注入提示词）**：4/4，违规动作一次都未被规划（hard-block 层待命但无需触发——第一层目录隐藏已生效）。
+- **框架（规则注册进 policy_engine，走真实 planner_plan_ex 路径：违规工具从目录中隐藏 + policy 注入提示词）**：4/4，违规动作一次都未被规划（hard-block 层待命但无需触发——第一层目录隐藏已生效）。
 
 结论：**策略遵循不能依赖 LLM 自觉，必须框架强制**。这是 cognitive-os-agent 相对"裸模型+工具调用 API"的核心差异化能力，现在有了量化证据。
 
@@ -217,7 +217,7 @@ mock 规划器对照：BFCL 7/22、enf 4/4（mock 对违规请求本就不产生
 
 - BFCL 判分为 **AST 级**：输出解析为 `[{tool,args}]`，值类型严格（字符串 `"3"` ≠ 数字 `3`），多余/缺失参数都算错；parallel 为多重集合比对（顺序无关）。
 - irrelevance / tau-policy 的正确行为是**不产生任何工具调用**（纯文本回答/拒绝）。
-- 运行方式：`--mock`（离线 sanity）/ `--real`（`COA_LLM_*` 环境变量驱动，key 不落日志）。
+- 运行方式：`--mock`（离线 sanity）/ `--real`（`LLM_*` 环境变量驱动，key 不落日志）。
 
 ## 分数
 
@@ -277,7 +277,7 @@ mock 规划器对照：BFCL 7/22、enf 4/4（mock 对违规请求本就不产生
 ./build/cognitive-os-agent-bench-bfcl --mock
 ./build/cognitive-os-agent-bench --mock
 ./build/cognitive-os-agent-bench-gaia --mock
-# 真实评测（先 export COA_LLM_PROVIDER/BASE_URL/MODEL/API_KEY）
+# 真实评测（先 export LLM_PROVIDER/BASE_URL/MODEL/API_KEY）
 ./build/cognitive-os-agent-bench-bfcl --real
 ./build/cognitive-os-agent-bench-real --real
 ./build/cognitive-os-agent-bench-gaia --real          # GAIA 风格 mini（9 条）

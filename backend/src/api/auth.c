@@ -7,17 +7,17 @@
 #include <stdint.h>
 #include <time.h>
 
-struct coa_auth {
+struct auth {
     char **keys;
     size_t count;
     size_t cap;
 };
 
-coa_auth *coa_auth_new(void) {
-    return (coa_auth *)calloc(1, sizeof(coa_auth));
+auth *auth_new(void) {
+    return (auth *)calloc(1, sizeof(auth));
 }
 
-void coa_auth_free(coa_auth *a) {
+void auth_free(auth *a) {
     if (!a)
         return;
     for (size_t i = 0; i < a->count; i++)
@@ -26,7 +26,7 @@ void coa_auth_free(coa_auth *a) {
     free(a);
 }
 
-void coa_auth_add_key(coa_auth *a, const char *key) {
+void auth_add_key(auth *a, const char *key) {
     if (!a || !key || !*key)
         return;
     if (a->count == a->cap) {
@@ -37,10 +37,10 @@ void coa_auth_add_key(coa_auth *a, const char *key) {
         a->keys = nk;
         a->cap = cap;
     }
-    a->keys[a->count++] = coa_strdup(key);
+    a->keys[a->count++] = xstrdup(key);
 }
 
-int coa_auth_count(coa_auth *a) {
+int auth_count(auth *a) {
     return a ? (int)a->count : 0;
 }
 
@@ -58,7 +58,7 @@ static int ct_equal(const char *a, const char *b) {
     return diff == 0;
 }
 
-int coa_auth_check(coa_auth *a, const char *token) {
+int auth_check(auth *a, const char *token) {
     if (!a || !token)
         return 0;
     for (size_t i = 0; i < a->count; i++)
@@ -81,7 +81,7 @@ static int prefix_ieq(const char *s, const char *prefix) {
     return 1;
 }
 
-int coa_auth_check_header(coa_auth *a, const char *authorization) {
+int auth_check_header(auth *a, const char *authorization) {
     if (!a || !authorization)
         return 0;
     const char *tok = authorization;
@@ -91,7 +91,7 @@ int coa_auth_check_header(coa_auth *a, const char *authorization) {
         tok++;
     if (!*tok)
         return 0;
-    return coa_auth_check(a, tok);
+    return auth_check(a, tok);
 }
 
 /* Small xorshift64 PRNG seeded once per process from wall clock + stack
@@ -105,7 +105,7 @@ static unsigned long long xorshift64(unsigned long long *s) {
     return x;
 }
 
-void coa_auth_generate_token(char *out, size_t bytes) {
+void auth_generate_token(char *out, size_t bytes) {
     if (!out || bytes == 0)
         return;
     static unsigned long long state;

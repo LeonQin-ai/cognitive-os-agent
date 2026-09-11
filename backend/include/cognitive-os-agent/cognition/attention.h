@@ -11,30 +11,30 @@
 extern "C" {
 #endif
 
-typedef struct coa_attention coa_attention;
+typedef struct attention attention;
 
-typedef struct coa_attention_candidate {
+typedef struct attention_candidate {
     const char *text; /* content to match against */
     const char *tags; /* optional space/comma-separated keywords */
     double boost;     /* explicit prior (e.g. recency, frequency) */
-} coa_attention_candidate;
+} attention_candidate;
 
-typedef struct coa_attention_result {
+typedef struct attention_result {
     int index; /* index into the candidate array */
     double score;
-} coa_attention_result;
+} attention_result;
 
-coa_attention *coa_attention_new(void);
-void coa_attention_free(coa_attention *a);
+attention *attention_new(void);
+void attention_free(attention *a);
 
 /* Score a single candidate against the query. Higher = more salient. */
-double coa_attention_score(coa_attention *a, const char *query, const coa_attention_candidate *c);
+double attention_score(attention *a, const char *query, const attention_candidate *c);
 
 /* Rank candidates and write up to `topk` results (best-first) into `out`.
  * Returns the number of results written (0..topk). `out` must have room for
  * `topk` entries. */
-int coa_attention_select(coa_attention *a, const char *query, const coa_attention_candidate *cands, size_t n,
-                         coa_attention_result *out, size_t topk);
+int attention_select(attention *a, const char *query, const attention_candidate *cands, size_t n,
+                         attention_result *out, size_t topk);
 
 #ifdef __cplusplus
 }

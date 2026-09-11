@@ -19,16 +19,16 @@ typedef struct term {
     size_t count, cap;
 } term;
 
-struct coa_index {
+struct index {
     term *terms;
     size_t count, cap;
 };
 
-coa_index *coa_index_new(void) {
-    return calloc(1, sizeof(coa_index));
+index *index_new(void) {
+    return calloc(1, sizeof(index));
 }
 
-void coa_index_free(coa_index *idx) {
+void index_free(index *idx) {
     if (!idx)
         return;
     for (size_t i = 0; i < idx->count; i++) {
@@ -41,7 +41,7 @@ void coa_index_free(coa_index *idx) {
     free(idx);
 }
 
-static term *find_term(coa_index *idx, const char *word, size_t wlen) {
+static term *find_term(index *idx, const char *word, size_t wlen) {
     for (size_t i = 0; i < idx->count; i++) {
         if (strlen(idx->terms[i].word) == wlen && strncmp(idx->terms[i].word, word, wlen) == 0)
             return &idx->terms[i];
@@ -49,7 +49,7 @@ static term *find_term(coa_index *idx, const char *word, size_t wlen) {
     return NULL;
 }
 
-static term *get_or_add(coa_index *idx, const char *word, size_t wlen) {
+static term *get_or_add(index *idx, const char *word, size_t wlen) {
     term *t = find_term(idx, word, wlen);
     if (t)
         return t;
@@ -74,7 +74,7 @@ static void add_occ(term *t, const char *file, int line) {
         t->occs = realloc(t->occs, cap * sizeof(occ));
         t->cap = cap;
     }
-    t->occs[t->count].file = coa_strdup(file);
+    t->occs[t->count].file = xstrdup(file);
     t->occs[t->count].line = line;
     t->count++;
 }
@@ -83,7 +83,7 @@ static int is_word_char(int c) {
     return isalnum(c) || c == '_';
 }
 
-int coa_index_add_file(coa_index *idx, const char *path, const char *content) {
+int index_add_file(index *idx, const char *path, const char *content) {
     const char *p = content;
     int line = 1;
     char word[128];
@@ -109,7 +109,7 @@ int coa_index_add_file(coa_index *idx, const char *path, const char *content) {
     return 0;
 }
 
-char *coa_index_search(coa_index *idx, const char *query, int limit) {
+char *index_search(index *idx, const char *query, int limit) {
     /* tokenize query with the same rule as indexing (alnum + underscore) */
     const char *tokens[32];
     int ntok = 0;
@@ -144,5 +144,5 @@ char *coa_index_search(coa_index *idx, const char *query, int limit) {
     }
     char *out = cJSON_PrintUnformatted(arr);
     cJSON_Delete(arr);
-    return out ? out : coa_strdup("[]");
+    return out ? out : xstrdup("[]");
 }

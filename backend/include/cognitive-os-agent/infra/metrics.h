@@ -7,17 +7,17 @@
 extern "C" {
 #endif
 
-typedef struct coa_metrics coa_metrics;
+typedef struct metrics metrics;
 
-coa_metrics *coa_metrics_new(void);
-void coa_metrics_free(coa_metrics *m);
+metrics *metrics_new(void);
+void metrics_free(metrics *m);
 
-void coa_metrics_inc(coa_metrics *m, const char *name);               /* counter += 1 */
-void coa_metrics_add(coa_metrics *m, const char *name, double v);     /* counter += v */
-void coa_metrics_set(coa_metrics *m, const char *name, double v);     /* gauge = v */
+void metrics_inc(metrics *m, const char *name);               /* counter += 1 */
+void metrics_add(metrics *m, const char *name, double v);     /* counter += v */
+void metrics_set(metrics *m, const char *name, double v);     /* gauge = v */
 
 /* Render as Prometheus text. Caller frees returned string. */
-char *coa_metrics_render(coa_metrics *m);
+char *metrics_render(metrics *m);
 
 #ifdef __cplusplus
 }

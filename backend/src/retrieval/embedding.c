@@ -1,6 +1,6 @@
 /* embedding.c — embeddings with a pluggable provider.
  * Local provider: deterministic "hashing trick" bag-of-words into a fixed
- * COA_EMBED_DIM vector, L2-normalized (works fully offline).
+ * EMBED_DIM vector, L2-normalized (works fully offline).
  * Remote provider: OpenAI-compatible POST {base}/embeddings.
  * A simple token-overlap rerank scorer is provided for context reordering. */
 #include "cognitive-os-agent/retrieval/embedding.h"
@@ -28,7 +28,7 @@ static int utf8_char_len(unsigned char c) {
 }
 
 static void local_embed(const char *text, float *out) {
-    memset(out, 0, COA_EMBED_DIM * sizeof(float));
+    memset(out, 0, EMBED_DIM * sizeof(float));
     if (!text)
         return;
     const char *p = text;
@@ -42,8 +42,8 @@ static void local_embed(const char *text, float *out) {
             p++;
         size_t len = (size_t)(p - s);
         if (len >= 2) {
-            uint64_t h = coa_hash64(s, len);
-            int bucket = (int)(h % (uint64_t)COA_EMBED_DIM);
+            uint64_t h = hash64(s, len);
+            int bucket = (int)(h % (uint64_t)EMBED_DIM);
             out[bucket] += 1.0f;
         }
     }
@@ -59,17 +59,17 @@ static void local_embed(const char *text, float *out) {
         int cl = utf8_char_len(*q);
         int nl = q[cl] ? utf8_char_len(q[cl]) : 0;
         if (nl > 0 && cl + nl >= 2) {
-            uint64_t h = coa_hash64((const char *)q, (size_t)(cl + nl));
-            out[h % (uint64_t)COA_EMBED_DIM] += 1.0f;
+            uint64_t h = hash64((const char *)q, (size_t)(cl + nl));
+            out[h % (uint64_t)EMBED_DIM] += 1.0f;
         }
         q += (size_t)cl;
     }
     float norm = 0.0f;
-    for (int i = 0; i < COA_EMBED_DIM; i++)
+    for (int i = 0; i < EMBED_DIM; i++)
         norm += out[i] * out[i];
     norm = sqrtf(norm);
     if (norm > 1e-9f) {
-        for (int i = 0; i < COA_EMBED_DIM; i++)
+        for (int i = 0; i < EMBED_DIM; i++)
             out[i] /= norm;
     }
 }
@@ -92,7 +92,7 @@ static void l2norm(float *v, int dim) {
 }
 
 static int remote_embed(const char *text, float *out) {
-    memset(out, 0, COA_EMBED_DIM * sizeof(float));
+    memset(out, 0, EMBED_DIM * sizeof(float));
     if (!g_base[0])
         return -1;
 
@@ -106,22 +106,22 @@ static int remote_embed(const char *text, float *out) {
     if (!js)
         return -1;
 
-    coa_strmap headers;
+    strmap headers;
     memset(&headers, 0, sizeof(headers));
     if (g_key[0])
-        coa_strmap_set(&headers, "Authorization", g_key); /* caller prefixes "Bearer " */
+        strmap_set(&headers, "Authorization", g_key); /* caller prefixes "Bearer " */
 
-    coa_http_response *r = coa_http_post(g_base, "/embeddings", js, "application/json", &headers, 15000);
+    http_response *r = http_post(g_base, "/embeddings", js, "application/json", &headers, 15000);
     free(js);
-    coa_strmap_free(&headers);
+    strmap_free(&headers);
     if (!r || r->status != 200 || !r->body) {
         if (r)
-            coa_http_response_free(r);
+            http_response_free(r);
         return -1;
     }
 
     cJSON *root = cJSON_Parse(r->body);
-    coa_http_response_free(r);
+    http_response_free(r);
     if (!root)
         return -1;
     cJSON *data = cJSON_GetObjectItemCaseSensitive(root, "data");
@@ -130,14 +130,14 @@ static int remote_embed(const char *text, float *out) {
     int rc = -1;
     if (emb && cJSON_IsArray(emb)) {
         int n = cJSON_GetArraySize(emb);
-        if (n > COA_EMBED_DIM)
-            n = COA_EMBED_DIM;
+        if (n > EMBED_DIM)
+            n = EMBED_DIM;
         for (int i = 0; i < n; i++) {
             cJSON *v = cJSON_GetArrayItem(emb, i);
             if (v && cJSON_IsNumber(v))
                 out[i] = (float)v->valuedouble;
         }
-        l2norm(out, COA_EMBED_DIM);
+        l2norm(out, EMBED_DIM);
         rc = 0;
     }
     cJSON_Delete(root);
@@ -146,7 +146,7 @@ static int remote_embed(const char *text, float *out) {
 
 /* ---------- public API ---------- */
 
-void coa_embed_text(const char *text, float *out) {
+void embed_text(const char *text, float *out) {
     if (!out)
         return;
     if (g_remote && remote_embed(text, out) == 0)
@@ -154,7 +154,7 @@ void coa_embed_text(const char *text, float *out) {
     local_embed(text, out);
 }
 
-float coa_embed_cosine(const float *a, const float *b, int dim) {
+float embed_cosine(const float *a, const float *b, int dim) {
     if (!a || !b || dim <= 0)
         return 0.0f;
     double dot = 0.0;
@@ -163,12 +163,12 @@ float coa_embed_cosine(const float *a, const float *b, int dim) {
     return (float)dot; /* unit-normalized: dot == cosine */
 }
 
-void coa_embedding_use_local(void) {
+void embedding_use_local(void) {
     g_remote = 0;
     g_base[0] = g_key[0] = g_model[0] = '\0';
 }
 
-int coa_embedding_use_remote(const char *base_url, const char *api_key, const char *model) {
+int embedding_use_remote(const char *base_url, const char *api_key, const char *model) {
     if (!base_url || !*base_url)
         return -1;
     snprintf(g_base, sizeof(g_base), "%s", base_url);
@@ -188,7 +188,7 @@ int coa_embedding_use_remote(const char *base_url, const char *api_key, const ch
     return 0;
 }
 
-const char *coa_embedding_provider_name(void) {
+const char *embedding_provider_name(void) {
     return g_remote ? "remote" : "local";
 }
 
@@ -301,7 +301,7 @@ static int token_overlap(const char *q, const char *doc) {
     return hits;
 }
 
-int coa_embed_keyword_score(const char *query, const char *doc, float *score_out) {
+int embed_keyword_score(const char *query, const char *doc, float *score_out) {
     if (!query || !doc || !score_out)
         return -1;
     int qt = count_tokens(query);
@@ -311,10 +311,10 @@ int coa_embed_keyword_score(const char *query, const char *doc, float *score_out
     return 0;
 }
 
-int coa_embed_rerank(const char *query, const char **docs, size_t n, float *scores_out) {
+int embed_rerank(const char *query, const char **docs, size_t n, float *scores_out) {
     if (!query || !docs || !scores_out)
         return -1;
     for (size_t i = 0; i < n; i++)
-        coa_embed_keyword_score(query, docs[i] ? docs[i] : "", &scores_out[i]);
+        embed_keyword_score(query, docs[i] ? docs[i] : "", &scores_out[i]);
     return 0;
 }

@@ -16,21 +16,21 @@
 #include <string.h>
 #include <stdio.h>
 
-typedef struct coa_ws_client {
+typedef struct ws_client {
     int id;
-    coa_socket *sock;
-    struct coa_ws_server *server;
-    coa_mutex send_mtx;
-    coa_strbuf queue; /* pending outbound messages, '\n'-separated */
+    sock *sock;
+    struct ws_server *server;
+    mutex_t send_mtx;
+    strbuf queue; /* pending outbound messages, '\n'-separated */
     volatile int closed;
-} coa_ws_client;
+} ws_client;
 
-struct coa_ws_server {
-    coa_mutex mtx;
-    coa_ws_client **clients;
+struct ws_server {
+    mutex_t mtx;
+    ws_client **clients;
     size_t count, cap;
     int next_id;
-    coa_ws_msg_handler on_msg;
+    ws_msg_handler on_msg;
     void *ud;
 };
 
@@ -62,24 +62,24 @@ static size_t ws_frame_len(const unsigned char *b, size_t len, size_t *payload_l
     return off + plen;
 }
 
-static void ws_send_frame(coa_ws_client *c, int opcode, const unsigned char *payload, size_t len) {
+static void ws_send_frame(ws_client *c, int opcode, const unsigned char *payload, size_t len) {
     if (c->closed)
         return;
     size_t out_len = 0;
-    char *frame = coa_ws_build_frame(opcode, payload, len, 0, &out_len);
+    char *frame = ws_build_frame(opcode, payload, len, 0, &out_len);
     if (!frame)
         return;
-    int n = coa_sock_send(c->sock, frame, out_len);
+    int n = sock_send(c->sock, frame, out_len);
     free(frame);
     if (n != (int)out_len)
         c->closed = 1;
 }
 
 /* Send all complete queued messages (those ending with '\n') as text frames. */
-static void ws_client_flush(coa_ws_client *c) {
+static void ws_client_flush(ws_client *c) {
     char local[16384];
     size_t local_len = 0;
-    coa_mutex_lock(&c->send_mtx);
+    mutex_lock(&c->send_mtx);
     if (c->queue.len) {
         size_t take = c->queue.len > sizeof(local) ? sizeof(local) : c->queue.len;
         /* only consume up to the last complete '\n' so no partial message is lost */
@@ -87,7 +87,7 @@ static void ws_client_flush(coa_ws_client *c) {
         while (keep > 0 && c->queue.buf[keep - 1] != '\n')
             keep--;
         if (keep == 0) {
-            coa_mutex_unlock(&c->send_mtx);
+            mutex_unlock(&c->send_mtx);
             return;
         }
         memcpy(local, c->queue.buf, keep);
@@ -95,7 +95,7 @@ static void ws_client_flush(coa_ws_client *c) {
         c->queue.len -= keep;
         local_len = keep;
     }
-    coa_mutex_unlock(&c->send_mtx);
+    mutex_unlock(&c->send_mtx);
     size_t start = 0;
     for (size_t i = 0; i < local_len; i++) {
         if (local[i] == '\n') {
@@ -105,31 +105,31 @@ static void ws_client_flush(coa_ws_client *c) {
     }
 }
 
-static void ws_server_remove(coa_ws_server *s, coa_ws_client *c) {
-    coa_mutex_lock(&s->mtx);
+static void ws_server_remove(ws_server *s, ws_client *c) {
+    mutex_lock(&s->mtx);
     for (size_t i = 0; i < s->count; i++) {
         if (s->clients[i] == c) {
-            memmove(&s->clients[i], &s->clients[i + 1], (s->count - i - 1) * sizeof(coa_ws_client *));
+            memmove(&s->clients[i], &s->clients[i + 1], (s->count - i - 1) * sizeof(ws_client *));
             s->count--;
             break;
         }
     }
-    coa_mutex_unlock(&s->mtx);
+    mutex_unlock(&s->mtx);
 }
 
 static void ws_client_loop(void *arg) {
-    coa_ws_client *c = (coa_ws_client *)arg;
+    ws_client *c = (ws_client *)arg;
     unsigned char rbuf[8192];
     while (!c->closed) {
         ws_client_flush(c);
         if (c->closed)
             break;
-        int rd = coa_sock_wait_readable(c->sock, 200);
+        int rd = sock_wait_readable(c->sock, 200);
         if (rd < 0)
             break;
         if (rd == 0)
             continue;
-        int n = coa_sock_recv(c->sock, rbuf, sizeof(rbuf));
+        int n = sock_recv(c->sock, rbuf, sizeof(rbuf));
         if (n <= 0)
             break;
         size_t off = 0;
@@ -141,7 +141,7 @@ static void ws_client_loop(void *arg) {
             unsigned char payload[8192];
             size_t parsed = 0;
             int opcode = 0, fin = 0;
-            if (coa_ws_parse_frame(rbuf + off, total, payload, &parsed, &opcode, &fin) != 0)
+            if (ws_parse_frame(rbuf + off, total, payload, &parsed, &opcode, &fin) != 0)
                 break;
             off += total;
             switch (opcode) {
@@ -167,35 +167,35 @@ static void ws_client_loop(void *arg) {
         }
     }
     if (c->sock)
-        coa_sock_close(c->sock);
+        sock_close(c->sock);
     ws_server_remove(c->server, c);
-    coa_strbuf_free(&c->queue);
-    coa_mutex_destroy(&c->send_mtx);
+    strbuf_free(&c->queue);
+    mutex_destroy(&c->send_mtx);
     free(c);
 }
 
 /* ---------- public API ---------- */
 
-coa_ws_server *coa_ws_server_new(void) {
-    coa_ws_server *s = calloc(1, sizeof(coa_ws_server));
+ws_server *ws_server_new(void) {
+    ws_server *s = calloc(1, sizeof(ws_server));
     if (!s)
         return NULL;
-    coa_mutex_init(&s->mtx);
+    mutex_init(&s->mtx);
     return s;
 }
 
-void coa_ws_server_on_message(coa_ws_server *s, coa_ws_msg_handler fn, void *ud) {
+void ws_server_on_message(ws_server *s, ws_msg_handler fn, void *ud) {
     if (!s)
         return;
     s->on_msg = fn;
     s->ud = ud;
 }
 
-int coa_ws_server_accept(coa_ws_server *s, coa_socket *sock, const char *sec_ws_key) {
+int ws_server_accept(ws_server *s, sock *sock, const char *sec_ws_key) {
     if (!s || !sock || !sec_ws_key)
         return -1;
     char accept_key[29];
-    coa_ws_accept_key(sec_ws_key, accept_key);
+    ws_accept_key(sec_ws_key, accept_key);
     char resp[512];
     int n = snprintf(resp, sizeof(resp),
                      "HTTP/1.1 101 Switching Protocols\r\n"
@@ -203,30 +203,30 @@ int coa_ws_server_accept(coa_ws_server *s, coa_socket *sock, const char *sec_ws_
                      "Connection: Upgrade\r\n"
                      "Sec-WebSocket-Accept: %s\r\n\r\n",
                      accept_key);
-    if (coa_sock_send(sock, resp, (size_t)n) != n) {
-        coa_sock_close(sock);
+    if (sock_send(sock, resp, (size_t)n) != n) {
+        sock_close(sock);
         return -1;
     }
 
-    coa_ws_client *c = calloc(1, sizeof(coa_ws_client));
+    ws_client *c = calloc(1, sizeof(ws_client));
     if (!c) {
-        coa_sock_close(sock);
+        sock_close(sock);
         return -1;
     }
     c->sock = sock;
     c->server = s;
-    coa_mutex_init(&c->send_mtx);
-    coa_strbuf_init(&c->queue);
+    mutex_init(&c->send_mtx);
+    strbuf_init(&c->queue);
 
-    coa_mutex_lock(&s->mtx);
+    mutex_lock(&s->mtx);
     if (s->count == s->cap) {
         size_t cap = s->cap ? s->cap * 2 : 8;
-        coa_ws_client **nc = realloc(s->clients, cap * sizeof(coa_ws_client *));
+        ws_client **nc = realloc(s->clients, cap * sizeof(ws_client *));
         if (!nc) {
-            coa_mutex_unlock(&s->mtx);
-            coa_sock_close(sock);
-            coa_strbuf_free(&c->queue);
-            coa_mutex_destroy(&c->send_mtx);
+            mutex_unlock(&s->mtx);
+            sock_close(sock);
+            strbuf_free(&c->queue);
+            mutex_destroy(&c->send_mtx);
             free(c);
             return -1;
         }
@@ -235,31 +235,31 @@ int coa_ws_server_accept(coa_ws_server *s, coa_socket *sock, const char *sec_ws_
     }
     c->id = s->next_id++;
     s->clients[s->count++] = c;
-    coa_mutex_unlock(&s->mtx);
+    mutex_unlock(&s->mtx);
 
-    coa_thread *t = coa_thread_create(ws_client_loop, c);
+    thread_t *t = thread_create(ws_client_loop, c);
     if (!t) {
         ws_server_remove(s, c);
-        coa_sock_close(sock);
-        coa_strbuf_free(&c->queue);
-        coa_mutex_destroy(&c->send_mtx);
+        sock_close(sock);
+        strbuf_free(&c->queue);
+        mutex_destroy(&c->send_mtx);
         free(c);
         return -1;
     }
-    coa_thread_detach(t);
+    thread_detach(t);
     return 0;
 }
 
-void coa_ws_server_broadcast(coa_ws_server *s, const char *json_text) {
+void ws_server_broadcast(ws_server *s, const char *json_text) {
     if (!s || !json_text)
         return;
     size_t len = strlen(json_text);
-    coa_mutex_lock(&s->mtx);
+    mutex_lock(&s->mtx);
     for (size_t i = 0; i < s->count; i++) {
-        coa_ws_client *c = s->clients[i];
+        ws_client *c = s->clients[i];
         if (c->closed)
             continue;
-        coa_mutex_lock(&c->send_mtx);
+        mutex_lock(&c->send_mtx);
         if (c->queue.cap < c->queue.len + len + 2) {
             size_t cap = (c->queue.len + len + 2) * 2;
             char *nb = realloc(c->queue.buf, cap);
@@ -273,25 +273,25 @@ void coa_ws_server_broadcast(coa_ws_server *s, const char *json_text) {
             c->queue.len += len;
             c->queue.buf[c->queue.len++] = '\n';
         }
-        coa_mutex_unlock(&c->send_mtx);
+        mutex_unlock(&c->send_mtx);
     }
-    coa_mutex_unlock(&s->mtx);
+    mutex_unlock(&s->mtx);
 }
 
-void coa_ws_server_free(coa_ws_server *s) {
+void ws_server_free(ws_server *s) {
     if (!s)
         return;
     /* close every client socket; the reader threads exit on their own (within
      * ~200ms) and remove themselves. A short barrier makes shutdown tidy. */
-    coa_mutex_lock(&s->mtx);
+    mutex_lock(&s->mtx);
     for (size_t i = 0; i < s->count; i++) {
         s->clients[i]->closed = 1;
         if (s->clients[i]->sock)
-            coa_sock_close(s->clients[i]->sock);
+            sock_close(s->clients[i]->sock);
     }
-    coa_mutex_unlock(&s->mtx);
-    coa_time_sleep_ms(400);
-    coa_mutex_destroy(&s->mtx);
+    mutex_unlock(&s->mtx);
+    time_sleep_ms(400);
+    mutex_destroy(&s->mtx);
     free(s->clients);
     free(s);
 }

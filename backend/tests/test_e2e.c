@@ -34,8 +34,8 @@ int main(void) {
         snprintf(workspace, sizeof(workspace), "%s/w", root);
         snprintf(file, sizeof(file), "%s/note.txt", workspace);
 
-        coa_ctx ctx;
-        coa_config cfg;
+        runtime_ctx ctx;
+        config cfg;
         memset(&cfg, 0, sizeof(cfg));
         cfg.state_root = root;
         cfg.workspace = workspace;
@@ -46,10 +46,10 @@ int main(void) {
         cfg.http_port = 0;         /* no HTTP API in this test */
         cfg.workers = 1;
 
-        CHECK(coa_init(&ctx, &cfg) == 0);
+        CHECK(init(&ctx, &cfg) == 0);
 
         char *answer = NULL;
-        int rc = coa_run(&ctx, "创建 note.txt 写入内容为 hello-e2e", &answer);
+        int rc = run(&ctx, "创建 note.txt 写入内容为 hello-e2e", &answer);
         CHECK(rc == 0);
         if (answer) {
             printf("  answer: %s\n", answer);
@@ -58,7 +58,7 @@ int main(void) {
         }
 
         /* the tool should have created the file via the LLM adapter */
-        char *data = coa_fs_read_file(file);
+        char *data = fs_read_file(file);
         CHECK(data != NULL);
         if (data) {
             CHECK(strstr(data, "hello-e2e") != NULL);
@@ -66,7 +66,7 @@ int main(void) {
         }
 
         /* snapshot should list the captured (resolved) path */
-        char *list = coa_snapshot_list(ctx.snapshot);
+        char *list = snapshot_list(ctx.snapshot);
         CHECK(list != NULL);
         if (list) {
             printf("  snapshots: %s\n", list);
@@ -74,12 +74,12 @@ int main(void) {
             free(list);
         }
 
-        coa_shutdown(&ctx);
+        runtime_shutdown(&ctx);
 
         /* cleanup */
-        coa_fs_remove(file);
-        coa_fs_remove(workspace);
-        coa_fs_remove(root);
+        fs_remove(file);
+        fs_remove(workspace);
+        fs_remove(root);
     }
 
     printf(g_fail == 0 ? "E2E PASS\n" : "E2E FAIL\n");

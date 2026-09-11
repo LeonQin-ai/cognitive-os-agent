@@ -13,25 +13,25 @@ static int g_fail = 0;
 static void check_chat(const char *provider) {
     char url[64];
     snprintf(url, sizeof(url), "http://localhost:9000");
-    coa_llm *llm = coa_llm_create(provider, url, provider[0] == 'a' ? "test-key" : NULL, "test-model");
+    llm *llm = llm_create(provider, url, provider[0] == 'a' ? "test-key" : NULL, "test-model");
     if (!llm) { printf("  FAIL create %s\n", provider); g_fail++; return; }
-    coa_llm_message msgs[2] = {{"system", "plan"}, {"user", "创建 adapter.txt 写入内容为 hi"}};
-    coa_llm_request req;
+    llm_message msgs[2] = {{"system", "plan"}, {"user", "创建 adapter.txt 写入内容为 hi"}};
+    llm_request req;
     memset(&req, 0, sizeof(req));
     req.messages = msgs;
     req.num_messages = 2;
     req.temperature = 0.2;
     req.max_tokens = 1024;
-    coa_llm_response resp;
+    llm_response resp;
     memset(&resp, 0, sizeof(resp));
-    int rc = coa_llm_chat(llm, &req, &resp);
+    int rc = llm_chat(llm, &req, &resp);
     CHECK(rc == 0);
     if (resp.error) { printf("    error: %s\n", resp.error); }
     CHECK(resp.content != NULL);
     if (resp.content) CHECK(strstr(resp.content, "file_write") != NULL);
     free(resp.content);
     free(resp.error);
-    coa_llm_destroy(llm);
+    llm_destroy(llm);
 }
 
 /* Multimodal message: image attached; the mock server prefixes "[img] " to
@@ -39,21 +39,21 @@ static void check_chat(const char *provider) {
 static void check_image(const char *provider) {
     char url[64];
     snprintf(url, sizeof(url), "http://localhost:9000");
-    coa_llm *llm = coa_llm_create(provider, url, provider[0] == 'a' ? "test-key" : NULL, "test-model");
+    llm *llm = llm_create(provider, url, provider[0] == 'a' ? "test-key" : NULL, "test-model");
     if (!llm) { printf("  FAIL create %s\n", provider); g_fail++; return; }
-    coa_llm_message msgs[2] = {
+    llm_message msgs[2] = {
         {"system", "plan", NULL, NULL},
         {"user", "describe this image", "aGVsbG8td29ybGQ=", "image/png"},
     };
-    coa_llm_request req;
+    llm_request req;
     memset(&req, 0, sizeof(req));
     req.messages = msgs;
     req.num_messages = 2;
     req.temperature = 0.2;
     req.max_tokens = 1024;
-    coa_llm_response resp;
+    llm_response resp;
     memset(&resp, 0, sizeof(resp));
-    int rc = coa_llm_chat(llm, &req, &resp);
+    int rc = llm_chat(llm, &req, &resp);
     CHECK(rc == 0);
     if (resp.error) printf("    error: %s\n", resp.error);
     CHECK(resp.content != NULL);
@@ -62,7 +62,7 @@ static void check_image(const char *provider) {
            resp.content ? resp.content : "(null)");
     free(resp.content);
     free(resp.error);
-    coa_llm_destroy(llm);
+    llm_destroy(llm);
 }
 
 static void on_delta(const char *d, void *ud) {
@@ -74,18 +74,18 @@ static void on_delta(const char *d, void *ud) {
 static void check_stream(const char *provider) {
     char url[64];
     snprintf(url, sizeof(url), "http://localhost:9000");
-    coa_llm *llm = coa_llm_create(provider, url, provider[0] == 'a' ? "test-key" : NULL, "test-model");
+    llm *llm = llm_create(provider, url, provider[0] == 'a' ? "test-key" : NULL, "test-model");
     if (!llm) { printf("  FAIL create %s\n", provider); g_fail++; return; }
-    coa_llm_message msgs[2] = {{"system", "plan"}, {"user", "创建 adapter.txt 写入内容为 hi"}};
-    coa_llm_request req;
+    llm_message msgs[2] = {{"system", "plan"}, {"user", "创建 adapter.txt 写入内容为 hi"}};
+    llm_request req;
     memset(&req, 0, sizeof(req));
     req.messages = msgs;
     req.num_messages = 2;
     req.temperature = 0.2;
     req.max_tokens = 1024;
     int n = 0;
-    int rc = coa_llm_stream(llm, &req, on_delta, &n);
-    coa_llm_destroy(llm);
+    int rc = llm_stream(llm, &req, on_delta, &n);
+    llm_destroy(llm);
     printf("    stream(provider=%s) rc=%d deltas=%d\n", provider, rc, n);
     CHECK(rc == 0);
     CHECK(n >= 1);

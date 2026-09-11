@@ -21,7 +21,7 @@ static void add_interface(cJSON *arr, const char *from, const char *to, const ch
     cJSON_AddItemToArray(arr, o);
 }
 
-char *coa_architect_design(const char *goal) {
+char *architect_design(const char *goal) {
     cJSON *out = cJSON_CreateObject();
     if (out) {
         cJSON_AddStringToObject(out, "goal", goal ? goal : "");
@@ -44,5 +44,5 @@ char *coa_architect_design(const char *goal) {
     char *s = out ? cJSON_PrintUnformatted(out) : NULL;
     if (out)
         cJSON_Delete(out);
-    return s ? s : coa_strdup("{}");
+    return s ? s : xstrdup("{}");
 }

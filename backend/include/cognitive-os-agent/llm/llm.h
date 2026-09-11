@@ -9,9 +9,9 @@
 extern "C" {
 #endif
 
-typedef struct coa_llm coa_llm;
+typedef struct llm llm;
 
-typedef struct coa_llm_message {
+typedef struct llm_message {
     const char *role; /* "system" | "user" | "assistant" */
     const char *content;
     /* Optional image attachment (multimodal messages). When image_b64 is
@@ -20,38 +20,38 @@ typedef struct coa_llm_message {
      * {type:image,source:{type:base64}}. Mime defaults to "image/png". */
     const char *image_b64;  /* base64 payload, no data: prefix (may be NULL) */
     const char *image_mime; /* e.g. "image/png" (NULL = image/png) */
-} coa_llm_message;
+} llm_message;
 
-typedef struct coa_llm_request {
+typedef struct llm_request {
     const char *model; /* NULL = provider default */
-    const coa_llm_message *messages;
+    const llm_message *messages;
     size_t num_messages;
     double temperature;
     int max_tokens;
     int stream; /* set by the streaming entry points */
-} coa_llm_request;
+} llm_request;
 
-typedef struct coa_llm_response {
+typedef struct llm_response {
     char *content; /* full accumulated text (caller frees) */
     char *error;   /* NULL if ok (caller frees) */
-} coa_llm_response;
+} llm_response;
 
-typedef void (*coa_llm_stream_cb)(const char *delta, void *ud);
+typedef void (*llm_stream_cb)(const char *delta, void *ud);
 
-typedef struct coa_llm_vtable {
-    void (*destroy)(coa_llm *self);
-    int (*chat)(coa_llm *self, const coa_llm_request *req, coa_llm_response *resp);
-    int (*stream)(coa_llm *self, const coa_llm_request *req, coa_llm_stream_cb cb, void *ud);
-} coa_llm_vtable;
+typedef struct llm_vtable {
+    void (*destroy)(llm *self);
+    int (*chat)(llm *self, const llm_request *req, llm_response *resp);
+    int (*stream)(llm *self, const llm_request *req, llm_stream_cb cb, void *ud);
+} llm_vtable;
 
-struct coa_llm {
-    const coa_llm_vtable *vt;
+struct llm {
+    const llm_vtable *vt;
     char *provider;
     char *base_url;
     char *api_key;
     char *model;
     void *impl;
-    volatile int cancel; /* set by coa_llm_cancel(); checked between stream deltas */
+    volatile int cancel; /* set by llm_cancel(); checked between stream deltas */
 };
 
 /* Provider capability summary (bridge-level; agents pick models by capability
@@ -61,38 +61,38 @@ typedef struct {
     int stream;        /* supports SSE streaming */
     int tools;         /* supports tool/function calling */
     long long max_ctx; /* approximate context window in tokens */
-} coa_llm_caps;
+} llm_caps;
 
 /* Create a provider instance. base_url may be NULL for defaults.
  * api_key may be NULL (required for anthropic). Returns NULL on bad provider. */
-coa_llm *coa_llm_create(const char *provider, const char *base_url, const char *api_key, const char *model);
-void coa_llm_destroy(coa_llm *llm);
+llm *llm_create(const char *provider, const char *base_url, const char *api_key, const char *model);
+void llm_destroy(llm *llm);
 
 /* HTTP timeout for LLM calls in ms (default 300000; override with
- * COA_LLM_TIMEOUT_MS / the "llm.timeout_ms" config key). Reasoning models
+ * LLM_TIMEOUT_MS / the "llm.timeout_ms" config key). Reasoning models
  * routinely think longer than a minute before the first byte. */
-int coa_llm_timeout_ms(void);
+int llm_timeout_ms(void);
 
 /* Non-streaming chat. resp->content is filled; caller frees. Returns 0 ok, -1 error. */
-int coa_llm_chat(coa_llm *llm, const coa_llm_request *req, coa_llm_response *resp);
+int llm_chat(llm *llm, const llm_request *req, llm_response *resp);
 /* Streaming chat; cb is called with deltas. Returns 0 ok, -1 error. A pending
  * cancel aborts the stream between deltas (-1). */
-int coa_llm_stream(coa_llm *llm, const coa_llm_request *req, coa_llm_stream_cb cb, void *ud);
+int llm_stream(llm *llm, const llm_request *req, llm_stream_cb cb, void *ud);
 
 /* Request cancellation of an in-flight stream (safe from another thread;
  * takes effect between deltas, and also aborts a stream started afterwards).
  * The flag is consumed when the stream returns. */
-void coa_llm_cancel(coa_llm *llm);
+void llm_cancel(llm *llm);
 
 /* Borrowed capability record for this provider (static, do not free). */
-const coa_llm_caps *coa_llm_capabilities(coa_llm *llm);
+const llm_caps *llm_capabilities(llm *llm);
 
 /* Convenience one-shot chat. Returns malloc'd string (NULL on error). */
-char *coa_llm_chat_simple(coa_llm *llm, const char *system_prompt, const char *user_prompt);
+char *llm_chat_simple(llm *llm, const char *system_prompt, const char *user_prompt);
 
 /* Same, with an explicit max_tokens budget (needed when the reply embeds
  * long content, e.g. JSON plans carrying whole scripts — 1024 truncates). */
-char *coa_llm_chat_simple_ex(coa_llm *llm, const char *system_prompt, const char *user_prompt, int max_tokens);
+char *llm_chat_simple_ex(llm *llm, const char *system_prompt, const char *user_prompt, int max_tokens);
 
 #ifdef __cplusplus
 }

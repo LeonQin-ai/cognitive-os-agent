@@ -8,17 +8,17 @@ extern "C" {
 #endif
 
 /* Monotonic milliseconds since an arbitrary epoch (for measuring durations). */
-int64_t coa_time_now_ms(void);
+int64_t time_now_ms(void);
 /* Monotonic microseconds since an arbitrary epoch. */
-int64_t coa_time_now_us(void);
+int64_t time_now_us(void);
 
 /* Current wall clock as "YYYY-MM-DD HH:MM:SS" into out[0..n). */
-void coa_time_now_str(char *out, size_t n);
+void time_now_str(char *out, size_t n);
 
 /* Wall-clock ISO8601 timestamp with ms: "YYYY-MM-DDTHH:MM:SS.mmmZ". */
-void coa_time_now_iso(char *out, size_t n);
+void time_now_iso(char *out, size_t n);
 
-void coa_time_sleep_ms(int ms);
+void time_sleep_ms(int ms);
 
 #ifdef __cplusplus
 }

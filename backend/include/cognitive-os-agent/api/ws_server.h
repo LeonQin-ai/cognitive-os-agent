@@ -9,25 +9,25 @@
 extern "C" {
 #endif
 
-typedef struct coa_ws_server coa_ws_server;
-typedef struct coa_socket coa_socket;
+typedef struct ws_server ws_server;
+typedef struct sock sock;
 
 /* Called with each inbound text message (NUL-terminated, borrowed). */
-typedef void (*coa_ws_msg_handler)(const char *text, void *ud);
+typedef void (*ws_msg_handler)(const char *text, void *ud);
 
-coa_ws_server *coa_ws_server_new(void);
-void coa_ws_server_free(coa_ws_server *s);
+ws_server *ws_server_new(void);
+void ws_server_free(ws_server *s);
 
 /* Set the inbound-message handler (default: ignore). */
-void coa_ws_server_on_message(coa_ws_server *s, coa_ws_msg_handler fn, void *ud);
+void ws_server_on_message(ws_server *s, ws_msg_handler fn, void *ud);
 
 /* Accept an upgraded socket: send the 101 handshake (using the client's
  * Sec-WebSocket-Key), register the client, and spawn its reader thread.
  * Takes ownership of sock. Returns 0 ok, -1 error. */
-int coa_ws_server_accept(coa_ws_server *s, coa_socket *sock, const char *sec_ws_key);
+int ws_server_accept(ws_server *s, sock *sock, const char *sec_ws_key);
 
 /* Broadcast a text message to every connected client. */
-void coa_ws_server_broadcast(coa_ws_server *s, const char *json_text);
+void ws_server_broadcast(ws_server *s, const char *json_text);
 
 #ifdef __cplusplus
 }

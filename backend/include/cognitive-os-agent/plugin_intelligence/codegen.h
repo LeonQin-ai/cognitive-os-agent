@@ -8,7 +8,7 @@ extern "C" {
 
 /* Generate a C source skeleton for a plugin `name` with `description`.
  * Returns a malloc'd string (caller frees). */
-char *coa_codegen_plugin(const char *name, const char *description);
+char *codegen_plugin(const char *name, const char *description);
 
 #ifdef __cplusplus
 }

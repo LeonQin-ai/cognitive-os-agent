@@ -88,51 +88,51 @@ static const char *SYS_PROMPT_TAIL =
  * malloc'd prompt, or NULL when no registry is available (caller falls back
  * to the static catalog). Tools denied by `policy` are hidden entirely
  * (Claude Code: deny rules both block calls AND remove from the tool pool). */
-static char *build_catalog_prompt(const coa_tool_registry *tools, struct coa_skill_registry *skills,
-                                  struct coa_policy_engine *policy) {
+static char *build_catalog_prompt(const tool_registry *tools, struct skill_registry *skills,
+                                  struct policy_engine *policy) {
     if (!tools)
         return NULL;
-    coa_strbuf b;
-    coa_strbuf_init(&b);
-    coa_strbuf_append(&b, SYS_PROMPT_HEAD);
+    strbuf b;
+    strbuf_init(&b);
+    strbuf_append(&b, SYS_PROMPT_HEAD);
     int have_skill_tool = 0;
-    for (size_t i = 0; i < (size_t)coa_tool_registry_count(tools); i++) {
-        const coa_tool *t = coa_tool_registry_get(tools, i);
+    for (size_t i = 0; i < (size_t)tool_registry_count(tools); i++) {
+        const tool *t = tool_registry_get(tools, i);
         if (!t || !t->name)
             continue;
-        if (policy && coa_policy_check(policy, t->name, "{}", NULL) == COA_POLICY_DENY)
+        if (policy && policy_check(policy, t->name, "{}", NULL) == POLICY_DENY)
             continue;
         if (strcmp(t->name, "skill") == 0) {
             have_skill_tool = 1;
-            coa_strbuf_append(&b,
+            strbuf_append(&b,
                               "- skill:      args {\"name\": string}  # run a REGISTERED SKILL by name (list below)\n");
         } else {
-            coa_strbuf_appendf(&b, "- %s: %s\n", t->name, t->description ? t->description : "");
+            strbuf_appendf(&b, "- %s: %s\n", t->name, t->description ? t->description : "");
             if (t->json_schema && *t->json_schema) {
-                coa_strbuf_append(&b, "  args schema: ");
+                strbuf_append(&b, "  args schema: ");
                 if (strlen(t->json_schema) > 200)
-                    coa_strbuf_append_n(&b, t->json_schema, 200);
+                    strbuf_append_n(&b, t->json_schema, 200);
                 else
-                    coa_strbuf_append(&b, t->json_schema);
-                coa_strbuf_append(&b, "\n");
+                    strbuf_append(&b, t->json_schema);
+                strbuf_append(&b, "\n");
             }
         }
     }
-    if (have_skill_tool && skills && coa_skill_count(skills) > 0) {
-        coa_strbuf_append(&b, "Registered skills (capabilities you can RUN via the skill tool):\n");
-        for (int i = 0; i < coa_skill_count(skills); i++) {
-            const coa_skill *s = coa_skill_get(skills, (size_t)i);
+    if (have_skill_tool && skills && skill_count(skills) > 0) {
+        strbuf_append(&b, "Registered skills (capabilities you can RUN via the skill tool):\n");
+        for (int i = 0; i < skill_count(skills); i++) {
+            const skill *s = skill_get(skills, (size_t)i);
             if (!s)
                 continue;
-            coa_strbuf_appendf(&b, "  * %s (%s): %s\n", s->name, s->kind ? s->kind : "",
+            strbuf_appendf(&b, "  * %s (%s): %s\n", s->name, s->kind ? s->kind : "",
                                s->description ? s->description : "");
         }
-        coa_strbuf_append(&b, "When the user ASKS what skills/tools you have (e.g. \"你有哪些skills\", "
+        strbuf_append(&b, "When the user ASKS what skills/tools you have (e.g. \"你有哪些skills\", "
                               "\"list your skills\"), answer in PLAIN TEXT listing these skill names and "
                               "their use. Do NOT call any tool or skill to answer such a question.\n");
     }
-    coa_strbuf_append(&b, SYS_PROMPT_TAIL);
-    return coa_strbuf_detach(&b);
+    strbuf_append(&b, SYS_PROMPT_TAIL);
+    return strbuf_detach(&b);
 }
 
 /* Extract the first balanced JSON array/object span from a reply, honoring
@@ -181,7 +181,7 @@ static char *extract_json_span(const char *plan) {
 /* Try to parse a reply into tool actions. Returns 1 when actions were built
  * (possibly zero if the array was empty), 0 when the reply is prose without
  * any tool plan. */
-static int parse_plan_actions(const char *plan, coa_planned_action **actions, int *n_actions) {
+static int parse_plan_actions(const char *plan, planned_action **actions, int *n_actions) {
     *actions = NULL;
     *n_actions = 0;
     cJSON *root = cJSON_Parse(plan);
@@ -204,7 +204,7 @@ static int parse_plan_actions(const char *plan, coa_planned_action **actions, in
         cJSON_Delete(root);
         return 0;
     }
-    coa_planned_action *a = NULL;
+    planned_action *a = NULL;
     int n = 0;
     cJSON *it;
     cJSON_ArrayForEach(it, root) {
@@ -214,16 +214,16 @@ static int parse_plan_actions(const char *plan, coa_planned_action **actions, in
         if (!tool || !cJSON_IsString(tool))
             continue;
         cJSON *args = cJSON_GetObjectItemCaseSensitive(it, "args");
-        char *args_json = (args && cJSON_IsObject(args)) ? cJSON_PrintUnformatted(args) : coa_strdup("{}");
+        char *args_json = (args && cJSON_IsObject(args)) ? cJSON_PrintUnformatted(args) : xstrdup("{}");
         if (!args_json)
-            args_json = coa_strdup("{}");
-        coa_planned_action *na = (coa_planned_action *)realloc(a, (size_t)(n + 1) * sizeof(coa_planned_action));
+            args_json = xstrdup("{}");
+        planned_action *na = (planned_action *)realloc(a, (size_t)(n + 1) * sizeof(planned_action));
         if (!na) {
             free(args_json);
             break;
         }
         a = na;
-        a[n].tool = coa_strdup(tool->valuestring);
+        a[n].tool = xstrdup(tool->valuestring);
         a[n].args_json = args_json;
         n++;
     }
@@ -234,7 +234,7 @@ static int parse_plan_actions(const char *plan, coa_planned_action **actions, in
 }
 
 /* Shared planning core. Takes ownership of nothing; frees sys_prompt. */
-static int plan_with(coa_llm *llm, char *sys_prompt, const char *prompt, coa_planned_action **actions, int *n_actions,
+static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_action **actions, int *n_actions,
                      char **raw_out, char **err_out) {
     if (actions)
         *actions = NULL;
@@ -247,15 +247,15 @@ static int plan_with(coa_llm *llm, char *sys_prompt, const char *prompt, coa_pla
     if (!llm || !prompt) {
         free(sys_prompt);
         if (err_out)
-            *err_out = coa_strdup("no LLM configured");
+            *err_out = xstrdup("no LLM configured");
         return -1;
     }
 
-    coa_llm_message msgs[2] = {
+    llm_message msgs[2] = {
         {"system", sys_prompt ? sys_prompt : SYS_PROMPT},
         {"user", prompt},
     };
-    coa_llm_request req = {0};
+    llm_request req = {0};
     req.messages = msgs;
     req.num_messages = 2;
     req.temperature = 0.2;
@@ -264,12 +264,12 @@ static int plan_with(coa_llm *llm, char *sys_prompt, const char *prompt, coa_pla
                             * JSON mid-string and the plan was lost. Thinking
                             * models spend reasoning tokens from the same
                             * budget; 1024 risked empty-content replies */
-    coa_llm_response resp = {0};
-    int rc = coa_llm_chat(llm, &req, &resp);
+    llm_response resp = {0};
+    int rc = llm_chat(llm, &req, &resp);
     free(sys_prompt);
     if (rc != 0) {
         if (err_out)
-            *err_out = coa_strdup(resp.error ? resp.error : "LLM call failed");
+            *err_out = xstrdup(resp.error ? resp.error : "LLM call failed");
         free(resp.content);
         free(resp.error);
         return -1;
@@ -279,7 +279,7 @@ static int plan_with(coa_llm *llm, char *sys_prompt, const char *prompt, coa_pla
     free(resp.error);
     if (!plan) {
         if (err_out)
-            *err_out = coa_strdup("LLM returned an empty response");
+            *err_out = xstrdup("LLM returned an empty response");
         return -1;
     }
     if (raw_out)
@@ -299,7 +299,7 @@ static int plan_with(coa_llm *llm, char *sys_prompt, const char *prompt, coa_pla
     if (!have && looks_like_plan) {
         const char *epos = cJSON_GetErrorPtr();
         size_t off = (epos && epos >= plan && epos < plan + strlen(plan)) ? (size_t)(epos - plan) : 0;
-        coa_log_warn("planner: invalid plan JSON (byte %zu / len %zu) — requesting repair", off, strlen(plan));
+        log_warn("planner: invalid plan JSON (byte %zu / len %zu) — requesting repair", off, strlen(plan));
         /* one repair round-trip: the model re-emits its own plan as clean JSON */
         size_t plen = strlen(plan);
         char *user = (char *)malloc(plen + 512);
@@ -311,7 +311,7 @@ static int plan_with(coa_llm *llm, char *sys_prompt, const char *prompt, coa_pla
                      "markdown fences, no prose:\n\n%s",
                      plan);
         }
-        char *fixed = user ? coa_llm_chat_simple_ex(
+        char *fixed = user ? llm_chat_simple_ex(
                                  llm, "You repair broken JSON. Output ONLY the corrected JSON array.", user, 8192)
                            : NULL;
         if (fixed) {
@@ -321,7 +321,7 @@ static int plan_with(coa_llm *llm, char *sys_prompt, const char *prompt, coa_pla
                     *raw_out = fixed;
                 } else
                     free(fixed);
-                coa_log_info("planner: repaired plan JSON accepted (%d actions)", *n_actions);
+                log_info("planner: repaired plan JSON accepted (%d actions)", *n_actions);
             } else {
                 free(fixed);
             }
@@ -333,7 +333,7 @@ static int plan_with(coa_llm *llm, char *sys_prompt, const char *prompt, coa_pla
     return 0;
 }
 
-void coa_planner_actions_free(coa_planned_action *a, int n) {
+void planner_actions_free(planned_action *a, int n) {
     for (int i = 0; i < n; i++) {
         free(a[i].tool);
         free(a[i].args_json);
@@ -341,13 +341,13 @@ void coa_planner_actions_free(coa_planned_action *a, int n) {
     free(a);
 }
 
-int coa_planner_plan(coa_llm *llm, const char *prompt, coa_planned_action **actions, int *n_actions, char **raw_out,
+int planner_plan(llm *llm, const char *prompt, planned_action **actions, int *n_actions, char **raw_out,
                      char **err_out) {
     return plan_with(llm, NULL, prompt, actions, n_actions, raw_out, err_out);
 }
 
-int coa_planner_plan_ex(coa_llm *llm, const struct coa_tool_registry *tools, struct coa_skill_registry *skills,
-                        struct coa_policy_engine *policy, const char *prompt, coa_planned_action **actions,
+int planner_plan_ex(llm *llm, const struct tool_registry *tools, struct skill_registry *skills,
+                        struct policy_engine *policy, const char *prompt, planned_action **actions,
                         int *n_actions, char **raw_out, char **err_out) {
     char *sys = build_catalog_prompt(tools, skills, policy);
     return plan_with(llm, sys, prompt, actions, n_actions, raw_out, err_out);

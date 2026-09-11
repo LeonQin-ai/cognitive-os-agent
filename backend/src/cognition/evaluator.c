@@ -4,18 +4,18 @@
 #include <stdlib.h>
 #include <string.h>
 
-struct coa_evaluator {
+struct evaluator {
     int reserved;
 };
 
-coa_evaluator *coa_evaluator_new(void) {
-    return (coa_evaluator *)calloc(1, sizeof(coa_evaluator));
+evaluator *evaluator_new(void) {
+    return (evaluator *)calloc(1, sizeof(evaluator));
 }
-void coa_evaluator_free(coa_evaluator *e) {
+void evaluator_free(evaluator *e) {
     free(e);
 }
 
-int coa_evaluator_verify(coa_evaluator *e, int all_actions_ok, int n_actions, int ok_actions) {
+int evaluator_verify(evaluator *e, int all_actions_ok, int n_actions, int ok_actions) {
     (void)e;
     (void)all_actions_ok;
     if (n_actions == 0)
@@ -27,7 +27,7 @@ int coa_evaluator_verify(coa_evaluator *e, int all_actions_ok, int n_actions, in
     return ok_actions > 0 ? 1 : 0;
 }
 
-double coa_evaluator_score(coa_evaluator *e, int n_actions, int ok_actions, int all_actions_ok, const char *answer) {
+double evaluator_score(evaluator *e, int n_actions, int ok_actions, int all_actions_ok, const char *answer) {
     (void)e;
     if (answer) {
         if (strstr(answer, "FAILED") || strstr(answer, "denied") || strstr(answer, "rollback") ||

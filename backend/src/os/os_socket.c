@@ -26,10 +26,10 @@
 #include <fcntl.h>
 #endif
 
-struct coa_socket {
+struct sock {
     int fd;
 };
-struct coa_listener {
+struct listener {
     int fd;
 };
 
@@ -64,7 +64,7 @@ static void set_err(const char *msg) {
 
 #if defined(_WIN32)
 /* WSAStartup must precede any Winsock call. Initialization normally happens in
- * coa_init(), but the socket layer self-initializes too so standalone users
+ * init(), but the socket layer self-initializes too so standalone users
  * (e.g. tests that call the LLM adapters directly) work without it. The guard
  * flag makes this idempotent. */
 static int wsa_started = 0;
@@ -81,14 +81,14 @@ static int wsa_start(void) {
 }
 #endif
 
-int coa_sock_init(void) {
+int sock_init(void) {
 #if defined(_WIN32)
     return wsa_start();
 #endif
     return 0;
 }
 
-void coa_sock_cleanup(void) {
+void sock_cleanup(void) {
 #if defined(_WIN32)
     if (wsa_started) {
         WSACleanup();
@@ -97,7 +97,7 @@ void coa_sock_cleanup(void) {
 #endif
 }
 
-const char *coa_sock_error(void) {
+const char *sock_error(void) {
     return g_err;
 }
 
@@ -111,7 +111,7 @@ static void set_nonblock(int fd, int nb) {
 #endif
 }
 
-coa_socket *coa_sock_connect(const char *host, uint16_t port, int timeout_ms) {
+sock *sock_connect(const char *host, uint16_t port, int timeout_ms) {
 #if defined(_WIN32)
     if (wsa_start() != 0)
         return NULL;
@@ -217,7 +217,7 @@ coa_socket *coa_sock_connect(const char *host, uint16_t port, int timeout_ms) {
         int one = 1;
         setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, (const char *)&one, sizeof(one));
     }
-    coa_socket *s = malloc(sizeof(coa_socket));
+    sock *s = malloc(sizeof(sock));
     if (!s) {
         CLOSEFD(fd);
         return NULL;
@@ -227,7 +227,7 @@ coa_socket *coa_sock_connect(const char *host, uint16_t port, int timeout_ms) {
     return s;
 }
 
-int coa_sock_send(coa_socket *s, const void *data, size_t len) {
+int sock_send(sock *s, const void *data, size_t len) {
     size_t off = 0;
     const char *p = (const char *)data;
     while (off < len) {
@@ -244,7 +244,7 @@ int coa_sock_send(coa_socket *s, const void *data, size_t len) {
     return (int)off;
 }
 
-int coa_sock_recv(coa_socket *s, void *buf, size_t cap) {
+int sock_recv(sock *s, void *buf, size_t cap) {
     int n = (int)recv(s->fd, buf, (int)cap, 0);
     if (n == 0)
         return 0; /* EOF */
@@ -258,7 +258,7 @@ int coa_sock_recv(coa_socket *s, void *buf, size_t cap) {
     return n;
 }
 
-int coa_sock_wait_readable(coa_socket *s, int timeout_ms) {
+int sock_wait_readable(sock *s, int timeout_ms) {
     if (!s || s->fd < 0)
         return -1;
     fd_set rset;
@@ -288,7 +288,7 @@ int coa_sock_wait_readable(coa_socket *s, int timeout_ms) {
     return 0;
 }
 
-coa_listener *coa_listen_addr(const char *host, uint16_t port) {
+listener *listen_addr(const char *host, uint16_t port) {
 #if defined(_WIN32)
     if (wsa_start() != 0)
         return NULL;
@@ -334,7 +334,7 @@ coa_listener *coa_listen_addr(const char *host, uint16_t port) {
         CLOSEFD(fd);
         return NULL;
     }
-    coa_listener *l = malloc(sizeof(coa_listener));
+    listener *l = malloc(sizeof(listener));
     if (!l) {
         CLOSEFD(fd);
         return NULL;
@@ -344,13 +344,13 @@ coa_listener *coa_listen_addr(const char *host, uint16_t port) {
     return l;
 }
 
-coa_socket *coa_accept(coa_listener *l, int timeout_ms) {
+sock *sock_accept(listener *l, int timeout_ms) {
     if (l->fd < 0)
         return NULL;
     /* Wait for an inbound connection with a real timeout. SO_RCVTIMEO does
      * NOT unblock accept() on Windows/Winsock (it only affects recv), so the
      * old code could hang a serving thread forever and ignore stop requests.
-     * select() before accept() gives a portable timeout: coa_http_server_stop()
+     * select() before accept() gives a portable timeout: http_server_stop()
      * sets stop_flag and the serve loop wakes within timeout_ms. */
     if (timeout_ms > 0) {
         fd_set rset;
@@ -374,7 +374,7 @@ coa_socket *coa_accept(coa_listener *l, int timeout_ms) {
         set_err("accept failed");
         return NULL;
     }
-    coa_socket *s = malloc(sizeof(coa_socket));
+    sock *s = malloc(sizeof(sock));
     if (!s) {
         CLOSEFD(fd);
         return NULL;
@@ -385,7 +385,7 @@ coa_socket *coa_accept(coa_listener *l, int timeout_ms) {
      * returns WSAETIMEDOUT and the connection is dropped instead of blocking
      * the accept loop forever. NOTE: on Windows the timeout is a DWORD in
      * milliseconds (NOT struct timeval); 30s is generous for the WebSocket
-     * client threads, which poll with coa_sock_wait_readable() before recv. */
+     * client threads, which poll with sock_wait_readable() before recv. */
 #ifdef _WIN32
     DWORD rto = 30000;
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, (const char *)&rto, sizeof(rto));
@@ -396,14 +396,14 @@ coa_socket *coa_accept(coa_listener *l, int timeout_ms) {
     return s;
 }
 
-void coa_sock_close(coa_socket *s) {
+void sock_close(sock *s) {
     if (!s)
         return;
     CLOSEFD(s->fd);
     free(s);
 }
 
-void coa_listener_close(coa_listener *l) {
+void listener_close(listener *l) {
     if (!l)
         return;
     CLOSEFD(l->fd);

@@ -7,13 +7,13 @@
 #include <stdlib.h>
 #include <string.h>
 
-struct coa_audit {
+struct audit {
     FILE *f;
-    coa_mutex mtx;
+    mutex_t mtx;
 };
 
-coa_audit *coa_audit_open(const char *path) {
-    coa_audit *a = calloc(1, sizeof(coa_audit));
+audit *audit_open(const char *path) {
+    audit *a = calloc(1, sizeof(audit));
     if (!a)
         return NULL;
     a->f = fopen(path, "a");
@@ -21,51 +21,51 @@ coa_audit *coa_audit_open(const char *path) {
         free(a);
         return NULL;
     }
-    coa_mutex_init(&a->mtx);
+    mutex_init(&a->mtx);
     return a;
 }
 
-void coa_audit_log(coa_audit *a, const char *action, const char *subject, const char *result, const char *detail_json) {
+void audit_log(audit *a, const char *action, const char *subject, const char *result, const char *detail_json) {
     if (!a || !a->f)
         return;
     char ts[40];
-    coa_time_now_iso(ts, sizeof(ts));
+    time_now_iso(ts, sizeof(ts));
     /* Escape detail_json minimally: strip raw newlines/tabs. */
     const char *detail = detail_json ? detail_json : "";
     char *esc = NULL;
     size_t dl = strlen(detail);
     if (dl > 0 && (strchr(detail, '\n') || strchr(detail, '\t') || strchr(detail, '"'))) {
-        coa_strbuf sb;
-        coa_strbuf_init(&sb);
+        strbuf sb;
+        strbuf_init(&sb);
         for (size_t i = 0; i < dl; i++) {
             char ch = detail[i];
             if (ch == '"')
-                coa_strbuf_append(&sb, "\\\"");
+                strbuf_append(&sb, "\\\"");
             else if (ch == '\\')
-                coa_strbuf_append(&sb, "\\\\");
+                strbuf_append(&sb, "\\\\");
             else if (ch == '\n')
-                coa_strbuf_append(&sb, "\\n");
+                strbuf_append(&sb, "\\n");
             else if (ch == '\t')
-                coa_strbuf_append(&sb, "\\t");
+                strbuf_append(&sb, "\\t");
             else
-                coa_strbuf_append_n(&sb, &ch, 1);
+                strbuf_append_n(&sb, &ch, 1);
         }
-        esc = coa_strbuf_detach(&sb);
+        esc = strbuf_detach(&sb);
         detail = esc;
     }
-    coa_mutex_lock(&a->mtx);
+    mutex_lock(&a->mtx);
     fprintf(a->f, "{\"ts\":\"%s\",\"action\":\"%s\",\"subject\":\"%s\",\"result\":\"%s\",\"detail\":%s}\n", ts,
             action ? action : "", subject ? subject : "", result ? result : "", detail);
     fflush(a->f);
-    coa_mutex_unlock(&a->mtx);
+    mutex_unlock(&a->mtx);
     free(esc);
 }
 
-void coa_audit_close(coa_audit *a) {
+void audit_close(audit *a) {
     if (!a)
         return;
     if (a->f)
         fclose(a->f);
-    coa_mutex_destroy(&a->mtx);
+    mutex_destroy(&a->mtx);
     free(a);
 }

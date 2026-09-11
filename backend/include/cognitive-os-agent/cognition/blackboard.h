@@ -8,21 +8,21 @@
 extern "C" {
 #endif
 
-typedef struct coa_blackboard coa_blackboard;
+typedef struct blackboard blackboard;
 
-coa_blackboard *coa_blackboard_new(void);
-void coa_blackboard_free(coa_blackboard *b);
+blackboard *blackboard_new(void);
+void blackboard_free(blackboard *b);
 
 /* Store a key->value entry (value is copied). */
-void coa_blackboard_put(coa_blackboard *b, const char *key, const char *val);
+void blackboard_put(blackboard *b, const char *key, const char *val);
 /* Fetch a copy of the value for key (caller frees). NULL if absent. */
-char *coa_blackboard_get(coa_blackboard *b, const char *key);
+char *blackboard_get(blackboard *b, const char *key);
 /* Remove an entry. Returns 1 if it existed, 0 otherwise. */
-int coa_blackboard_remove(coa_blackboard *b, const char *key);
-int coa_blackboard_count(coa_blackboard *b);
+int blackboard_remove(blackboard *b, const char *key);
+int blackboard_count(blackboard *b);
 
 /* All entries as a JSON object (malloc'd; caller frees). */
-char *coa_blackboard_snapshot_json(coa_blackboard *b);
+char *blackboard_snapshot_json(blackboard *b);
 
 #ifdef __cplusplus
 }

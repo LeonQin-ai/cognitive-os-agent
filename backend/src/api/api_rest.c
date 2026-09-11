@@ -27,9 +27,9 @@
 #include "cJSON.h"
 
 /* Copy the (not null-terminated) request body into a C string. */
-static char *body_str(const coa_http_request *req) {
+static char *body_str(const http_request *req) {
     if (!req->body || req->body_len == 0)
-        return coa_strdup("");
+        return xstrdup("");
     char *s = malloc(req->body_len + 1);
     if (!s)
         return NULL;
@@ -50,37 +50,37 @@ static double json_dbl(cJSON *o, const char *key, double def) {
 
 /* If an auth key is configured (ctx->auth != NULL), require a valid bearer
  * token on /v1 routes. Returns 1 if allowed, 0 if denied (sets 401). */
-static int authz_ok(coa_ctx *ctx, const coa_http_request *req, coa_http_response *resp) {
+static int authz_ok(runtime_ctx *ctx, const http_request *req, http_response *resp) {
     if (!ctx->auth)
         return 1; /* auth not configured: open access */
-    if (coa_auth_check_header(ctx->auth, req->authorization))
+    if (auth_check_header(ctx->auth, req->authorization))
         return 1;
     resp->status = 401;
-    coa_http_resp_json(resp, "{\"error\":\"unauthorized\"}");
+    http_resp_json(resp, "{\"error\":\"unauthorized\"}");
     return 0;
 }
 
-static const char *task_status_str(coa_task_status st) {
+static const char *task_status_str(task_status st) {
     switch (st) {
-    case COA_TS_QUEUED:
+    case TS_QUEUED:
         return "QUEUED";
-    case COA_TS_RUNNING:
+    case TS_RUNNING:
         return "RUNNING";
-    case COA_TS_DONE:
+    case TS_DONE:
         return "DONE";
-    case COA_TS_FAILED:
+    case TS_FAILED:
         return "FAILED";
-    case COA_TS_CANCELLED:
+    case TS_CANCELLED:
         return "CANCELLED";
-    case COA_TS_TIMEOUT:
+    case TS_TIMEOUT:
         return "TIMEOUT";
     default:
         return "UNKNOWN";
     }
 }
 
-static int h_task_create(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_task_create(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
     char *b = body_str(req);
@@ -96,40 +96,40 @@ static int h_task_create(const coa_http_request *req, coa_http_response *resp, v
         if (root)
             cJSON_Delete(root);
         resp->status = 400;
-        coa_http_resp_json(resp, "{\"error\":\"missing 'prompt' string\"}");
+        http_resp_json(resp, "{\"error\":\"missing 'prompt' string\"}");
         return 0;
     }
-    int64_t id = coa_scheduler_submit(ctx->scheduler, 0, prompt, NULL, 0);
+    int64_t id = scheduler_submit(ctx->scheduler, 0, prompt, NULL, 0);
     /* prompt borrows into the cJSON tree — copy before freeing it */
     char prompt_copy[512];
     snprintf(prompt_copy, sizeof(prompt_copy), "%s", prompt);
     cJSON_Delete(root);
     if (id < 0) {
         resp->status = 500;
-        coa_http_resp_json(resp, "{\"error\":\"scheduler submit failed\"}");
+        http_resp_json(resp, "{\"error\":\"scheduler submit failed\"}");
         return 0;
     }
     if (ctx->state)
-        coa_state_store_task_set(ctx->state, id, "QUEUED", prompt_copy);
-    coa_http_resp_appendf(resp, "{\"id\":%lld,\"status\":\"queued\"}", (long long)id);
+        state_store_task_set(ctx->state, id, "QUEUED", prompt_copy);
+    http_resp_appendf(resp, "{\"id\":%lld,\"status\":\"queued\"}", (long long)id);
     return 0;
 }
 
-static int h_task_get(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_task_get(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
     const char *suffix = req->path + strlen("/v1/tasks/");
     if (!*suffix) {
         resp->status = 404;
-        coa_http_resp_json(resp, "{\"error\":\"missing task id\"}");
+        http_resp_json(resp, "{\"error\":\"missing task id\"}");
         return 0;
     }
     int64_t id = atoll(suffix);
-    coa_task *t = coa_scheduler_get(ctx->scheduler, id);
+    task *t = scheduler_get(ctx->scheduler, id);
     if (!t) {
         resp->status = 404;
-        coa_http_resp_json(resp, "{\"error\":\"task not found\"}");
+        http_resp_json(resp, "{\"error\":\"task not found\"}");
         return 0;
     }
     cJSON *o = cJSON_CreateObject();
@@ -142,7 +142,7 @@ static int h_task_get(const coa_http_request *req, coa_http_response *resp, void
     char *s = cJSON_PrintUnformatted(o);
     cJSON_Delete(o);
     if (s) {
-        coa_http_resp_append(resp, s);
+        http_resp_append(resp, s);
         free(s);
     }
     return 0;
@@ -154,8 +154,8 @@ static int h_task_get(const coa_http_request *req, coa_http_response *resp, void
  * calls). The optional "session" id isolates the conversation: each session
  * carries its own history, summary and session notes, so multiple chat boxes
  * can run side by side (default = the shared default session). */
-static int h_chat(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_chat(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
     char *b = body_str(req);
@@ -175,29 +175,29 @@ static int h_chat(const coa_http_request *req, coa_http_response *resp, void *ud
         if (root)
             cJSON_Delete(root);
         resp->status = 400;
-        coa_http_resp_json(resp, "{\"error\":\"missing 'message' string\"}");
+        http_resp_json(resp, "{\"error\":\"missing 'message' string\"}");
         return 0;
     }
-    int64_t id = coa_scheduler_submit_tag(ctx->scheduler, 0, msg, NULL, 0, session);
+    int64_t id = scheduler_submit_tag(ctx->scheduler, 0, msg, NULL, 0, session);
     cJSON_Delete(root);
     if (id < 0) {
         resp->status = 500;
-        coa_http_resp_json(resp, "{\"error\":\"scheduler submit failed\"}");
+        http_resp_json(resp, "{\"error\":\"scheduler submit failed\"}");
         return 0;
     }
-    coa_http_resp_appendf(resp, "{\"id\":%lld,\"status\":\"queued\"}", (long long)id);
+    http_resp_appendf(resp, "{\"id\":%lld,\"status\":\"queued\"}", (long long)id);
     return 0;
 }
 
 /* GET /v1/chat/sessions — list chat sessions (id, turns, task, last active).
  * DELETE /v1/chat/sessions/<id> — clear that session's history and notes. */
-static int h_chat_sessions(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_chat_sessions(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
     if (strcmp(req->method, "GET") == 0) {
-        char *js = coa_reasoning_sessions_json(ctx->reasoning);
-        coa_http_resp_append(resp, js ? js : "[]");
+        char *js = reasoning_sessions_json(ctx->reasoning);
+        http_resp_append(resp, js ? js : "[]");
         free(js);
         return 0;
     }
@@ -205,18 +205,18 @@ static int h_chat_sessions(const coa_http_request *req, coa_http_response *resp,
     const char *suffix = req->path + strlen("/v1/chat/sessions/");
     if (!*suffix) {
         resp->status = 400;
-        coa_http_resp_json(resp, "{\"error\":\"missing session id\"}");
+        http_resp_json(resp, "{\"error\":\"missing session id\"}");
         return 0;
     }
     char sid[128];
     snprintf(sid, sizeof(sid), "%s", suffix);
-    int rc = coa_reasoning_session_clear(ctx->reasoning, sid);
+    int rc = reasoning_session_clear(ctx->reasoning, sid);
     if (rc != 0) {
         resp->status = 404;
-        coa_http_resp_json(resp, "{\"error\":\"session not found\"}");
+        http_resp_json(resp, "{\"error\":\"session not found\"}");
         return 0;
     }
-    coa_http_resp_json(resp, "{\"status\":\"cleared\"}");
+    http_resp_json(resp, "{\"status\":\"cleared\"}");
     return 0;
 }
 
@@ -224,8 +224,8 @@ static int h_chat_sessions(const coa_http_request *req, coa_http_response *resp,
  * decomposed across registered agents (blackboard + merge), executed async via
  * the scheduler. Poll /v1/tasks/<id> for the final answer; live progress comes
  * over WebSocket (source "orchestrator"); steps land on the blackboard "orch/". */
-static int h_orchestrate(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_orchestrate(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
     char *b = body_str(req);
@@ -241,26 +241,26 @@ static int h_orchestrate(const coa_http_request *req, coa_http_response *resp, v
         if (root)
             cJSON_Delete(root);
         resp->status = 400;
-        coa_http_resp_json(resp, "{\"error\":\"missing 'task' string\"}");
+        http_resp_json(resp, "{\"error\":\"missing 'task' string\"}");
         return 0;
     }
-    /* userdata = marker so the task runner routes to coa_orchestrate */
-    int64_t id = coa_scheduler_submit(ctx->scheduler, 0, task, (void *)1, 0);
+    /* userdata = marker so the task runner routes to orchestrate */
+    int64_t id = scheduler_submit(ctx->scheduler, 0, task, (void *)1, 0);
     cJSON_Delete(root);
     if (id < 0) {
         resp->status = 500;
-        coa_http_resp_json(resp, "{\"error\":\"scheduler submit failed\"}");
+        http_resp_json(resp, "{\"error\":\"scheduler submit failed\"}");
         return 0;
     }
-    coa_http_resp_appendf(resp, "{\"id\":%lld,\"status\":\"queued\"}", (long long)id);
+    http_resp_appendf(resp, "{\"id\":%lld,\"status\":\"queued\"}", (long long)id);
     return 0;
 }
 
 /* POST /v1/flows — compile + execute an explicit DAG flow (async via the
  * scheduler). Body: either the raw DAG {"nodes":[...],"edges":[...]} or
  * {"flow": <that object>}. Validated synchronously so 400s carry the reason. */
-static int h_flow_run(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_flow_run(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
     char *b = body_str(req);
@@ -279,42 +279,42 @@ static int h_flow_run(const coa_http_request *req, coa_http_response *resp, void
         if (root)
             cJSON_Delete(root);
         resp->status = 400;
-        coa_http_resp_json(resp, "{\"error\":\"need a flow object with 'nodes'\"}");
+        http_resp_json(resp, "{\"error\":\"need a flow object with 'nodes'\"}");
         return 0;
     }
     char *dag_json = cJSON_PrintUnformatted(dag);
     cJSON_Delete(root);
     if (!dag_json) {
         resp->status = 500;
-        coa_http_resp_json(resp, "{\"error\":\"serialize failed\"}");
+        http_resp_json(resp, "{\"error\":\"serialize failed\"}");
         return 0;
     }
     char *verr = NULL;
-    if (coa_flow_validate(dag_json, &verr) != 0) {
-        coa_http_resp_appendf(resp, "{\"error\":\"invalid flow: %s\"}", verr ? verr : "unknown");
+    if (flow_validate(dag_json, &verr) != 0) {
+        http_resp_appendf(resp, "{\"error\":\"invalid flow: %s\"}", verr ? verr : "unknown");
         free(verr);
         free(dag_json);
         resp->status = 400;
         return 0;
     }
     free(verr);
-    /* userdata marker 2 routes the task runner to coa_flow_run */
-    int64_t id = coa_scheduler_submit(ctx->scheduler, 0, dag_json, (void *)2, 0);
+    /* userdata marker 2 routes the task runner to flow_run */
+    int64_t id = scheduler_submit(ctx->scheduler, 0, dag_json, (void *)2, 0);
     free(dag_json);
     if (id < 0) {
         resp->status = 500;
-        coa_http_resp_json(resp, "{\"error\":\"scheduler submit failed\"}");
+        http_resp_json(resp, "{\"error\":\"scheduler submit failed\"}");
         return 0;
     }
-    coa_http_resp_appendf(resp, "{\"id\":%lld,\"status\":\"queued\"}", (long long)id);
+    http_resp_appendf(resp, "{\"id\":%lld,\"status\":\"queued\"}", (long long)id);
     return 0;
 }
 
 /* POST /v1/flows/decompose {task} — compile a task into a Flow DAG via the
  * orchestrator's LLM decomposition WITHOUT executing it. Returns the DAG so
  * the client can inspect/modify it before POST /v1/flows. */
-static int h_flow_decompose(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_flow_decompose(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
     char *b = body_str(req);
@@ -324,22 +324,22 @@ static int h_flow_decompose(const coa_http_request *req, coa_http_response *resp
     if (!t || !cJSON_IsString(t) || !t->valuestring || !*t->valuestring) {
         cJSON_Delete(root);
         resp->status = 400;
-        coa_http_resp_json(resp, "{\"error\":\"missing 'task' string\"}");
+        http_resp_json(resp, "{\"error\":\"missing 'task' string\"}");
         return 0;
     }
     char *dag_json = NULL;
-    int rc = coa_flow_decompose(ctx, t->valuestring, &dag_json);
+    int rc = flow_decompose(ctx, t->valuestring, &dag_json);
     cJSON_Delete(root);
     if (rc != 0 || !dag_json) {
         resp->status = 422;
-        coa_http_resp_json(resp, "{\"error\":\"no multi-agent plan (register agents or check LLM config)\"}");
+        http_resp_json(resp, "{\"error\":\"no multi-agent plan (register agents or check LLM config)\"}");
         return 0;
     }
     cJSON *dag = cJSON_Parse(dag_json);
     free(dag_json);
     if (!dag) {
         resp->status = 500;
-        coa_http_resp_json(resp, "{\"error\":\"dag serialize failed\"}");
+        http_resp_json(resp, "{\"error\":\"dag serialize failed\"}");
         return 0;
     }
     cJSON *out = cJSON_CreateObject();
@@ -347,7 +347,7 @@ static int h_flow_decompose(const coa_http_request *req, coa_http_response *resp
     char *js = cJSON_PrintUnformatted(out);
     cJSON_Delete(out);
     if (js) {
-        coa_http_resp_json(resp, js);
+        http_resp_json(resp, js);
         free(js);
     }
     return 0;
@@ -355,22 +355,22 @@ static int h_flow_decompose(const coa_http_request *req, coa_http_response *resp
 
 /* ---------- policy rules: list / add / delete (persisted to policy.json) ---------- */
 
-static void policy_path_of(coa_ctx *ctx, char *out, size_t cap) {
-    coa_path_join(out, cap, ctx->state_root ? ctx->state_root : "state", "policy.json");
+static void policy_path_of(runtime_ctx *ctx, char *out, size_t cap) {
+    path_join(out, cap, ctx->state_root ? ctx->state_root : "state", "policy.json");
 }
 
-static int h_policy_rules(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_policy_rules(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
     (void)req;
     cJSON *arr = cJSON_CreateArray();
-    int n = ctx->policy ? coa_policy_rule_count(ctx->policy) : 0;
+    int n = ctx->policy ? policy_rule_count(ctx->policy) : 0;
     for (int i = 0; i < n; i++) {
         const char *tool = NULL, *action = NULL, *reason = NULL;
         cJSON *o = cJSON_CreateObject();
         cJSON_AddNumberToObject(o, "index", i);
-        if (coa_policy_rule_get(ctx->policy, (size_t)i, &tool, &action, &reason) == 0) {
+        if (policy_rule_get(ctx->policy, (size_t)i, &tool, &action, &reason) == 0) {
             cJSON_AddStringToObject(o, "tool", tool ? tool : "*");
             cJSON_AddStringToObject(o, "action", action ? action : "deny");
             cJSON_AddStringToObject(o, "reason", reason ? reason : "");
@@ -382,14 +382,14 @@ static int h_policy_rules(const coa_http_request *req, coa_http_response *resp, 
     char *js = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
     if (js) {
-        coa_http_resp_append(resp, js);
+        http_resp_append(resp, js);
         free(js);
     }
     return 0;
 }
 
-static int h_policy_add(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_policy_add(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
     char *b = body_str(req);
@@ -402,44 +402,44 @@ static int h_policy_add(const coa_http_request *req, coa_http_response *resp, vo
         !a->valuestring) {
         cJSON_Delete(root);
         resp->status = 400;
-        coa_http_resp_json(resp, "{\"error\":\"need 'tool' and 'action' (allow|deny|ask)\"}");
+        http_resp_json(resp, "{\"error\":\"need 'tool' and 'action' (allow|deny|ask)\"}");
         return 0;
     }
-    coa_policy_add_rule(ctx->policy, t->valuestring, a->valuestring, (r && cJSON_IsString(r)) ? r->valuestring : NULL);
+    policy_add_rule(ctx->policy, t->valuestring, a->valuestring, (r && cJSON_IsString(r)) ? r->valuestring : NULL);
     cJSON_Delete(root);
     char ppath[600];
     policy_path_of(ctx, ppath, sizeof(ppath));
-    int saved = coa_policy_save_file(ctx->policy, ppath);
-    coa_http_resp_appendf(resp, "{\"ok\":true,\"saved\":%s}", saved == 0 ? "true" : "false");
+    int saved = policy_save_file(ctx->policy, ppath);
+    http_resp_appendf(resp, "{\"ok\":true,\"saved\":%s}", saved == 0 ? "true" : "false");
     return 0;
 }
 
-static int h_policy_delete(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_policy_delete(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
     int idx = atoi(req->path + strlen("/v1/policy/rules/"));
-    if (idx < 0 || (size_t)idx >= (size_t)coa_policy_rule_count(ctx->policy)) {
+    if (idx < 0 || (size_t)idx >= (size_t)policy_rule_count(ctx->policy)) {
         resp->status = 404;
-        coa_http_resp_json(resp, "{\"error\":\"no such rule\"}");
+        http_resp_json(resp, "{\"error\":\"no such rule\"}");
         return 0;
     }
-    coa_policy_remove_rule(ctx->policy, (size_t)idx);
+    policy_remove_rule(ctx->policy, (size_t)idx);
     char ppath[600];
     policy_path_of(ctx, ppath, sizeof(ppath));
-    coa_policy_save_file(ctx->policy, ppath);
-    coa_http_resp_json(resp, "{\"ok\":true}");
+    policy_save_file(ctx->policy, ppath);
+    http_resp_json(resp, "{\"ok\":true}");
     return 0;
 }
 
 /* GET /v1/hooks — list registered hooks [{"id":N,"event":"..."}]. */
-static int h_hooks(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_hooks(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
     (void)req;
-    char *js = ctx->hooks ? coa_hook_registry_json(ctx->hooks) : coa_strdup("[]");
-    coa_http_resp_appendf(resp, "{\"hooks\":%s}", js ? js : "[]");
+    char *js = ctx->hooks ? hook_registry_json(ctx->hooks) : xstrdup("[]");
+    http_resp_appendf(resp, "{\"hooks\":%s}", js ? js : "[]");
     free(js);
     return 0;
 }
@@ -448,13 +448,13 @@ static int h_hooks(const coa_http_request *req, coa_http_response *resp, void *u
  * register a hook from outside the process (web UI, plugins). type "log"
  * appends {"ts_ms","event","payload"} JSON lines to `file` (default
  * <state_root>/hooks-external.jsonl). Returns the hook id. */
-static int h_hook_add(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_hook_add(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
     if (!ctx->hooks) {
         resp->status = 500;
-        coa_http_resp_json(resp, "{\"error\":\"hook registry unavailable\"}");
+        http_resp_json(resp, "{\"error\":\"hook registry unavailable\"}");
         return 0;
     }
     char *b = body_str(req);
@@ -464,7 +464,7 @@ static int h_hook_add(const coa_http_request *req, coa_http_response *resp, void
     if (!ev || !cJSON_IsString(ev) || !ev->valuestring || !*ev->valuestring) {
         cJSON_Delete(root);
         resp->status = 400;
-        coa_http_resp_json(resp, "{\"error\":\"need 'event' (name or '*') and optional 'file', 'type'='log'\"}");
+        http_resp_json(resp, "{\"error\":\"need 'event' (name or '*') and optional 'file', 'type'='log'\"}");
         return 0;
     }
     char fpath[600];
@@ -472,33 +472,33 @@ static int h_hook_add(const coa_http_request *req, coa_http_response *resp, void
     if (fj && cJSON_IsString(fj) && fj->valuestring && *fj->valuestring) {
         snprintf(fpath, sizeof(fpath), "%s", fj->valuestring);
     } else {
-        coa_path_join(fpath, sizeof(fpath), ctx->state_root ? ctx->state_root : "state", "hooks-external.jsonl");
+        path_join(fpath, sizeof(fpath), ctx->state_root ? ctx->state_root : "state", "hooks-external.jsonl");
     }
-    char *fpath_heap = coa_strdup(fpath);
-    int id = fpath_heap ? coa_hook_register(ctx->hooks, ev->valuestring, coa_hook_audit_file, fpath_heap) : -1;
+    char *fpath_heap = xstrdup(fpath);
+    int id = fpath_heap ? hook_register(ctx->hooks, ev->valuestring, hook_audit_file, fpath_heap) : -1;
     cJSON_Delete(root);
     if (id < 0) {
         free(fpath_heap);
         resp->status = 500;
-        coa_http_resp_json(resp, "{\"error\":\"register failed\"}");
+        http_resp_json(resp, "{\"error\":\"register failed\"}");
         return 0;
     }
-    coa_http_resp_appendf(resp, "{\"ok\":true,\"id\":%d}", id);
+    http_resp_appendf(resp, "{\"ok\":true,\"id\":%d}", id);
     return 0;
 }
 
 /* DELETE /v1/hooks/<id> — unregister a hook (builtin audit hook id 1 stays). */
-static int h_hook_delete(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_hook_delete(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
     int id = atoi(req->path + strlen("/v1/hooks/"));
-    if (id <= 0 || coa_hook_unregister(ctx->hooks, id) != 0) {
+    if (id <= 0 || hook_unregister(ctx->hooks, id) != 0) {
         resp->status = 404;
-        coa_http_resp_json(resp, "{\"error\":\"no such hook\"}");
+        http_resp_json(resp, "{\"error\":\"no such hook\"}");
         return 0;
     }
-    coa_http_resp_json(resp, "{\"ok\":true}");
+    http_resp_json(resp, "{\"ok\":true}");
     return 0;
 }
 
@@ -540,16 +540,16 @@ static void sanitize_upload_name(const char *in, char *out, size_t cap) {
         memmove(out, out + strip, oi - strip + 1);
 }
 
-static void uploads_dir_of(const coa_ctx *ctx, char *dir, size_t cap) {
-    coa_path_join(dir, cap, ctx->state_root, "uploads");
-    coa_fs_mkdirs(dir);
+static void uploads_dir_of(const runtime_ctx *ctx, char *dir, size_t cap) {
+    path_join(dir, cap, ctx->state_root, "uploads");
+    fs_mkdirs(dir);
 }
 
 /* GET /v1/chat/history[?session=<id>] — recent conversation turns (oldest
  * first) for the chat panel to backfill on open; per-session when ?session=
  * is given. */
-static int h_chat_history(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_chat_history(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
     char sid[128] = "";
@@ -557,8 +557,8 @@ static int h_chat_history(const coa_http_request *req, coa_http_response *resp, 
     if (sp)
         sanitize_upload_name(sp + 8, sid, sizeof(sid));
     char *turns =
-        ctx->reasoning ? coa_reasoning_history_json_ex(ctx->reasoning, sid[0] ? sid : NULL, 20) : coa_strdup("[]");
-    coa_http_resp_appendf(resp, "{\"turns\":%s}", turns ? turns : "[]");
+        ctx->reasoning ? reasoning_history_json_ex(ctx->reasoning, sid[0] ? sid : NULL, 20) : xstrdup("[]");
+    http_resp_appendf(resp, "{\"turns\":%s}", turns ? turns : "[]");
     free(turns);
     return 0;
 }
@@ -566,8 +566,8 @@ static int h_chat_history(const coa_http_request *req, coa_http_response *resp, 
 /* POST /v1/upload?name=<filename> — raw-body upload for RAG. The file is
  * stored under <state_root>/uploads/<name>; text content is chunked into the
  * vector store so later prompts recall it via "## Retrieved context". */
-static int h_upload(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_upload(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
     char name[192];
@@ -575,15 +575,15 @@ static int h_upload(const coa_http_request *req, coa_http_response *resp, void *
     sanitize_upload_name(nmp ? nmp + 5 : req->query, name, sizeof(name));
     if (!name[0] || !req->body || req->body_len == 0) {
         resp->status = 400;
-        coa_http_resp_json(resp, "{\"error\":\"need ?name=<file> and a non-empty body\"}");
+        http_resp_json(resp, "{\"error\":\"need ?name=<file> and a non-empty body\"}");
         return 0;
     }
     char dir[600], fpath[820];
     uploads_dir_of(ctx, dir, sizeof(dir));
-    coa_path_join(fpath, sizeof(fpath), dir, name);
-    if (coa_fs_write_file(fpath, req->body, req->body_len) != 0) {
+    path_join(fpath, sizeof(fpath), dir, name);
+    if (fs_write_file(fpath, req->body, req->body_len) != 0) {
         resp->status = 500;
-        coa_http_resp_json(resp, "{\"error\":\"write failed\"}");
+        http_resp_json(resp, "{\"error\":\"write failed\"}");
         return 0;
     }
     /* text files (no NUL byte) go into the vector store */
@@ -593,85 +593,85 @@ static int h_upload(const coa_http_request *req, coa_http_response *resp, void *
         if (text) {
             memcpy(text, req->body, req->body_len);
             text[req->body_len] = '\0';
-            char *clean = coa_str_utf8_sanitize(text); /* GBK/invalid bytes guard */
+            char *clean = str_utf8_sanitize(text); /* GBK/invalid bytes guard */
             if (clean) {
                 free(text);
                 text = clean;
             }
             char base[224];
             snprintf(base, sizeof(base), "upload:%s", name);
-            chunks = coa_memory_index_text(ctx->memory, base, text);
+            chunks = memory_index_text(ctx->memory, base, text);
             free(text);
         }
     }
-    coa_http_resp_appendf(resp, "{\"ok\":true,\"name\":\"%s\",\"size\":%d,\"chunks\":%d}", name, (int)req->body_len,
+    http_resp_appendf(resp, "{\"ok\":true,\"name\":\"%s\",\"size\":%d,\"chunks\":%d}", name, (int)req->body_len,
                           chunks);
     return 0;
 }
 
 /* GET /v1/uploads — uploaded files with sizes. */
-static int h_uploads(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_uploads(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
     (void)req;
     char dir[600];
     uploads_dir_of(ctx, dir, sizeof(dir));
-    coa_dir_list dl;
+    dir_list dl;
     cJSON *arr = cJSON_CreateArray();
-    if (coa_fs_list_dir(dir, &dl) == 0) {
+    if (fs_list_dir(dir, &dl) == 0) {
         for (size_t i = 0; i < dl.count; i++) {
             if (dl.items[i].is_dir)
                 continue;
             char fpath[820];
-            coa_path_join(fpath, sizeof(fpath), dir, dl.items[i].name);
+            path_join(fpath, sizeof(fpath), dir, dl.items[i].name);
             cJSON *o = cJSON_CreateObject();
             cJSON_AddStringToObject(o, "name", dl.items[i].name);
-            cJSON_AddNumberToObject(o, "size", (double)coa_fs_file_size(fpath));
+            cJSON_AddNumberToObject(o, "size", (double)fs_file_size(fpath));
             cJSON_AddItemToArray(arr, o);
         }
-        coa_fs_list_free(&dl);
+        fs_list_free(&dl);
     }
     char *s = cJSON_PrintUnformatted(arr);
     cJSON_Delete(arr);
-    coa_http_resp_appendf(resp, "{\"files\":%s}", s ? s : "[]");
+    http_resp_appendf(resp, "{\"files\":%s}", s ? s : "[]");
     free(s);
     return 0;
 }
 
 /* DELETE /v1/uploads/<name> — remove an uploaded file (its vectors stay until
  * the next startup rebuild, which scans the directory). */
-static int h_upload_delete(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_upload_delete(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
     char name[192];
     sanitize_upload_name(req->path + strlen("/v1/uploads/"), name, sizeof(name));
     if (!name[0]) {
         resp->status = 400;
-        coa_http_resp_json(resp, "{\"error\":\"missing file name\"}");
+        http_resp_json(resp, "{\"error\":\"missing file name\"}");
         return 0;
     }
     char dir[600], fpath[820];
-    coa_path_join(dir, sizeof(dir), ctx->state_root, "uploads");
+    path_join(dir, sizeof(dir), ctx->state_root, "uploads");
     snprintf(fpath, sizeof(fpath), "%s/%s", dir, name);
-    if (coa_fs_remove(fpath) != 0) {
+    if (fs_remove(fpath) != 0) {
         resp->status = 404;
-        coa_http_resp_json(resp, "{\"error\":\"not found\"}");
+        http_resp_json(resp, "{\"error\":\"not found\"}");
         return 0;
     }
-    coa_http_resp_json(resp, "{\"ok\":true}");
+    http_resp_json(resp, "{\"ok\":true}");
     return 0;
 }
 
-static int h_tools(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_tools(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
     cJSON *arr = cJSON_CreateArray();
-    int n = coa_tool_registry_count(ctx->tools);
+    int n = tool_registry_count(ctx->tools);
     for (int i = 0; i < n; i++) {
-        const coa_tool *t = coa_tool_registry_get(ctx->tools, (size_t)i);
+        const tool *t = tool_registry_get(ctx->tools, (size_t)i);
         if (!t)
             continue;
         cJSON *o = cJSON_CreateObject();
@@ -689,19 +689,19 @@ static int h_tools(const coa_http_request *req, coa_http_response *resp, void *u
     }
     char *s = cJSON_PrintUnformatted(arr);
     cJSON_Delete(arr);
-    coa_http_resp_json(resp, s ? s : "[]");
+    http_resp_json(resp, s ? s : "[]");
     free(s);
     return 0;
 }
 
-static int h_memory(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_memory(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
     cJSON *root = cJSON_CreateObject();
     if (ctx->memory) {
-        char *w = coa_memory_working_json(ctx->memory);
-        char *l = coa_memory_longterm_json(ctx->memory);
+        char *w = memory_working_json(ctx->memory);
+        char *l = memory_longterm_json(ctx->memory);
         cJSON *wj = w ? cJSON_Parse(w) : NULL;
         cJSON *lj = l ? cJSON_Parse(l) : NULL;
         cJSON_AddItemToObject(root, "working", wj ? wj : cJSON_CreateArray());
@@ -711,42 +711,42 @@ static int h_memory(const coa_http_request *req, coa_http_response *resp, void *
     }
     char *s = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
-    coa_http_resp_json(resp, s ? s : "{}");
+    http_resp_json(resp, s ? s : "{}");
     free(s);
     return 0;
 }
 
-static int h_snapshots(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_snapshots(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
-    char *s = ctx->snapshot ? coa_snapshot_list(ctx->snapshot) : coa_strdup("[]");
-    coa_http_resp_json(resp, s ? s : "[]");
+    char *s = ctx->snapshot ? snapshot_list(ctx->snapshot) : xstrdup("[]");
+    http_resp_json(resp, s ? s : "[]");
     free(s);
     return 0;
 }
 
-static int h_snapshot_rollback(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_snapshot_rollback(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
-    int rc = ctx->snapshot ? coa_snapshot_restore_latest(ctx->snapshot) : -1;
-    coa_http_resp_appendf(resp, "{\"ok\":%s}", rc == 0 ? "true" : "false");
+    int rc = ctx->snapshot ? snapshot_restore_latest(ctx->snapshot) : -1;
+    http_resp_appendf(resp, "{\"ok\":%s}", rc == 0 ? "true" : "false");
     return 0;
 }
 
-static int h_blackboard(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_blackboard(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
-    char *s = ctx->blackboard ? coa_blackboard_snapshot_json(ctx->blackboard) : coa_strdup("{}");
-    coa_http_resp_json(resp, s ? s : "{}");
+    char *s = ctx->blackboard ? blackboard_snapshot_json(ctx->blackboard) : xstrdup("{}");
+    http_resp_json(resp, s ? s : "{}");
     free(s);
     return 0;
 }
 
-static int h_blackboard_put(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_blackboard_put(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
     char *b = body_str(req);
@@ -765,28 +765,28 @@ static int h_blackboard_put(const coa_http_request *req, coa_http_response *resp
         if (root)
             cJSON_Delete(root);
         resp->status = 400;
-        coa_http_resp_json(resp, "{\"error\":\"need 'key' and 'value' strings\"}");
+        http_resp_json(resp, "{\"error\":\"need 'key' and 'value' strings\"}");
         return 0;
     }
     if (ctx->blackboard)
-        coa_blackboard_put(ctx->blackboard, key, val);
+        blackboard_put(ctx->blackboard, key, val);
     cJSON_Delete(root);
-    coa_http_resp_appendf(resp, "{\"ok\":true}");
+    http_resp_appendf(resp, "{\"ok\":true}");
     return 0;
 }
 
-static int h_agents(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_agents(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
-    char *s = ctx->agents ? coa_agent_pool_snapshot_json(ctx->agents) : coa_strdup("{}");
-    coa_http_resp_json(resp, s ? s : "{}");
+    char *s = ctx->agents ? agent_pool_snapshot_json(ctx->agents) : xstrdup("{}");
+    http_resp_json(resp, s ? s : "{}");
     free(s);
     return 0;
 }
 
-static int h_agent_add(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_agent_add(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
     char *b = body_str(req);
@@ -824,49 +824,49 @@ static int h_agent_add(const coa_http_request *req, coa_http_response *resp, voi
         cJSON_Delete(root);
     if (!name || !*name) {
         resp->status = 400;
-        coa_http_resp_json(resp, "{\"error\":\"need 'name' string\"}");
+        http_resp_json(resp, "{\"error\":\"need 'name' string\"}");
         return 0;
     }
-    int idx = ctx->agents ? coa_agent_pool_add_model(ctx->agents, name, role ? role : "", provider, model) : -1;
+    int idx = ctx->agents ? agent_pool_add_model(ctx->agents, name, role ? role : "", provider, model) : -1;
     if (idx < 0) {
         resp->status = 400;
-        coa_http_resp_json(resp, "{\"error\":\"add agent failed (duplicate?)\"}");
+        http_resp_json(resp, "{\"error\":\"add agent failed (duplicate?)\"}");
         return 0;
     }
-    coa_agent_pool_save(ctx->agents, ctx->state_root); /* roster persists across restarts */
+    agent_pool_save(ctx->agents, ctx->state_root); /* roster persists across restarts */
     if (ctx->state)
-        coa_state_store_agent_set(ctx->state, name, role, "idle");
-    coa_http_resp_appendf(resp, "{\"ok\":true,\"index\":%d}", idx);
+        state_store_agent_set(ctx->state, name, role, "idle");
+    http_resp_appendf(resp, "{\"ok\":true,\"index\":%d}", idx);
     return 0;
 }
 
-static int h_agent_run(const coa_http_request *req, coa_http_response *resp, void *ud);
+static int h_agent_run(const http_request *req, http_response *resp, void *ud);
 
 /* DELETE /v1/agents/<name> — remove a registered agent from the pool and
  * persist the roster. 404 when the name is unknown. */
-static int h_agent_delete(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_agent_delete(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
     const char *name = req->path + strlen("/v1/agents/");
     if (!*name) {
         resp->status = 400;
-        coa_http_resp_json(resp, "{\"error\":\"need agent name in path\"}");
+        http_resp_json(resp, "{\"error\":\"need agent name in path\"}");
         return 0;
     }
-    int rc = ctx->agents ? coa_agent_pool_remove(ctx->agents, name) : -1;
+    int rc = ctx->agents ? agent_pool_remove(ctx->agents, name) : -1;
     if (rc != 0) {
         resp->status = 404;
-        coa_http_resp_json(resp, "{\"error\":\"unknown agent\"}");
+        http_resp_json(resp, "{\"error\":\"unknown agent\"}");
         return 0;
     }
-    coa_agent_pool_save(ctx->agents, ctx->state_root);
-    coa_http_resp_json(resp, "{\"ok\":true}");
+    agent_pool_save(ctx->agents, ctx->state_root);
+    http_resp_json(resp, "{\"ok\":true}");
     return 0;
 }
 
-static int h_agent_post(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_agent_post(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
     /* dispatch: "<name>/run" executes a task through the reasoning engine */
@@ -904,19 +904,19 @@ static int h_agent_post(const coa_http_request *req, coa_http_response *resp, vo
         cJSON_Delete(root);
     if (!key || !*key || !val) {
         resp->status = 400;
-        coa_http_resp_json(resp, "{\"error\":\"need 'key' and 'value' strings\"}");
+        http_resp_json(resp, "{\"error\":\"need 'key' and 'value' strings\"}");
         return 0;
     }
-    int rc = ctx->agents ? coa_agent_post(ctx->agents, name, key, val) : -1;
-    coa_http_resp_appendf(resp, "{\"ok\":%s}", rc == 0 ? "true" : "false");
+    int rc = ctx->agents ? agent_post(ctx->agents, name, key, val) : -1;
+    http_resp_appendf(resp, "{\"ok\":%s}", rc == 0 ? "true" : "false");
     return 0;
 }
 
 /* POST /v1/agents/<name>/run  {"task": "..."} — execute a task as the agent
  * through the reasoning engine; the result is published on the shared
  * blackboard and returned here. (Dispatched from h_agent_post for /run.) */
-static int h_agent_run(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_agent_run(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
     const char *rest = req->path + strlen("/v1/agents/");
@@ -938,22 +938,22 @@ static int h_agent_run(const coa_http_request *req, coa_http_response *resp, voi
         if (root)
             cJSON_Delete(root);
         resp->status = 400;
-        coa_http_resp_json(resp, "{\"error\":\"need 'task' string\"}");
+        http_resp_json(resp, "{\"error\":\"need 'task' string\"}");
         return 0;
     }
     char *answer = NULL;
-    int rc = coa_agent_run(ctx, name, task, &answer);
+    int rc = agent_run(ctx, name, task, &answer);
     cJSON_Delete(root);
     if (rc == -2) {
         free(answer);
         resp->status = 404;
-        coa_http_resp_json(resp, "{\"error\":\"unknown agent\"}");
+        http_resp_json(resp, "{\"error\":\"unknown agent\"}");
         return 0;
     }
     if (rc != 0) {
         free(answer);
         resp->status = 500;
-        coa_http_resp_json(resp, "{\"error\":\"agent run failed\"}");
+        http_resp_json(resp, "{\"error\":\"agent run failed\"}");
         return 0;
     }
     cJSON *out = cJSON_CreateObject();
@@ -963,58 +963,58 @@ static int h_agent_run(const coa_http_request *req, coa_http_response *resp, voi
     char *s = cJSON_PrintUnformatted(out);
     cJSON_Delete(out);
     free(answer);
-    coa_http_resp_json(resp, s ? s : "{}");
+    http_resp_json(resp, s ? s : "{}");
     free(s);
     return 0;
 }
 
-static int h_metrics(const coa_http_request *req, coa_http_response *resp, void *ud) {
+static int h_metrics(const http_request *req, http_response *resp, void *ud) {
     (void)req;
-    coa_ctx *ctx = (coa_ctx *)ud;
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     snprintf(resp->content_type, sizeof(resp->content_type), "text/plain; version=0.0.4");
-    char *s = ctx->metrics ? coa_metrics_render(ctx->metrics) : coa_strdup("");
-    coa_http_resp_append(resp, s ? s : "");
+    char *s = ctx->metrics ? metrics_render(ctx->metrics) : xstrdup("");
+    http_resp_append(resp, s ? s : "");
     free(s);
     return 0;
 }
 
-static int h_index(const coa_http_request *req, coa_http_response *resp, void *ud) {
+static int h_index(const http_request *req, http_response *resp, void *ud) {
     (void)req;
     (void)ud;
     snprintf(resp->content_type, sizeof(resp->content_type), "text/html; charset=utf-8");
-    coa_http_resp_append(resp, coa_web_index_html);
+    http_resp_append(resp, web_index_html);
     return 0;
 }
 
-static int h_favicon(const coa_http_request *req, coa_http_response *resp, void *ud) {
+static int h_favicon(const http_request *req, http_response *resp, void *ud) {
     (void)req;
     (void)ud;
     resp->status = 204;
     return 0;
 }
 
-static int h_trace(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_trace(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
-    char *s = ctx->trace ? coa_trace_json(ctx->trace) : coa_strdup("[]");
-    coa_http_resp_json(resp, s ? s : "[]");
+    char *s = ctx->trace ? trace_json(ctx->trace) : xstrdup("[]");
+    http_resp_json(resp, s ? s : "[]");
     free(s);
     return 0;
 }
 
-static int h_routes(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_routes(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
-    char *s = ctx->router ? coa_router_json(ctx->router) : coa_strdup("[]");
-    coa_http_resp_json(resp, s ? s : "[]");
+    char *s = ctx->router ? router_json(ctx->router) : xstrdup("[]");
+    http_resp_json(resp, s ? s : "[]");
     free(s);
     return 0;
 }
 
-static int h_route_add(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_route_add(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
     char *b = body_str(req);
@@ -1024,7 +1024,7 @@ static int h_route_add(const coa_http_request *req, coa_http_response *resp, voi
         if (root)
             cJSON_Delete(root);
         resp->status = 400;
-        coa_http_resp_json(resp, "{\"error\":\"body must be a JSON object\"}");
+        http_resp_json(resp, "{\"error\":\"body must be a JSON object\"}");
         return 0;
     }
     const char *name = json_str(root, "name");
@@ -1032,29 +1032,29 @@ static int h_route_add(const coa_http_request *req, coa_http_response *resp, voi
     if (!name || !*name || !provider || !*provider) {
         cJSON_Delete(root);
         resp->status = 400;
-        coa_http_resp_json(resp, "{\"error\":\"need 'name' and 'provider' strings\"}");
+        http_resp_json(resp, "{\"error\":\"need 'name' and 'provider' strings\"}");
         return 0;
     }
     if (ctx->router)
-        coa_router_add_ex(ctx->router, name, provider, json_str(root, "base_url"), json_str(root, "api_key"),
+        router_add_ex(ctx->router, name, provider, json_str(root, "base_url"), json_str(root, "api_key"),
                           json_str(root, "model"), json_dbl(root, "weight", 1.0), (int)json_dbl(root, "cost_rank", 0),
                           (int)json_dbl(root, "latency_ms", 0), json_str(root, "caps"));
     cJSON_Delete(root);
-    char *s = ctx->router ? coa_router_json(ctx->router) : coa_strdup("[]");
-    coa_http_resp_json(resp, s ? s : "[]");
+    char *s = ctx->router ? router_json(ctx->router) : xstrdup("[]");
+    http_resp_json(resp, s ? s : "[]");
     free(s);
     /* persist so configured routes survive restart */
     if (ctx->router && ctx->state_root) {
         char rpath[600];
-        coa_path_join(rpath, sizeof(rpath), ctx->state_root, "routes.json");
-        coa_router_save_file(ctx->router, rpath);
+        path_join(rpath, sizeof(rpath), ctx->state_root, "routes.json");
+        router_save_file(ctx->router, rpath);
     }
     return 0;
 }
 
 /* POST /v1/routes/policy {"policy":"cost|latency|round_robin|capability:<tag>"} */
-static int h_route_policy(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_route_policy(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
     char *b = body_str(req);
@@ -1064,61 +1064,61 @@ static int h_route_policy(const coa_http_request *req, coa_http_response *resp, 
     if (!p || !cJSON_IsString(p) || !p->valuestring) {
         cJSON_Delete(root);
         resp->status = 400;
-        coa_http_resp_json(resp, "{\"error\":\"need 'policy': cost|latency|round_robin|capability:<tag>\"}");
+        http_resp_json(resp, "{\"error\":\"need 'policy': cost|latency|round_robin|capability:<tag>\"}");
         return 0;
     }
-    int rc = coa_router_set_policy(ctx->router, p->valuestring);
+    int rc = router_set_policy(ctx->router, p->valuestring);
     cJSON_Delete(root);
     if (rc != 0) {
         resp->status = 400;
-        coa_http_resp_json(resp, "{\"error\":\"unknown policy\"}");
+        http_resp_json(resp, "{\"error\":\"unknown policy\"}");
         return 0;
     }
-    coa_http_resp_appendf(resp, "{\"ok\":true,\"policy\":\"%s\"}", coa_router_policy(ctx->router));
+    http_resp_appendf(resp, "{\"ok\":true,\"policy\":\"%s\"}", router_policy(ctx->router));
     return 0;
 }
 
-static int h_route_delete(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_route_delete(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
     const char *name = req->path + strlen("/v1/routes/");
-    int removed = ctx->router ? coa_router_remove(ctx->router, name) : 0;
-    char *s = ctx->router ? coa_router_json(ctx->router) : coa_strdup("[]");
-    coa_http_resp_appendf(resp, "{\"removed\":%s,\"routes\":", removed ? "true" : "false");
-    coa_http_resp_append(resp, s ? s : "[]");
-    coa_http_resp_append(resp, "}");
+    int removed = ctx->router ? router_remove(ctx->router, name) : 0;
+    char *s = ctx->router ? router_json(ctx->router) : xstrdup("[]");
+    http_resp_appendf(resp, "{\"removed\":%s,\"routes\":", removed ? "true" : "false");
+    http_resp_append(resp, s ? s : "[]");
+    http_resp_append(resp, "}");
     free(s);
     /* persist so configured routes survive restart */
     if (ctx->router && ctx->state_root) {
         char rpath[600];
-        coa_path_join(rpath, sizeof(rpath), ctx->state_root, "routes.json");
-        coa_router_save_file(ctx->router, rpath);
+        path_join(rpath, sizeof(rpath), ctx->state_root, "routes.json");
+        router_save_file(ctx->router, rpath);
     }
     return 0;
 }
 
-static int h_config_llm_get(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_config_llm_get(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
     (void)req;
-    /* active LLM as persisted in config (set by coa_set_llm / env / defaults) */
+    /* active LLM as persisted in config (set by set_llm / env / defaults) */
     cJSON *o = cJSON_CreateObject();
-    cJSON_AddStringToObject(o, "provider", coa_config_get_str(ctx->config, "llm.provider", "mock"));
-    cJSON_AddStringToObject(o, "model", coa_config_get_str(ctx->config, "llm.model", ""));
-    cJSON_AddStringToObject(o, "base_url", coa_config_get_str(ctx->config, "llm.base_url", ""));
-    const char *ak = coa_config_get_str(ctx->config, "llm.api_key", NULL);
+    cJSON_AddStringToObject(o, "provider", config_get_str(ctx->config, "llm.provider", "mock"));
+    cJSON_AddStringToObject(o, "model", config_get_str(ctx->config, "llm.model", ""));
+    cJSON_AddStringToObject(o, "base_url", config_get_str(ctx->config, "llm.base_url", ""));
+    const char *ak = config_get_str(ctx->config, "llm.api_key", NULL);
     cJSON_AddBoolToObject(o, "api_key_set", ak && *ak);
     char *s = cJSON_PrintUnformatted(o);
-    coa_http_resp_json(resp, s ? s : "{}");
+    http_resp_json(resp, s ? s : "{}");
     free(s);
     cJSON_Delete(o);
     return 0;
 }
 
-static int h_config_llm(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_config_llm(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
     char *b = body_str(req);
@@ -1128,54 +1128,54 @@ static int h_config_llm(const coa_http_request *req, coa_http_response *resp, vo
         if (root)
             cJSON_Delete(root);
         resp->status = 400;
-        coa_http_resp_json(resp, "{\"error\":\"body must be a JSON object\"}");
+        http_resp_json(resp, "{\"error\":\"body must be a JSON object\"}");
         return 0;
     }
     const char *provider = json_str(root, "provider");
     if (!provider || !*provider) {
         cJSON_Delete(root);
         resp->status = 400;
-        coa_http_resp_json(resp, "{\"error\":\"need 'provider' string\"}");
+        http_resp_json(resp, "{\"error\":\"need 'provider' string\"}");
         return 0;
     }
     const char *base_url = json_str(root, "base_url");
     const char *model = json_str(root, "model");
     const char *api_key = json_str(root, "api_key");
-    /* coa_set_llm dups every value; keep the JSON alive until after the call
+    /* set_llm dups every value; keep the JSON alive until after the call
      * so the pointers above stay valid (they live inside `root`) */
-    int rc = coa_set_llm(ctx, provider, base_url, model, api_key);
+    int rc = set_llm(ctx, provider, base_url, model, api_key);
     cJSON_Delete(root);
     if (rc != 0) {
         resp->status = 400;
-        coa_http_resp_json(resp, "{\"error\":\"unknown provider (mock|openai|anthropic)\"}");
+        http_resp_json(resp, "{\"error\":\"unknown provider (mock|openai|anthropic)\"}");
         return 0;
     }
-    char *s = ctx->router ? coa_router_json(ctx->router) : coa_strdup("[]");
-    coa_http_resp_appendf(resp, "{\"ok\":true,\"routes\":");
-    coa_http_resp_append(resp, s ? s : "[]");
-    coa_http_resp_append(resp, "}");
+    char *s = ctx->router ? router_json(ctx->router) : xstrdup("[]");
+    http_resp_appendf(resp, "{\"ok\":true,\"routes\":");
+    http_resp_append(resp, s ? s : "[]");
+    http_resp_append(resp, "}");
     free(s);
     return 0;
 }
 
 /* Snapshot capture size limit (bytes; 0 = unlimited). UI-configurable
- * override of the built-in 64MB default / COA_SNAPSHOT_MAX_FILE env. */
-static int h_config_snapshot_get(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+ * override of the built-in 64MB default / SNAPSHOT_MAX_FILE env. */
+static int h_config_snapshot_get(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
     (void)req;
     cJSON *o = cJSON_CreateObject();
-    cJSON_AddNumberToObject(o, "max_file", (double)(ctx->snapshot ? coa_snapshot_get_max_file(ctx->snapshot) : -1));
+    cJSON_AddNumberToObject(o, "max_file", (double)(ctx->snapshot ? snapshot_get_max_file(ctx->snapshot) : -1));
     char *s = cJSON_PrintUnformatted(o);
-    coa_http_resp_json(resp, s ? s : "{}");
+    http_resp_json(resp, s ? s : "{}");
     free(s);
     cJSON_Delete(o);
     return 0;
 }
 
-static int h_config_snapshot(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_config_snapshot(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
     char *b = body_str(req);
@@ -1186,28 +1186,28 @@ static int h_config_snapshot(const coa_http_request *req, coa_http_response *res
         if (root)
             cJSON_Delete(root);
         resp->status = 400;
-        coa_http_resp_json(resp, "{\"error\":\"need 'max_file' number >= 0 (bytes; 0 = unlimited)\"}");
+        http_resp_json(resp, "{\"error\":\"need 'max_file' number >= 0 (bytes; 0 = unlimited)\"}");
         return 0;
     }
     long long v = (long long)mf->valuedouble;
     cJSON_Delete(root);
     if (ctx->snapshot)
-        coa_snapshot_set_max_file(ctx->snapshot, v);
-    coa_config_set_int(ctx->config, "snapshot.max_file", v);
+        snapshot_set_max_file(ctx->snapshot, v);
+    config_set_int(ctx->config, "snapshot.max_file", v);
     if (ctx->state_root) {
         char cfgfile[600];
-        coa_path_join(cfgfile, sizeof(cfgfile), ctx->state_root, "cognitive-os-agent.json");
-        coa_config_save_file(ctx->config, cfgfile);
+        path_join(cfgfile, sizeof(cfgfile), ctx->state_root, "cognitive-os-agent.json");
+        config_save_file(ctx->config, cfgfile);
     }
-    coa_http_resp_json(resp, "{\"ok\":true}");
+    http_resp_json(resp, "{\"ok\":true}");
     return 0;
 }
 
 /* Validate that a given provider/base_url/model/api_key actually answers a chat
  * request. Creates a throwaway LLM instance (never persisted, never made active)
  * and returns {ok, reply|error}. Lets the UI prove a config works before saving. */
-static int h_config_llm_test(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_config_llm_test(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
     char *b = body_str(req);
@@ -1217,33 +1217,33 @@ static int h_config_llm_test(const coa_http_request *req, coa_http_response *res
         if (root)
             cJSON_Delete(root);
         resp->status = 400;
-        coa_http_resp_json(resp, "{\"error\":\"body must be a JSON object\"}");
+        http_resp_json(resp, "{\"error\":\"body must be a JSON object\"}");
         return 0;
     }
     const char *provider = json_str(root, "provider");
     if (!provider || !*provider) {
         cJSON_Delete(root);
         resp->status = 400;
-        coa_http_resp_json(resp, "{\"error\":\"need 'provider' string\"}");
+        http_resp_json(resp, "{\"error\":\"need 'provider' string\"}");
         return 0;
     }
-    coa_llm *nl =
-        coa_llm_create(provider, json_str(root, "base_url"), json_str(root, "api_key"), json_str(root, "model"));
+    llm *nl =
+        llm_create(provider, json_str(root, "base_url"), json_str(root, "api_key"), json_str(root, "model"));
     if (!nl) {
         cJSON_Delete(root);
         resp->status = 400;
-        coa_http_resp_json(resp, "{\"ok\":false,\"error\":\"unknown provider (mock|openai|anthropic)\"}");
+        http_resp_json(resp, "{\"ok\":false,\"error\":\"unknown provider (mock|openai|anthropic)\"}");
         return 0;
     }
-    coa_llm_message msgs[2] = {{"system", "You are a concise assistant. Reply in at most a few words."},
+    llm_message msgs[2] = {{"system", "You are a concise assistant. Reply in at most a few words."},
                                {"user", "Reply with exactly the word: ok"}};
-    coa_llm_request lreq = {0};
+    llm_request lreq = {0};
     lreq.messages = msgs;
     lreq.num_messages = 2;
     lreq.temperature = 0.2;
     lreq.max_tokens = 64;
-    coa_llm_response lr = {0};
-    int rc = coa_llm_chat(nl, &lreq, &lr);
+    llm_response lr = {0};
+    int rc = llm_chat(nl, &lreq, &lr);
     cJSON *o = cJSON_CreateObject();
     int ok = (rc == 0 && lr.content && *lr.content);
     cJSON_AddBoolToObject(o, "ok", ok);
@@ -1254,38 +1254,38 @@ static int h_config_llm_test(const coa_http_request *req, coa_http_response *res
     else
         cJSON_AddStringToObject(o, "error", "no response from provider (check base_url / model / api_key / network)");
     char *s = cJSON_PrintUnformatted(o);
-    coa_http_resp_json(resp, s ? s : "{\"ok\":false}");
+    http_resp_json(resp, s ? s : "{\"ok\":false}");
     free(s);
     cJSON_Delete(o);
     free(lr.content);
     free(lr.error);
-    coa_llm_destroy(nl);
+    llm_destroy(nl);
     cJSON_Delete(root);
     return 0;
 }
 
-static int h_usage(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_usage(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
-    char *s = ctx->usage ? coa_usage_json(ctx->usage) : coa_strdup("{}");
-    coa_http_resp_json(resp, s ? s : "{}");
+    char *s = ctx->usage ? usage_json(ctx->usage) : xstrdup("{}");
+    http_resp_json(resp, s ? s : "{}");
     free(s);
     return 0;
 }
 
-static int h_plugins(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_plugins(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
-    char *s = ctx->registry ? coa_plugin_registry_json(ctx->registry) : coa_strdup("{}");
-    coa_http_resp_json(resp, s ? s : "{}");
+    char *s = ctx->registry ? plugin_registry_json(ctx->registry) : xstrdup("{}");
+    http_resp_json(resp, s ? s : "{}");
     free(s);
     return 0;
 }
 
-static int h_plugin_generate(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_plugin_generate(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
     char *b = body_str(req);
@@ -1303,21 +1303,21 @@ static int h_plugin_generate(const coa_http_request *req, coa_http_response *res
     const char *description = desc_buf;
     if (!description || !*description) {
         resp->status = 400;
-        coa_http_resp_json(resp, "{\"ok\":false,\"error\":\"need 'description' string\"}");
+        http_resp_json(resp, "{\"ok\":false,\"error\":\"need 'description' string\"}");
         return 0;
     }
-    char *s = coa_plugin_generate(ctx, description);
-    coa_http_resp_json(resp, s ? s : "{\"ok\":false,\"error\":\"pipeline failed\"}");
+    char *s = plugin_generate(ctx, description);
+    http_resp_json(resp, s ? s : "{\"ok\":false,\"error\":\"pipeline failed\"}");
     free(s);
     return 0;
 }
 
 /* POST /v1/plugins/native/load — load a native shared-library plugin
  * (.dll/.so) and probe its entry symbol. Body: {"path": "...",
- * "entry": "coa_plugin_main" (optional, defaults to coa_plugin_main)}.
+ * "entry": "plugin_main" (optional, defaults to plugin_main)}.
  * The library is unloaded after the probe; tests exercise the error paths. */
-static int h_plugin_native_load(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_plugin_native_load(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
     char *b = body_str(req);
@@ -1334,25 +1334,25 @@ static int h_plugin_native_load(const coa_http_request *req, coa_http_response *
     if (root)
         cJSON_Delete(root);
     const char *path = path_buf;
-    const char *entry = *entry_buf ? entry_buf : "coa_plugin_main";
+    const char *entry = *entry_buf ? entry_buf : "plugin_main";
     if (!path || !*path) {
         resp->status = 400;
-        coa_http_resp_json(resp, "{\"ok\":false,\"error\":\"need 'path' string\"}");
+        http_resp_json(resp, "{\"ok\":false,\"error\":\"need 'path' string\"}");
         return 0;
     }
-    coa_plugin *p = coa_plugin_load(path);
+    plugin *p = plugin_load(path);
     if (!p) {
         resp->status = 400;
         cJSON *e = cJSON_CreateObject();
         cJSON_AddBoolToObject(e, "ok", 0);
-        cJSON_AddStringToObject(e, "error", coa_plugin_error());
+        cJSON_AddStringToObject(e, "error", plugin_error());
         char *s = cJSON_PrintUnformatted(e);
         cJSON_Delete(e);
-        coa_http_resp_json(resp, s ? s : "{\"ok\":false,\"error\":\"load failed\"}");
+        http_resp_json(resp, s ? s : "{\"ok\":false,\"error\":\"load failed\"}");
         free(s);
         return 0;
     }
-    void *sym = coa_plugin_symbol(p, entry);
+    void *sym = plugin_symbol(p, entry);
     cJSON *o = cJSON_CreateObject();
     cJSON_AddBoolToObject(o, "ok", 1);
     cJSON_AddStringToObject(o, "path", path);
@@ -1360,24 +1360,24 @@ static int h_plugin_native_load(const coa_http_request *req, coa_http_response *
     cJSON_AddBoolToObject(o, "entry_found", sym ? 1 : 0);
     char *s = cJSON_PrintUnformatted(o);
     cJSON_Delete(o);
-    coa_plugin_unload(p);
-    coa_http_resp_json(resp, s ? s : "{}");
+    plugin_unload(p);
+    http_resp_json(resp, s ? s : "{}");
     free(s);
     return 0;
 }
 
-static int h_skills(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_skills(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
-    char *s = ctx->skills ? coa_skill_list_json(ctx->skills) : coa_strdup("[]");
-    coa_http_resp_json(resp, s ? s : "[]");
+    char *s = ctx->skills ? skill_list_json(ctx->skills) : xstrdup("[]");
+    http_resp_json(resp, s ? s : "[]");
     free(s);
     return 0;
 }
 
-static int h_skill_run(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_skill_run(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
     char *b = body_str(req);
@@ -1396,19 +1396,19 @@ static int h_skill_run(const coa_http_request *req, coa_http_response *resp, voi
         if (root)
             cJSON_Delete(root);
         resp->status = 400;
-        coa_http_resp_json(resp, "{\"error\":\"missing 'name' string\"}");
+        http_resp_json(resp, "{\"error\":\"missing 'name' string\"}");
         return 0;
     }
     /* kind="prompt" skills run through the LLM (fabric-style patterns) */
-    const coa_skill *sk = ctx->skills ? coa_skill_find(ctx->skills, name) : NULL;
+    const skill *sk = ctx->skills ? skill_find(ctx->skills, name) : NULL;
     if (sk && sk->kind && strcmp(sk->kind, "prompt") == 0) {
-        char *prompt_text = coa_skill_render_prompt(ctx->skills, name, args);
+        char *prompt_text = skill_render_prompt(ctx->skills, name, args);
         cJSON_Delete(root);
         if (!prompt_text) {
-            coa_http_resp_json(resp, "{\"ok\":false,\"output\":\"prompt skill render failed\"}");
+            http_resp_json(resp, "{\"ok\":false,\"output\":\"prompt skill render failed\"}");
             return 0;
         }
-        char *answer = ctx->llm ? coa_llm_chat_simple(ctx->llm,
+        char *answer = ctx->llm ? llm_chat_simple(ctx->llm,
                                                       "You are a precise assistant. Follow the instruction "
                                                       "in the user message exactly.",
                                                       prompt_text)
@@ -1425,11 +1425,11 @@ static int h_skill_run(const coa_http_request *req, coa_http_response *resp, voi
         free(answer);
         char *s = cJSON_PrintUnformatted(o);
         cJSON_Delete(o);
-        coa_http_resp_json(resp, s ? s : "{\"ok\":false}");
+        http_resp_json(resp, s ? s : "{\"ok\":false}");
         free(s);
         return 0;
     }
-    coa_skill_result *r = ctx->skills ? coa_skill_execute(ctx->skills, name, args, ctx->workspace, 10000) : NULL;
+    skill_result *r = ctx->skills ? skill_execute(ctx->skills, name, args, ctx->workspace, 10000) : NULL;
     cJSON_Delete(root);
     cJSON *o = cJSON_CreateObject();
     cJSON_AddBoolToObject(o, "ok", r ? (r->ok ? 1 : 0) : 0);
@@ -1437,8 +1437,8 @@ static int h_skill_run(const coa_http_request *req, coa_http_response *resp, voi
     char *s = cJSON_PrintUnformatted(o);
     cJSON_Delete(o);
     if (r)
-        coa_skill_result_free(r);
-    coa_http_resp_json(resp, s ? s : "{}");
+        skill_result_free(r);
+    http_resp_json(resp, s ? s : "{}");
     free(s);
     return 0;
 }
@@ -1491,10 +1491,10 @@ static void market_merge_remote(cJSON *dest, cJSON *remote) {
 
 /* Fetch a remote market catalog for a path and return its parsed JSON root
  * (or NULL when no market is configured or it is unreachable). */
-static cJSON *market_fetch_root(coa_ctx *ctx, const char *path) {
+static cJSON *market_fetch_root(runtime_ctx *ctx, const char *path) {
     if (!ctx->market_url || !*ctx->market_url)
         return NULL;
-    char *body = coa_market_fetch(ctx->market_url, path, 4000);
+    char *body = market_fetch(ctx->market_url, path, 4000);
     if (!body)
         return NULL;
     cJSON *root = cJSON_Parse(body);
@@ -1527,8 +1527,8 @@ static const struct {
     {"bat", "带语法高亮的 cat 替代", "https://github.com/sharkdp/bat", "shell", "sharkdp.bat"},
 };
 
-static int h_skills_market(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_skills_market(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
     cJSON *root = cJSON_CreateObject();
@@ -1540,7 +1540,7 @@ static int h_skills_market(const coa_http_request *req, coa_http_response *resp,
         cJSON_AddStringToObject(o, "description", t->description);
         cJSON_AddStringToObject(o, "kind", t->kind);
         cJSON_AddStringToObject(o, "body", t->body);
-        cJSON_AddBoolToObject(o, "installed", ctx->skills && coa_skill_find(ctx->skills, t->name) != NULL);
+        cJSON_AddBoolToObject(o, "installed", ctx->skills && skill_find(ctx->skills, t->name) != NULL);
         cJSON_AddItemToArray(tmpl, o);
     }
     cJSON_AddItemToObject(root, "templates", tmpl);
@@ -1571,12 +1571,12 @@ static int h_skills_market(const coa_http_request *req, coa_http_response *resp,
     if (ctx->market_url && *ctx->market_url)
         cJSON_AddStringToObject(root, "market_url", ctx->market_url);
 
-    char *mine = ctx->skills ? coa_skill_list_json(ctx->skills) : NULL;
+    char *mine = ctx->skills ? skill_list_json(ctx->skills) : NULL;
     cJSON *inst = mine ? cJSON_Parse(mine) : NULL;
     free(mine);
     cJSON_AddItemToObject(root, "installed", inst ? inst : cJSON_CreateArray());
     char *s = cJSON_PrintUnformatted(root);
-    coa_http_resp_json(resp, s ? s : "{}");
+    http_resp_json(resp, s ? s : "{}");
     free(s);
     cJSON_Delete(root);
     return 0;
@@ -1585,7 +1585,7 @@ static int h_skills_market(const coa_http_request *req, coa_http_response *resp,
 /* One-click install of a GitHub 热门应用 native tool via winget. The install
  * runs DETACHED (winget can take minutes) — the single-threaded HTTP server
  * must never block inside a handler. */
-static int h_gh_install(const coa_http_request *req, coa_http_response *resp, void *ud) {
+static int h_gh_install(const http_request *req, http_response *resp, void *ud) {
     (void)ud;
     char *b = body_str(req);
     cJSON *root = b ? cJSON_Parse(b) : NULL;
@@ -1606,7 +1606,7 @@ static int h_gh_install(const coa_http_request *req, coa_http_response *resp, vo
     }
     if (!winget || !*winget) {
         resp->status = 404;
-        coa_http_resp_json(resp, "{\"error\":\"unknown tool or no winget package\"}");
+        http_resp_json(resp, "{\"error\":\"unknown tool or no winget package\"}");
         return 0;
     }
     char cmd[512];
@@ -1614,20 +1614,20 @@ static int h_gh_install(const coa_http_request *req, coa_http_response *resp, vo
              "winget install --id %s -e --silent --accept-package-agreements "
              "--accept-source-agreements --disable-interactivity",
              winget);
-    if (coa_proc_spawn_detached(cmd) != 0) {
+    if (proc_spawn_detached(cmd) != 0) {
         resp->status = 500;
-        coa_http_resp_json(resp, "{\"error\":\"failed to start winget (is it installed?)\"}");
+        http_resp_json(resp, "{\"error\":\"failed to start winget (is it installed?)\"}");
         return 0;
     }
-    coa_http_resp_appendf(resp,
+    http_resp_appendf(resp,
                           "{\"ok\":true,\"started\":true,\"tool\":\"%s\",\"winget_id\":\"%s\","
                           "\"hint\":\"后台安装已启动，稍后在 shell 里运行该命令验证\"}",
                           name, winget);
     return 0;
 }
 
-static int h_skills_publish(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_skills_publish(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
     char *b = body_str(req);
@@ -1639,10 +1639,10 @@ static int h_skills_publish(const coa_http_request *req, coa_http_response *resp
         if (root)
             cJSON_Delete(root);
         resp->status = 400;
-        coa_http_resp_json(resp, "{\"error\":\"need 'name' string\"}");
+        http_resp_json(resp, "{\"error\":\"need 'name' string\"}");
         return 0;
     }
-    coa_skill sk;
+    skill sk;
     memset(&sk, 0, sizeof(sk));
     sk.name = name;
     sk.description = json_str(root, "description") ? json_str(root, "description") : "";
@@ -1650,57 +1650,57 @@ static int h_skills_publish(const coa_http_request *req, coa_http_response *resp
     sk.body = json_str(root, "body") ? json_str(root, "body") : "";
     /* Upsert semantics: the market "install" button re-publishes templates,
      * so an existing skill with the same name is updated, not rejected. */
-    int rc = ctx->skills ? coa_skill_register_ex(ctx->skills, &sk, 1) : -1;
+    int rc = ctx->skills ? skill_register_ex(ctx->skills, &sk, 1) : -1;
     if (rc != 0) {
         cJSON_Delete(root);
         resp->status = 400;
-        coa_http_resp_json(resp, "{\"error\":\"register failed (invalid name or kind)\"}");
+        http_resp_json(resp, "{\"error\":\"register failed (invalid name or kind)\"}");
         return 0;
     }
     if (ctx->state_root)
-        coa_skill_registry_persist(ctx->skills, ctx->state_root);
+        skill_registry_persist(ctx->skills, ctx->state_root);
     /* best-effort push to a networked marketplace */
     int pushed = 0;
     if (ctx->market_url && *ctx->market_url && root) {
         char *payload = cJSON_PrintUnformatted(root);
         if (payload) {
-            pushed = coa_market_publish(ctx->market_url, "/v1/skills/publish", payload, 4000) == 0;
+            pushed = market_publish(ctx->market_url, "/v1/skills/publish", payload, 4000) == 0;
             free(payload);
         }
     }
-    char *s = ctx->skills ? coa_skill_list_json(ctx->skills) : coa_strdup("[]");
-    coa_http_resp_appendf(resp, "{\"ok\":true,\"pushed_to_market\":%s,\"skills\":", pushed ? "true" : "false");
-    coa_http_resp_append(resp, s ? s : "[]");
-    coa_http_resp_append(resp, "}");
+    char *s = ctx->skills ? skill_list_json(ctx->skills) : xstrdup("[]");
+    http_resp_appendf(resp, "{\"ok\":true,\"pushed_to_market\":%s,\"skills\":", pushed ? "true" : "false");
+    http_resp_append(resp, s ? s : "[]");
+    http_resp_append(resp, "}");
     free(s);
     cJSON_Delete(root);
     return 0;
 }
 
-static int h_skill_delete(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_skill_delete(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
     const char *name = req->path + strlen("/v1/skills/");
-    int rc = ctx->skills ? coa_skill_unregister(ctx->skills, name) : -1;
+    int rc = ctx->skills ? skill_unregister(ctx->skills, name) : -1;
     if (rc != 0) {
         resp->status = 404;
-        coa_http_resp_json(resp, "{\"error\":\"skill not found\"}");
+        http_resp_json(resp, "{\"error\":\"skill not found\"}");
         return 0;
     }
     if (ctx->state_root)
-        coa_skill_registry_persist(ctx->skills, ctx->state_root);
-    coa_http_resp_json(resp, "{\"ok\":true}");
+        skill_registry_persist(ctx->skills, ctx->state_root);
+    http_resp_json(resp, "{\"ok\":true}");
     return 0;
 }
 
 /* ---- Plugin marketplace (publish user-built standardized plugins) ---- */
 
-static int h_plugins_market(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_plugins_market(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
-    char *reg = ctx->registry ? coa_plugin_registry_json(ctx->registry) : coa_strdup("{}");
+    char *reg = ctx->registry ? plugin_registry_json(ctx->registry) : xstrdup("{}");
     cJSON *root = cJSON_Parse(reg ? reg : "{}");
     free(reg);
     if (!root)
@@ -1753,14 +1753,14 @@ static int h_plugins_market(const coa_http_request *req, coa_http_response *resp
         cJSON_AddStringToObject(root, "market_url", ctx->market_url);
 
     char *s = cJSON_PrintUnformatted(root);
-    coa_http_resp_json(resp, s ? s : "{}");
+    http_resp_json(resp, s ? s : "{}");
     free(s);
     cJSON_Delete(root);
     return 0;
 }
 
-static int h_plugins_publish(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_plugins_publish(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
     char *b = body_str(req);
@@ -1773,21 +1773,21 @@ static int h_plugins_publish(const coa_http_request *req, coa_http_response *res
         if (root)
             cJSON_Delete(root);
         resp->status = 400;
-        coa_http_resp_json(resp, "{\"ok\":false,\"error\":\"need 'name' and 'body'\"}");
+        http_resp_json(resp, "{\"ok\":false,\"error\":\"need 'name' and 'body'\"}");
         return 0;
     }
     /* make it runnable as a skill */
-    coa_skill sk;
+    skill sk;
     memset(&sk, 0, sizeof(sk));
     sk.name = name;
     sk.description = json_str(root, "description") ? json_str(root, "description") : "";
     sk.kind = (kind && *kind) ? kind : "shell";
     sk.body = body;
-    coa_skill_register(ctx->skills, &sk); /* best-effort; skip if duplicate */
+    skill_register(ctx->skills, &sk); /* best-effort; skip if duplicate */
 
     char sig[17];
     fnv1a_hex(body, sig);
-    coa_plugin_meta m;
+    plugin_meta m;
     memset(&m, 0, sizeof(m));
     m.name = (char *)name;
     m.version = "1.0.0";
@@ -1801,29 +1801,29 @@ static int h_plugins_publish(const coa_http_request *req, coa_http_response *res
         m.caps = (char **)calloc(m.n_caps ? m.n_caps : 1, sizeof(char *));
         for (size_t i = 0; i < m.n_caps; i++) {
             cJSON *ci = cJSON_GetArrayItem(caps, i);
-            m.caps[i] = (ci && cJSON_IsString(ci)) ? coa_strdup(ci->valuestring) : coa_strdup("");
+            m.caps[i] = (ci && cJSON_IsString(ci)) ? xstrdup(ci->valuestring) : xstrdup("");
         }
     }
-    int rc = ctx->registry ? coa_plugin_registry_register(ctx->registry, &m) : -1;
+    int rc = ctx->registry ? plugin_registry_register(ctx->registry, &m) : -1;
     for (size_t i = 0; i < m.n_caps; i++)
         free(m.caps[i]);
     free(m.caps);
     if (rc != 0) {
         cJSON_Delete(root);
         resp->status = 400;
-        coa_http_resp_json(resp, "{\"ok\":false,\"error\":\"publish failed (duplicate version?)\"}");
+        http_resp_json(resp, "{\"ok\":false,\"error\":\"publish failed (duplicate version?)\"}");
         return 0;
     }
     if (ctx->state_root) {
-        coa_plugin_registry_persist(ctx->registry, ctx->state_root);
-        coa_skill_registry_persist(ctx->skills, ctx->state_root);
+        plugin_registry_persist(ctx->registry, ctx->state_root);
+        skill_registry_persist(ctx->skills, ctx->state_root);
     }
     /* best-effort push to a networked marketplace */
     int pushed = 0;
     if (ctx->market_url && *ctx->market_url && root) {
         char *payload = cJSON_PrintUnformatted(root);
         if (payload) {
-            pushed = coa_market_publish(ctx->market_url, "/v1/plugins/publish", payload, 4000) == 0;
+            pushed = market_publish(ctx->market_url, "/v1/plugins/publish", payload, 4000) == 0;
             free(payload);
         }
     }
@@ -1832,52 +1832,52 @@ static int h_plugins_publish(const coa_http_request *req, coa_http_response *res
     cJSON_AddStringToObject(o, "name", name);
     cJSON_AddBoolToObject(o, "pushed_to_market", pushed);
     char *s = cJSON_PrintUnformatted(o);
-    coa_http_resp_json(resp, s ? s : "{\"ok\":true}");
+    http_resp_json(resp, s ? s : "{\"ok\":true}");
     free(s);
     cJSON_Delete(o);
     cJSON_Delete(root);
     return 0;
 }
 
-static int h_plugin_market_delete(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_plugin_market_delete(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
     const char *name = req->path + strlen("/v1/plugins/market/");
-    int rc = ctx->registry ? coa_plugin_registry_unregister(ctx->registry, name) : -1;
+    int rc = ctx->registry ? plugin_registry_unregister(ctx->registry, name) : -1;
     if (rc != 0) {
         resp->status = 404;
-        coa_http_resp_json(resp, "{\"error\":\"plugin not found\"}");
+        http_resp_json(resp, "{\"error\":\"plugin not found\"}");
         return 0;
     }
     if (ctx->skills)
-        coa_skill_unregister(ctx->skills, name);
+        skill_unregister(ctx->skills, name);
     if (ctx->state_root) {
-        coa_plugin_registry_persist(ctx->registry, ctx->state_root);
-        coa_skill_registry_persist(ctx->skills, ctx->state_root);
+        plugin_registry_persist(ctx->registry, ctx->state_root);
+        skill_registry_persist(ctx->skills, ctx->state_root);
     }
-    coa_http_resp_json(resp, "{\"ok\":true}");
+    http_resp_json(resp, "{\"ok\":true}");
     return 0;
 }
 
-static int h_mcp(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_mcp(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
-    char *s = ctx->mcp ? coa_mcp_manager_json(ctx->mcp) : coa_strdup("[]");
-    coa_http_resp_json(resp, s ? s : "[]");
+    char *s = ctx->mcp ? mcp_manager_json(ctx->mcp) : xstrdup("[]");
+    http_resp_json(resp, s ? s : "[]");
     free(s);
     return 0;
 }
 
-static int h_mcp_add(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_mcp_add(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
     char *b = body_str(req);
     cJSON *root = b ? cJSON_Parse(b) : NULL;
     free(b);
-    coa_mcp_conn c;
+    mcp_conn c;
     memset(&c, 0, sizeof(c));
     int ok_body = 0;
     /* copy fields into owned buffers BEFORE deleting the parsed JSON —
@@ -1914,10 +1914,10 @@ static int h_mcp_add(const coa_http_request *req, coa_http_response *resp, void 
     c.token = *tok_buf ? tok_buf : NULL;
     c.command = *cmd_buf ? cmd_buf : NULL;
     c.args_csv = *args_buf ? args_buf : NULL;
-    int rc = ok_body ? (ctx->mcp ? coa_mcp_manager_add_ex(ctx->mcp, &c) : -1) : -1;
+    int rc = ok_body ? (ctx->mcp ? mcp_manager_add_ex(ctx->mcp, &c) : -1) : -1;
     if (rc != 0) {
         resp->status = 400;
-        coa_http_resp_json(resp, "{\"error\":\"add failed: need 'name' plus 'url' (http) or "
+        http_resp_json(resp, "{\"error\":\"add failed: need 'name' plus 'url' (http) or "
                                  "'command' (stdio), and a valid transport\"}");
         return 0;
     }
@@ -1926,27 +1926,27 @@ static int h_mcp_add(const coa_http_request *req, coa_http_response *resp, void 
      * block the single-threaded HTTP server on every other cold npx server. */
     if (ctx->mcp) {
         if (ctx->tools)
-            coa_mcp_manager_sync_tools_one(ctx->mcp, ctx->tools, name_buf);
-        coa_mcp_manager_persist(ctx->mcp, ctx->state_root);
+            mcp_manager_sync_tools_one(ctx->mcp, ctx->tools, name_buf);
+        mcp_manager_persist(ctx->mcp, ctx->state_root);
     }
-    char *s = ctx->mcp ? coa_mcp_manager_json(ctx->mcp) : coa_strdup("[]");
-    coa_http_resp_json(resp, s ? s : "[]");
+    char *s = ctx->mcp ? mcp_manager_json(ctx->mcp) : xstrdup("[]");
+    http_resp_json(resp, s ? s : "[]");
     free(s);
     return 0;
 }
 
 /* Re-discover tools on every connection (manual refresh). */
-static int h_mcp_sync(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_mcp_sync(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
-    int n = (ctx->mcp && ctx->tools) ? coa_mcp_manager_sync_tools(ctx->mcp, ctx->tools) : -1;
+    int n = (ctx->mcp && ctx->tools) ? mcp_manager_sync_tools(ctx->mcp, ctx->tools) : -1;
     cJSON *o = cJSON_CreateObject();
     cJSON_AddNumberToObject(o, "registered", n);
     cJSON_AddBoolToObject(o, "ok", n >= 0);
     char *s = cJSON_PrintUnformatted(o);
     cJSON_Delete(o);
-    coa_http_resp_json(resp, s ? s : "{}");
+    http_resp_json(resp, s ? s : "{}");
     free(s);
     return 0;
 }
@@ -1955,9 +1955,9 @@ static int h_mcp_sync(const coa_http_request *req, coa_http_response *resp, void
  * WITHOUT registering the connection. Body: {transport,url,token,command,args}.
  * Response: {"ok":true,"transport":"...","count":N,"tools":[...]} or
  * {"ok":false,"error":"..."}; 400 when the request is malformed. */
-static int h_mcp_test(const coa_http_request *req, coa_http_response *resp, void *ud) {
+static int h_mcp_test(const http_request *req, http_response *resp, void *ud) {
     (void)ud;
-    if (!authz_ok((coa_ctx *)ud, req, resp))
+    if (!authz_ok((runtime_ctx *)ud, req, resp))
         return 0;
     char *b = body_str(req);
     cJSON *root = b ? cJSON_Parse(b) : NULL;
@@ -1983,7 +1983,7 @@ static int h_mcp_test(const coa_http_request *req, coa_http_response *resp, void
     }
     if (root)
         cJSON_Delete(root);
-    coa_mcp_conn c;
+    mcp_conn c;
     memset(&c, 0, sizeof(c));
     c.name = (char *)"mcp-test";
     c.transport = *tr_buf ? tr_buf : (char *)"http";
@@ -1993,46 +1993,46 @@ static int h_mcp_test(const coa_http_request *req, coa_http_response *resp, void
     c.args_csv = args_buf;
     if (strcmp(c.transport, "http") == 0 && !*c.url) {
         resp->status = 400;
-        coa_http_resp_json(resp, "{\"ok\":false,\"error\":\"http transport needs 'url'\"}");
+        http_resp_json(resp, "{\"ok\":false,\"error\":\"http transport needs 'url'\"}");
         return 0;
     }
     if (strcmp(c.transport, "stdio") == 0 && !*c.command) {
         resp->status = 400;
-        coa_http_resp_json(resp, "{\"ok\":false,\"error\":\"stdio transport needs 'command'\"}");
+        http_resp_json(resp, "{\"ok\":false,\"error\":\"stdio transport needs 'command'\"}");
         return 0;
     }
-    char *s = coa_mcp_test_json(&c);
-    coa_http_resp_json(resp, s ? s : "{\"ok\":false,\"error\":\"test failed\"}");
+    char *s = mcp_test_json(&c);
+    http_resp_json(resp, s ? s : "{\"ok\":false,\"error\":\"test failed\"}");
     free(s);
     return 0;
 }
 
-static int h_mcp_delete(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_mcp_delete(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
     const char *name = req->path + strlen("/v1/mcp/");
-    int rc = ctx->mcp ? coa_mcp_manager_remove(ctx->mcp, name, ctx->tools) : -1;
+    int rc = ctx->mcp ? mcp_manager_remove(ctx->mcp, name, ctx->tools) : -1;
     if (rc == 0 && ctx->mcp)
-        coa_mcp_manager_persist(ctx->mcp, ctx->state_root);
-    coa_http_resp_appendf(resp, "{\"removed\":%s}", rc == 0 ? "true" : "false");
+        mcp_manager_persist(ctx->mcp, ctx->state_root);
+    http_resp_appendf(resp, "{\"removed\":%s}", rc == 0 ? "true" : "false");
     return 0;
 }
 
-static int h_cluster(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_cluster(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
-    char *s = ctx->cluster ? coa_cluster_json(ctx->cluster) : coa_strdup("[]");
-    coa_http_resp_json(resp, s ? s : "[]");
+    char *s = ctx->cluster ? cluster_json(ctx->cluster) : xstrdup("[]");
+    http_resp_json(resp, s ? s : "[]");
     free(s);
     return 0;
 }
 
 /* POST /v1/cluster/join — register a node {id, host, port, role, caps}.
  * Capability tags are comma-separated; the node must heartbeat to stay "up". */
-static int h_cluster_join(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_cluster_join(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
     char *b = body_str(req);
@@ -2047,25 +2047,25 @@ static int h_cluster_join(const coa_http_request *req, coa_http_response *resp, 
         !cJSON_IsNumber(jport)) {
         cJSON_Delete(root);
         resp->status = 400;
-        coa_http_resp_json(resp, "{\"error\":\"need 'id', 'host' and numeric 'port'\"}");
+        http_resp_json(resp, "{\"error\":\"need 'id', 'host' and numeric 'port'\"}");
         return 0;
     }
-    int rc = coa_cluster_upsert_ex(ctx->cluster, jid->valuestring, jhost->valuestring, (uint16_t)jport->valuedouble,
+    int rc = cluster_upsert_ex(ctx->cluster, jid->valuestring, jhost->valuestring, (uint16_t)jport->valuedouble,
                                    cJSON_IsString(jrole) ? jrole->valuestring : NULL,
                                    cJSON_IsString(jcaps) ? jcaps->valuestring : NULL);
     cJSON_Delete(root);
     if (rc != 0) {
         resp->status = 500;
-        coa_http_resp_json(resp, "{\"error\":\"upsert failed\"}");
+        http_resp_json(resp, "{\"error\":\"upsert failed\"}");
         return 0;
     }
-    coa_http_resp_json(resp, "{\"ok\":true}");
+    http_resp_json(resp, "{\"ok\":true}");
     return 0;
 }
 
 /* POST /v1/cluster/heartbeat {id} — refresh a node's liveness. */
-static int h_cluster_heartbeat(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_cluster_heartbeat(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
     char *b = body_str(req);
@@ -2075,55 +2075,55 @@ static int h_cluster_heartbeat(const coa_http_request *req, coa_http_response *r
     if (!cJSON_IsString(jid) || !*jid->valuestring) {
         cJSON_Delete(root);
         resp->status = 400;
-        coa_http_resp_json(resp, "{\"error\":\"need 'id'\"}");
+        http_resp_json(resp, "{\"error\":\"need 'id'\"}");
         return 0;
     }
-    int rc = coa_cluster_heartbeat(ctx->cluster, jid->valuestring);
+    int rc = cluster_heartbeat(ctx->cluster, jid->valuestring);
     cJSON_Delete(root);
     if (rc != 0) {
         resp->status = 404;
-        coa_http_resp_json(resp, "{\"error\":\"unknown node\"}");
+        http_resp_json(resp, "{\"error\":\"unknown node\"}");
         return 0;
     }
-    coa_http_resp_json(resp, "{\"ok\":true}");
+    http_resp_json(resp, "{\"ok\":true}");
     return 0;
 }
 
 /* DELETE /v1/cluster/nodes/<id> — leave the cluster. */
-static int h_cluster_leave(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_cluster_leave(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
     const char *id = req->path + strlen("/v1/cluster/nodes/");
     if (!*id) {
         resp->status = 400;
-        coa_http_resp_json(resp, "{\"error\":\"need node id in path\"}");
+        http_resp_json(resp, "{\"error\":\"need node id in path\"}");
         return 0;
     }
-    if (coa_cluster_remove(ctx->cluster, id) != 0) {
+    if (cluster_remove(ctx->cluster, id) != 0) {
         resp->status = 404;
-        coa_http_resp_json(resp, "{\"error\":\"unknown node\"}");
+        http_resp_json(resp, "{\"error\":\"unknown node\"}");
         return 0;
     }
-    coa_http_resp_json(resp, "{\"ok\":true}");
+    http_resp_json(resp, "{\"ok\":true}");
     return 0;
 }
 
 /* ================= catalogs (MCP plaza + free models) ================= */
 
 /* GET /v1/market/status — report networked marketplace configuration + reachability. */
-static int h_market_status(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_market_status(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
     int configured = (ctx->market_url && *ctx->market_url) ? 1 : 0;
     int online = 0;
     if (configured) {
-        char *body = coa_market_fetch(ctx->market_url, "/v1/market/ping", 3000);
+        char *body = market_fetch(ctx->market_url, "/v1/market/ping", 3000);
         online = body ? 1 : 0;
         free(body);
     }
-    coa_http_resp_appendf(resp, "{\"configured\":%s,\"url\":\"%s\",\"online\":%s}", configured ? "true" : "false",
+    http_resp_appendf(resp, "{\"configured\":%s,\"url\":\"%s\",\"online\":%s}", configured ? "true" : "false",
                           ctx->market_url ? ctx->market_url : "", online ? "true" : "false");
     return 0;
 }
@@ -2142,22 +2142,22 @@ static int local_probe(const char *base_url, const char *path) {
     int port = 80;
     if (sscanf(base_url, "http://%63[^:]:%d", host, &port) != 2)
         return 0;
-    coa_socket *s = coa_sock_connect(host, (uint16_t)port, 300);
+    sock *s = sock_connect(host, (uint16_t)port, 300);
     if (!s)
         return 0;
     char req[320];
     snprintf(req, sizeof req, "GET %s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n", path, host);
     int ok = 0;
-    if (coa_sock_send(s, req, (int)strlen(req)) > 0 && coa_sock_wait_readable(s, 300) > 0) {
+    if (sock_send(s, req, (int)strlen(req)) > 0 && sock_wait_readable(s, 300) > 0) {
         char buf[256];
-        int n = coa_sock_recv(s, buf, (int)sizeof buf - 1);
+        int n = sock_recv(s, buf, (int)sizeof buf - 1);
         if (n > 0) {
             buf[n] = '\0';
             if (strncmp(buf, "HTTP/", 5) == 0 && strstr(buf, " 200 "))
                 ok = 1;
         }
     }
-    coa_sock_close(s);
+    sock_close(s);
     return ok;
 }
 
@@ -2169,9 +2169,9 @@ static int tool_exists(const char *name) {
 #else
     snprintf(cmd, sizeof cmd, "command -v %s >/dev/null 2>&1", name);
 #endif
-    coa_proc_result *r = coa_proc_run(cmd, 4000);
+    proc_result *r = proc_run(cmd, 4000);
     int found = r && r->exit_code == 0;
-    coa_proc_result_free(r);
+    proc_result_free(r);
     return found;
 }
 
@@ -2187,7 +2187,7 @@ static int ollama_start_cmd(char *out, size_t cap) {
         const char *la = getenv("LOCALAPPDATA");
         if (la) {
             snprintf(p, sizeof p, "%s\\Programs\\Ollama\\ollama.exe", la);
-            if (coa_fs_exists(p)) {
+            if (fs_exists(p)) {
                 snprintf(out, cap, "\"%s\" serve", p);
                 return 1;
             }
@@ -2195,7 +2195,7 @@ static int ollama_start_cmd(char *out, size_t cap) {
         const char *pf = getenv("ProgramFiles");
         if (pf) {
             snprintf(p, sizeof p, "%s\\Ollama\\ollama.exe", pf);
-            if (coa_fs_exists(p)) {
+            if (fs_exists(p)) {
                 snprintf(out, cap, "\"%s\" serve", p);
                 return 1;
             }
@@ -2209,8 +2209,8 @@ static int ollama_start_cmd(char *out, size_t cap) {
  * avoids port 8080 where this HTTP server itself listens: the bundled server is
  * single-threaded, so probing our own port would wait on a request we can never
  * serve — a self-deadlock that freezes every other API call. */
-static void llamacpp_probe_url(const coa_config *cfg, char *out, size_t cap) {
-    long port = (long)coa_config_get_int(cfg, "local.llamacpp_port", 8081);
+static void llamacpp_probe_url(const config *cfg, char *out, size_t cap) {
+    long port = (long)config_get_int(cfg, "local.llamacpp_port", 8081);
     snprintf(out, cap, "http://127.0.0.1:%ld", port);
 }
 
@@ -2222,13 +2222,13 @@ static void llamacpp_probe_url(const coa_config *cfg, char *out, size_t cap) {
 static char *g_local_status_cache = NULL;
 static int64_t g_local_status_at = 0;
 
-static int h_local_status(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_local_status(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
-    int64_t now = coa_time_now_ms();
+    int64_t now = time_now_ms();
     if (g_local_status_cache && now - g_local_status_at < 3000) {
-        coa_http_resp_append(resp, g_local_status_cache);
+        http_resp_append(resp, g_local_status_cache);
         return 0;
     }
     int o_running = local_probe("http://127.0.0.1:11434", "/api/version");
@@ -2237,7 +2237,7 @@ static int h_local_status(const coa_http_request *req, coa_http_response *resp, 
     int l_running = local_probe(lp_url, "/v1/models");
     char cmdbuf[512];
     int o_installed = ollama_start_cmd(cmdbuf, sizeof cmdbuf);
-    coa_http_resp_appendf(resp,
+    http_resp_appendf(resp,
                           "{\"ollama\":{\"running\":%s,\"installed\":%s},"
                           "\"llamacpp\":{\"running\":%s}}",
                           o_running ? "true" : "false", o_installed ? "true" : "false", l_running ? "true" : "false");
@@ -2255,8 +2255,8 @@ static int h_local_status(const coa_http_request *req, coa_http_response *resp, 
 
 /* POST /v1/local/start — spawn a local runtime (non-blocking: returns right
  * after launch; the UI polls /v1/local/status for readiness). */
-static int h_local_start(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_local_start(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
     char *b = body_str(req);
@@ -2276,21 +2276,21 @@ static int h_local_start(const coa_http_request *req, coa_http_response *resp, v
 
     if (strcmp(engine, "ollama") == 0) {
         if (local_probe("http://127.0.0.1:11434", "/api/version")) {
-            coa_http_resp_json(resp, "{\"ok\":true,\"engine\":\"ollama\",\"already_running\":true}");
+            http_resp_json(resp, "{\"ok\":true,\"engine\":\"ollama\",\"already_running\":true}");
             return 0;
         }
         char cmd[512];
         if (!ollama_start_cmd(cmd, sizeof cmd)) {
-            coa_http_resp_json(resp, "{\"ok\":false,\"engine\":\"ollama\",\"error\":\"未找到 ollama，请先到 ollama.com "
+            http_resp_json(resp, "{\"ok\":false,\"engine\":\"ollama\",\"error\":\"未找到 ollama，请先到 ollama.com "
                                      "安装并确保它在 PATH\"}");
             return 0;
         }
-        int rc = coa_proc_spawn_detached(cmd);
+        int rc = proc_spawn_detached(cmd);
         if (rc != 0) {
-            coa_http_resp_json(resp, "{\"ok\":false,\"engine\":\"ollama\",\"error\":\"启动失败（无法创建进程）\"}");
+            http_resp_json(resp, "{\"ok\":false,\"engine\":\"ollama\",\"error\":\"启动失败（无法创建进程）\"}");
             return 0;
         }
-        coa_http_resp_json(resp, "{\"ok\":true,\"engine\":\"ollama\",\"spawned\":true,"
+        http_resp_json(resp, "{\"ok\":true,\"engine\":\"ollama\",\"spawned\":true,"
                                  "\"note\":\"已启动 ollama serve，首次运行需拉取模型，请稍候刷新状态\"}");
         return 0;
     }
@@ -2298,53 +2298,53 @@ static int h_local_start(const coa_http_request *req, coa_http_response *resp, v
         char lp_url[128];
         llamacpp_probe_url(ctx->config, lp_url, sizeof lp_url);
         if (local_probe(lp_url, "/v1/models")) {
-            coa_http_resp_json(resp, "{\"ok\":true,\"engine\":\"llamacpp\",\"already_running\":true}");
+            http_resp_json(resp, "{\"ok\":true,\"engine\":\"llamacpp\",\"already_running\":true}");
             return 0;
         }
-        const char *cmd = coa_config_get_str(ctx->config, "local.llamacpp_cmd", NULL);
+        const char *cmd = config_get_str(ctx->config, "local.llamacpp_cmd", NULL);
         if (!cmd || !*cmd) {
-            coa_http_resp_json(
+            http_resp_json(
                 resp,
                 "{\"ok\":false,\"engine\":\"llamacpp\","
                 "\"error\":\"未配置启动命令，请在 config 中设置 local.llamacpp_cmd（如 server 可执行文件路径）\"}");
             return 0;
         }
-        int rc = coa_proc_spawn_detached(cmd);
+        int rc = proc_spawn_detached(cmd);
         if (rc != 0) {
-            coa_http_resp_json(resp, "{\"ok\":false,\"engine\":\"llamacpp\",\"error\":\"启动失败（无法创建进程）\"}");
+            http_resp_json(resp, "{\"ok\":false,\"engine\":\"llamacpp\",\"error\":\"启动失败（无法创建进程）\"}");
             return 0;
         }
-        coa_http_resp_json(resp, "{\"ok\":true,\"engine\":\"llamacpp\",\"spawned\":true,"
+        http_resp_json(resp, "{\"ok\":true,\"engine\":\"llamacpp\",\"spawned\":true,"
                                  "\"note\":\"已启动，请稍候刷新状态\"}");
         return 0;
     }
-    coa_http_resp_json(resp, "{\"ok\":false,\"engine\":\"unknown\",\"error\":\"unknown engine (ollama|llamacpp)\"}");
+    http_resp_json(resp, "{\"ok\":false,\"engine\":\"unknown\",\"error\":\"unknown engine (ollama|llamacpp)\"}");
     return 0;
 }
 
-static int h_catalog_mcp(const coa_http_request *req, coa_http_response *resp, void *ud) {
+static int h_catalog_mcp(const http_request *req, http_response *resp, void *ud) {
     (void)req;
     (void)ud;
-    char *s = coa_catalog_mcp_json();
-    coa_http_resp_json(resp, s ? s : "[]");
+    char *s = catalog_mcp_json();
+    http_resp_json(resp, s ? s : "[]");
     free(s);
     return 0;
 }
 
-static int h_catalog_models(const coa_http_request *req, coa_http_response *resp, void *ud) {
+static int h_catalog_models(const http_request *req, http_response *resp, void *ud) {
     (void)req;
     (void)ud;
-    char *s = coa_catalog_models_json();
-    coa_http_resp_json(resp, s ? s : "[]");
+    char *s = catalog_models_json();
+    http_resp_json(resp, s ? s : "[]");
     free(s);
     return 0;
 }
 
-static int h_catalog_skills(const coa_http_request *req, coa_http_response *resp, void *ud) {
+static int h_catalog_skills(const http_request *req, http_response *resp, void *ud) {
     (void)req;
     (void)ud;
-    char *s = coa_catalog_skills_json();
-    coa_http_resp_json(resp, s ? s : "[]");
+    char *s = catalog_skills_json();
+    http_resp_json(resp, s ? s : "[]");
     free(s);
     return 0;
 }
@@ -2352,8 +2352,8 @@ static int h_catalog_skills(const coa_http_request *req, coa_http_response *resp
 /* One-click install of a curated skills-plaza entry: find the catalog entry by
  * id and upsert it into the runtime skill registry (reference entries, which
  * point at upstream repos rather than runnable bodies, are rejected). */
-static int h_skill_install(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_skill_install(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
     char *b = body_str(req);
@@ -2367,9 +2367,9 @@ static int h_skill_install(const coa_http_request *req, coa_http_response *resp,
     id = idbuf;
     const catalog_skill *cs = NULL;
     if (id && *id) {
-        int n = coa_catalog_skill_count();
+        int n = catalog_skill_count();
         for (int i = 0; i < n; i++) {
-            const catalog_skill *e = coa_catalog_skill_at(i);
+            const catalog_skill *e = catalog_skill_at(i);
             if (e && strcmp(e->id, id) == 0) {
                 cs = e;
                 break;
@@ -2378,43 +2378,43 @@ static int h_skill_install(const coa_http_request *req, coa_http_response *resp,
     }
     if (!cs) {
         resp->status = 404;
-        coa_http_resp_json(resp, "{\"error\":\"unknown skill id\"}");
+        http_resp_json(resp, "{\"error\":\"unknown skill id\"}");
         return 0;
     }
     if (strcmp(cs->kind, "reference") == 0) {
         resp->status = 400;
-        coa_http_resp_json(resp, "{\"error\":\"reference entry (upstream repo), not installable\"}");
+        http_resp_json(resp, "{\"error\":\"reference entry (upstream repo), not installable\"}");
         return 0;
     }
-    coa_skill sk;
+    skill sk;
     memset(&sk, 0, sizeof(sk));
     sk.name = cs->id; /* runtime name = ASCII id; cs->name is display */
     sk.description = cs->description;
     sk.kind = cs->kind;
     sk.body = cs->body;
-    if (coa_skill_register_ex(ctx->skills, &sk, 1) != 0) {
+    if (skill_register_ex(ctx->skills, &sk, 1) != 0) {
         resp->status = 400;
-        coa_http_resp_json(resp, "{\"error\":\"register failed\"}");
+        http_resp_json(resp, "{\"error\":\"register failed\"}");
         return 0;
     }
     if (ctx->state_root)
-        coa_skill_registry_persist(ctx->skills, ctx->state_root);
+        skill_registry_persist(ctx->skills, ctx->state_root);
     cJSON *o = cJSON_CreateObject();
     cJSON_AddBoolToObject(o, "ok", 1);
     cJSON_AddStringToObject(o, "name", cs->id);
     cJSON_AddStringToObject(o, "kind", cs->kind);
     char *s = cJSON_PrintUnformatted(o);
     cJSON_Delete(o);
-    coa_http_resp_json(resp, s ? s : "{\"ok\":true}");
+    http_resp_json(resp, s ? s : "{\"ok\":true}");
     free(s);
     return 0;
 }
 
-static int h_catalog_github_skills(const coa_http_request *req, coa_http_response *resp, void *ud) {
+static int h_catalog_github_skills(const http_request *req, http_response *resp, void *ud) {
     (void)req;
     (void)ud;
-    char *s = coa_catalog_remote_skills_json();
-    coa_http_resp_json(resp, s ? s : "[]");
+    char *s = catalog_remote_skills_json();
+    http_resp_json(resp, s ? s : "[]");
     free(s);
     return 0;
 }
@@ -2423,8 +2423,8 @@ static int h_catalog_github_skills(const coa_http_request *req, coa_http_respons
  * (direct URL, then ghproxy mirror) and register it as a prompt-kind skill
  * with the fetched content as body. Blocking network I/O (up to ~20s) — same
  * tradeoff as /v1/mcp/test on the single-threaded server. */
-static int h_skill_install_remote(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_skill_install_remote(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
     char *b = body_str(req);
@@ -2440,38 +2440,38 @@ static int h_skill_install_remote(const coa_http_request *req, coa_http_response
     cJSON_Delete(root);
     if (!repo_buf[0] || !id_buf[0]) {
         resp->status = 400;
-        coa_http_resp_json(resp, "{\"error\":\"need 'repo' and 'id' strings\"}");
+        http_resp_json(resp, "{\"error\":\"need 'repo' and 'id' strings\"}");
         return 0;
     }
-    const catalog_remote_skill *e = coa_catalog_remote_skill_find(repo_buf, id_buf);
+    const catalog_remote_skill *e = catalog_remote_skill_find(repo_buf, id_buf);
     if (!e || strcmp(e->id, id_buf) != 0) {
         resp->status = 404;
-        coa_http_resp_json(resp, "{\"error\":\"unknown remote skill (repo/id)\"}");
+        http_resp_json(resp, "{\"error\":\"unknown remote skill (repo/id)\"}");
         return 0;
     }
-    char *content = coa_catalog_remote_skill_fetch(e);
+    char *content = catalog_remote_skill_fetch(e);
     if (!content) {
         resp->status = 502;
-        coa_http_resp_json(resp, "{\"error\":\"fetch failed: cannot download from raw.githubusercontent.com "
+        http_resp_json(resp, "{\"error\":\"fetch failed: cannot download from raw.githubusercontent.com "
                                  "or mirror (check network)\"}");
         return 0;
     }
-    coa_skill sk;
+    skill sk;
     memset(&sk, 0, sizeof(sk));
     sk.name = e->id;
     sk.description = e->description;
     sk.kind = "prompt";
     sk.body = content;
     sk.caps = "";
-    int rc = coa_skill_register_ex(ctx->skills, &sk, 1);
+    int rc = skill_register_ex(ctx->skills, &sk, 1);
     free(content);
     if (rc != 0) {
         resp->status = 400;
-        coa_http_resp_json(resp, "{\"error\":\"register failed\"}");
+        http_resp_json(resp, "{\"error\":\"register failed\"}");
         return 0;
     }
     if (ctx->state_root)
-        coa_skill_registry_persist(ctx->skills, ctx->state_root);
+        skill_registry_persist(ctx->skills, ctx->state_root);
     cJSON *o = cJSON_CreateObject();
     cJSON_AddBoolToObject(o, "ok", 1);
     cJSON_AddStringToObject(o, "name", e->id);
@@ -2479,7 +2479,7 @@ static int h_skill_install_remote(const coa_http_request *req, coa_http_response
     cJSON_AddStringToObject(o, "repo", e->repo);
     char *s = cJSON_PrintUnformatted(o);
     cJSON_Delete(o);
-    coa_http_resp_json(resp, s ? s : "{\"ok\":true}");
+    http_resp_json(resp, s ? s : "{\"ok\":true}");
     free(s);
     return 0;
 }
@@ -2489,24 +2489,24 @@ static int h_skill_install_remote(const coa_http_request *req, coa_http_response
 /* Live listing from api.skillhub.cn (first page of the skill-package
  * catalog). Blocking network I/O (~seconds) on the single-threaded server —
  * same tradeoff as /v1/skills/install-remote. */
-static int h_catalog_skillhub(const coa_http_request *req, coa_http_response *resp, void *ud) {
+static int h_catalog_skillhub(const http_request *req, http_response *resp, void *ud) {
     (void)req;
     (void)ud;
-    char *s = coa_catalog_skillhub_list_json();
+    char *s = catalog_skillhub_list_json();
     if (!s) {
         resp->status = 502;
-        coa_http_resp_json(resp, "{\"error\":\"skillhub.cn list fetch failed (check network)\"}");
+        http_resp_json(resp, "{\"error\":\"skillhub.cn list fetch failed (check network)\"}");
         return 0;
     }
-    coa_http_resp_json(resp, s);
+    http_resp_json(resp, s);
     free(s);
     return 0;
 }
 
 /* Install a skillhub.cn skill: download SKILL.md for the given slug and
  * register it as a prompt-kind skill (same persistence flow as install-remote). */
-static int h_skill_install_skillhub(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_skill_install_skillhub(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
     char *b = body_str(req);
@@ -2519,34 +2519,34 @@ static int h_skill_install_skillhub(const coa_http_request *req, coa_http_respon
     cJSON_Delete(root);
     if (!slug_buf[0]) {
         resp->status = 400;
-        coa_http_resp_json(resp, "{\"error\":\"need 'slug' string\"}");
+        http_resp_json(resp, "{\"error\":\"need 'slug' string\"}");
         return 0;
     }
-    char *content = coa_catalog_skillhub_fetch_skill(slug_buf);
+    char *content = catalog_skillhub_fetch_skill(slug_buf);
     if (!content) {
         resp->status = 502;
-        coa_http_resp_json(resp, "{\"error\":\"fetch failed: cannot download SKILL.md from api.skillhub.cn\"}");
+        http_resp_json(resp, "{\"error\":\"fetch failed: cannot download SKILL.md from api.skillhub.cn\"}");
         return 0;
     }
     char name[160], desc[256];
     snprintf(name, sizeof(name), "skh_%s", slug_buf);
     snprintf(desc, sizeof(desc), "SkillHub 技能（skillhub.cn/skills/%s）", slug_buf);
-    coa_skill sk;
+    skill sk;
     memset(&sk, 0, sizeof(sk));
     sk.name = name;
     sk.description = desc;
     sk.kind = "prompt";
     sk.body = content;
     sk.caps = "";
-    int rc = coa_skill_register_ex(ctx->skills, &sk, 1);
+    int rc = skill_register_ex(ctx->skills, &sk, 1);
     free(content);
     if (rc != 0) {
         resp->status = 400;
-        coa_http_resp_json(resp, "{\"error\":\"register failed\"}");
+        http_resp_json(resp, "{\"error\":\"register failed\"}");
         return 0;
     }
     if (ctx->state_root)
-        coa_skill_registry_persist(ctx->skills, ctx->state_root);
+        skill_registry_persist(ctx->skills, ctx->state_root);
     cJSON *o = cJSON_CreateObject();
     cJSON_AddBoolToObject(o, "ok", 1);
     cJSON_AddStringToObject(o, "name", name);
@@ -2554,7 +2554,7 @@ static int h_skill_install_skillhub(const coa_http_request *req, coa_http_respon
     cJSON_AddStringToObject(o, "slug", slug_buf);
     char *s = cJSON_PrintUnformatted(o);
     cJSON_Delete(o);
-    coa_http_resp_json(resp, s ? s : "{\"ok\":true}");
+    http_resp_json(resp, s ? s : "{\"ok\":true}");
     free(s);
     return 0;
 }
@@ -2562,7 +2562,7 @@ static int h_skill_install_skillhub(const coa_http_request *req, coa_http_respon
 /* ================= IM (instant messaging) ================= */
 
 /* Push a new IM message to every WebSocket client + record an experience. */
-static void im_push(coa_ctx *ctx, int64_t session_id, int64_t msg_id, const char *role, const char *sender,
+static void im_push(runtime_ctx *ctx, int64_t session_id, int64_t msg_id, const char *role, const char *sender,
                     const char *content) {
     if (!ctx || !content)
         return;
@@ -2574,19 +2574,19 @@ static void im_push(coa_ctx *ctx, int64_t session_id, int64_t msg_id, const char
     if (sender && *sender)
         cJSON_AddStringToObject(o, "sender", sender);
     cJSON_AddStringToObject(o, "content", content);
-    cJSON_AddNumberToObject(o, "ts_ms", (double)coa_time_now_ms());
+    cJSON_AddNumberToObject(o, "ts_ms", (double)time_now_ms());
     char *js = cJSON_PrintUnformatted(o);
     cJSON_Delete(o);
     if (js) {
         if (ctx->http)
-            coa_http_server_ws_broadcast(ctx->http, js);
+            http_server_ws_broadcast(ctx->http, js);
         free(js);
     }
     if (ctx->memory) {
         char buf[384];
         snprintf(buf, sizeof(buf), "im session %lld (%s%s%s)", (long long)session_id, role ? role : "user",
                  (sender && *sender) ? " by " : "", (sender && *sender) ? sender : "");
-        coa_memory_record_experience(ctx->memory, buf, content);
+        memory_record_experience(ctx->memory, buf, content);
     }
 }
 
@@ -2594,13 +2594,13 @@ static void im_push(coa_ctx *ctx, int64_t session_id, int64_t msg_id, const char
  * channel (best-effort: drops the response). Inbound channel messages are
  * injected directly via channel_ingest and never reach here, so there is no
  * echo. */
-static void im_forward_to_channel(coa_ctx *ctx, int64_t session_id, const char *content) {
+static void im_forward_to_channel(runtime_ctx *ctx, int64_t session_id, const char *content) {
     if (!ctx || !ctx->channels || !ctx->im || !content)
         return;
-    const char *chn = coa_im_session_channel(ctx->im, session_id);
+    const char *chn = im_session_channel(ctx->im, session_id);
     if (!chn || !*chn)
         return;
-    char *r = coa_im_channel_send(ctx->channels, chn, content);
+    char *r = im_channel_send(ctx->channels, chn, content);
     if (r)
         free(r);
 }
@@ -2610,7 +2610,7 @@ static void im_forward_to_channel(coa_ctx *ctx, int64_t session_id, const char *
  *   {"type":"im.ping"}                                  -> server replies pong
  */
 static void on_ws_msg(const char *text, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!ctx || !text)
         return;
     cJSON *root = cJSON_Parse(text);
@@ -2624,7 +2624,7 @@ static void on_ws_msg(const char *text, void *ud) {
         cJSON *sender = cJSON_GetObjectItemCaseSensitive(root, "sender");
         if (sid && cJSON_IsNumber(sid) && content && cJSON_IsString(content) && ctx->im) {
             const char *snd = (sender && cJSON_IsString(sender)) ? sender->valuestring : NULL;
-            int64_t id = coa_im_send_ex(ctx->im, (int64_t)sid->valuedouble, "user", content->valuestring, snd);
+            int64_t id = im_send_ex(ctx->im, (int64_t)sid->valuedouble, "user", content->valuestring, snd);
             if (id > 0) {
                 im_push(ctx, (int64_t)sid->valuedouble, id, "user", snd, content->valuestring);
                 im_forward_to_channel(ctx, (int64_t)sid->valuedouble, content->valuestring);
@@ -2632,23 +2632,23 @@ static void on_ws_msg(const char *text, void *ud) {
         }
     } else if (strcmp(t, "im.ping") == 0) {
         if (ctx->http)
-            coa_http_server_ws_broadcast(ctx->http, "{\"type\":\"pong\"}");
+            http_server_ws_broadcast(ctx->http, "{\"type\":\"pong\"}");
     }
     cJSON_Delete(root);
 }
 
-static int h_im_sessions(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_im_sessions(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
-    char *s = ctx->im ? coa_im_sessions_json(ctx->im) : coa_strdup("{}");
-    coa_http_resp_json(resp, s ? s : "{}");
+    char *s = ctx->im ? im_sessions_json(ctx->im) : xstrdup("{}");
+    http_resp_json(resp, s ? s : "{}");
     free(s);
     return 0;
 }
 
-static int h_im_session_create(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_im_session_create(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
     char *b = body_str(req);
@@ -2681,45 +2681,45 @@ static int h_im_session_create(const coa_http_request *req, coa_http_response *r
         if (root)
             cJSON_Delete(root);
         resp->status = 500;
-        coa_http_resp_json(resp, "{\"error\":\"im disabled\"}");
+        http_resp_json(resp, "{\"error\":\"im disabled\"}");
         return 0;
     }
-    int64_t id = coa_im_create_session_ex(ctx->im, name ? name : "", kind ? kind : "direct", members, n_members);
+    int64_t id = im_create_session_ex(ctx->im, name ? name : "", kind ? kind : "direct", members, n_members);
     cJSON_Delete(root);
     if (id < 0) {
         resp->status = 500;
-        coa_http_resp_json(resp, "{\"error\":\"create failed\"}");
+        http_resp_json(resp, "{\"error\":\"create failed\"}");
         return 0;
     }
     if (id > 0 && ctx->channels && channel && *channel)
-        coa_im_session_set_channel(ctx->im, id, channel);
-    coa_http_resp_appendf(resp, "{\"id\":%lld}", (long long)id);
+        im_session_set_channel(ctx->im, id, channel);
+    http_resp_appendf(resp, "{\"id\":%lld}", (long long)id);
     return 0;
 }
 
 /* Channel bridge: external messaging channels (feishu/wecom/generic/telegram). */
-static int h_im_channels(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_im_channels(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
     if (!ctx->channels) {
         resp->status = 500;
-        coa_http_resp_json(resp, "{\"error\":\"channels disabled\"}");
+        http_resp_json(resp, "{\"error\":\"channels disabled\"}");
         return 0;
     }
-    char *s = coa_im_channels_json(ctx->channels);
-    coa_http_resp_json(resp, s ? s : "{\"channels\":[]}");
+    char *s = im_channels_json(ctx->channels);
+    http_resp_json(resp, s ? s : "{\"channels\":[]}");
     free(s);
     return 0;
 }
 
-static int h_im_channel_add(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_im_channel_add(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
     if (!ctx->channels) {
         resp->status = 500;
-        coa_http_resp_json(resp, "{\"error\":\"channels disabled\"}");
+        http_resp_json(resp, "{\"error\":\"channels disabled\"}");
         return 0;
     }
     char *b = body_str(req);
@@ -2750,7 +2750,7 @@ static int h_im_channel_add(const coa_http_request *req, coa_http_response *resp
     }
     int rc = -1;
     if (name && *name && type && *type) {
-        coa_im_channel ch;
+        im_channel ch;
         memset(&ch, 0, sizeof(ch));
         ch.name = (char *)name;
         ch.type = (char *)type;
@@ -2758,52 +2758,52 @@ static int h_im_channel_add(const coa_http_request *req, coa_http_response *resp
         ch.token = token && *token ? (char *)token : NULL;
         ch.target = target && *target ? (char *)target : NULL;
         ch.enabled = enabled;
-        rc = coa_im_channel_register(ctx->channels, &ch);
+        rc = im_channel_register(ctx->channels, &ch);
     }
     if (root)
         cJSON_Delete(root);
     if (rc != 0) {
         resp->status = 400;
-        coa_http_resp_json(resp, "{\"error\":\"need 'name' and 'type' (feishu|wecom|generic|telegram)\"}");
+        http_resp_json(resp, "{\"error\":\"need 'name' and 'type' (feishu|wecom|generic|telegram)\"}");
         return 0;
     }
-    coa_http_resp_json(resp, "{\"ok\":true}");
+    http_resp_json(resp, "{\"ok\":true}");
     return 0;
 }
 
-static int h_im_channel_remove(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_im_channel_remove(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
     if (!ctx->channels) {
         resp->status = 500;
-        coa_http_resp_json(resp, "{\"error\":\"channels disabled\"}");
+        http_resp_json(resp, "{\"error\":\"channels disabled\"}");
         return 0;
     }
     const char *name = req->path + strlen("/v1/im/channels/");
-    int rc = coa_im_channel_remove(ctx->channels, name);
+    int rc = im_channel_remove(ctx->channels, name);
     if (rc == 0) {
         /* unbind any session that pointed at this channel */
         if (ctx->im) {
             size_t n = 0;
-            coa_im_session *ss = coa_im_list_sessions(ctx->im, &n);
+            im_session *ss = im_list_sessions(ctx->im, &n);
             for (size_t i = 0; i < n; i++)
                 if (ss[i].channel && strcmp(ss[i].channel, name) == 0)
-                    coa_im_session_set_channel(ctx->im, ss[i].id, NULL);
-            coa_im_sessions_free(ss, n);
+                    im_session_set_channel(ctx->im, ss[i].id, NULL);
+            im_sessions_free(ss, n);
         }
     }
-    coa_http_resp_appendf(resp, "{\"removed\":%s}", rc == 0 ? "true" : "false");
+    http_resp_appendf(resp, "{\"removed\":%s}", rc == 0 ? "true" : "false");
     return 0;
 }
 
-static int h_im_channel_send(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_im_channel_send(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
     if (!ctx->channels) {
         resp->status = 500;
-        coa_http_resp_json(resp, "{\"error\":\"channels disabled\"}");
+        http_resp_json(resp, "{\"error\":\"channels disabled\"}");
         return 0;
     }
     const char *base = req->path + strlen("/v1/im/channels/");
@@ -2818,7 +2818,7 @@ static int h_im_channel_send(const coa_http_request *req, coa_http_response *res
     name[blen] = '\0';
     if (!*name) {
         resp->status = 404;
-        coa_http_resp_json(resp, "{\"error\":\"missing channel name\"}");
+        http_resp_json(resp, "{\"error\":\"missing channel name\"}");
         return 0;
     }
     char *b = body_str(req);
@@ -2834,23 +2834,23 @@ static int h_im_channel_send(const coa_http_request *req, coa_http_response *res
         cJSON_Delete(root);
     if (!text || !*text) {
         resp->status = 400;
-        coa_http_resp_json(resp, "{\"error\":\"need 'text' string\"}");
+        http_resp_json(resp, "{\"error\":\"need 'text' string\"}");
         return 0;
     }
-    char *r = coa_im_channel_send(ctx->channels, name, text);
-    coa_http_resp_json(resp, r ? r : "{\"ok\":false,\"error\":\"channel not found\"}");
+    char *r = im_channel_send(ctx->channels, name, text);
+    http_resp_json(resp, r ? r : "{\"ok\":false,\"error\":\"channel not found\"}");
     free(r);
     return 0;
 }
 
 /* Handles GET/POST/DELETE on /v1/im/sessions/{id} and /v1/im/sessions/{id}/messages */
-static int h_im_session_route(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_im_session_route(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
     if (!ctx->im) {
         resp->status = 500;
-        coa_http_resp_json(resp, "{\"error\":\"im disabled\"}");
+        http_resp_json(resp, "{\"error\":\"im disabled\"}");
         return 0;
     }
     const char *rest = req->path + strlen("/v1/im/sessions/");
@@ -2867,20 +2867,20 @@ static int h_im_session_route(const coa_http_request *req, coa_http_response *re
     idbuf[rest_len] = '\0';
     if (!idbuf[0]) {
         resp->status = 404;
-        coa_http_resp_json(resp, "{\"error\":\"missing session id\"}");
+        http_resp_json(resp, "{\"error\":\"missing session id\"}");
         return 0;
     }
     int64_t session_id = atoll(idbuf);
 
     if (strcmp(req->method, "DELETE") == 0) {
-        int ok = coa_im_delete_session(ctx->im, session_id);
-        coa_http_resp_appendf(resp, "{\"deleted\":%s}", ok ? "true" : "false");
+        int ok = im_delete_session(ctx->im, session_id);
+        http_resp_appendf(resp, "{\"deleted\":%s}", ok ? "true" : "false");
         return 0;
     }
     if (strcmp(req->method, "POST") == 0) {
         if (!is_messages) {
             resp->status = 404;
-            coa_http_resp_json(resp, "{\"error\":\"POST expects .../messages\"}");
+            http_resp_json(resp, "{\"error\":\"POST expects .../messages\"}");
             return 0;
         }
         char *b = body_str(req);
@@ -2902,25 +2902,25 @@ static int h_im_session_route(const coa_http_request *req, coa_http_response *re
             cJSON_Delete(root);
         if (!content || !*content) {
             resp->status = 400;
-            coa_http_resp_json(resp, "{\"error\":\"need 'content' string\"}");
+            http_resp_json(resp, "{\"error\":\"need 'content' string\"}");
             return 0;
         }
         if (!role || !*role)
             role = "user";
-        int64_t id = coa_im_send_ex(ctx->im, session_id, role, content, sender);
+        int64_t id = im_send_ex(ctx->im, session_id, role, content, sender);
         if (id < 0) {
             resp->status = 404;
-            coa_http_resp_json(resp, "{\"error\":\"session not found\"}");
+            http_resp_json(resp, "{\"error\":\"session not found\"}");
             return 0;
         }
         im_push(ctx, session_id, id, role, sender, content);
         im_forward_to_channel(ctx, session_id, content);
-        coa_http_resp_appendf(resp, "{\"id\":%lld,\"ok\":true}", (long long)id);
+        http_resp_appendf(resp, "{\"id\":%lld,\"ok\":true}", (long long)id);
         return 0;
     }
     /* GET */
     size_t n = 0;
-    coa_im_message *msgs = coa_im_messages(ctx->im, session_id, &n);
+    im_message *msgs = im_messages(ctx->im, session_id, &n);
     cJSON *arr = cJSON_CreateArray();
     for (size_t i = 0; i < n; i++) {
         cJSON *o = cJSON_CreateObject();
@@ -2932,28 +2932,28 @@ static int h_im_session_route(const coa_http_request *req, coa_http_response *re
         cJSON_AddNumberToObject(o, "ts_ms", (double)msgs[i].ts_ms);
         cJSON_AddItemToArray(arr, o);
     }
-    coa_im_messages_free(msgs, n);
+    im_messages_free(msgs, n);
     char *s = cJSON_PrintUnformatted(arr);
     cJSON_Delete(arr);
-    coa_http_resp_json(resp, s ? s : "[]");
+    http_resp_json(resp, s ? s : "[]");
     free(s);
     return 0;
 }
 
 /* GET /v1/im/search?q=term  — history search across all sessions */
-static int h_im_search(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_im_search(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
     if (!ctx->im) {
         resp->status = 500;
-        coa_http_resp_json(resp, "{\"error\":\"im disabled\"}");
+        http_resp_json(resp, "{\"error\":\"im disabled\"}");
         return 0;
     }
     const char *q = strstr(req->query, "q=");
     const char *query = q ? q + 2 : "";
-    char *s = coa_im_search(ctx->im, query, 200);
-    coa_http_resp_json(resp, s ? s : "[]");
+    char *s = im_search(ctx->im, query, 200);
+    http_resp_json(resp, s ? s : "[]");
     free(s);
     return 0;
 }
@@ -2961,27 +2961,27 @@ static int h_im_search(const coa_http_request *req, coa_http_response *resp, voi
 /* ---------- Context layer: unified KV/Task/Agent state (/v1/state) ---------- */
 
 /* GET /v1/state — the whole store */
-static int h_state_all(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_state_all(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
-    char *s = ctx->state ? coa_state_store_json(ctx->state) : coa_strdup("{}");
-    coa_http_resp_appendf(resp,
-                          "{\"ok\":true,\"count\":%d,\"state\":", ctx->state ? coa_state_store_count(ctx->state) : 0);
-    coa_http_resp_append(resp, s ? s : "{}");
-    coa_http_resp_append(resp, "}");
+    char *s = ctx->state ? state_store_json(ctx->state) : xstrdup("{}");
+    http_resp_appendf(resp,
+                          "{\"ok\":true,\"count\":%d,\"state\":", ctx->state ? state_store_count(ctx->state) : 0);
+    http_resp_append(resp, s ? s : "{}");
+    http_resp_append(resp, "}");
     free(s);
     return 0;
 }
 
 /* GET /v1/state/<ns>[/<key>] — one namespace or one entry (borrowed value) */
-static int h_state_get(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_state_get(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
     if (!ctx->state) {
         resp->status = 500;
-        coa_http_resp_json(resp, "{\"error\":\"state store disabled\"}");
+        http_resp_json(resp, "{\"error\":\"state store disabled\"}");
         return 0;
     }
     const char *rest = req->path + strlen("/v1/state/");
@@ -2995,18 +2995,18 @@ static int h_state_get(const coa_http_request *req, coa_http_response *resp, voi
         key[0] = '\0';
     if (!*ns) {
         resp->status = 404;
-        coa_http_resp_json(resp, "{\"error\":\"missing namespace\"}");
+        http_resp_json(resp, "{\"error\":\"missing namespace\"}");
         return 0;
     }
     if (*key) {
-        const char *v = coa_state_store_get(ctx->state, ns, key);
+        const char *v = state_store_get(ctx->state, ns, key);
         if (!v) {
             resp->status = 404;
-            coa_http_resp_json(resp, "{\"error\":\"not found\"}");
+            http_resp_json(resp, "{\"error\":\"not found\"}");
             return 0;
         }
         char *esc = cJSON_PrintUnformatted(cJSON_CreateString(v));
-        coa_http_resp_appendf(resp, "{\"ok\":true,\"ns\":\"%s\",\"key\":\"%s\",\"value\":%s}", ns, key,
+        http_resp_appendf(resp, "{\"ok\":true,\"ns\":\"%s\",\"key\":\"%s\",\"value\":%s}", ns, key,
                               esc ? esc : "\"\"");
         free(esc);
         return 0;
@@ -3014,7 +3014,7 @@ static int h_state_get(const coa_http_request *req, coa_http_response *resp, voi
     /* whole namespace */
     cJSON *o = cJSON_CreateObject();
     cJSON *sub = cJSON_CreateObject();
-    char *all = coa_state_store_json(ctx->state);
+    char *all = state_store_json(ctx->state);
     cJSON *root = all ? cJSON_Parse(all) : NULL;
     free(all);
     cJSON *nsobj = root ? cJSON_GetObjectItemCaseSensitive(root, ns) : NULL;
@@ -3030,19 +3030,19 @@ static int h_state_get(const coa_http_request *req, coa_http_response *resp, voi
     cJSON_AddItemToObject(o, ns, sub);
     char *s = cJSON_PrintUnformatted(o);
     cJSON_Delete(o);
-    coa_http_resp_json(resp, s ? s : "{}");
+    http_resp_json(resp, s ? s : "{}");
     free(s);
     return 0;
 }
 
 /* PUT /v1/state/<ns>/<key> — body is the raw value, or {"value":"..."} */
-static int h_state_put(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_state_put(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
     if (!ctx->state) {
         resp->status = 500;
-        coa_http_resp_json(resp, "{\"error\":\"state store disabled\"}");
+        http_resp_json(resp, "{\"error\":\"state store disabled\"}");
         return 0;
     }
     const char *rest = req->path + strlen("/v1/state/");
@@ -3051,14 +3051,14 @@ static int h_state_put(const coa_http_request *req, coa_http_response *resp, voi
     char *slash = strchr(ns, '/');
     if (!slash) {
         resp->status = 400;
-        coa_http_resp_json(resp, "{\"error\":\"need <ns>/<key>\"}");
+        http_resp_json(resp, "{\"error\":\"need <ns>/<key>\"}");
         return 0;
     }
     *slash = '\0';
     snprintf(key, sizeof(key), "%s", slash + 1);
     if (!*ns || !*key) {
         resp->status = 400;
-        coa_http_resp_json(resp, "{\"error\":\"need <ns>/<key>\"}");
+        http_resp_json(resp, "{\"error\":\"need <ns>/<key>\"}");
         return 0;
     }
     char *b = body_str(req);
@@ -3066,22 +3066,22 @@ static int h_state_put(const coa_http_request *req, coa_http_response *resp, voi
     const char *val = (root && cJSON_IsObject(root)) ? json_str(root, "value") : NULL;
     if (!val)
         val = b ? b : "";
-    coa_state_store_set(ctx->state, ns, key, val);
+    state_store_set(ctx->state, ns, key, val);
     if (root)
         cJSON_Delete(root);
     free(b);
-    coa_http_resp_json(resp, "{\"ok\":true}");
+    http_resp_json(resp, "{\"ok\":true}");
     return 0;
 }
 
 /* DELETE /v1/state/<ns>/<key> */
-static int h_state_del(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_state_del(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
     if (!ctx->state) {
         resp->status = 500;
-        coa_http_resp_json(resp, "{\"error\":\"state store disabled\"}");
+        http_resp_json(resp, "{\"error\":\"state store disabled\"}");
         return 0;
     }
     const char *rest = req->path + strlen("/v1/state/");
@@ -3090,20 +3090,20 @@ static int h_state_del(const coa_http_request *req, coa_http_response *resp, voi
     char *slash = strchr(ns, '/');
     if (!slash) {
         resp->status = 400;
-        coa_http_resp_json(resp, "{\"error\":\"need <ns>/<key>\"}");
+        http_resp_json(resp, "{\"error\":\"need <ns>/<key>\"}");
         return 0;
     }
     *slash = '\0';
     snprintf(key, sizeof(key), "%s", slash + 1);
-    int removed = *ns && *key && coa_state_store_get(ctx->state, ns, key) != NULL;
-    coa_state_store_remove(ctx->state, ns, key);
-    coa_http_resp_appendf(resp, "{\"ok\":true,\"removed\":%s}", removed ? "true" : "false");
+    int removed = *ns && *key && state_store_get(ctx->state, ns, key) != NULL;
+    state_store_remove(ctx->state, ns, key);
+    http_resp_appendf(resp, "{\"ok\":true,\"removed\":%s}", removed ? "true" : "false");
     return 0;
 }
 
 /* POST /v1/state/snapshot — full runtime state export to <state_root>/snapshot.json */
-static int h_state_snapshot(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_state_snapshot(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
     char *b = body_str(req);
@@ -3114,21 +3114,21 @@ static int h_state_snapshot(const coa_http_request *req, coa_http_response *resp
     if (p && *p)
         snprintf(path, sizeof(path), "%s", p);
     else
-        coa_path_join(path, sizeof(path), ctx->state_root, "snapshot.json");
+        path_join(path, sizeof(path), ctx->state_root, "snapshot.json");
     if (root)
         cJSON_Delete(root);
-    if (coa_state_export(ctx, path) != 0) {
+    if (state_export(ctx, path) != 0) {
         resp->status = 500;
-        coa_http_resp_json(resp, "{\"error\":\"export failed\"}");
+        http_resp_json(resp, "{\"error\":\"export failed\"}");
         return 0;
     }
-    coa_http_resp_appendf(resp, "{\"ok\":true,\"path\":\"%s\"}", path);
+    http_resp_appendf(resp, "{\"ok\":true,\"path\":\"%s\"}", path);
     return 0;
 }
 
 /* POST /v1/state/restore — import <state_root>/snapshot.json back */
-static int h_state_restore(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_state_restore(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
     char *b = body_str(req);
@@ -3139,133 +3139,133 @@ static int h_state_restore(const coa_http_request *req, coa_http_response *resp,
     if (p && *p)
         snprintf(path, sizeof(path), "%s", p);
     else
-        coa_path_join(path, sizeof(path), ctx->state_root, "snapshot.json");
+        path_join(path, sizeof(path), ctx->state_root, "snapshot.json");
     if (root)
         cJSON_Delete(root);
-    if (coa_state_import(ctx, path) != 0) {
+    if (state_import(ctx, path) != 0) {
         resp->status = 500;
-        coa_http_resp_json(resp, "{\"error\":\"restore failed\"}");
+        http_resp_json(resp, "{\"error\":\"restore failed\"}");
         return 0;
     }
-    coa_http_resp_json(resp, "{\"ok\":true}");
+    http_resp_json(resp, "{\"ok\":true}");
     return 0;
 }
 
 /* GET /v1/memory/service — Memory Service interface: backend + per-type stats */
-static int h_memory_service(const coa_http_request *req, coa_http_response *resp, void *ud) {
-    coa_ctx *ctx = (coa_ctx *)ud;
+static int h_memory_service(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp))
         return 0;
     char *s = NULL;
     if (ctx->memsvc)
-        coa_memory_service_stats(ctx->memsvc, &s);
-    coa_http_resp_appendf(resp, "{\"ok\":true,\"backend\":\"%s\",\"types\":",
-                          ctx->memsvc ? coa_memory_service_backend(ctx->memsvc) : "none");
-    coa_http_resp_append(resp, s ? s : "[]");
-    coa_http_resp_append(resp, "}");
+        memory_service_stats(ctx->memsvc, &s);
+    http_resp_appendf(resp, "{\"ok\":true,\"backend\":\"%s\",\"types\":",
+                          ctx->memsvc ? memory_service_backend(ctx->memsvc) : "none");
+    http_resp_append(resp, s ? s : "[]");
+    http_resp_append(resp, "}");
     free(s);
     return 0;
 }
 
-int coa_api_attach(coa_ctx *ctx) {
+int api_attach(runtime_ctx *ctx) {
     if (!ctx || ctx->http_port == 0)
         return 0;
     if (!ctx->http) {
-        ctx->http = coa_http_server_new_bind(ctx->http_bind, ctx->http_port);
+        ctx->http = http_server_new_bind(ctx->http_bind, ctx->http_port);
         if (!ctx->http)
             return -1;
     }
-    coa_http_server_route(ctx->http, "POST", "/v1/tasks", h_task_create, ctx);
-    coa_http_server_route(ctx->http, "GET", "/v1/tasks/", h_task_get, ctx);
-    coa_http_server_route(ctx->http, "GET", "/v1/tools", h_tools, ctx);
-    coa_http_server_route(ctx->http, "GET", "/v1/memory", h_memory, ctx);
-    coa_http_server_route(ctx->http, "GET", "/v1/blackboard", h_blackboard, ctx);
-    coa_http_server_route(ctx->http, "POST", "/v1/blackboard", h_blackboard_put, ctx);
-    coa_http_server_route(ctx->http, "GET", "/v1/agents", h_agents, ctx);
-    coa_http_server_route(ctx->http, "POST", "/v1/agents", h_agent_add, ctx);
-    coa_http_server_route(ctx->http, "POST", "/v1/agents/", h_agent_post, ctx);
-    coa_http_server_route(ctx->http, "DELETE", "/v1/agents/", h_agent_delete, ctx);
-    coa_http_server_route(ctx->http, "GET", "/v1/snapshots", h_snapshots, ctx);
-    coa_http_server_route(ctx->http, "POST", "/v1/snapshots/rollback", h_snapshot_rollback, ctx);
-    coa_http_server_route(ctx->http, "GET", "/v1/trace", h_trace, ctx);
-    coa_http_server_route(ctx->http, "GET", "/v1/market/status", h_market_status, ctx);
-    coa_http_server_route(ctx->http, "GET", "/v1/local/status", h_local_status, ctx);
-    coa_http_server_route(ctx->http, "POST", "/v1/local/start", h_local_start, ctx);
-    coa_http_server_route(ctx->http, "GET", "/v1/routes", h_routes, ctx);
-    coa_http_server_route(ctx->http, "POST", "/v1/routes", h_route_add, ctx);
-    coa_http_server_route(ctx->http, "POST", "/v1/routes/policy", h_route_policy, ctx);
-    coa_http_server_route(ctx->http, "DELETE", "/v1/routes/", h_route_delete, ctx);
-    coa_http_server_route(ctx->http, "GET", "/v1/config/llm", h_config_llm_get, ctx);
-    coa_http_server_route(ctx->http, "POST", "/v1/config/llm", h_config_llm, ctx);
-    coa_http_server_route(ctx->http, "POST", "/v1/config/llm/test", h_config_llm_test, ctx);
-    coa_http_server_route(ctx->http, "GET", "/v1/config/snapshot", h_config_snapshot_get, ctx);
-    coa_http_server_route(ctx->http, "POST", "/v1/config/snapshot", h_config_snapshot, ctx);
-    coa_http_server_route(ctx->http, "POST", "/v1/chat", h_chat, ctx);
-    coa_http_server_route(ctx->http, "GET", "/v1/chat/history", h_chat_history, ctx);
-    coa_http_server_route(ctx->http, "GET", "/v1/chat/sessions", h_chat_sessions, ctx);
-    coa_http_server_route(ctx->http, "DELETE", "/v1/chat/sessions/", h_chat_sessions, ctx);
-    coa_http_server_route(ctx->http, "GET", "/v1/policy/rules", h_policy_rules, ctx);
-    coa_http_server_route(ctx->http, "POST", "/v1/policy/rules", h_policy_add, ctx);
-    coa_http_server_route(ctx->http, "DELETE", "/v1/policy/rules/", h_policy_delete, ctx);
-    coa_http_server_route(ctx->http, "POST", "/v1/orchestrate", h_orchestrate, ctx);
-    coa_http_server_route(ctx->http, "POST", "/v1/flows", h_flow_run, ctx);
-    coa_http_server_route(ctx->http, "POST", "/v1/flows/decompose", h_flow_decompose, ctx);
-    coa_http_server_route(ctx->http, "GET", "/v1/hooks", h_hooks, ctx);
-    coa_http_server_route(ctx->http, "POST", "/v1/hooks", h_hook_add, ctx);
-    coa_http_server_route(ctx->http, "DELETE", "/v1/hooks/", h_hook_delete, ctx);
-    coa_http_server_route(ctx->http, "POST", "/v1/upload", h_upload, ctx);
-    coa_http_server_route(ctx->http, "GET", "/v1/uploads", h_uploads, ctx);
-    coa_http_server_route(ctx->http, "DELETE", "/v1/uploads/", h_upload_delete, ctx);
-    coa_http_server_route(ctx->http, "GET", "/v1/usage", h_usage, ctx);
-    coa_http_server_route(ctx->http, "GET", "/v1/state", h_state_all, ctx);
-    coa_http_server_route(ctx->http, "GET", "/v1/state/", h_state_get, ctx);
-    coa_http_server_route(ctx->http, "PUT", "/v1/state/", h_state_put, ctx);
-    coa_http_server_route(ctx->http, "DELETE", "/v1/state/", h_state_del, ctx);
-    coa_http_server_route(ctx->http, "POST", "/v1/state/snapshot", h_state_snapshot, ctx);
-    coa_http_server_route(ctx->http, "POST", "/v1/state/restore", h_state_restore, ctx);
-    coa_http_server_route(ctx->http, "GET", "/v1/memory/service", h_memory_service, ctx);
-    coa_http_server_route(ctx->http, "GET", "/v1/plugins", h_plugins, ctx);
-    coa_http_server_route(ctx->http, "POST", "/v1/plugins/generate", h_plugin_generate, ctx);
-    coa_http_server_route(ctx->http, "POST", "/v1/plugins/native/load", h_plugin_native_load, ctx);
-    coa_http_server_route(ctx->http, "GET", "/v1/plugins/market", h_plugins_market, ctx);
-    coa_http_server_route(ctx->http, "POST", "/v1/plugins/publish", h_plugins_publish, ctx);
-    coa_http_server_route(ctx->http, "DELETE", "/v1/plugins/market/", h_plugin_market_delete, ctx);
-    coa_http_server_route(ctx->http, "GET", "/v1/skills", h_skills, ctx);
-    coa_http_server_route(ctx->http, "POST", "/v1/skills/run", h_skill_run, ctx);
-    coa_http_server_route(ctx->http, "POST", "/v1/skills/install", h_skill_install, ctx);
-    coa_http_server_route(ctx->http, "POST", "/v1/skills/install-remote", h_skill_install_remote, ctx);
-    coa_http_server_route(ctx->http, "GET", "/v1/skills/market", h_skills_market, ctx);
-    coa_http_server_route(ctx->http, "POST", "/v1/skills/publish", h_skills_publish, ctx);
-    coa_http_server_route(ctx->http, "POST", "/v1/tools/gh-install", h_gh_install, NULL);
-    coa_http_server_route(ctx->http, "DELETE", "/v1/skills/", h_skill_delete, ctx);
-    coa_http_server_route(ctx->http, "GET", "/v1/mcp", h_mcp, ctx);
-    coa_http_server_route(ctx->http, "POST", "/v1/mcp", h_mcp_add, ctx);
-    coa_http_server_route(ctx->http, "POST", "/v1/mcp/test", h_mcp_test, ctx);
-    coa_http_server_route(ctx->http, "POST", "/v1/mcp/sync", h_mcp_sync, ctx);
-    coa_http_server_route(ctx->http, "DELETE", "/v1/mcp/", h_mcp_delete, ctx);
-    coa_http_server_route(ctx->http, "GET", "/v1/cluster", h_cluster, ctx);
-    coa_http_server_route(ctx->http, "POST", "/v1/cluster/join", h_cluster_join, ctx);
-    coa_http_server_route(ctx->http, "POST", "/v1/cluster/heartbeat", h_cluster_heartbeat, ctx);
-    coa_http_server_route(ctx->http, "DELETE", "/v1/cluster/nodes/", h_cluster_leave, ctx);
-    coa_http_server_route(ctx->http, "GET", "/v1/im/sessions", h_im_sessions, ctx);
-    coa_http_server_route(ctx->http, "POST", "/v1/im/sessions", h_im_session_create, ctx);
-    coa_http_server_route(ctx->http, "GET", "/v1/im/search", h_im_search, ctx);
-    coa_http_server_route(ctx->http, "GET", "/v1/im/channels", h_im_channels, ctx);
-    coa_http_server_route(ctx->http, "POST", "/v1/im/channels", h_im_channel_add, ctx);
-    coa_http_server_route(ctx->http, "DELETE", "/v1/im/channels/", h_im_channel_remove, ctx);
-    coa_http_server_route(ctx->http, "POST", "/v1/im/channels/", h_im_channel_send, ctx);
-    coa_http_server_route(ctx->http, "GET", "/v1/im/sessions/", h_im_session_route, ctx);
-    coa_http_server_route(ctx->http, "POST", "/v1/im/sessions/", h_im_session_route, ctx);
-    coa_http_server_route(ctx->http, "DELETE", "/v1/im/sessions/", h_im_session_route, ctx);
-    coa_http_server_ws_route(ctx->http, "/ws", on_ws_msg, ctx);
-    coa_http_server_route(ctx->http, "GET", "/metrics", h_metrics, ctx);
-    coa_http_server_route(ctx->http, "GET", "/v1/catalog/mcp", h_catalog_mcp, ctx);
-    coa_http_server_route(ctx->http, "GET", "/v1/catalog/models", h_catalog_models, ctx);
-    coa_http_server_route(ctx->http, "GET", "/v1/catalog/skills", h_catalog_skills, ctx);
-    coa_http_server_route(ctx->http, "GET", "/v1/catalog/github-skills", h_catalog_github_skills, ctx);
-    coa_http_server_route(ctx->http, "GET", "/v1/catalog/skillhub", h_catalog_skillhub, ctx);
-    coa_http_server_route(ctx->http, "POST", "/v1/skills/install-skillhub", h_skill_install_skillhub, ctx);
-    coa_http_server_route(ctx->http, "GET", "/", h_index, ctx);
-    coa_http_server_route(ctx->http, "GET", "/favicon.ico", h_favicon, ctx);
+    http_server_route(ctx->http, "POST", "/v1/tasks", h_task_create, ctx);
+    http_server_route(ctx->http, "GET", "/v1/tasks/", h_task_get, ctx);
+    http_server_route(ctx->http, "GET", "/v1/tools", h_tools, ctx);
+    http_server_route(ctx->http, "GET", "/v1/memory", h_memory, ctx);
+    http_server_route(ctx->http, "GET", "/v1/blackboard", h_blackboard, ctx);
+    http_server_route(ctx->http, "POST", "/v1/blackboard", h_blackboard_put, ctx);
+    http_server_route(ctx->http, "GET", "/v1/agents", h_agents, ctx);
+    http_server_route(ctx->http, "POST", "/v1/agents", h_agent_add, ctx);
+    http_server_route(ctx->http, "POST", "/v1/agents/", h_agent_post, ctx);
+    http_server_route(ctx->http, "DELETE", "/v1/agents/", h_agent_delete, ctx);
+    http_server_route(ctx->http, "GET", "/v1/snapshots", h_snapshots, ctx);
+    http_server_route(ctx->http, "POST", "/v1/snapshots/rollback", h_snapshot_rollback, ctx);
+    http_server_route(ctx->http, "GET", "/v1/trace", h_trace, ctx);
+    http_server_route(ctx->http, "GET", "/v1/market/status", h_market_status, ctx);
+    http_server_route(ctx->http, "GET", "/v1/local/status", h_local_status, ctx);
+    http_server_route(ctx->http, "POST", "/v1/local/start", h_local_start, ctx);
+    http_server_route(ctx->http, "GET", "/v1/routes", h_routes, ctx);
+    http_server_route(ctx->http, "POST", "/v1/routes", h_route_add, ctx);
+    http_server_route(ctx->http, "POST", "/v1/routes/policy", h_route_policy, ctx);
+    http_server_route(ctx->http, "DELETE", "/v1/routes/", h_route_delete, ctx);
+    http_server_route(ctx->http, "GET", "/v1/config/llm", h_config_llm_get, ctx);
+    http_server_route(ctx->http, "POST", "/v1/config/llm", h_config_llm, ctx);
+    http_server_route(ctx->http, "POST", "/v1/config/llm/test", h_config_llm_test, ctx);
+    http_server_route(ctx->http, "GET", "/v1/config/snapshot", h_config_snapshot_get, ctx);
+    http_server_route(ctx->http, "POST", "/v1/config/snapshot", h_config_snapshot, ctx);
+    http_server_route(ctx->http, "POST", "/v1/chat", h_chat, ctx);
+    http_server_route(ctx->http, "GET", "/v1/chat/history", h_chat_history, ctx);
+    http_server_route(ctx->http, "GET", "/v1/chat/sessions", h_chat_sessions, ctx);
+    http_server_route(ctx->http, "DELETE", "/v1/chat/sessions/", h_chat_sessions, ctx);
+    http_server_route(ctx->http, "GET", "/v1/policy/rules", h_policy_rules, ctx);
+    http_server_route(ctx->http, "POST", "/v1/policy/rules", h_policy_add, ctx);
+    http_server_route(ctx->http, "DELETE", "/v1/policy/rules/", h_policy_delete, ctx);
+    http_server_route(ctx->http, "POST", "/v1/orchestrate", h_orchestrate, ctx);
+    http_server_route(ctx->http, "POST", "/v1/flows", h_flow_run, ctx);
+    http_server_route(ctx->http, "POST", "/v1/flows/decompose", h_flow_decompose, ctx);
+    http_server_route(ctx->http, "GET", "/v1/hooks", h_hooks, ctx);
+    http_server_route(ctx->http, "POST", "/v1/hooks", h_hook_add, ctx);
+    http_server_route(ctx->http, "DELETE", "/v1/hooks/", h_hook_delete, ctx);
+    http_server_route(ctx->http, "POST", "/v1/upload", h_upload, ctx);
+    http_server_route(ctx->http, "GET", "/v1/uploads", h_uploads, ctx);
+    http_server_route(ctx->http, "DELETE", "/v1/uploads/", h_upload_delete, ctx);
+    http_server_route(ctx->http, "GET", "/v1/usage", h_usage, ctx);
+    http_server_route(ctx->http, "GET", "/v1/state", h_state_all, ctx);
+    http_server_route(ctx->http, "GET", "/v1/state/", h_state_get, ctx);
+    http_server_route(ctx->http, "PUT", "/v1/state/", h_state_put, ctx);
+    http_server_route(ctx->http, "DELETE", "/v1/state/", h_state_del, ctx);
+    http_server_route(ctx->http, "POST", "/v1/state/snapshot", h_state_snapshot, ctx);
+    http_server_route(ctx->http, "POST", "/v1/state/restore", h_state_restore, ctx);
+    http_server_route(ctx->http, "GET", "/v1/memory/service", h_memory_service, ctx);
+    http_server_route(ctx->http, "GET", "/v1/plugins", h_plugins, ctx);
+    http_server_route(ctx->http, "POST", "/v1/plugins/generate", h_plugin_generate, ctx);
+    http_server_route(ctx->http, "POST", "/v1/plugins/native/load", h_plugin_native_load, ctx);
+    http_server_route(ctx->http, "GET", "/v1/plugins/market", h_plugins_market, ctx);
+    http_server_route(ctx->http, "POST", "/v1/plugins/publish", h_plugins_publish, ctx);
+    http_server_route(ctx->http, "DELETE", "/v1/plugins/market/", h_plugin_market_delete, ctx);
+    http_server_route(ctx->http, "GET", "/v1/skills", h_skills, ctx);
+    http_server_route(ctx->http, "POST", "/v1/skills/run", h_skill_run, ctx);
+    http_server_route(ctx->http, "POST", "/v1/skills/install", h_skill_install, ctx);
+    http_server_route(ctx->http, "POST", "/v1/skills/install-remote", h_skill_install_remote, ctx);
+    http_server_route(ctx->http, "GET", "/v1/skills/market", h_skills_market, ctx);
+    http_server_route(ctx->http, "POST", "/v1/skills/publish", h_skills_publish, ctx);
+    http_server_route(ctx->http, "POST", "/v1/tools/gh-install", h_gh_install, NULL);
+    http_server_route(ctx->http, "DELETE", "/v1/skills/", h_skill_delete, ctx);
+    http_server_route(ctx->http, "GET", "/v1/mcp", h_mcp, ctx);
+    http_server_route(ctx->http, "POST", "/v1/mcp", h_mcp_add, ctx);
+    http_server_route(ctx->http, "POST", "/v1/mcp/test", h_mcp_test, ctx);
+    http_server_route(ctx->http, "POST", "/v1/mcp/sync", h_mcp_sync, ctx);
+    http_server_route(ctx->http, "DELETE", "/v1/mcp/", h_mcp_delete, ctx);
+    http_server_route(ctx->http, "GET", "/v1/cluster", h_cluster, ctx);
+    http_server_route(ctx->http, "POST", "/v1/cluster/join", h_cluster_join, ctx);
+    http_server_route(ctx->http, "POST", "/v1/cluster/heartbeat", h_cluster_heartbeat, ctx);
+    http_server_route(ctx->http, "DELETE", "/v1/cluster/nodes/", h_cluster_leave, ctx);
+    http_server_route(ctx->http, "GET", "/v1/im/sessions", h_im_sessions, ctx);
+    http_server_route(ctx->http, "POST", "/v1/im/sessions", h_im_session_create, ctx);
+    http_server_route(ctx->http, "GET", "/v1/im/search", h_im_search, ctx);
+    http_server_route(ctx->http, "GET", "/v1/im/channels", h_im_channels, ctx);
+    http_server_route(ctx->http, "POST", "/v1/im/channels", h_im_channel_add, ctx);
+    http_server_route(ctx->http, "DELETE", "/v1/im/channels/", h_im_channel_remove, ctx);
+    http_server_route(ctx->http, "POST", "/v1/im/channels/", h_im_channel_send, ctx);
+    http_server_route(ctx->http, "GET", "/v1/im/sessions/", h_im_session_route, ctx);
+    http_server_route(ctx->http, "POST", "/v1/im/sessions/", h_im_session_route, ctx);
+    http_server_route(ctx->http, "DELETE", "/v1/im/sessions/", h_im_session_route, ctx);
+    http_server_ws_route(ctx->http, "/ws", on_ws_msg, ctx);
+    http_server_route(ctx->http, "GET", "/metrics", h_metrics, ctx);
+    http_server_route(ctx->http, "GET", "/v1/catalog/mcp", h_catalog_mcp, ctx);
+    http_server_route(ctx->http, "GET", "/v1/catalog/models", h_catalog_models, ctx);
+    http_server_route(ctx->http, "GET", "/v1/catalog/skills", h_catalog_skills, ctx);
+    http_server_route(ctx->http, "GET", "/v1/catalog/github-skills", h_catalog_github_skills, ctx);
+    http_server_route(ctx->http, "GET", "/v1/catalog/skillhub", h_catalog_skillhub, ctx);
+    http_server_route(ctx->http, "POST", "/v1/skills/install-skillhub", h_skill_install_skillhub, ctx);
+    http_server_route(ctx->http, "GET", "/", h_index, ctx);
+    http_server_route(ctx->http, "GET", "/favicon.ico", h_favicon, ctx);
     return 0;
 }

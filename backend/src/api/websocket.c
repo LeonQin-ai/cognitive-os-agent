@@ -105,7 +105,7 @@ static void sha1_final(sha1_ctx *s, unsigned char out[20]) {
     }
 }
 
-void coa_sha1(const unsigned char *data, size_t len, unsigned char out[20]) {
+void sha1(const unsigned char *data, size_t len, unsigned char out[20]) {
     sha1_ctx s;
     sha1_init(&s);
     sha1_update(&s, data, len);
@@ -116,7 +116,7 @@ void coa_sha1(const unsigned char *data, size_t len, unsigned char out[20]) {
 
 static const char b64_tab[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
-char *coa_base64_encode(const unsigned char *data, size_t len) {
+char *base64_encode(const unsigned char *data, size_t len) {
     size_t olen = ((len + 2) / 3) * 4;
     char *out = (char *)malloc(olen + 1);
     if (!out)
@@ -162,7 +162,7 @@ static int b64_val(char c) {
     return -1;
 }
 
-int coa_base64_decode(const char *in, unsigned char *out, size_t out_cap, size_t *out_len) {
+int base64_decode(const char *in, unsigned char *out, size_t out_cap, size_t *out_len) {
     size_t ilen = strlen(in);
     size_t olen = 0;
     uint32_t acc = 0;
@@ -196,17 +196,17 @@ int coa_base64_decode(const char *in, unsigned char *out, size_t out_cap, size_t
 
 static const char WS_GUID[] = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
-void coa_ws_accept_key(const char *client_key, char out[29]) {
+void ws_accept_key(const char *client_key, char out[29]) {
     char buf[256];
     unsigned char sha[20];
     snprintf(buf, sizeof(buf), "%s%s", client_key ? client_key : "", WS_GUID);
-    coa_sha1((const unsigned char *)buf, strlen(buf), sha);
-    char *b64 = coa_base64_encode(sha, 20);
+    sha1((const unsigned char *)buf, strlen(buf), sha);
+    char *b64 = base64_encode(sha, 20);
     snprintf(out, 29, "%s", b64 ? b64 : "");
     free(b64);
 }
 
-char *coa_ws_build_frame(int opcode, const unsigned char *payload, size_t len, int mask, size_t *out_len) {
+char *ws_build_frame(int opcode, const unsigned char *payload, size_t len, int mask, size_t *out_len) {
     size_t header = 2;
     if (len >= 126)
         header += 2;
@@ -240,7 +240,7 @@ char *coa_ws_build_frame(int opcode, const unsigned char *payload, size_t len, i
 
     if (mask) {
         unsigned char key[4];
-        uint64_t seed = (uint64_t)coa_time_now_us();
+        uint64_t seed = (uint64_t)time_now_us();
         int i;
         for (i = 0; i < 4; i++) {
             seed ^= seed << 13;
@@ -261,7 +261,7 @@ char *coa_ws_build_frame(int opcode, const unsigned char *payload, size_t len, i
     return (char *)buf;
 }
 
-int coa_ws_parse_frame(const unsigned char *buf, size_t len, unsigned char *payload, size_t *payload_len, int *opcode,
+int ws_parse_frame(const unsigned char *buf, size_t len, unsigned char *payload, size_t *payload_len, int *opcode,
                        int *fin) {
     if (len < 2)
         return -1;

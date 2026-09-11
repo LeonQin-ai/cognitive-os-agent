@@ -16,53 +16,53 @@
 typedef struct route {
     char method[16];
     char prefix[256];
-    coa_http_handler fn;
+    http_handler fn;
     void *ud;
 } route;
 
-struct coa_http_server {
+struct http_server {
     uint16_t port;
-    coa_listener *listener;
+    listener *listener;
     route *routes;
     size_t n_routes, cap_routes;
-    coa_ws_server *ws; /* WebSocket hub (created on first ws route) */
+    ws_server *ws; /* WebSocket hub (created on first ws route) */
     char ws_path[256];
-    coa_ws_handler ws_on_msg;
+    ws_handler ws_on_msg;
     void *ws_ud;
     volatile int stop_flag;
-    coa_mutex mtx;
+    mutex_t mtx;
 };
 
-coa_http_server *coa_http_server_new_bind(const char *host, uint16_t port) {
-    coa_http_server *s = calloc(1, sizeof(coa_http_server));
+http_server *http_server_new_bind(const char *host, uint16_t port) {
+    http_server *s = calloc(1, sizeof(http_server));
     if (!s)
         return NULL;
     s->port = port;
-    s->listener = coa_listen_addr(host, port);
+    s->listener = listen_addr(host, port);
     if (!s->listener) {
-        coa_log_error("http server: failed to listen on %s:%u: %s", (host && *host) ? host : "*", (unsigned)port,
-                      coa_sock_error());
+        log_error("http server: failed to listen on %s:%u: %s", (host && *host) ? host : "*", (unsigned)port,
+                      sock_error());
         free(s);
         return NULL;
     }
-    coa_mutex_init(&s->mtx);
-    coa_log_info("http server listening on %s:%u", (host && *host) ? host : "*", (unsigned)port);
+    mutex_init(&s->mtx);
+    log_info("http server listening on %s:%u", (host && *host) ? host : "*", (unsigned)port);
     return s;
 }
 
-void coa_http_server_free(coa_http_server *s) {
+void http_server_free(http_server *s) {
     if (!s)
         return;
     if (s->listener)
-        coa_listener_close(s->listener);
+        listener_close(s->listener);
     if (s->ws)
-        coa_ws_server_free(s->ws);
+        ws_server_free(s->ws);
     free(s->routes);
-    coa_mutex_destroy(&s->mtx);
+    mutex_destroy(&s->mtx);
     free(s);
 }
 
-void coa_http_server_route(coa_http_server *s, const char *method, const char *path_prefix, coa_http_handler fn,
+void http_server_route(http_server *s, const char *method, const char *path_prefix, http_handler fn,
                            void *ud) {
     if (!s || !fn)
         return;
@@ -81,29 +81,29 @@ void coa_http_server_route(coa_http_server *s, const char *method, const char *p
     r->ud = ud;
 }
 
-void coa_http_server_ws_route(coa_http_server *s, const char *path, coa_ws_handler on_msg, void *ud) {
+void http_server_ws_route(http_server *s, const char *path, ws_handler on_msg, void *ud) {
     if (!s || !path)
         return;
     snprintf(s->ws_path, sizeof(s->ws_path), "%s", path);
     s->ws_on_msg = on_msg;
     s->ws_ud = ud;
     if (!s->ws)
-        s->ws = coa_ws_server_new();
+        s->ws = ws_server_new();
     if (s->ws)
-        coa_ws_server_on_message(s->ws, on_msg, ud);
+        ws_server_on_message(s->ws, on_msg, ud);
 }
 
-void coa_http_server_ws_broadcast(coa_http_server *s, const char *json_text) {
+void http_server_ws_broadcast(http_server *s, const char *json_text) {
     if (s && s->ws)
-        coa_ws_server_broadcast(s->ws, json_text);
+        ws_server_broadcast(s->ws, json_text);
 }
 
-void coa_http_server_stop(coa_http_server *s) {
+void http_server_stop(http_server *s) {
     if (!s)
         return;
-    coa_mutex_lock(&s->mtx);
+    mutex_lock(&s->mtx);
     s->stop_flag = 1;
-    coa_mutex_unlock(&s->mtx);
+    mutex_unlock(&s->mtx);
 }
 
 static int startswith(const char *s, const char *p) {
@@ -144,7 +144,7 @@ static const char *status_reason(int code) {
 }
 
 /* Read request head (request line + headers) and body. Returns 0 ok, -1 error. */
-static int read_request(coa_socket *sock, char *buf, size_t cap, size_t *head_len, size_t *body_len) {
+static int read_request(sock *sock, char *buf, size_t cap, size_t *head_len, size_t *body_len) {
     size_t got = 0;
     size_t hlen = 0;
     for (;;) {
@@ -160,7 +160,7 @@ static int read_request(coa_socket *sock, char *buf, size_t cap, size_t *head_le
             break;
         if (got >= cap - 1 || got >= MAX_HEADER_BYTES)
             return -1;
-        int n = coa_sock_recv(sock, buf + got, cap - 1 - got);
+        int n = sock_recv(sock, buf + got, cap - 1 - got);
         if (n <= 0)
             return -1;
         got += (size_t)n;
@@ -183,7 +183,7 @@ static int read_request(coa_socket *sock, char *buf, size_t cap, size_t *head_le
     while (got < hlen + clen) {
         if (got >= cap - 1)
             return -1;
-        int n = coa_sock_recv(sock, buf + got, cap - 1 - got);
+        int n = sock_recv(sock, buf + got, cap - 1 - got);
         if (n <= 0)
             return -1;
         got += (size_t)n;
@@ -196,7 +196,7 @@ static int read_request(coa_socket *sock, char *buf, size_t cap, size_t *head_le
 
 /* Handle one accepted connection (buf supplied by the heap-allocating
  * wrapper; MAX_BODY_BYTES is 32MB — far too large for the stack). */
-static int handle_conn_buf(coa_http_server *s, coa_socket *sock, char *buf) {
+static int handle_conn_buf(http_server *s, sock *sock, char *buf) {
     size_t hlen = 0, blen = 0;
     if (read_request(sock, buf, MAX_HEADER_BYTES + MAX_BODY_BYTES, &hlen, &blen) != 0)
         return 0;
@@ -219,7 +219,7 @@ static int handle_conn_buf(coa_http_server *s, coa_socket *sock, char *buf) {
         *qm = '\0';
     }
 
-    coa_http_request req;
+    http_request req;
     memset(&req, 0, sizeof(req));
     snprintf(req.method, sizeof(req.method), "%s", method);
     snprintf(req.path, sizeof(req.path), "%s", path);
@@ -242,7 +242,7 @@ static int handle_conn_buf(coa_http_server *s, coa_socket *sock, char *buf) {
             }
         }
         if (ws_key[0]) {
-            coa_ws_server_accept(s->ws, sock, ws_key);
+            ws_server_accept(s->ws, sock, ws_key);
             return 1; /* socket owned by the ws client thread */
         }
     }
@@ -263,11 +263,11 @@ static int handle_conn_buf(coa_http_server *s, coa_socket *sock, char *buf) {
     req.body = blen ? buf + hlen : NULL;
     req.body_len = blen;
 
-    coa_http_response resp;
+    http_response resp;
     memset(&resp, 0, sizeof(resp));
     resp.status = 0; /* unknown: filled by the dispatcher unless the handler set it */
     snprintf(resp.content_type, sizeof(resp.content_type), "application/json");
-    coa_strbuf_init(&resp.body);
+    strbuf_init(&resp.body);
 
     /* dispatch: among routes whose path prefix matches, prefer one whose
      * method matches the request, then the longest prefix (so "/v1/tasks/123"
@@ -305,10 +305,10 @@ static int handle_conn_buf(coa_http_server *s, coa_socket *sock, char *buf) {
     }
     if (!best) {
         status = 404;
-        coa_http_resp_json(&resp, "{\"error\":\"not found\"}");
+        http_resp_json(&resp, "{\"error\":\"not found\"}");
     } else if (best->method[0] != '*' && strcmp(best->method, req.method) != 0) {
         status = 405;
-        coa_http_resp_json(&resp, "{\"error\":\"method not allowed\"}");
+        http_resp_json(&resp, "{\"error\":\"method not allowed\"}");
     } else if (best->fn(&req, &resp, best->ud) != 0) {
         status = 500;
     }
@@ -324,17 +324,17 @@ static int handle_conn_buf(coa_http_server *s, coa_socket *sock, char *buf) {
                      "Content-Length: %zu\r\nConnection: close\r\n\r\n",
                      resp.status, status_reason(resp.status), resp.content_type, resp.body.len);
     if (n > 0)
-        coa_sock_send(sock, head, (size_t)n);
+        sock_send(sock, head, (size_t)n);
     if (resp.body.len > 0)
-        coa_sock_send(sock, resp.body.buf, resp.body.len);
-    coa_strbuf_free(&resp.body);
+        sock_send(sock, resp.body.buf, resp.body.len);
+    strbuf_free(&resp.body);
     return 0;
 }
 
 /* Heap-allocating wrapper: the request buffer is up to MAX_BODY_BYTES (32MB),
  * which must not live on the stack. Returns 1 if the socket was handed off to
  * a WebSocket client thread (caller must not close it), 0 otherwise. */
-static int handle_conn(coa_http_server *s, coa_socket *sock) {
+static int handle_conn(http_server *s, sock *sock) {
     char *buf = malloc(MAX_HEADER_BYTES + MAX_BODY_BYTES);
     if (!buf)
         return 0;
@@ -343,29 +343,29 @@ static int handle_conn(coa_http_server *s, coa_socket *sock) {
     return rc;
 }
 
-int coa_http_server_serve(coa_http_server *s) {
+int http_server_serve(http_server *s) {
     if (!s || !s->listener)
         return -1;
     while (!s->stop_flag) {
-        coa_socket *c = coa_accept(s->listener, 200);
+        sock *c = sock_accept(s->listener, 200);
         if (!c) {
             if (s->stop_flag)
                 break;
             continue;
         }
         if (handle_conn(s, c) == 0)
-            coa_sock_close(c);
+            sock_close(c);
     }
     return 0;
 }
 
-void coa_http_resp_append(coa_http_response *resp, const char *s) {
+void http_resp_append(http_response *resp, const char *s) {
     if (!resp || !s)
         return;
-    coa_strbuf_append(&resp->body, s);
+    strbuf_append(&resp->body, s);
 }
 
-void coa_http_resp_appendf(coa_http_response *resp, const char *fmt, ...) {
+void http_resp_appendf(http_response *resp, const char *fmt, ...) {
     if (!resp)
         return;
     char tmp[4096];
@@ -373,12 +373,12 @@ void coa_http_resp_appendf(coa_http_response *resp, const char *fmt, ...) {
     va_start(ap, fmt);
     vsnprintf(tmp, sizeof(tmp), fmt, ap);
     va_end(ap);
-    coa_strbuf_append(&resp->body, tmp);
+    strbuf_append(&resp->body, tmp);
 }
 
-void coa_http_resp_json(coa_http_response *resp, const char *json) {
+void http_resp_json(http_response *resp, const char *json) {
     if (!resp || !json)
         return;
     snprintf(resp->content_type, sizeof(resp->content_type), "application/json");
-    coa_strbuf_append(&resp->body, json);
+    strbuf_append(&resp->body, json);
 }

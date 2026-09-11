@@ -1,5 +1,5 @@
 /* wasm_runner.h — wasm3-backed Wasm runner for the plugin sandbox.
- * Exposes the coa_sandbox_wasm_fn entry point implemented on top of wasm3. */
+ * Exposes the sandbox_wasm_fn entry point implemented on top of wasm3. */
 #pragma once
 #include <stddef.h>
 
@@ -9,11 +9,11 @@ extern "C" {
 
 /* Run `fn_name` in `wasm` with JSON args (array [..] or object {k:v} of
  * numbers). Returns a malloc'd JSON {"ok":bool,"result":N} or an error
- * object. Matches coa_sandbox_wasm_fn. */
-char *coa_wasm3_run(const void *wasm, size_t wasm_len, const char *fn_name, const char *args_json);
+ * object. Matches sandbox_wasm_fn. */
+char *wasm3_run(const void *wasm, size_t wasm_len, const char *fn_name, const char *args_json);
 
 /* 1 if the wasm3 interpreter was linked into this build. */
-int coa_wasm3_available(void);
+int wasm3_available(void);
 
 #ifdef __cplusplus
 }

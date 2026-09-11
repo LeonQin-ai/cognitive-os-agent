@@ -6,20 +6,20 @@
 extern "C" {
 #endif
 
-typedef struct coa_kvstore coa_kvstore;
+typedef struct kvstore kvstore;
 
-coa_kvstore *coa_kvstore_new(void);
-void coa_kvstore_free(coa_kvstore *k);
+kvstore *kvstore_new(void);
+void kvstore_free(kvstore *k);
 
 /* Set a key to val (copied). val == NULL removes the key. */
-void coa_kvstore_set(coa_kvstore *k, const char *key, const char *val);
+void kvstore_set(kvstore *k, const char *key, const char *val);
 /* Borrowed pointer, or NULL if absent. Do not free. */
-const char *coa_kvstore_get(coa_kvstore *k, const char *key);
-int coa_kvstore_remove(coa_kvstore *k, const char *key);
-int coa_kvstore_count(coa_kvstore *k);
+const char *kvstore_get(kvstore *k, const char *key);
+int kvstore_remove(kvstore *k, const char *key);
+int kvstore_count(kvstore *k);
 
 /* All entries as a JSON object (malloc'd; caller frees). */
-char *coa_kvstore_snapshot_json(coa_kvstore *k);
+char *kvstore_snapshot_json(kvstore *k);
 
 #ifdef __cplusplus
 }

@@ -17,7 +17,7 @@ lines = []
 lines.append("/* web_ui.h - GENERATED from apps/web/index.html by tools/gen_web_ui.py.")
 lines.append(" * Do not edit by hand; re-run the generator after changing the HTML. */")
 lines.append("#pragma once")
-lines.append("static const char coa_web_index_html[] =")
+lines.append("static const char web_index_html[] =")
 for line in text.split("\n"):
     esc = line.replace("\\", "\\\\").replace('"', '\\"')
     lines.append('    "%s\\n"' % esc)

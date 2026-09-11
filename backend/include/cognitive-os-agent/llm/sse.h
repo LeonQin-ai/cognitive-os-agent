@@ -7,17 +7,17 @@
 extern "C" {
 #endif
 
-typedef struct coa_sse coa_sse;
+typedef struct sse sse;
 
 /* Send the request and begin reading the SSE stream. NULL on connection/head failure. */
-coa_sse *coa_sse_start(const char *base_url, const char *path, const char *body, const char *content_type,
-                       coa_strmap *extra_headers, int timeout_ms);
-int coa_sse_status(const coa_sse *s);
+sse *sse_start(const char *base_url, const char *path, const char *body, const char *content_type,
+                       strmap *extra_headers, int timeout_ms);
+int sse_status(const sse *s);
 
 /* Read the next "data:" payload into out (NUL-terminated).
  * Returns 1 = data, 0 = stream end, -1 = error. */
-int coa_sse_next(coa_sse *s, char *out, size_t cap);
-void coa_sse_close(coa_sse *s);
+int sse_next(sse *s, char *out, size_t cap);
+void sse_close(sse *s);
 
 #ifdef __cplusplus
 }

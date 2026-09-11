@@ -6,8 +6,8 @@
  *   agentbench  AgentBench OS-CLI-style: OS command execution with file side effects
  *
  * Modes:
- *   --real  (default)  drive a live LLM via COA_LLM_PROVIDER / COA_LLM_BASE_URL /
- *                      COA_LLM_MODEL / COA_LLM_API_KEY
+ *   --real  (default)  drive a live LLM via LLM_PROVIDER / LLM_BASE_URL /
+ *                      LLM_MODEL / LLM_API_KEY
  *   --mock  offline deterministic planner (sanity check, no network)
  *
  * NOTE on the other mainstream benchmarks (honest scope boundary):
@@ -123,24 +123,24 @@ int main(int argc, char **argv) {
         else { fprintf(stderr, "usage: %s [--mock|--real]\n", argv[0]); return 2; }
     }
 
-    coa_config cfg;
+    config cfg;
     memset(&cfg, 0, sizeof(cfg));
     cfg.state_root = "state-bench";
     cfg.workspace  = "state-bench/ws";
     cfg.http_port  = 0;
     if (real) {
-        cfg.provider = getenv("COA_LLM_PROVIDER");
-        cfg.base_url = getenv("COA_LLM_BASE_URL");
-        cfg.api_key  = getenv("COA_LLM_API_KEY");
-        cfg.model    = getenv("COA_LLM_MODEL");
+        cfg.provider = getenv("LLM_PROVIDER");
+        cfg.base_url = getenv("LLM_BASE_URL");
+        cfg.api_key  = getenv("LLM_API_KEY");
+        cfg.model    = getenv("LLM_MODEL");
         if (!cfg.provider || !*cfg.provider) cfg.provider = "openai";
     } else {
         cfg.provider = "mock";
     }
 
-    coa_ctx ctx;
-    if (coa_init(&ctx, &cfg) != 0) {
-        fprintf(stderr, "bench_real: coa_init failed (provider=%s)\n",
+    runtime_ctx ctx;
+    if (init(&ctx, &cfg) != 0) {
+        fprintf(stderr, "bench_real: init failed (provider=%s)\n",
                 cfg.provider ? cfg.provider : "?");
         return 1;
     }
@@ -148,19 +148,19 @@ int main(int argc, char **argv) {
            real ? "REAL" : "MOCK", ctx.provider ? ctx.provider : "?");
 
     /* deterministic start state */
-    coa_fs_mkdirs("state-bench/ws");
-    coa_fs_mkdirs("state-bench/ws/test");
-    coa_fs_mkdirs("state-bench/ws/out");
-    coa_fs_write_file("state-bench/ws/test/note.txt", "hello\n", 6);
-    coa_fs_write_file("state-bench/ws/config.json", "{\"name\":\"bench\"}\n", 17);
-    coa_fs_remove("state-bench/ws/out/result.txt");
-    coa_fs_remove("state-bench/ws/out/echo.txt");
-    coa_fs_remove("state-bench/ws/out/note_copy.txt");
-    coa_fs_remove("state-bench/ws/out/listing.txt");
+    fs_mkdirs("state-bench/ws");
+    fs_mkdirs("state-bench/ws/test");
+    fs_mkdirs("state-bench/ws/out");
+    fs_write_file("state-bench/ws/test/note.txt", "hello\n", 6);
+    fs_write_file("state-bench/ws/config.json", "{\"name\":\"bench\"}\n", 17);
+    fs_remove("state-bench/ws/out/result.txt");
+    fs_remove("state-bench/ws/out/echo.txt");
+    fs_remove("state-bench/ws/out/note_copy.txt");
+    fs_remove("state-bench/ws/out/listing.txt");
 
     int fam_sel[N_TASKS], fam_ok[N_TASKS], fam_side[N_TASKS];
     int64_t lat[N_TASKS];
-    int64_t t0 = coa_time_now_ms();
+    int64_t t0 = time_now_ms();
 
     for (int i = 0; i < N_TASKS; i++) {
         const task_t *t = (i < N_TOOLBENCH) ? &TOOLBENCH[i] : &AGENTBENCH[i - N_TOOLBENCH];
@@ -168,7 +168,7 @@ int main(int argc, char **argv) {
         /* 1) planner probe: tool selection + parameter construction */
         int sel = 1;
         if (t->expect_tool) {
-            char *plan = coa_llm_chat_simple(ctx.llm, SYS_PROMPT, t->prompt);
+            char *plan = llm_chat_simple(ctx.llm, SYS_PROMPT, t->prompt);
             sel = plan ? plan_has_tool(plan, t->expect_tool) : 0;
             if (sel && t->arg_key)
                 sel = plan_arg_contains(plan, t->expect_tool, t->arg_key, t->arg_val);
@@ -177,17 +177,17 @@ int main(int argc, char **argv) {
 
         /* 2) end-to-end full pipeline (latency + success) */
         char *answer = NULL;
-        int64_t s0 = coa_time_now_ms();
-        int rc = coa_run(&ctx, t->prompt, &answer);
-        lat[i] = coa_time_now_ms() - s0;
+        int64_t s0 = time_now_ms();
+        int rc = run(&ctx, t->prompt, &answer);
+        lat[i] = time_now_ms() - s0;
         free(answer);
 
         /* 3) side effect check */
         int side = 1;
         if (t->side_path) {
             char full[1024];
-            coa_path_resolve(full, sizeof(full), "state-bench/ws", t->side_path);
-            char *data = coa_fs_read_file(full);
+            path_resolve(full, sizeof(full), "state-bench/ws", t->side_path);
+            char *data = fs_read_file(full);
             side = data != NULL && (!t->side_contains || strstr(data, t->side_contains) != NULL);
             free(data);
         }
@@ -202,8 +202,8 @@ int main(int argc, char **argv) {
                (long long)lat[i]);
     }
 
-    int64_t total = coa_time_now_ms() - t0;
-    coa_shutdown(&ctx);
+    int64_t total = time_now_ms() - t0;
+    runtime_shutdown(&ctx);
 
     /* aggregate per family */
     int tb_sel = 0, tb_ok = 0;

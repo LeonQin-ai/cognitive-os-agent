@@ -5,32 +5,32 @@
 #include <string.h>
 #include <stdio.h>
 
-struct coa_sse {
-    coa_http_stream *h;
+struct sse {
+    http_stream *h;
 };
 
-coa_sse *coa_sse_start(const char *base_url, const char *path, const char *body, const char *content_type,
-                       coa_strmap *extra_headers, int timeout_ms) {
-    coa_http_stream *h = coa_http_stream_open(base_url, "POST", path, body, content_type, extra_headers, timeout_ms);
+sse *sse_start(const char *base_url, const char *path, const char *body, const char *content_type,
+                       strmap *extra_headers, int timeout_ms) {
+    http_stream *h = http_stream_open(base_url, "POST", path, body, content_type, extra_headers, timeout_ms);
     if (!h)
         return NULL;
-    coa_sse *s = malloc(sizeof(coa_sse));
+    sse *s = malloc(sizeof(sse));
     if (!s) {
-        coa_http_stream_close(h);
+        http_stream_close(h);
         return NULL;
     }
     s->h = h;
     return s;
 }
 
-int coa_sse_status(const coa_sse *s) {
-    return s ? coa_http_stream_status(s->h) : 0;
+int sse_status(const sse *s) {
+    return s ? http_stream_status(s->h) : 0;
 }
 
-int coa_sse_next(coa_sse *s, char *out, size_t cap) {
+int sse_next(sse *s, char *out, size_t cap) {
     char line[8192];
     for (;;) {
-        int n = coa_http_stream_read_line(s->h, line, sizeof(line));
+        int n = http_stream_read_line(s->h, line, sizeof(line));
         if (n < 0)
             return 0; /* EOF / connection end */
         if (strncmp(line, "data:", 5) == 0) {
@@ -46,9 +46,9 @@ int coa_sse_next(coa_sse *s, char *out, size_t cap) {
     }
 }
 
-void coa_sse_close(coa_sse *s) {
+void sse_close(sse *s) {
     if (!s)
         return;
-    coa_http_stream_close(s->h);
+    http_stream_close(s->h);
     free(s);
 }

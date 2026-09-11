@@ -11,9 +11,9 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
-struct coa_coro {
+struct coro {
     LPVOID fiber;
-    coa_coro_fn fn;
+    coro_fn fn;
     void *arg;
     int done;
 };
@@ -24,20 +24,20 @@ struct coa_coro {
 static _Thread_local LPVOID tls_main_fiber = NULL;
 
 static void WINAPI fiber_proc(LPVOID p) {
-    coa_coro *c = (coa_coro *)p;
+    coro *c = (coro *)p;
     c->fn(c->arg);
     c->done = 1;
     /* A fiber must not return; switch back to the main fiber explicitly. */
     SwitchToFiber(tls_main_fiber);
 }
 
-coa_coro *coa_coro_new(coa_coro_fn fn, void *arg, size_t stack_size) {
-    coa_coro *c = (coa_coro *)calloc(1, sizeof(*c));
+coro *coro_new(coro_fn fn, void *arg, size_t stack_size) {
+    coro *c = (coro *)calloc(1, sizeof(*c));
     if (!c)
         return NULL;
     c->fn = fn;
     c->arg = arg;
-    c->fiber = CreateFiber(stack_size ? stack_size : COA_CORO_STACK_DEFAULT, fiber_proc, c);
+    c->fiber = CreateFiber(stack_size ? stack_size : CORO_STACK_DEFAULT, fiber_proc, c);
     if (!c->fiber) {
         free(c);
         return NULL;
@@ -45,7 +45,7 @@ coa_coro *coa_coro_new(coa_coro_fn fn, void *arg, size_t stack_size) {
     return c;
 }
 
-void coa_coro_free(coa_coro *c) {
+void coro_free(coro *c) {
     if (!c)
         return;
     if (c->fiber)
@@ -53,7 +53,7 @@ void coa_coro_free(coa_coro *c) {
     free(c);
 }
 
-void coa_coro_resume(coa_coro *c) {
+void coro_resume(coro *c) {
     if (!c || c->done)
         return;
     if (!tls_main_fiber) {
@@ -64,12 +64,12 @@ void coa_coro_resume(coa_coro *c) {
     SwitchToFiber(c->fiber);
 }
 
-void coa_coro_yield(void) {
+void coro_yield(void) {
     if (tls_main_fiber)
         SwitchToFiber(tls_main_fiber);
 }
 
-int coa_coro_done(const coa_coro *c) {
+int coro_done(const coro *c) {
     return c ? c->done : 1;
 }
 
@@ -84,34 +84,34 @@ int coa_coro_done(const coa_coro *c) {
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wclobbered"
 
-struct coa_coro {
+struct coro {
     ucontext_t ctx;
     char *stack;
-    coa_coro_fn fn;
+    coro_fn fn;
     void *arg;
     int done;
     ucontext_t *resume_ctx; /* where to swap back to on yield/finish */
 };
 
 static _Thread_local ucontext_t tls_main_ctx;
-static _Thread_local coa_coro *tls_current = NULL;
+static _Thread_local coro *tls_current = NULL;
 
 /* Entry trampoline. Reads the coroutine pointer from TLS (set by resume just
  * before swapcontext) — avoids passing a pointer through makecontext's int
  * varargs, which truncates on 64-bit. */
 static void coro_entry(void) {
-    coa_coro *c = tls_current;
+    coro *c = tls_current;
     c->fn(c->arg);
     c->done = 1;
     tls_current = NULL;
     swapcontext(&c->ctx, c->resume_ctx); /* never returns */
 }
 
-coa_coro *coa_coro_new(coa_coro_fn fn, void *arg, size_t stack_size) {
-    coa_coro *c = (coa_coro *)calloc(1, sizeof(*c));
+coro *coro_new(coro_fn fn, void *arg, size_t stack_size) {
+    coro *c = (coro *)calloc(1, sizeof(*c));
     if (!c)
         return NULL;
-    size_t sz = stack_size ? stack_size : COA_CORO_STACK_DEFAULT;
+    size_t sz = stack_size ? stack_size : CORO_STACK_DEFAULT;
     c->stack = (char *)malloc(sz);
     if (!c->stack) {
         free(c);
@@ -131,14 +131,14 @@ coa_coro *coa_coro_new(coa_coro_fn fn, void *arg, size_t stack_size) {
     return c;
 }
 
-void coa_coro_free(coa_coro *c) {
+void coro_free(coro *c) {
     if (!c)
         return;
     free(c->stack);
     free(c);
 }
 
-void coa_coro_resume(coa_coro *c) {
+void coro_resume(coro *c) {
     if (!c || c->done)
         return;
     c->resume_ctx = &tls_main_ctx;
@@ -147,14 +147,14 @@ void coa_coro_resume(coa_coro *c) {
     /* returns here when the coroutine yields or finishes */
 }
 
-void coa_coro_yield(void) {
-    coa_coro *cur = tls_current;
+void coro_yield(void) {
+    coro *cur = tls_current;
     if (!cur || cur->done)
         return;
     swapcontext(&cur->ctx, cur->resume_ctx);
 }
 
-int coa_coro_done(const coa_coro *c) {
+int coro_done(const coro *c) {
     return c ? c->done : 1;
 }
 

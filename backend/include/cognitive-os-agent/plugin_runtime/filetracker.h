@@ -14,48 +14,48 @@
 extern "C" {
 #endif
 
-typedef struct coa_filetracker coa_filetracker;
+typedef struct filetracker filetracker;
 
 /* operation bits (OR together) */
-#define COA_FT_READ 0x1
-#define COA_FT_WRITE 0x2 /* created or modified */
-#define COA_FT_DELETE 0x4
-#define COA_FT_EXEC 0x8
+#define FT_READ 0x1
+#define FT_WRITE 0x2 /* created or modified */
+#define FT_DELETE 0x4
+#define FT_EXEC 0x8
 
-coa_filetracker *coa_filetracker_new(void);
-void coa_filetracker_free(coa_filetracker *ft);
+filetracker *filetracker_new(void);
+void filetracker_free(filetracker *ft);
 /* Forget everything recorded so far. */
-void coa_filetracker_clear(coa_filetracker *ft);
+void filetracker_clear(filetracker *ft);
 
 /* Merge ops for `path` (dedup by exact path string; ops OR in).
  * Returns the entry's accumulated op mask, or 0 on bad args. */
-int coa_filetracker_record(coa_filetracker *ft, const char *path, int ops);
+int filetracker_record(filetracker *ft, const char *path, int ops);
 
 /* Distinct tracked paths. */
-int coa_filetracker_count(coa_filetracker *ft);
+int filetracker_count(filetracker *ft);
 
 /* ops bitmask -> "read,write,delete,exec" (static buffer, do not free). */
-const char *coa_filetracker_ops_str(int ops);
+const char *filetracker_ops_str(int ops);
 
 /* JSON array [{"path":"...","ops":"read,write"}] (caller frees). */
-char *coa_filetracker_json(coa_filetracker *ft);
+char *filetracker_json(filetracker *ft);
 
 /* --- workspace scan (before/after diff) --- */
-typedef struct coa_ft_snapshot coa_ft_snapshot;
+typedef struct ft_snapshot ft_snapshot;
 
 /* Capture {path,size} of every regular file under `dir` (recursive, depth- and
  * entry-bounded). `dir` may be NULL/"" for "nothing to scan". NULL on OOM. */
-coa_ft_snapshot *coa_filetracker_dir_snapshot(const char *dir);
-void coa_filetracker_snapshot_free(coa_ft_snapshot *s);
+ft_snapshot *filetracker_dir_snapshot(const char *dir);
+void filetracker_snapshot_free(ft_snapshot *s);
 /* Diff the current state of `dir` against `before`: new/size-changed files
- * record COA_FT_WRITE, vanished files record COA_FT_DELETE. Returns the number
+ * record FT_WRITE, vanished files record FT_DELETE. Returns the number
  * of changes recorded (0 = identical). */
-int coa_filetracker_dir_diff(coa_filetracker *ft, const coa_ft_snapshot *before, const char *dir);
+int filetracker_dir_diff(filetracker *ft, const ft_snapshot *before, const char *dir);
 
 /* Parse `cmd` for path tokens (whitespace/quote separated); tokens that exist
- * (as given, or resolved against `workspace` when relative) record COA_FT_READ.
+ * (as given, or resolved against `workspace` when relative) record FT_READ.
  * Returns reads recorded. */
-int coa_filetracker_cmd_reads(coa_filetracker *ft, const char *cmd, const char *workspace);
+int filetracker_cmd_reads(filetracker *ft, const char *cmd, const char *workspace);
 
 #ifdef __cplusplus
 }

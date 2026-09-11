@@ -8,7 +8,7 @@ extern "C" {
 
 /* Audit `text` (plugin source or spec). Returns a JSON object
  * {findings:[{pattern,severity,message}]} (malloc'd; caller frees). */
-char *coa_security_audit(const char *text);
+char *security_audit(const char *text);
 
 #ifdef __cplusplus
 }

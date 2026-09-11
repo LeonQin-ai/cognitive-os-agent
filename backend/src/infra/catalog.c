@@ -163,8 +163,8 @@ static const mcp_entry MCPS[] = {
 };
 #define N_MCPS (int)(sizeof(MCPS) / sizeof(MCPS[0]))
 
-char *coa_catalog_models_json(void) {
-    char *out = coa_strdup("[");
+char *catalog_models_json(void) {
+    char *out = xstrdup("[");
     for (int i = 0; i < N_MODELS; i++) {
         char buf[1600];
         const model_entry *m = &MODELS[i];
@@ -198,8 +198,8 @@ char *coa_catalog_models_json(void) {
     return out;
 }
 
-char *coa_catalog_mcp_json(void) {
-    char *out = coa_strdup("[");
+char *catalog_mcp_json(void) {
+    char *out = xstrdup("[");
     for (int i = 0; i < N_MCPS; i++) {
         char buf[1400];
         const mcp_entry *m = &MCPS[i];
@@ -380,7 +380,7 @@ static const catalog_remote_skill REMOTE_SKILLS[] = {
 };
 #define N_REMOTE (int)(sizeof(REMOTE_SKILLS) / sizeof(REMOTE_SKILLS[0]))
 
-const catalog_remote_skill *coa_catalog_remote_skill_find(const char *repo, const char *id) {
+const catalog_remote_skill *catalog_remote_skill_find(const char *repo, const char *id) {
     for (int i = 0; i < N_REMOTE; i++) {
         const catalog_remote_skill *e = &REMOTE_SKILLS[i];
         if (repo && strcmp(e->repo, repo) != 0)
@@ -392,8 +392,8 @@ const catalog_remote_skill *coa_catalog_remote_skill_find(const char *repo, cons
     return NULL;
 }
 
-char *coa_catalog_remote_skills_json(void) {
-    char *out = coa_strdup("[");
+char *catalog_remote_skills_json(void) {
+    char *out = xstrdup("[");
     for (int i = 0; i < N_REMOTE; i++) {
         char buf[900];
         const catalog_remote_skill *e = &REMOTE_SKILLS[i];
@@ -436,7 +436,7 @@ static int split_url(const char *url, char **base_out, char **path_out) {
         return -1;
     size_t blen = (size_t)(slash - url);
     *base_out = (char *)malloc(blen + 1);
-    *path_out = coa_strdup(slash);
+    *path_out = xstrdup(slash);
     if (!*base_out || !*path_out) {
         free(*base_out);
         free(*path_out);
@@ -449,7 +449,7 @@ static int split_url(const char *url, char **base_out, char **path_out) {
 
 #define REMOTE_SKILL_MAX 65536
 
-char *coa_catalog_remote_skill_fetch(const catalog_remote_skill *e) {
+char *catalog_remote_skill_fetch(const catalog_remote_skill *e) {
     if (!e || !e->raw_url || !*e->raw_url)
         return NULL;
     /* one shot: try direct raw URL, then the ghproxy mirror */
@@ -460,7 +460,7 @@ char *coa_catalog_remote_skill_fetch(const catalog_remote_skill *e) {
         char *base = NULL, *path = NULL;
         if (split_url(urls[u], &base, &path) != 0)
             continue;
-        coa_http_response *r = coa_http_get(base, path, NULL, 10000);
+        http_response *r = http_get(base, path, NULL, 10000);
         free(base);
         free(path);
         if (r && r->status == 200 && r->body && r->body_len > 0) {
@@ -472,11 +472,11 @@ char *coa_catalog_remote_skill_fetch(const catalog_remote_skill *e) {
                 memcpy(text, r->body, n);
                 text[n] = '\0';
             }
-            coa_http_response_free(r);
+            http_response_free(r);
             return text;
         }
         if (r)
-            coa_http_response_free(r);
+            http_response_free(r);
     }
     return NULL;
 }
@@ -486,22 +486,22 @@ char *coa_catalog_remote_skill_fetch(const catalog_remote_skill *e) {
 #define SKILLHUB_API "https://api.skillhub.cn"
 #define SKILLHUB_LIST_PATH "/api/v1/skillsets?page=1&pageSize=40"
 
-char *coa_catalog_skillhub_list_json(void) {
-    coa_http_response *r = coa_http_get(SKILLHUB_API, SKILLHUB_LIST_PATH, NULL, 10000);
+char *catalog_skillhub_list_json(void) {
+    http_response *r = http_get(SKILLHUB_API, SKILLHUB_LIST_PATH, NULL, 10000);
     if (!r || r->status != 200 || !r->body || r->body_len == 0) {
         if (r)
-            coa_http_response_free(r);
+            http_response_free(r);
         return NULL;
     }
     /* body is not NUL-terminated — copy for cJSON */
     char *body = (char *)malloc(r->body_len + 1);
     if (!body) {
-        coa_http_response_free(r);
+        http_response_free(r);
         return NULL;
     }
     memcpy(body, r->body, r->body_len);
     body[r->body_len] = '\0';
-    coa_http_response_free(r);
+    http_response_free(r);
     cJSON *root = cJSON_Parse(body);
     free(body);
     if (!root)
@@ -511,7 +511,7 @@ char *coa_catalog_skillhub_list_json(void) {
         cJSON_Delete(root);
         return NULL;
     }
-    char *out = coa_strdup("[");
+    char *out = xstrdup("[");
     int i = 0;
     cJSON *item;
     cJSON_ArrayForEach(item, sets) {
@@ -549,7 +549,7 @@ char *coa_catalog_skillhub_list_json(void) {
     return out;
 }
 
-char *coa_catalog_skillhub_fetch_skill(const char *slug) {
+char *catalog_skillhub_fetch_skill(const char *slug) {
     if (!slug)
         return NULL;
     /* slug must be a plain path segment: letters/digits/._- only */
@@ -560,7 +560,7 @@ char *coa_catalog_skillhub_fetch_skill(const char *slug) {
     }
     char path[256];
     snprintf(path, sizeof(path), "/api/v1/skills/%s/file?path=SKILL.md", slug);
-    coa_http_response *r = coa_http_get(SKILLHUB_API, path, NULL, 15000);
+    http_response *r = http_get(SKILLHUB_API, path, NULL, 15000);
     if (r && r->status == 200 && r->body && r->body_len > 0) {
         size_t n = r->body_len;
         if (n > REMOTE_SKILL_MAX)
@@ -570,28 +570,28 @@ char *coa_catalog_skillhub_fetch_skill(const char *slug) {
             memcpy(text, r->body, n);
             text[n] = '\0';
         }
-        coa_http_response_free(r);
+        http_response_free(r);
         return text;
     }
     if (r)
-        coa_http_response_free(r);
+        http_response_free(r);
     /* skill-package entries (skillsets) have no file endpoint — their SKILL.md
      * ships inline as the "content" field of the skillset detail API */
     snprintf(path, sizeof(path), "/api/v1/skillsets/%s", slug);
-    r = coa_http_get(SKILLHUB_API, path, NULL, 15000);
+    r = http_get(SKILLHUB_API, path, NULL, 15000);
     if (!r || r->status != 200 || !r->body || r->body_len == 0) {
         if (r)
-            coa_http_response_free(r);
+            http_response_free(r);
         return NULL;
     }
     char *body = (char *)malloc(r->body_len + 1);
     if (!body) {
-        coa_http_response_free(r);
+        http_response_free(r);
         return NULL;
     }
     memcpy(body, r->body, r->body_len);
     body[r->body_len] = '\0';
-    coa_http_response_free(r);
+    http_response_free(r);
     cJSON *root = cJSON_Parse(body);
     free(body);
     if (!root)
@@ -612,16 +612,16 @@ char *coa_catalog_skillhub_fetch_skill(const char *slug) {
     return text;
 }
 
-int coa_catalog_skill_count(void) {
+int catalog_skill_count(void) {
     return N_SKILLS;
 }
 
-const catalog_skill *coa_catalog_skill_at(int i) {
+const catalog_skill *catalog_skill_at(int i) {
     return (i >= 0 && i < N_SKILLS) ? &SKILLS[i] : NULL;
 }
 
-char *coa_catalog_skills_json(void) {
-    char *out = coa_strdup("[");
+char *catalog_skills_json(void) {
+    char *out = xstrdup("[");
     for (int i = 0; i < N_SKILLS; i++) {
         char buf[1800];
         const catalog_skill *s = &SKILLS[i];

@@ -5,15 +5,15 @@
 #include <string.h>
 #include <ctype.h>
 
-struct coa_attention {
+struct attention {
     int dummy;
 };
 
-coa_attention *coa_attention_new(void) {
-    return (coa_attention *)calloc(1, sizeof(coa_attention));
+attention *attention_new(void) {
+    return (attention *)calloc(1, sizeof(attention));
 }
 
-void coa_attention_free(coa_attention *a) {
+void attention_free(attention *a) {
     free(a);
 }
 
@@ -43,7 +43,7 @@ static int ci_substr(const char *hay, const char *needle) {
 
 /* Iterate query words; for each word present in the candidate text/tags add a
  * weight proportional to word length so rare/specific terms dominate. */
-double coa_attention_score(coa_attention *a, const char *query, const coa_attention_candidate *c) {
+double attention_score(attention *a, const char *query, const attention_candidate *c) {
     (void)a;
     if (!c)
         return 0.0;
@@ -79,9 +79,9 @@ double coa_attention_score(coa_attention *a, const char *query, const coa_attent
 }
 
 /* Insertion sort by score descending (small n; simple and stable enough). */
-static void sort_results(coa_attention_result *r, int n) {
+static void sort_results(attention_result *r, int n) {
     for (int i = 1; i < n; i++) {
-        coa_attention_result key = r[i];
+        attention_result key = r[i];
         int j = i - 1;
         while (j >= 0 && r[j].score < key.score) {
             r[j + 1] = r[j];
@@ -91,17 +91,17 @@ static void sort_results(coa_attention_result *r, int n) {
     }
 }
 
-int coa_attention_select(coa_attention *a, const char *query, const coa_attention_candidate *cands, size_t n,
-                         coa_attention_result *out, size_t topk) {
+int attention_select(attention *a, const char *query, const attention_candidate *cands, size_t n,
+                         attention_result *out, size_t topk) {
     if (!a || !cands || !out || n == 0 || topk == 0)
         return 0;
 
-    coa_attention_result *tmp = (coa_attention_result *)malloc(n * sizeof(*tmp));
+    attention_result *tmp = (attention_result *)malloc(n * sizeof(*tmp));
     if (!tmp)
         return 0;
     for (size_t i = 0; i < n; i++) {
         tmp[i].index = (int)i;
-        tmp[i].score = coa_attention_score(a, query, &cands[i]);
+        tmp[i].score = attention_score(a, query, &cands[i]);
     }
     sort_results(tmp, (int)n);
 

@@ -23,33 +23,33 @@
 extern "C" {
 #endif
 
-typedef struct coa_hook_registry coa_hook_registry;
+typedef struct hook_registry hook_registry;
 
 /* Return 0 = allow/ok, nonzero = block (only honored for before_* events). */
-typedef int (*coa_hook_fn)(const char *event, const char *payload_json, void *ud);
+typedef int (*hook_fn)(const char *event, const char *payload_json, void *ud);
 
-coa_hook_registry *coa_hook_registry_new(void);
-void coa_hook_registry_free(coa_hook_registry *h);
+hook_registry *hook_registry_new(void);
+void hook_registry_free(hook_registry *h);
 
 /* Register a callback for `event` (or "*" for all events). Returns a hook id
  * (>0), or -1 on bad args / OOM. Thread-safe. */
-int coa_hook_register(coa_hook_registry *h, const char *event, coa_hook_fn fn, void *ud);
+int hook_register(hook_registry *h, const char *event, hook_fn fn, void *ud);
 
 /* Remove a previously registered hook. Returns 0 ok, -1 not found. */
-int coa_hook_unregister(coa_hook_registry *h, int id);
+int hook_unregister(hook_registry *h, int id);
 
 /* Dispatch `event` with `payload_json` (may be NULL / arbitrary text) to all
  * matching hooks in registration order. Returns 0 = all allowed, 1 = a hook
  * blocked (nonzero return), -1 = bad args. Thread-safe. */
-int coa_hook_dispatch(coa_hook_registry *h, const char *event, const char *payload_json);
+int hook_dispatch(hook_registry *h, const char *event, const char *payload_json);
 
 /* Registered hooks as a JSON array [{"id":N,"event":"..."}]. Caller frees. */
-char *coa_hook_registry_json(coa_hook_registry *h);
+char *hook_registry_json(hook_registry *h);
 
 /* Builtin audit hook: appends {"ts_ms","event","payload"} as one JSON line to
  * the file whose path is passed as `ud` (opens/appends/closes per call).
  * Register with event "*" to audit everything. */
-int coa_hook_audit_file(const char *event, const char *payload_json, void *ud);
+int hook_audit_file(const char *event, const char *payload_json, void *ud);
 
 #ifdef __cplusplus
 }

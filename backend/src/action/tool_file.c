@@ -9,70 +9,70 @@
 #include "cJSON.h"
 
 /* Resolve a (possibly relative) path against the workspace. Caller frees. */
-static char *resolve_path(const coa_tool_ctx *ctx, const char *path) {
+static char *resolve_path(const tool_ctx *ctx, const char *path) {
     char full[2048];
-    coa_path_resolve(full, sizeof(full), ctx ? ctx->workspace : NULL, path ? path : "");
-    return coa_strdup(full);
+    path_resolve(full, sizeof(full), ctx ? ctx->workspace : NULL, path ? path : "");
+    return xstrdup(full);
 }
 
-static coa_tool_result *file_read_exec(const coa_tool *self, const coa_tool_ctx *ctx, const char *args_json) {
+static tool_result *file_read_exec(const tool *self, const tool_ctx *ctx, const char *args_json) {
     (void)self;
     cJSON *args = cJSON_Parse(args_json);
     if (!args)
-        return coa_tool_result_new(0, "file_read: invalid args JSON");
+        return tool_result_new(0, "file_read: invalid args JSON");
     cJSON *path_j = cJSON_GetObjectItemCaseSensitive(args, "path");
     if (!path_j || !cJSON_IsString(path_j)) {
         cJSON_Delete(args);
-        return coa_tool_result_new(0, "file_read: missing string arg 'path'");
+        return tool_result_new(0, "file_read: missing string arg 'path'");
     }
     char *rp = resolve_path(ctx, path_j->valuestring);
     /* Reading a directory is common (the planner often probes a path before
      * reading a file). Instead of failing, return a listing so the agent can
      * continue — a single mis-targeted file_read must not fail the whole task. */
-    if (coa_fs_is_dir(rp)) {
-        coa_dir_list dl;
+    if (fs_is_dir(rp)) {
+        dir_list dl;
         memset(&dl, 0, sizeof(dl));
-        if (coa_fs_list_dir(rp, &dl) == 0) {
-            coa_strbuf sb;
-            coa_strbuf_init(&sb);
-            coa_strbuf_appendf(&sb, "Directory listing of %s:\n", rp);
+        if (fs_list_dir(rp, &dl) == 0) {
+            strbuf sb;
+            strbuf_init(&sb);
+            strbuf_appendf(&sb, "Directory listing of %s:\n", rp);
             for (size_t i = 0; i < dl.count; i++) {
-                coa_strbuf_appendf(&sb, "%s%s\n", dl.items[i].name, dl.items[i].is_dir ? "/" : "");
+                strbuf_appendf(&sb, "%s%s\n", dl.items[i].name, dl.items[i].is_dir ? "/" : "");
             }
-            coa_fs_list_free(&dl);
-            char *out = coa_strbuf_detach(&sb);
+            fs_list_free(&dl);
+            char *out = strbuf_detach(&sb);
             free(rp);
             cJSON_Delete(args);
-            coa_tool_result *r = coa_tool_result_new(1, out);
+            tool_result *r = tool_result_new(1, out);
             free(out);
             return r;
         }
-        coa_fs_list_free(&dl);
+        fs_list_free(&dl);
     }
-    char *content = coa_fs_read_file(rp);
+    char *content = fs_read_file(rp);
     cJSON_Delete(args);
     if (!content) {
         char msg[1024];
         snprintf(msg, sizeof(msg), "file_read: cannot read %s", rp);
         free(rp);
-        return coa_tool_result_new(0, msg);
+        return tool_result_new(0, msg);
     }
     free(rp);
-    coa_tool_result *r = coa_tool_result_new(1, content);
+    tool_result *r = tool_result_new(1, content);
     free(content);
     return r;
 }
 
-static coa_tool_result *file_write_exec(const coa_tool *self, const coa_tool_ctx *ctx, const char *args_json) {
+static tool_result *file_write_exec(const tool *self, const tool_ctx *ctx, const char *args_json) {
     (void)self;
     cJSON *args = cJSON_Parse(args_json);
     if (!args)
-        return coa_tool_result_new(0, "file_write: invalid args JSON");
+        return tool_result_new(0, "file_write: invalid args JSON");
     cJSON *path_j = cJSON_GetObjectItemCaseSensitive(args, "path");
     cJSON *content_j = cJSON_GetObjectItemCaseSensitive(args, "content");
     if (!path_j || !cJSON_IsString(path_j)) {
         cJSON_Delete(args);
-        return coa_tool_result_new(0, "file_write: missing string arg 'path'");
+        return tool_result_new(0, "file_write: missing string arg 'path'");
     }
     const char *content = (content_j && cJSON_IsString(content_j)) ? content_j->valuestring : "";
 
@@ -89,23 +89,23 @@ static coa_tool_result *file_write_exec(const coa_tool *self, const coa_tool_ctx
         size_t n = (size_t)(slash - rp);
         if (n > 0) {
             snprintf(dir, sizeof(dir), "%.*s", (int)n, rp);
-            coa_fs_mkdirs(dir);
+            fs_mkdirs(dir);
         }
     }
 
     size_t content_len = strlen(content);
-    int w = coa_fs_write_file(rp, content, content_len);
+    int w = fs_write_file(rp, content, content_len);
     cJSON_Delete(args);
     if (w != 0) {
         char msg[1024];
         snprintf(msg, sizeof(msg), "file_write: failed to write %s", rp);
         free(rp);
-        return coa_tool_result_new(0, msg);
+        return tool_result_new(0, msg);
     }
     char out[1200];
     snprintf(out, sizeof(out), "wrote %zu bytes to %s", content_len, rp);
     free(rp);
-    return coa_tool_result_new(1, out);
+    return tool_result_new(1, out);
 }
 
 /* file_edit — exact string replacement (ported from Claude Code FileEditTool):
@@ -124,17 +124,17 @@ static size_t count_occurrences(const char *hay, const char *needle) {
     return n;
 }
 
-static coa_tool_result *file_edit_exec(const coa_tool *self, const coa_tool_ctx *ctx, const char *args_json) {
+static tool_result *file_edit_exec(const tool *self, const tool_ctx *ctx, const char *args_json) {
     (void)self;
     cJSON *args = cJSON_Parse(args_json);
     if (!args)
-        return coa_tool_result_new(0, "file_edit: invalid args JSON");
+        return tool_result_new(0, "file_edit: invalid args JSON");
     cJSON *path_j = cJSON_GetObjectItemCaseSensitive(args, "path");
     cJSON *old_j = cJSON_GetObjectItemCaseSensitive(args, "old_string");
     cJSON *new_j = cJSON_GetObjectItemCaseSensitive(args, "new_string");
     if (!path_j || !cJSON_IsString(path_j) || !old_j || !cJSON_IsString(old_j) || !new_j || !cJSON_IsString(new_j)) {
         cJSON_Delete(args);
-        return coa_tool_result_new(0, "file_edit: requires string args 'path', 'old_string', 'new_string'");
+        return tool_result_new(0, "file_edit: requires string args 'path', 'old_string', 'new_string'");
     }
     int replace_all = 0;
     cJSON *ra_j = cJSON_GetObjectItemCaseSensitive(args, "replace_all");
@@ -142,10 +142,10 @@ static coa_tool_result *file_edit_exec(const coa_tool *self, const coa_tool_ctx 
         replace_all = 1;
 
     /* copy strings out before cJSON_Delete(args) frees the tree */
-    char *old_s = coa_strdup(old_j->valuestring);
-    char *new_s = coa_strdup(new_j->valuestring);
+    char *old_s = xstrdup(old_j->valuestring);
+    char *new_s = xstrdup(new_j->valuestring);
     char *rp = resolve_path(ctx, path_j->valuestring);
-    char *content = coa_fs_read_file(rp);
+    char *content = fs_read_file(rp);
     cJSON_Delete(args);
     if (!content) {
         char msg[1200];
@@ -153,7 +153,7 @@ static coa_tool_result *file_edit_exec(const coa_tool *self, const coa_tool_ctx 
         free(rp);
         free(old_s);
         free(new_s);
-        return coa_tool_result_new(0, msg);
+        return tool_result_new(0, msg);
     }
     size_t old_len = strlen(old_s);
     size_t occ = count_occurrences(content, old_s);
@@ -167,7 +167,7 @@ static coa_tool_result *file_edit_exec(const coa_tool *self, const coa_tool_ctx 
         free(rp);
         free(old_s);
         free(new_s);
-        return coa_tool_result_new(0, msg);
+        return tool_result_new(0, msg);
     }
     if (occ > 1 && !replace_all) {
         char msg[1200];
@@ -179,22 +179,22 @@ static coa_tool_result *file_edit_exec(const coa_tool *self, const coa_tool_ctx 
         free(rp);
         free(old_s);
         free(new_s);
-        return coa_tool_result_new(0, msg);
+        return tool_result_new(0, msg);
     }
-    coa_strbuf sb;
-    coa_strbuf_init(&sb);
+    strbuf sb;
+    strbuf_init(&sb);
     const char *p = content;
     while (*p) {
         const char *hit = strstr(p, old_s);
         if (!hit) {
-            coa_strbuf_append(&sb, p);
+            strbuf_append(&sb, p);
             break;
         }
-        coa_strbuf_append_n(&sb, p, (size_t)(hit - p));
-        coa_strbuf_append(&sb, new_s);
+        strbuf_append_n(&sb, p, (size_t)(hit - p));
+        strbuf_append(&sb, new_s);
         p = hit + old_len;
     }
-    int w = coa_fs_write_file(rp, sb.buf ? sb.buf : "", sb.len);
+    int w = fs_write_file(rp, sb.buf ? sb.buf : "", sb.len);
     free(sb.buf);
     free(content);
     free(old_s);
@@ -203,16 +203,16 @@ static coa_tool_result *file_edit_exec(const coa_tool *self, const coa_tool_ctx 
         char msg[1200];
         snprintf(msg, sizeof(msg), "file_edit: failed to write %s", rp);
         free(rp);
-        return coa_tool_result_new(0, msg);
+        return tool_result_new(0, msg);
     }
     char out[1240];
     snprintf(out, sizeof(out), "edited %s (%zu replacement%s)", rp, occ, occ == 1 ? "" : "s");
     free(rp);
-    return coa_tool_result_new(1, out);
+    return tool_result_new(1, out);
 }
 
-const coa_tool *coa_tool_file_read(void) {
-    static const coa_tool t = {
+const tool *tool_file_read(void) {
+    static const tool t = {
         "file_read",
         "Read a file's content. If the path is a DIRECTORY, returns its listing instead of failing.",
         "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}}}",
@@ -223,8 +223,8 @@ const coa_tool *coa_tool_file_read(void) {
     return &t;
 }
 
-const coa_tool *coa_tool_file_write(void) {
-    static const coa_tool t = {
+const tool *tool_file_write(void) {
+    static const tool t = {
         "file_write",
         "Write content to a file (creates parent directories).",
         "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"content\":{\"type\":\"string\"}}}",
@@ -235,8 +235,8 @@ const coa_tool *coa_tool_file_write(void) {
     return &t;
 }
 
-const coa_tool *coa_tool_file_edit(void) {
-    static const coa_tool t = {
+const tool *tool_file_edit(void) {
+    static const tool t = {
         "file_edit",
         "Performs exact string replacements in files. ALWAYS prefer editing existing files; "
         "NEVER write new files unless required. The edit FAILS if old_string is not unique in the "

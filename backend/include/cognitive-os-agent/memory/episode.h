@@ -9,45 +9,45 @@
 extern "C" {
 #endif
 
-typedef struct coa_episodic coa_episodic;
+typedef struct episodic episodic;
 
-coa_episodic *coa_episodic_new(void);
-void coa_episodic_free(coa_episodic *e);
+episodic *episodic_new(void);
+void episodic_free(episodic *e);
 
 /* Record a completed episode (both copied; ts = ms since epoch, <=0 = now).
  * Re-experiencing an existing task REINFORCES it: strength += 1 and the
  * ts/result are refreshed. New episodes start with strength 1. */
-void coa_episodic_add(coa_episodic *e, const char *task, const char *result);
-void coa_episodic_add_ts(coa_episodic *e, const char *task, const char *result, long long ts);
+void episodic_add(episodic *e, const char *task, const char *result);
+void episodic_add_ts(episodic *e, const char *task, const char *result, long long ts);
 /* Like add_ts, but also restores an explicit strength (persistence round-trip;
  * strength <= 0 falls back to 1). Dedup still reinforces (+1). */
-void coa_episodic_add_full(coa_episodic *e, const char *task, const char *result, long long ts, double strength);
-int coa_episodic_count(coa_episodic *e);
+void episodic_add_full(episodic *e, const char *task, const char *result, long long ts, double strength);
+int episodic_count(episodic *e);
 
 /* Borrowed task/result/ts of the i-th episode (0 = oldest). Do not free. */
-const char *coa_episodic_task(coa_episodic *e, int i);
-const char *coa_episodic_result(coa_episodic *e, int i);
-long long coa_episodic_ts(coa_episodic *e, int i);
+const char *episodic_task(episodic *e, int i);
+const char *episodic_result(episodic *e, int i);
+long long episodic_ts(episodic *e, int i);
 /* Access strength of the i-th episode (0.0 on bad args). */
-double coa_episodic_strength(coa_episodic *e, int i);
+double episodic_strength(episodic *e, int i);
 
 /* Explicitly reinforce a task (+1 strength, ts refreshed). No-op if unknown. */
-void coa_episodic_reinforce(coa_episodic *e, const char *task);
+void episodic_reinforce(episodic *e, const char *task);
 
 /* Lifecycle: DECAY — strength halves once per full half_life_ms elapsed since
  * the episode's ts (capped at 30 halvings), floored at floor_strength
  * (floor <= 0 = 0.001). Entries already at/below the floor are not touched.
  * Returns the number of entries decayed. */
-int coa_episodic_decay(coa_episodic *e, long long now_ms, long long half_life_ms, double floor_strength);
+int episodic_decay(episodic *e, long long now_ms, long long half_life_ms, double floor_strength);
 /* Lifecycle: FORGET — drop episodes with strength < min_strength (compacts the
  * store). Returns the number of entries dropped. */
-int coa_episodic_drop_below(coa_episodic *e, double min_strength);
+int episodic_drop_below(episodic *e, double min_strength);
 /* Lifecycle: ARCHIVE payload — the episodes that drop_below(min_strength)
  * would remove, as a JSON array of {task,result,ts,strength} (caller frees). */
-char *coa_episodic_below_json(coa_episodic *e, double min_strength);
+char *episodic_below_json(episodic *e, double min_strength);
 
 /* All episodes as a JSON array of {task,result,ts,strength} (caller frees). */
-char *coa_episodic_json(coa_episodic *e);
+char *episodic_json(episodic *e);
 
 #ifdef __cplusplus
 }

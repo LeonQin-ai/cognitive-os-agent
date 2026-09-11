@@ -9,14 +9,14 @@
 #include <stdio.h>
 #include "cJSON.h"
 
-struct coa_tx_manager {
+struct tx_manager {
     int unused;
 };
 
-struct coa_tx {
-    coa_snapshot *snap;
-    coa_tool_registry *tools;
-    coa_tool_ctx ctx;
+struct tx {
+    snapshot *snap;
+    tool_registry *tools;
+    tool_ctx ctx;
     int all_ok;
     int n_actions;
     int rolled_back;
@@ -36,8 +36,8 @@ static int is_git_managed(const char *dir) {
     snprintf(buf, sizeof(buf), "%s", dir);
     for (int depth = 0; depth < 32; depth++) {
         char gitp[2200];
-        coa_path_join(gitp, sizeof(gitp), buf, ".git");
-        if (coa_fs_exists(gitp))
+        path_join(gitp, sizeof(gitp), buf, ".git");
+        if (fs_exists(gitp))
             return 1;
         /* strip the last path component */
         char *slash = strrchr(buf, '/');
@@ -53,23 +53,25 @@ static int is_git_managed(const char *dir) {
         size_t n = strlen(buf);
         if (n == 2 && buf[1] == ':') {
             snprintf(gitp, sizeof(gitp), "%s\\.git", buf);
-            return coa_fs_exists(gitp);
+            return fs_exists(gitp);
         }
     }
     return 0;
 }
 
-coa_tx_manager *coa_tx_manager_new(void) {
-    return calloc(1, sizeof(coa_tx_manager));
+tx_manager *tx_manager_new(void) {
+    return calloc(1, sizeof(tx_manager));
 }
 
-void coa_tx_manager_free(coa_tx_manager *m) {
+void tx_manager_free(tx_manager *m) {
     free(m);
 }
 
-coa_tx *coa_tx_begin(coa_tx_manager *m, coa_snapshot *snap, coa_tool_registry *tools, const coa_tool_ctx *ctx) {
+tx *tx_begin(tx_manager *m, snapshot *snap, tool_registry *tools, const tool_ctx *ctx) {
     (void)m;
-    coa_tx *tx = calloc(1, sizeof(coa_tx));
+    /* sizeof(*tx): a local named `tx` shadows the typedef, so a bare
+     * sizeof(tx) here would yield pointer size (8) — classic heap overflow */
+    tx *tx = calloc(1, sizeof(*tx));
     if (!tx)
         return NULL;
     tx->snap = snap;
@@ -95,8 +97,8 @@ static void extract_paths(const char *args_json, const char *workspace, char *pa
     cJSON *p = cJSON_GetObjectItemCaseSensitive(args, "path");
     if (p && cJSON_IsString(p) && *npaths < 16) {
         char full[2048];
-        coa_path_resolve(full, sizeof(full), workspace, p->valuestring);
-        paths[(*npaths)++] = coa_strdup(full);
+        path_resolve(full, sizeof(full), workspace, p->valuestring);
+        paths[(*npaths)++] = xstrdup(full);
     }
     cJSON *files = cJSON_GetObjectItemCaseSensitive(args, "files");
     if (files && cJSON_IsArray(files)) {
@@ -104,8 +106,8 @@ static void extract_paths(const char *args_json, const char *workspace, char *pa
         cJSON_ArrayForEach(it, files) {
             if (cJSON_IsString(it) && *npaths < 16) {
                 char full[2048];
-                coa_path_resolve(full, sizeof(full), workspace, it->valuestring);
-                paths[(*npaths)++] = coa_strdup(full);
+                path_resolve(full, sizeof(full), workspace, it->valuestring);
+                paths[(*npaths)++] = xstrdup(full);
             }
         }
     }
@@ -113,7 +115,7 @@ static void extract_paths(const char *args_json, const char *workspace, char *pa
 }
 
 /* Append one action's result line "[tool] output\n" to tx->output. */
-static void tx_append_output(coa_tx *tx, const char *tool, const char *output) {
+static void tx_append_output(tx *tx, const char *tool, const char *output) {
     const char *out = output ? output : "";
     size_t need = strlen(tool) + strlen(out) + 4; /* "[", "] ", "\n", NUL */
     if (tx->output_len + need > tx->output_cap) {
@@ -130,10 +132,10 @@ static void tx_append_output(coa_tx *tx, const char *tool, const char *output) {
         (size_t)snprintf(tx->output + tx->output_len, tx->output_cap - tx->output_len, "[%s] %s\n", tool, out);
 }
 
-int coa_tx_run(coa_tx *tx, const char *tool_name, const char *args_json) {
+int tx_run(tx *tx, const char *tool_name, const char *args_json) {
     if (!tx || !tx->tools)
         return -1;
-    const coa_tool *tool = coa_tool_find(tx->tools, tool_name);
+    const tool *tool = tool_find(tx->tools, tool_name);
     if (!tool)
         return -1;
 
@@ -146,12 +148,12 @@ int coa_tx_run(coa_tx *tx, const char *tool_name, const char *args_json) {
         int npaths = 0;
         extract_paths(args_json, tx->ctx.workspace, paths, &npaths);
         for (int i = 0; i < npaths; i++) {
-            coa_snapshot_capture(tx->snap, paths[i]);
+            snapshot_capture(tx->snap, paths[i]);
             free(paths[i]);
         }
     }
 
-    coa_tool_result *r = coa_tool_execute(tx->tools, tool_name, args_json, &tx->ctx);
+    tool_result *r = tool_execute(tx->tools, tool_name, args_json, &tx->ctx);
     if (!r)
         return -1;
     tx->n_actions++;
@@ -159,36 +161,36 @@ int coa_tx_run(coa_tx *tx, const char *tool_name, const char *args_json) {
     int ok = r->ok;
     if (!ok)
         tx->all_ok = 0;
-    coa_tool_result_free(r);
+    tool_result_free(r);
     return ok ? 0 : -1;
 }
 
-int coa_tx_validate(coa_tx *tx) {
+int tx_validate(tx *tx) {
     return tx ? tx->all_ok : 0;
 }
 
-const char *coa_tx_output(coa_tx *tx) {
+const char *tx_output(tx *tx) {
     return tx ? tx->output : NULL;
 }
 
-int coa_tx_commit(coa_tx *tx) {
+int tx_commit(tx *tx) {
     if (!tx)
         return -1;
     if (tx->snap)
-        coa_snapshot_commit(tx->snap);
+        snapshot_commit(tx->snap);
     return 0;
 }
 
-int coa_tx_rollback(coa_tx *tx) {
+int tx_rollback(tx *tx) {
     if (!tx)
         return -1;
     if (tx->snap)
-        coa_snapshot_restore_pending(tx->snap);
+        snapshot_restore_pending(tx->snap);
     tx->rolled_back = 1;
     return 0;
 }
 
-void coa_tx_free(coa_tx *tx) {
+void tx_free(tx *tx) {
     if (!tx)
         return;
     free(tx->output);

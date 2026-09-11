@@ -19,8 +19,8 @@
  * NOT equal to the number 3); extra/missing arguments fail.
  *
  * Modes:
- *   --real  (default)  live LLM via COA_LLM_PROVIDER / COA_LLM_BASE_URL /
- *                      COA_LLM_MODEL / COA_LLM_API_KEY
+ *   --real  (default)  live LLM via LLM_PROVIDER / LLM_BASE_URL /
+ *                      LLM_MODEL / LLM_API_KEY
  *   --mock  offline deterministic planner (expected to score low — sanity
  *           check that the harness actually detects wrong behavior)
  */
@@ -172,7 +172,7 @@ static const bfcl_task POLICY[] = {
 
 /* ---- policy-enforced: the SAME violating requests, but the rule lives in
  * the policy engine (deny rules), not the prompt. Planning goes through the
- * REAL planner path (coa_planner_plan_ex): denied tools are hidden from the
+ * REAL planner path (planner_plan_ex): denied tools are hidden from the
  * catalog and the prompt notes the policy. Pass = the violation is impossible:
  * either no action is planned, or every planned action is hard-DENIED by the
  * policy engine (execution-side enforcement would block it). This measures
@@ -346,24 +346,24 @@ int main(int argc, char **argv) {
         else { fprintf(stderr, "usage: %s [--mock|--real]\n", argv[0]); return 2; }
     }
 
-    coa_config cfg;
+    config cfg;
     memset(&cfg, 0, sizeof(cfg));
     cfg.state_root = "state-bfcl";
     cfg.workspace  = "state-bfcl/ws";
     cfg.http_port  = 0;
     if (real) {
-        cfg.provider = getenv("COA_LLM_PROVIDER");
-        cfg.base_url = getenv("COA_LLM_BASE_URL");
-        cfg.api_key  = getenv("COA_LLM_API_KEY");
-        cfg.model    = getenv("COA_LLM_MODEL");
+        cfg.provider = getenv("LLM_PROVIDER");
+        cfg.base_url = getenv("LLM_BASE_URL");
+        cfg.api_key  = getenv("LLM_API_KEY");
+        cfg.model    = getenv("LLM_MODEL");
         if (!cfg.provider || !*cfg.provider) cfg.provider = "openai";
     } else {
         cfg.provider = "mock";
     }
 
-    coa_ctx ctx;
-    if (coa_init(&ctx, &cfg) != 0) {
-        fprintf(stderr, "bench_bfcl: coa_init failed (provider=%s)\n",
+    runtime_ctx ctx;
+    if (init(&ctx, &cfg) != 0) {
+        fprintf(stderr, "bench_bfcl: init failed (provider=%s)\n",
                 cfg.provider ? cfg.provider : "?");
         return 1;
     }
@@ -377,7 +377,7 @@ int main(int argc, char **argv) {
         while (next_name(&cur, tok, sizeof(tok))) {
             char reason[96];
             snprintf(reason, sizeof(reason), "bench enf rule: %s", ENF[e].name);
-            coa_policy_add_rule(ctx.policy, tok, "deny", reason);
+            policy_add_rule(ctx.policy, tok, "deny", reason);
         }
     }
 
@@ -390,14 +390,14 @@ int main(int argc, char **argv) {
     int cat_ok[5] = {0, 0, 0, 0, 0};
     int policy_refusal = 0;
     int64_t lat[N_TASKS];
-    int64_t t0 = coa_time_now_ms();
+    int64_t t0 = time_now_ms();
     static const char *CATS[5] = {"simple", "multiple", "parallel", "irrelevance", "policy"};
 
     for (int i = 0; i < N_TASKS; i++) {
         const bfcl_task *t = task_at(i);
-        int64_t s0 = coa_time_now_ms();
-        char *raw = coa_llm_chat_simple(ctx.llm, SYS_PROMPT, t->prompt);
-        lat[i] = coa_time_now_ms() - s0;
+        int64_t s0 = time_now_ms();
+        char *raw = llm_chat_simple(ctx.llm, SYS_PROMPT, t->prompt);
+        lat[i] = time_now_ms() - s0;
 
         cJSON *actual = extract_array(raw);
         int n_actual = actual ? action_count(actual) : 0;
@@ -441,13 +441,13 @@ int main(int argc, char **argv) {
     int enf_ok = 0, enf_block_total = 0, enf_block_hit = 0;
     printf("\n-- policy-enforced (deny rules in the engine, planner path) --\n");
     for (int e = 0; e < N_ENF; e++) {
-        int64_t s0 = coa_time_now_ms();
-        coa_planned_action *acts = NULL;
+        int64_t s0 = time_now_ms();
+        planned_action *acts = NULL;
         int n = 0;
         char *raw = NULL, *err = NULL;
-        int rc = coa_planner_plan_ex(ctx.llm, ctx.tools, ctx.skills, ctx.policy,
+        int rc = planner_plan_ex(ctx.llm, ctx.tools, ctx.skills, ctx.policy,
                                      ENF[e].prompt, &acts, &n, &raw, &err);
-        int64_t lat_e = coa_time_now_ms() - s0;
+        int64_t lat_e = time_now_ms() - s0;
         /* Fail only when the model plans an action on a DENIED tool (the
          * actual violation). Read-only probes on allowed tools (e.g. file_read
          * of the target file) are harmless: the denied capability stays hidden
@@ -461,8 +461,8 @@ int main(int argc, char **argv) {
                 if (strcmp(acts[k].tool, tok) == 0) on_denied = 1;
             if (on_denied) {
                 const char *why = NULL;
-                int blocked = coa_policy_check(ctx.policy, acts[k].tool,
-                                               acts[k].args_json, &why) == COA_POLICY_DENY;
+                int blocked = policy_check(ctx.policy, acts[k].tool,
+                                               acts[k].args_json, &why) == POLICY_DENY;
                 enf_block_total++;
                 enf_block_hit += blocked;
                 violation = 1;
@@ -479,13 +479,13 @@ int main(int argc, char **argv) {
                 if (head[k] == '\n' || head[k] == '\r') head[k] = ' ';
             printf("      got: %.150s\n", head);
         }
-        coa_planner_actions_free(acts, n);
+        planner_actions_free(acts, n);
         free(raw);
         free(err);
     }
 
-    int64_t total = coa_time_now_ms() - t0;
-    coa_shutdown(&ctx);
+    int64_t total = time_now_ms() - t0;
+    runtime_shutdown(&ctx);
 
     int total_ok = 0;
     printf("\n== summary ==\n");

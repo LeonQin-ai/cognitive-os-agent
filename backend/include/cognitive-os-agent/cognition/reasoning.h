@@ -11,38 +11,38 @@
 extern "C" {
 #endif
 
-typedef struct coa_reasoning coa_reasoning;
-typedef struct coa_llm coa_llm;
-typedef struct coa_tool_registry coa_tool_registry;
-typedef struct coa_memory coa_memory;
-typedef struct coa_policy_engine coa_policy_engine;
-typedef struct coa_snapshot coa_snapshot;
-typedef struct coa_event_bus coa_event_bus;
-typedef struct coa_metrics coa_metrics;
-typedef struct coa_state_machine coa_state_machine;
-typedef struct coa_hook_registry coa_hook_registry;
+typedef struct reasoning reasoning;
+typedef struct llm llm;
+typedef struct tool_registry tool_registry;
+typedef struct memory memory;
+typedef struct policy_engine policy_engine;
+typedef struct snapshot snapshot;
+typedef struct event_bus event_bus;
+typedef struct metrics metrics;
+typedef struct state_machine state_machine;
+typedef struct hook_registry hook_registry;
 
-struct coa_skill_registry;  /* skill.h */
-struct coa_index;           /* retrieval/engine.h */
-struct coa_plugin_registry; /* plugin_runtime/registry.h */
+struct skill_registry;  /* skill.h */
+struct index;           /* retrieval/engine.h */
+struct plugin_registry; /* plugin_runtime/registry.h */
 
-typedef struct coa_reasoning_config {
-    coa_llm *llm;                                /* required */
-    coa_tool_registry *tools;                    /* required */
-    coa_memory *memory;                          /* may be NULL */
-    coa_policy_engine *policy;                   /* may be NULL = allow all */
-    coa_snapshot *snapshot;                      /* may be NULL = no rollback */
-    coa_event_bus *bus;                          /* may be NULL */
-    coa_metrics *metrics;                        /* may be NULL */
+typedef struct reasoning_config {
+    llm *llm;                                /* required */
+    tool_registry *tools;                    /* required */
+    memory *memory;                          /* may be NULL */
+    policy_engine *policy;                   /* may be NULL = allow all */
+    snapshot *snapshot;                      /* may be NULL = no rollback */
+    event_bus *bus;                          /* may be NULL */
+    metrics *metrics;                        /* may be NULL */
     const char *workspace;                       /* base dir for relative tool paths */
     int use_transaction;                         /* wrap actions in a tx when snapshot present */
-    struct coa_skill_registry *skills;           /* advertised to the planner + skill tool (may be NULL) */
-    struct coa_mcp_manager *mcp;                 /* MCP connections for the mcp tool + sync (may be NULL) */
-    struct coa_index *index;                     /* code index; touched files are indexed (may be NULL) */
-    struct coa_plugin_registry *plugin_registry; /* for missing-capability auto-generation */
+    struct skill_registry *skills;           /* advertised to the planner + skill tool (may be NULL) */
+    struct mcp_manager *mcp;                 /* MCP connections for the mcp tool + sync (may be NULL) */
+    struct index *index;                     /* code index; touched files are indexed (may be NULL) */
+    struct plugin_registry *plugin_registry; /* for missing-capability auto-generation */
     const char *state_root;                      /* state dir for plugin generation (may be NULL) */
     int max_rounds;                              /* agent-loop rounds per run (0 = default 8; 1 = single-shot) */
-    coa_hook_registry *hooks;                    /* horizontal hook system (may be NULL) */
+    hook_registry *hooks;                    /* horizontal hook system (may be NULL) */
     /* Context MMU budgets (chars per prompt section; 0 = default). Over budget
      * a section degrades automatically: hot drops oldest turns to one line,
      * warm sheds worklog -> errors/files, cold sheds retrieved items. */
@@ -57,53 +57,53 @@ typedef struct coa_reasoning_config {
      * `wsl.exe` / `ssh <exec_host>`; other tools run unchanged on the host. */
     const char *exec_backend; /* NULL = local */
     const char *exec_host;    /* ssh target for "remote" (user@host) */
-} coa_reasoning_config;
+} reasoning_config;
 
 /* HyDE (Hypothetical Document Embeddings) primitive: ask the LLM for a short
  * hypothetical answer passage to `query`; embed passage-to-passage instead of
  * question-to-passage for better cold-tier recall. Returns a malloc'd passage
  * (caller frees), or NULL (bad args / LLM error). */
-char *coa_hyde_passage(coa_llm *llm, const char *query);
+char *hyde_passage(llm *llm, const char *query);
 
-coa_reasoning *coa_reasoning_new(const coa_reasoning_config *cfg);
-void coa_reasoning_free(coa_reasoning *r);
+reasoning *reasoning_new(const reasoning_config *cfg);
+void reasoning_free(reasoning *r);
 
 /* Run the full RECEIVE..LEARN pipeline on `prompt`.
  * *answer receives the final output (caller frees). Returns 0 ok, -1 failed. */
-int coa_reasoning_run(coa_reasoning *r, const char *prompt, char **answer);
+int reasoning_run(reasoning *r, const char *prompt, char **answer);
 
 /* Same, bound to a named chat session: conversation history, compaction
  * summary and session notes are isolated per session_id (NULL/"" = the
- * shared default session used by coa_reasoning_run). Sessions are created
+ * shared default session used by reasoning_run). Sessions are created
  * on demand (capped); runs must still be serialized by the caller. */
-int coa_reasoning_run_ex(coa_reasoning *r, const char *session_id, const char *prompt, char **answer);
+int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, char **answer);
 
 /* Swap the active LLM at runtime. Caller serializes access (the ctx run-lock);
  * the old instance stays owned by the caller to destroy after the swap. */
-void coa_reasoning_set_llm(coa_reasoning *r, coa_llm *llm);
+void reasoning_set_llm(reasoning *r, llm *llm);
 
 /* Route each run through `router` (weighted round-robin). Pass NULL to revert
  * to the single configured LLM. The router is borrowed (owned by the caller). */
-void coa_reasoning_set_router(coa_reasoning *r, coa_router *router);
+void reasoning_set_router(reasoning *r, router *router);
 
 /* Session-memory snapshot as JSON: session notes (task/state/files/errors/
  * worklog), the rolling compaction summary and history size. Caller frees. */
-char *coa_reasoning_session_json(coa_reasoning *r);
+char *reasoning_session_json(reasoning *r);
 
 /* Recent conversation turns as a JSON array of {"q","a"} objects, oldest
  * first (the newest max_turns turns; <=0 = default 20). Thread-safe against
  * a concurrent run. Caller frees. */
-char *coa_reasoning_history_json(coa_reasoning *r, int max_turns);
+char *reasoning_history_json(reasoning *r, int max_turns);
 
 /* Per-session variant of the above; NULL session_id = default session. */
-char *coa_reasoning_history_json_ex(coa_reasoning *r, const char *session_id, int max_turns);
+char *reasoning_history_json_ex(reasoning *r, const char *session_id, int max_turns);
 
 /* Chat session registry (multi-session support): list sessions as a JSON
  * array of {id, turns, task, last_active_ms}; clear one session's history
  * and notes (returns -1 if the session does not exist). Callers free the
  * JSON string. */
-char *coa_reasoning_sessions_json(coa_reasoning *r);
-int coa_reasoning_session_clear(coa_reasoning *r, const char *session_id);
+char *reasoning_sessions_json(reasoning *r);
+int reasoning_session_clear(reasoning *r, const char *session_id);
 
 #ifdef __cplusplus
 }

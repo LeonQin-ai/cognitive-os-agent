@@ -10,43 +10,43 @@ extern "C" {
 #endif
 
 /* 64-byte opaque storage (pthread_cond_t is 48B on glibc/x86_64). */
-#define COA_OPAQUE64 _Alignas(16) unsigned char _d[64]
+#define OPAQUE64 _Alignas(16) unsigned char _d[64]
 
-typedef struct coa_mutex {
-    COA_OPAQUE64;
-} coa_mutex;
-typedef struct coa_cond {
-    COA_OPAQUE64;
-} coa_cond;
-typedef struct coa_thread {
-    COA_OPAQUE64;
-} coa_thread;
+typedef struct mutex_t {
+    OPAQUE64;
+} mutex_t;
+typedef struct cond {
+    OPAQUE64;
+} cond;
+typedef struct thread_t {
+    OPAQUE64;
+} thread_t;
 
 /* ---------- mutex ---------- */
-int coa_mutex_init(coa_mutex *m);
-void coa_mutex_destroy(coa_mutex *m);
-void coa_mutex_lock(coa_mutex *m);
-void coa_mutex_unlock(coa_mutex *m);
+int mutex_init(mutex_t *m);
+void mutex_destroy(mutex_t *m);
+void mutex_lock(mutex_t *m);
+void mutex_unlock(mutex_t *m);
 
 /* ---------- condition variable ---------- */
-int coa_cond_init(coa_cond *c);
-void coa_cond_destroy(coa_cond *c);
+int cond_init(cond *c);
+void cond_destroy(cond *c);
 /* Atomically unlock mtx and wait until signaled. Re-locks before returning. */
-void coa_cond_wait(coa_cond *c, coa_mutex *m);
+void cond_wait(cond *c, mutex_t *m);
 /* Like wait but with a timeout in milliseconds. Returns 0 on signal, -1 on timeout. */
-int coa_cond_timedwait_ms(coa_cond *c, coa_mutex *m, int ms);
-void coa_cond_signal(coa_cond *c);
-void coa_cond_broadcast(coa_cond *c);
+int cond_timedwait_ms(cond *c, mutex_t *m, int ms);
+void cond_signal(cond *c);
+void cond_broadcast(cond *c);
 
 /* ---------- thread ---------- */
-typedef void (*coa_thread_fn)(void *arg);
+typedef void (*thread_fn)(void *arg);
 /* Start a thread; returns NULL on failure. The thread runs fn(arg). */
-coa_thread *coa_thread_create(coa_thread_fn fn, void *arg);
-void coa_thread_join(coa_thread *t);
-void coa_thread_detach(coa_thread *t);
+thread_t *thread_create(thread_fn fn, void *arg);
+void thread_join(thread_t *t);
+void thread_detach(thread_t *t);
 
 #ifdef __cplusplus
 }
 #endif
 
-#undef COA_OPAQUE64
+#undef OPAQUE64

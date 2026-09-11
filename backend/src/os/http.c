@@ -18,7 +18,7 @@
 
 typedef enum { CHUNK_SIZE = 0, CHUNK_DATA = 1, CHUNK_CRLF = 2, CHUNK_DONE = 3 } chunk_state;
 
-struct coa_http_stream {
+struct http_stream {
     /* curl variant: the whole response is buffered at open time and reads
      * replay from it (SSE events still parse in order, just not incremental) */
     int via_curl;
@@ -26,7 +26,7 @@ struct coa_http_stream {
     size_t c_len;
     size_t c_pos;
     /* plain-socket variant */
-    coa_socket *sock;
+    sock *sock;
     char buf[HTTP_BUF];
     size_t pos;
     size_t len;
@@ -46,23 +46,23 @@ struct curl_slist;
 typedef int CURLcode;
 
 /* CURLOPT/CURLINFO values are stable ABI constants of libcurl. */
-#define COA_CURLOPT_WRITEDATA 10001L
-#define COA_CURLOPT_URL 10002L
-#define COA_CURLOPT_ERRORBUFFER 10010L
-#define COA_CURLOPT_HEADERDATA 10029L
-#define COA_CURLOPT_POSTFIELDS 10015L
-#define COA_CURLOPT_HTTPHEADER 10023L
-#define COA_CURLOPT_ACCEPT_ENCODING 10102L
-#define COA_CURLOPT_WRITEFUNCTION 20011L
-#define COA_CURLOPT_HEADERFUNCTION 20079L
-#define COA_CURLOPT_NOPROGRESS 43L
-#define COA_CURLOPT_FOLLOWLOCATION 52L
-#define COA_CURLOPT_POST 47L
-#define COA_CURLOPT_POSTFIELDSIZE 60L
-#define COA_CURLOPT_NOSIGNAL 99L
-#define COA_CURLOPT_TIMEOUT_MS 155L
-#define COA_CURLOPT_CONNECTTIMEOUT_MS 156L
-#define COA_CURLINFO_RESPONSE_CODE (0x200000L + 2L)
+#define CURLOPT_WRITEDATA 10001L
+#define CURLOPT_URL 10002L
+#define CURLOPT_ERRORBUFFER 10010L
+#define CURLOPT_HEADERDATA 10029L
+#define CURLOPT_POSTFIELDS 10015L
+#define CURLOPT_HTTPHEADER 10023L
+#define CURLOPT_ACCEPT_ENCODING 10102L
+#define CURLOPT_WRITEFUNCTION 20011L
+#define CURLOPT_HEADERFUNCTION 20079L
+#define CURLOPT_NOPROGRESS 43L
+#define CURLOPT_FOLLOWLOCATION 52L
+#define CURLOPT_POST 47L
+#define CURLOPT_POSTFIELDSIZE 60L
+#define CURLOPT_NOSIGNAL 99L
+#define CURLOPT_TIMEOUT_MS 155L
+#define CURLOPT_CONNECTTIMEOUT_MS 156L
+#define CURLINFO_RESPONSE_CODE (0x200000L + 2L)
 
 static struct {
     void *lib;
@@ -111,15 +111,15 @@ static int cu_ok(void) {
 }
 
 typedef struct {
-    coa_strbuf body;
-    coa_strmap headers; /* only used by the full-response path */
+    strbuf body;
+    strmap headers; /* only used by the full-response path */
     int want_headers;
 } cu_sink;
 
 static size_t cu_write_cb(const char *ptr, size_t size, size_t nmemb, void *ud) {
     cu_sink *s = (cu_sink *)ud;
     size_t n = size * nmemb;
-    coa_strbuf_append_n(&s->body, ptr, n);
+    strbuf_append_n(&s->body, ptr, n);
     return n;
 }
 
@@ -142,7 +142,7 @@ static size_t cu_header_cb(const char *ptr, size_t size, size_t nmemb, void *ud)
         char *v = colon + 1;
         while (*v == ' ' || *v == '\t')
             v++;
-        coa_strmap_set(&s->headers, line, v);
+        strmap_set(&s->headers, line, v);
     }
     free(line);
     return n;
@@ -150,13 +150,13 @@ static size_t cu_header_cb(const char *ptr, size_t size, size_t nmemb, void *ud)
 
 /* Perform one full HTTPS request via libcurl. Returns a curl-backed stream
  * (whole body buffered) or NULL on failure. */
-static coa_http_stream *curl_open(const char *base_url, const char *method, const char *path, const char *body,
-                                  const char *content_type, coa_strmap *extra_headers, int timeout_ms,
-                                  coa_strmap *headers_out) {
+static http_stream *curl_open(const char *base_url, const char *method, const char *path, const char *body,
+                                  const char *content_type, strmap *extra_headers, int timeout_ms,
+                                  strmap *headers_out) {
     if (!cu_ok()) {
         static int warned = 0;
         if (!warned) {
-            fprintf(stderr, "coa_http: https:// requested but libcurl is not "
+            fprintf(stderr, "http: https:// requested but libcurl is not "
                             "available (install libcurl4)\n");
             warned = 1;
         }
@@ -177,7 +177,7 @@ static coa_http_stream *curl_open(const char *base_url, const char *method, cons
         return NULL;
     cu_sink sink;
     memset(&sink, 0, sizeof(sink));
-    coa_strbuf_init(&sink.body);
+    strbuf_init(&sink.body);
     sink.want_headers = headers_out != NULL;
     char errbuf[256] = {0};
 
@@ -197,82 +197,82 @@ static coa_http_stream *curl_open(const char *base_url, const char *method, cons
     /* always accept compressed responses; curl decompresses transparently */
 
     int is_post = method && strcmp(method, "POST") == 0;
-    cu.easy_setopt(h, (int)COA_CURLOPT_URL, url);
-    cu.easy_setopt(h, (int)COA_CURLOPT_WRITEFUNCTION, &cu_write_cb);
-    cu.easy_setopt(h, (int)COA_CURLOPT_WRITEDATA, &sink);
-    cu.easy_setopt(h, (int)COA_CURLOPT_HEADERFUNCTION, &cu_header_cb);
-    cu.easy_setopt(h, (int)COA_CURLOPT_HEADERDATA, &sink);
-    cu.easy_setopt(h, (int)COA_CURLOPT_ERRORBUFFER, errbuf);
-    cu.easy_setopt(h, (int)COA_CURLOPT_NOPROGRESS, 1L);
-    cu.easy_setopt(h, (int)COA_CURLOPT_NOSIGNAL, 1L);
-    cu.easy_setopt(h, (int)COA_CURLOPT_FOLLOWLOCATION, 1L);
-    cu.easy_setopt(h, (int)COA_CURLOPT_ACCEPT_ENCODING, "");
+    cu.easy_setopt(h, (int)CURLOPT_URL, url);
+    cu.easy_setopt(h, (int)CURLOPT_WRITEFUNCTION, &cu_write_cb);
+    cu.easy_setopt(h, (int)CURLOPT_WRITEDATA, &sink);
+    cu.easy_setopt(h, (int)CURLOPT_HEADERFUNCTION, &cu_header_cb);
+    cu.easy_setopt(h, (int)CURLOPT_HEADERDATA, &sink);
+    cu.easy_setopt(h, (int)CURLOPT_ERRORBUFFER, errbuf);
+    cu.easy_setopt(h, (int)CURLOPT_NOPROGRESS, 1L);
+    cu.easy_setopt(h, (int)CURLOPT_NOSIGNAL, 1L);
+    cu.easy_setopt(h, (int)CURLOPT_FOLLOWLOCATION, 1L);
+    cu.easy_setopt(h, (int)CURLOPT_ACCEPT_ENCODING, "");
     if (timeout_ms > 0) {
-        cu.easy_setopt(h, (int)COA_CURLOPT_TIMEOUT_MS, (long)timeout_ms);
+        cu.easy_setopt(h, (int)CURLOPT_TIMEOUT_MS, (long)timeout_ms);
         long ct = timeout_ms < 30000 ? timeout_ms : 30000;
-        cu.easy_setopt(h, (int)COA_CURLOPT_CONNECTTIMEOUT_MS, ct);
+        cu.easy_setopt(h, (int)CURLOPT_CONNECTTIMEOUT_MS, ct);
     }
     if (is_post) {
-        cu.easy_setopt(h, (int)COA_CURLOPT_POST, 1L);
-        cu.easy_setopt(h, (int)COA_CURLOPT_POSTFIELDS, body ? body : "");
-        cu.easy_setopt(h, (int)COA_CURLOPT_POSTFIELDSIZE, (long)(body ? strlen(body) : 0));
+        cu.easy_setopt(h, (int)CURLOPT_POST, 1L);
+        cu.easy_setopt(h, (int)CURLOPT_POSTFIELDS, body ? body : "");
+        cu.easy_setopt(h, (int)CURLOPT_POSTFIELDSIZE, (long)(body ? strlen(body) : 0));
     }
     if (hdrs)
-        cu.easy_setopt(h, (int)COA_CURLOPT_HTTPHEADER, hdrs);
+        cu.easy_setopt(h, (int)CURLOPT_HTTPHEADER, hdrs);
 
     CURLcode rc = cu.easy_perform(h);
     long status = 0;
     if (rc == 0)
-        cu.easy_getinfo(h, (int)COA_CURLINFO_RESPONSE_CODE, &status);
+        cu.easy_getinfo(h, (int)CURLINFO_RESPONSE_CODE, &status);
     if (hdrs)
         cu.slist_free_all(hdrs);
     cu.easy_cleanup(h);
 
     if (rc != 0) {
-        coa_strbuf_free(&sink.body);
-        coa_strmap_free(&sink.headers);
+        strbuf_free(&sink.body);
+        strmap_free(&sink.headers);
         return NULL;
     }
 
-    coa_http_stream *s = (coa_http_stream *)calloc(1, sizeof(coa_http_stream));
+    http_stream *s = (http_stream *)calloc(1, sizeof(http_stream));
     if (!s) {
-        coa_strbuf_free(&sink.body);
-        coa_strmap_free(&sink.headers);
+        strbuf_free(&sink.body);
+        strmap_free(&sink.headers);
         return NULL;
     }
     s->via_curl = 1;
     s->status = (int)status;
-    s->c_body = coa_strbuf_detach(&sink.body);
+    s->c_body = strbuf_detach(&sink.body);
     s->c_len = s->c_body ? strlen(s->c_body) : 0;
     s->c_pos = 0;
     if (headers_out) {
         *headers_out = sink.headers;
     } else {
-        coa_strmap_free(&sink.headers);
+        strmap_free(&sink.headers);
     }
     return s;
 }
 
 /* ---------- raw buffered reads ---------- */
-static int http_fill(coa_http_stream *h) {
+static int http_fill(http_stream *h) {
     if (h->pos < h->len)
         return (int)(h->len - h->pos);
     h->pos = 0;
     h->len = 0;
-    int n = coa_sock_recv(h->sock, h->buf, HTTP_BUF);
+    int n = sock_recv(h->sock, h->buf, HTTP_BUF);
     if (n <= 0)
         return -1;
     h->len = (size_t)n;
     return (int)h->len;
 }
 
-static int http_getc(coa_http_stream *h) {
+static int http_getc(http_stream *h) {
     if (http_fill(h) <= 0)
         return -1;
     return (unsigned char)h->buf[h->pos++];
 }
 
-static int http_raw_line(coa_http_stream *h, char *out, size_t cap) {
+static int http_raw_line(http_stream *h, char *out, size_t cap) {
     size_t n = 0;
     for (;;) {
         int c = http_getc(h);
@@ -306,7 +306,7 @@ static int64_t parse_chunk_size(const char *line) {
 }
 
 /* ---------- decoded (transfer-decoded) byte reads ---------- */
-static int decode_getc(coa_http_stream *h) {
+static int decode_getc(http_stream *h) {
     if (h->pb_has) {
         h->pb_has = 0;
         return (unsigned char)h->pb;
@@ -375,7 +375,7 @@ static int decode_getc(coa_http_stream *h) {
     return http_getc(h);
 }
 
-int coa_http_stream_read_line(coa_http_stream *h, char *out, size_t cap) {
+int http_stream_read_line(http_stream *h, char *out, size_t cap) {
     size_t n = 0;
     if (h && h->via_curl) {
         /* replay from the buffered curl response, dropping \r like the
@@ -413,7 +413,7 @@ int coa_http_stream_read_line(coa_http_stream *h, char *out, size_t cap) {
     return (int)n;
 }
 
-int coa_http_stream_read(coa_http_stream *h, char *out, size_t cap) {
+int http_stream_read(http_stream *h, char *out, size_t cap) {
     if (h && h->via_curl) {
         size_t n = h->c_len - h->c_pos;
         if (n > cap)
@@ -432,12 +432,12 @@ int coa_http_stream_read(coa_http_stream *h, char *out, size_t cap) {
     return (int)n;
 }
 
-int coa_http_stream_status(coa_http_stream *h) {
+int http_stream_status(http_stream *h) {
     return h ? h->status : 0;
 }
 
 /* ---------- response head ---------- */
-static int parse_response_head(coa_http_stream *h) {
+static int parse_response_head(http_stream *h) {
     char line[1024];
     int n = http_raw_line(h, line, sizeof(line));
     if (n < 0)
@@ -509,59 +509,59 @@ static int parse_base_url(const char *base, char *host, size_t hostsz, uint16_t 
 }
 
 /* ---------- open connection ---------- */
-static coa_http_stream *http_open(const char *base_url, const char *method, const char *path, const char *body,
-                                  const char *content_type, coa_strmap *extra_headers, int timeout_ms) {
+static http_stream *http_open(const char *base_url, const char *method, const char *path, const char *body,
+                                  const char *content_type, strmap *extra_headers, int timeout_ms) {
     char host[256];
     uint16_t port;
     if (parse_base_url(base_url, host, sizeof(host), &port) != 0)
         return NULL;
 
-    coa_socket *sock = coa_sock_connect(host, port, timeout_ms > 0 ? timeout_ms : 10000);
+    sock *sock = sock_connect(host, port, timeout_ms > 0 ? timeout_ms : 10000);
     if (!sock)
         return NULL;
 
-    coa_strbuf sb;
-    coa_strbuf_init(&sb);
+    strbuf sb;
+    strbuf_init(&sb);
     size_t blen = body ? strlen(body) : 0;
-    coa_strbuf_appendf(&sb, "%s %s HTTP/1.1\r\n", method, path);
-    coa_strbuf_appendf(&sb, "Host: %s:%u\r\n", host, (unsigned)port);
-    coa_strbuf_append(&sb, "User-Agent: cognitive-os-agent/0.1\r\n");
+    strbuf_appendf(&sb, "%s %s HTTP/1.1\r\n", method, path);
+    strbuf_appendf(&sb, "Host: %s:%u\r\n", host, (unsigned)port);
+    strbuf_append(&sb, "User-Agent: cognitive-os-agent/0.1\r\n");
     if (content_type && blen)
-        coa_strbuf_appendf(&sb, "Content-Type: %s\r\n", content_type);
+        strbuf_appendf(&sb, "Content-Type: %s\r\n", content_type);
     if (blen)
-        coa_strbuf_appendf(&sb, "Content-Length: %zu\r\n", blen);
-    coa_strbuf_append(&sb, "Connection: keep-alive\r\n");
+        strbuf_appendf(&sb, "Content-Length: %zu\r\n", blen);
+    strbuf_append(&sb, "Connection: keep-alive\r\n");
     if (extra_headers) {
         for (size_t i = 0; i < extra_headers->count; i++)
-            coa_strbuf_appendf(&sb, "%s: %s\r\n", extra_headers->items[i].key, extra_headers->items[i].val);
+            strbuf_appendf(&sb, "%s: %s\r\n", extra_headers->items[i].key, extra_headers->items[i].val);
     }
-    coa_strbuf_append(&sb, "\r\n");
+    strbuf_append(&sb, "\r\n");
     if (blen)
-        coa_strbuf_append_n(&sb, body, blen);
+        strbuf_append_n(&sb, body, blen);
 
-    int sent = coa_sock_send(sock, sb.buf, sb.len);
+    int sent = sock_send(sock, sb.buf, sb.len);
     int ok = (sent == (int)sb.len);
-    coa_strbuf_free(&sb);
+    strbuf_free(&sb);
     if (!ok) {
-        coa_sock_close(sock);
+        sock_close(sock);
         return NULL;
     }
 
-    coa_http_stream *h = calloc(1, sizeof(coa_http_stream));
+    http_stream *h = calloc(1, sizeof(http_stream));
     if (!h) {
-        coa_sock_close(sock);
+        sock_close(sock);
         return NULL;
     }
     h->sock = sock;
     h->content_remaining = -1;
     if (parse_response_head(h) != 0) {
-        coa_http_stream_close(h);
+        http_stream_close(h);
         return NULL;
     }
     return h;
 }
 
-void coa_http_stream_close(coa_http_stream *h) {
+void http_stream_close(http_stream *h) {
     if (!h)
         return;
     if (h->via_curl) {
@@ -570,25 +570,25 @@ void coa_http_stream_close(coa_http_stream *h) {
         return;
     }
     if (h->sock)
-        coa_sock_close(h->sock);
+        sock_close(h->sock);
     free(h);
 }
 
 /* ---------- full responses ---------- */
-static coa_http_response *http_full(const char *base_url, const char *method, const char *path, const char *body,
-                                    const char *content_type, coa_strmap *extra_headers, int timeout_ms) {
+static http_response *http_full(const char *base_url, const char *method, const char *path, const char *body,
+                                    const char *content_type, strmap *extra_headers, int timeout_ms) {
     if (strncmp(base_url, "https://", 8) == 0) {
         /* TLS path: libcurl buffers the whole response, then we expose it
          * through the same response shape as the plain backend */
-        coa_strmap headers;
+        strmap headers;
         memset(&headers, 0, sizeof(headers));
-        coa_http_stream *h = curl_open(base_url, method, path, body, content_type, extra_headers, timeout_ms, &headers);
+        http_stream *h = curl_open(base_url, method, path, body, content_type, extra_headers, timeout_ms, &headers);
         if (!h)
             return NULL;
-        coa_http_response *r = (coa_http_response *)calloc(1, sizeof(coa_http_response));
+        http_response *r = (http_response *)calloc(1, sizeof(http_response));
         if (!r) {
-            coa_strmap_free(&headers);
-            coa_http_stream_close(h);
+            strmap_free(&headers);
+            http_stream_close(h);
             return NULL;
         }
         r->status = h->status;
@@ -596,56 +596,56 @@ static coa_http_response *http_full(const char *base_url, const char *method, co
         r->body_len = h->c_len;
         h->c_body = NULL;
         r->headers = headers;
-        coa_http_stream_close(h);
+        http_stream_close(h);
         return r;
     }
-    coa_http_stream *h = http_open(base_url, method, path, body, content_type, extra_headers, timeout_ms);
+    http_stream *h = http_open(base_url, method, path, body, content_type, extra_headers, timeout_ms);
     if (!h)
         return NULL;
 
-    coa_http_response *r = calloc(1, sizeof(coa_http_response));
+    http_response *r = calloc(1, sizeof(http_response));
     if (!r) {
-        coa_http_stream_close(h);
+        http_stream_close(h);
         return NULL;
     }
     r->status = h->status;
 
-    coa_strbuf sb;
-    coa_strbuf_init(&sb);
+    strbuf sb;
+    strbuf_init(&sb);
     char tmp[8192];
     int n;
-    while ((n = coa_http_stream_read(h, tmp, sizeof(tmp))) > 0) {
-        coa_strbuf_append_n(&sb, tmp, (size_t)n);
+    while ((n = http_stream_read(h, tmp, sizeof(tmp))) > 0) {
+        strbuf_append_n(&sb, tmp, (size_t)n);
         if (sb.len > 64u * 1024u * 1024u)
             break;
     }
-    r->body = coa_strbuf_detach(&sb);
+    r->body = strbuf_detach(&sb);
     r->body_len = strlen(r->body);
-    coa_http_stream_close(h);
+    http_stream_close(h);
     return r;
 }
 
-coa_http_response *coa_http_post(const char *base_url, const char *path, const char *body, const char *content_type,
-                                 coa_strmap *extra_headers, int timeout_ms) {
+http_response *http_post(const char *base_url, const char *path, const char *body, const char *content_type,
+                                 strmap *extra_headers, int timeout_ms) {
     return http_full(base_url, "POST", path, body, content_type, extra_headers, timeout_ms);
 }
 
-coa_http_response *coa_http_get(const char *base_url, const char *path, coa_strmap *extra_headers, int timeout_ms) {
+http_response *http_get(const char *base_url, const char *path, strmap *extra_headers, int timeout_ms) {
     return http_full(base_url, "GET", path, NULL, NULL, extra_headers, timeout_ms);
 }
 
-coa_http_stream *coa_http_stream_open(const char *base_url, const char *method, const char *path, const char *body,
-                                      const char *content_type, coa_strmap *extra_headers, int timeout_ms) {
+http_stream *http_stream_open(const char *base_url, const char *method, const char *path, const char *body,
+                                      const char *content_type, strmap *extra_headers, int timeout_ms) {
     if (strncmp(base_url, "https://", 8) == 0)
         return curl_open(base_url, method, path, body, content_type, extra_headers, timeout_ms, NULL);
     return http_open(base_url, method, path, body, content_type, extra_headers, timeout_ms);
 }
 
-void coa_http_response_free(coa_http_response *r) {
+void http_response_free(http_response *r) {
     if (!r)
         return;
     free(r->body);
-    coa_strmap_free(&r->headers);
+    strmap_free(&r->headers);
     free(r);
 }
 

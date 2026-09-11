@@ -8,13 +8,13 @@
 #include <string.h>
 #include "cJSON.h"
 
-struct coa_cluster {
-    coa_mutex mtx;
-    coa_cluster_node *items;
+struct cluster {
+    mutex_t mtx;
+    cluster_node *items;
     size_t count, cap;
 };
 
-static void node_free(coa_cluster_node *n) {
+static void node_free(cluster_node *n) {
     free(n->id);
     free(n->host);
     free(n->role);
@@ -32,51 +32,51 @@ static const char *valid_role(const char *role) {
     return "worker";
 }
 
-coa_cluster *coa_cluster_new(void) {
-    coa_cluster *c = (coa_cluster *)calloc(1, sizeof(coa_cluster));
+cluster *cluster_new(void) {
+    cluster *c = (cluster *)calloc(1, sizeof(cluster));
     if (!c)
         return NULL;
-    coa_mutex_init(&c->mtx);
+    mutex_init(&c->mtx);
     return c;
 }
 
-void coa_cluster_free(coa_cluster *c) {
+void cluster_free(cluster *c) {
     if (!c)
         return;
-    coa_mutex_lock(&c->mtx);
+    mutex_lock(&c->mtx);
     for (size_t i = 0; i < c->count; i++)
         node_free(&c->items[i]);
     free(c->items);
-    coa_mutex_unlock(&c->mtx);
-    coa_mutex_destroy(&c->mtx);
+    mutex_unlock(&c->mtx);
+    mutex_destroy(&c->mtx);
     free(c);
 }
 
-static int find_node(coa_cluster *c, const char *id) {
+static int find_node(cluster *c, const char *id) {
     for (size_t i = 0; i < c->count; i++)
         if (strcmp(c->items[i].id, id) == 0)
             return (int)i;
     return -1;
 }
 
-int coa_cluster_upsert(coa_cluster *c, const char *id, const char *host, uint16_t port, const char *role) {
-    return coa_cluster_upsert_ex(c, id, host, port, role, NULL);
+int cluster_upsert(cluster *c, const char *id, const char *host, uint16_t port, const char *role) {
+    return cluster_upsert_ex(c, id, host, port, role, NULL);
 }
 
-int coa_cluster_upsert_ex(coa_cluster *c, const char *id, const char *host, uint16_t port, const char *role,
+int cluster_upsert_ex(cluster *c, const char *id, const char *host, uint16_t port, const char *role,
                           const char *caps) {
     if (!c || !id || !*id || !host || !*host)
         return -1;
     const char *r = valid_role(role);
-    coa_mutex_lock(&c->mtx);
-    coa_cluster_node *e = NULL;
+    mutex_lock(&c->mtx);
+    cluster_node *e = NULL;
     int i = find_node(c, id);
     if (i < 0) {
         if (c->count == c->cap) {
             size_t ncap = c->cap ? c->cap * 2 : 8;
-            coa_cluster_node *ni = (coa_cluster_node *)realloc(c->items, ncap * sizeof(*ni));
+            cluster_node *ni = (cluster_node *)realloc(c->items, ncap * sizeof(*ni));
             if (!ni) {
-                coa_mutex_unlock(&c->mtx);
+                mutex_unlock(&c->mtx);
                 return -1;
             }
             c->items = ni;
@@ -84,9 +84,9 @@ int coa_cluster_upsert_ex(coa_cluster *c, const char *id, const char *host, uint
         }
         e = &c->items[c->count++];
         memset(e, 0, sizeof(*e));
-        e->id = coa_strdup(id);
-        e->status = coa_strdup("up");
-        e->last_seen_ms = coa_time_now_ms();
+        e->id = xstrdup(id);
+        e->status = xstrdup("up");
+        e->last_seen_ms = time_now_ms();
     } else {
         e = &c->items[i];
         free(e->host);
@@ -96,102 +96,102 @@ int coa_cluster_upsert_ex(coa_cluster *c, const char *id, const char *host, uint
         e->role = NULL;
         e->caps = NULL;
     }
-    e->host = coa_strdup(host);
+    e->host = xstrdup(host);
     e->port = port;
-    e->role = coa_strdup(r);
-    e->caps = coa_strdup(caps && *caps ? caps : "");
-    coa_mutex_unlock(&c->mtx);
+    e->role = xstrdup(r);
+    e->caps = xstrdup(caps && *caps ? caps : "");
+    mutex_unlock(&c->mtx);
     return 0;
 }
 
-int coa_cluster_remove(coa_cluster *c, const char *id) {
+int cluster_remove(cluster *c, const char *id) {
     if (!c || !id)
         return -1;
-    coa_mutex_lock(&c->mtx);
+    mutex_lock(&c->mtx);
     int i = find_node(c, id);
     if (i < 0) {
-        coa_mutex_unlock(&c->mtx);
+        mutex_unlock(&c->mtx);
         return -1;
     }
     node_free(&c->items[i]);
     if (c->count - i - 1 > 0)
-        memmove(&c->items[i], &c->items[i + 1], (c->count - i - 1) * sizeof(coa_cluster_node));
+        memmove(&c->items[i], &c->items[i + 1], (c->count - i - 1) * sizeof(cluster_node));
     c->count--;
-    coa_mutex_unlock(&c->mtx);
+    mutex_unlock(&c->mtx);
     return 0;
 }
 
-int coa_cluster_heartbeat(coa_cluster *c, const char *id) {
+int cluster_heartbeat(cluster *c, const char *id) {
     if (!c || !id)
         return -1;
-    coa_mutex_lock(&c->mtx);
+    mutex_lock(&c->mtx);
     int i = find_node(c, id);
     if (i < 0) {
-        coa_mutex_unlock(&c->mtx);
+        mutex_unlock(&c->mtx);
         return -1;
     }
-    c->items[i].last_seen_ms = coa_time_now_ms();
+    c->items[i].last_seen_ms = time_now_ms();
     free(c->items[i].status);
-    c->items[i].status = coa_strdup("up");
-    coa_mutex_unlock(&c->mtx);
+    c->items[i].status = xstrdup("up");
+    mutex_unlock(&c->mtx);
     return 0;
 }
 
-void coa_cluster_mark_down(coa_cluster *c, int64_t stale_ms) {
+void cluster_mark_down(cluster *c, int64_t stale_ms) {
     if (!c)
         return;
-    int64_t now = coa_time_now_ms();
-    coa_mutex_lock(&c->mtx);
+    int64_t now = time_now_ms();
+    mutex_lock(&c->mtx);
     for (size_t i = 0; i < c->count; i++) {
-        coa_cluster_node *n = &c->items[i];
+        cluster_node *n = &c->items[i];
         if (now - n->last_seen_ms > stale_ms && strcmp(n->status, "up") == 0) {
             free(n->status);
-            n->status = coa_strdup("down");
+            n->status = xstrdup("down");
         }
     }
-    coa_mutex_unlock(&c->mtx);
+    mutex_unlock(&c->mtx);
 }
 
-const coa_cluster_node *coa_cluster_find(coa_cluster *c, const char *id) {
+const cluster_node *cluster_find(cluster *c, const char *id) {
     if (!c || !id)
         return NULL;
-    coa_mutex_lock(&c->mtx);
-    const coa_cluster_node *n = NULL;
+    mutex_lock(&c->mtx);
+    const cluster_node *n = NULL;
     int i = find_node(c, id);
     if (i >= 0)
         n = &c->items[i];
-    coa_mutex_unlock(&c->mtx);
+    mutex_unlock(&c->mtx);
     return n;
 }
 
-int coa_cluster_count(coa_cluster *c) {
+int cluster_count(cluster *c) {
     if (!c)
         return 0;
-    coa_mutex_lock(&c->mtx);
+    mutex_lock(&c->mtx);
     int n = (int)c->count;
-    coa_mutex_unlock(&c->mtx);
+    mutex_unlock(&c->mtx);
     return n;
 }
 
-int coa_cluster_up_count(coa_cluster *c) {
+int cluster_up_count(cluster *c) {
     if (!c)
         return 0;
-    coa_mutex_lock(&c->mtx);
+    mutex_lock(&c->mtx);
     int up = 0;
     for (size_t i = 0; i < c->count; i++)
         if (strcmp(c->items[i].status, "up") == 0)
             up++;
-    coa_mutex_unlock(&c->mtx);
+    mutex_unlock(&c->mtx);
     return up;
 }
 
-char *coa_cluster_json(coa_cluster *c) {
+char *cluster_json(cluster *c) {
     cJSON *arr = cJSON_CreateArray();
     if (!c)
         return cJSON_PrintUnformatted(arr);
-    coa_mutex_lock(&c->mtx);
+    mutex_lock(&c->mtx);
     for (size_t i = 0; i < c->count; i++) {
-        coa_cluster_node *n = &c->items[i];
+        cluster_node *n = &c->items[i];
         cJSON *o = cJSON_CreateObject();
         cJSON_AddStringToObject(o, "id", n->id);
         cJSON_AddStringToObject(o, "host", n->host);
@@ -202,7 +202,7 @@ char *coa_cluster_json(coa_cluster *c) {
         cJSON_AddNumberToObject(o, "last_seen_ms", (double)n->last_seen_ms);
         cJSON_AddItemToArray(arr, o);
     }
-    coa_mutex_unlock(&c->mtx);
+    mutex_unlock(&c->mtx);
     char *s = cJSON_PrintUnformatted(arr);
     cJSON_Delete(arr);
     return s;
