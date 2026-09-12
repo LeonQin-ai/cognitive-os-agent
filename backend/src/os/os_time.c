@@ -33,13 +33,26 @@ int64_t time_now_us(void) {
 }
 
 static void win_epoch_utc(struct tm *out) {
+    /* 100ns ticks since 1601-01-01; convert to unix seconds */
+    time_t secs;
+    /* civil_from_days */
+    int z;
+    int era;
+    unsigned doe;
+    unsigned yoe;
+    int y;
+    unsigned doy;
+    unsigned mp;
+    unsigned d;
+    unsigned m;
+
     FILETIME ft;
     GetSystemTimeAsFileTime(&ft);
     ULARGE_INTEGER u;
     u.LowPart = ft.dwLowDateTime;
     u.HighPart = ft.dwHighDateTime;
     /* 100ns ticks since 1601-01-01; convert to unix seconds */
-    time_t secs = (time_t)((u.QuadPart / 10000000ULL) - 11644473600ULL);
+    secs = (time_t)((u.QuadPart / 10000000ULL) - 11644473600ULL);
     out->tm_sec = (int)(secs % 60);
     secs /= 60;
     out->tm_min = (int)(secs % 60);
@@ -47,15 +60,15 @@ static void win_epoch_utc(struct tm *out) {
     out->tm_hour = (int)(secs % 24);
     secs /= 24;
     /* civil_from_days */
-    int z = (int)secs + 719468;
-    int era = (z >= 0 ? z : z - 146096) / 146097;
-    unsigned doe = (unsigned)(z - era * 146097);
-    unsigned yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    int y = (int)yoe + era * 400;
-    unsigned doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    unsigned mp = (5 * doy + 2) / 153;
-    unsigned d = doy - (153 * mp + 2) / 5 + 1;
-    unsigned m = mp + (mp < 10 ? 3 : -9);
+    z = (int)secs + 719468;
+    era = (z >= 0 ? z : z - 146096) / 146097;
+    doe = (unsigned)(z - era * 146097);
+    yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    y = (int)yoe + era * 400;
+    doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    mp = (5 * doy + 2) / 153;
+    d = doy - (153 * mp + 2) / 5 + 1;
+    m = mp + (mp < 10 ? 3 : -9);
     y += (m <= 2);
     out->tm_year = y - 1900;
     out->tm_mon = (int)m - 1;

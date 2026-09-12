@@ -15,6 +15,7 @@ static const char *ident(const char *name, char *buf, size_t n) {
         else if (c == ' ' || c == '-' || c == '_')
             buf[j++] = '_';
     }
+
     if (j == 0)
         buf[j++] = '_';
     buf[j] = '\0';
@@ -23,9 +24,10 @@ static const char *ident(const char *name, char *buf, size_t n) {
 
 char *codegen_plugin(const char *name, const char *description) {
     char id[128];
+    strbuf sb;
+
     ident(name, id, sizeof(id));
 
-    strbuf sb;
     strbuf_init(&sb);
     strbuf_appendf(&sb,
                        "/* %s.c — generated cognitive-os-agent plugin: %s */\n"

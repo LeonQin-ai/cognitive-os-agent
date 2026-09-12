@@ -20,16 +20,20 @@ void strbuf_free(strbuf *sb) {
 }
 
 static void strbuf_grow(strbuf *sb, size_t need) {
+    size_t cap;
+    char *nb;
+
     if (sb->cap >= need)
         return;
-    size_t cap = sb->cap ? sb->cap : 64;
+    cap = sb->cap ? sb->cap : 64;
     while (cap < need)
         cap *= 2;
-    char *nb = realloc(sb->buf, cap);
+    nb = realloc(sb->buf, cap);
     if (!nb) {
         fprintf(stderr, "strbuf: out of memory\n");
         exit(1);
     }
+
     sb->buf = nb;
     sb->cap = cap;
 }
@@ -47,15 +51,18 @@ void strbuf_append(strbuf *sb, const char *s) {
 
 void strbuf_appendf(strbuf *sb, const char *fmt, ...) {
     va_list ap;
-    va_start(ap, fmt);
     va_list ap2;
+    int n;
+
+    va_start(ap, fmt);
     va_copy(ap2, ap);
-    int n = vsnprintf(NULL, 0, fmt, ap);
+    n = vsnprintf(NULL, 0, fmt, ap);
     va_end(ap);
     if (n < 0) {
         va_end(ap2);
         return;
     }
+
     strbuf_grow(sb, sb->len + (size_t)n + 1);
     vsnprintf(sb->buf + sb->len, (size_t)n + 1, fmt, ap2);
     va_end(ap2);
@@ -79,6 +86,7 @@ void strmap_set(strmap *m, const char *key, const char *val) {
             return;
         }
     }
+
     if (m->count == m->cap) {
         size_t cap = m->cap ? m->cap * 2 : 8;
         m->items = realloc(m->items, cap * sizeof(kv));
@@ -88,6 +96,7 @@ void strmap_set(strmap *m, const char *key, const char *val) {
         }
         m->cap = cap;
     }
+
     m->items[m->count].key = xstrdup(key);
     m->items[m->count].val = val ? xstrdup(val) : NULL;
     m->count++;
@@ -98,6 +107,7 @@ const char *strmap_get(const strmap *m, const char *key) {
         if (strcmp(m->items[i].key, key) == 0)
             return m->items[i].val;
     }
+
     return NULL;
 }
 
@@ -106,16 +116,20 @@ void strmap_free(strmap *m) {
         free(m->items[i].key);
         free(m->items[i].val);
     }
+
     free(m->items);
     memset(m, 0, sizeof(*m));
 }
 
 /* ---------- misc ---------- */
 char *xstrdup(const char *s) {
+    size_t n;
+    char *r;
+
     if (!s)
         return NULL;
-    size_t n = strlen(s) + 1;
-    char *r = malloc(n);
+    n = strlen(s) + 1;
+    r = malloc(n);
     if (!r)
         return NULL;
     memcpy(r, s, n);
@@ -141,6 +155,7 @@ void path_join(char *out, size_t n, const char *a, const char *b) {
         else
             snprintf(tmp, sizeof(tmp), "%s%s", a, b ? b : "");
     }
+
     snprintf(out, n, "%s", tmp);
 }
 
@@ -149,6 +164,7 @@ void path_resolve(char *out, size_t n, const char *workspace, const char *path) 
         snprintf(out, n, "%s", workspace ? workspace : "");
         return;
     }
+
     if (path[0] == '/' || path[0] == '\\') {
         snprintf(out, n, "%s", path);
         return;
@@ -167,12 +183,14 @@ void path_resolve(char *out, size_t n, const char *workspace, const char *path) 
 
 /* ---------- hashing ---------- */
 uint64_t hash64(const void *data, size_t len) {
-    const unsigned char *p = (const unsigned char *)data;
     uint64_t h = UINT64_C(0xcbf29ce484222325);
+
+    const unsigned char *p = (const unsigned char *)data;
     for (size_t i = 0; i < len; i++) {
         h ^= p[i];
         h *= UINT64_C(0x100000001b3);
     }
+
     return h;
 }
 
@@ -182,6 +200,7 @@ void hash_hex(char out[17], uint64_t h) {
         out[i] = hexc[h & 0xF];
         h >>= 4;
     }
+
     out[16] = '\0';
 }
 
@@ -201,10 +220,12 @@ static int utf8_seq_len(unsigned char b) {
 }
 
 int str_utf8_valid_n(const char *s, long long n) {
+    size_t len;
+    size_t i = 0;
+
     if (!s)
         return 1;
-    size_t len = (n < 0) ? strlen(s) : (size_t)n;
-    size_t i = 0;
+    len = (n < 0) ? strlen(s) : (size_t)n;
     while (i < len) {
         int l = utf8_seq_len((unsigned char)s[i]);
         if (l == 0 || i + (size_t)l > len)
@@ -229,14 +250,18 @@ int str_utf8_valid_n(const char *s, long long n) {
             return 0;
         i += (size_t)l;
     }
+
     return 1;
 }
 
 char *str_utf8_sanitize(const char *s) {
+    size_t len;
+    char *out;
+
     if (!s)
         return NULL;
-    size_t len = strlen(s);
-    char *out = (char *)malloc(len + 1);
+    len = strlen(s);
+    out = (char *)malloc(len + 1);
     if (!out)
         return NULL;
     size_t o = 0, i = 0;
@@ -275,6 +300,7 @@ char *str_utf8_sanitize(const char *s) {
             i += (l > 0) ? 1 : 1; /* skip the bad lead byte; continuations get re-checked */
         }
     }
+
     out[o] = '\0';
     return out;
 }

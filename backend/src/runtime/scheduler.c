@@ -48,24 +48,30 @@ static int task_less(const task *a, const task *b) {
 
 /* insert into sorted queue */
 static void queue_insert(scheduler *s, task *t) {
+    size_t i;
+
     if (s->qlen == s->qcap) {
         size_t cap = s->qcap ? s->qcap * 2 : 16;
         s->queue = realloc(s->queue, cap * sizeof(task *));
         s->qcap = cap;
     }
-    size_t i = s->qlen;
+
+    i = s->qlen;
     while (i > 0 && task_less(t, s->queue[i - 1])) {
         s->queue[i] = s->queue[i - 1];
         i--;
     }
+
     s->queue[i] = t;
     s->qlen++;
 }
 
 static task *queue_pop(scheduler *s) {
+    task *t;
+
     if (s->qlen == 0)
         return NULL;
-    task *t = s->queue[0];
+    t = s->queue[0];
     memmove(s->queue, s->queue + 1, (s->qlen - 1) * sizeof(task *));
     s->qlen--;
     return t;
@@ -77,6 +83,7 @@ static void add_all(scheduler *s, task *t) {
         s->all = realloc(s->all, cap * sizeof(task *));
         s->acap = cap;
     }
+
     s->all[s->alen++] = t;
 }
 
@@ -151,9 +158,11 @@ static void worker_main(void *arg) {
 }
 
 scheduler *scheduler_new(int workers, task_runner runner, void *worker_ud) {
+    scheduler *s;
+
     if (workers < 1)
         workers = 1;
-    scheduler *s = calloc(1, sizeof(scheduler));
+    s = calloc(1, sizeof(scheduler));
     if (!s)
         return NULL;
     s->workers = workers;
@@ -167,6 +176,7 @@ scheduler *scheduler_new(int workers, task_runner runner, void *worker_ud) {
         free(s);
         return NULL;
     }
+
     for (int i = 0; i < workers; i++) {
         s->threads[i] = thread_create(worker_main, s);
         if (!s->threads[i]) {
@@ -178,6 +188,7 @@ scheduler *scheduler_new(int workers, task_runner runner, void *worker_ud) {
             return NULL;
         }
     }
+
     return s;
 }
 
@@ -190,6 +201,7 @@ void scheduler_free(scheduler *s) {
         free(s->all[i]->tag);
         free(s->all[i]);
     }
+
     free(s->all);
     free(s->queue);
     free(s->threads);
@@ -205,6 +217,8 @@ int64_t scheduler_submit(scheduler *s, int priority, const char *input, void *us
 int64_t scheduler_submit_tag(scheduler *s, int priority, const char *input, void *userdata, int64_t timeout_ms,
                                  const char *tag) {
     task *t = calloc(1, sizeof(task));
+    int64_t id;
+
     if (!t)
         return -1;
     mutex_lock(&s->mtx);
@@ -220,7 +234,7 @@ int64_t scheduler_submit_tag(scheduler *s, int priority, const char *input, void
     queue_insert(s, t);
     add_all(s, t);
     s->active++;
-    int64_t id = t->id;
+    id = t->id;
     cond_broadcast(&s->not_empty);
     mutex_unlock(&s->mtx);
     return id;
@@ -234,6 +248,7 @@ task *scheduler_get(scheduler *s, int64_t id) {
             r = s->all[i];
             break;
         }
+
     mutex_unlock(&s->mtx);
     return r;
 }
@@ -263,17 +278,20 @@ int scheduler_wait_idle(scheduler *s, int timeout_ms) {
         }
         cond_timedwait_ms(&s->not_empty, &s->mtx, 50);
     }
+
     mutex_unlock(&s->mtx);
     return 0;
 }
 
 int scheduler_shutdown(scheduler *s, int timeout_ms) {
+    int64_t deadline;
+
     mutex_lock(&s->mtx);
     s->shutdown_flag = 1;
     cond_broadcast(&s->not_empty);
     mutex_unlock(&s->mtx);
 
-    int64_t deadline = timeout_ms > 0 ? time_now_ms() + timeout_ms : 0;
+    deadline = timeout_ms > 0 ? time_now_ms() + timeout_ms : 0;
     for (int i = 0; i < s->workers; i++) {
         if (timeout_ms > 0 && time_now_ms() >= deadline)
             return -1;
@@ -282,5 +300,6 @@ int scheduler_shutdown(scheduler *s, int timeout_ms) {
             s->threads[i] = NULL;
         }
     }
+
     return 0;
 }

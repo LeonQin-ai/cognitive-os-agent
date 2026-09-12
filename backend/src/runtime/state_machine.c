@@ -39,9 +39,10 @@ void state_machine_set_hooks(state_machine *sm, hook_registry *hooks) {
 
 /* Fire the on_state_change hook for a stage entry (best effort, never blocks). */
 static void sm_notify(state_machine *sm, state st) {
+    char payload[64];
+
     if (!sm->hooks)
         return;
-    char payload[64];
     snprintf(payload, sizeof(payload), "{\"state\":\"%s\"}", state_name(st));
     hook_dispatch(sm->hooks, "agent.on_state_change", payload);
 }

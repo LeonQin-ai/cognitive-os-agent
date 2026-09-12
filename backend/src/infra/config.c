@@ -33,12 +33,15 @@ config *config_new(void) {
 }
 
 int config_apply_json(config *c, const char *json_text) {
+    cJSON *parsed;
+    cJSON *target;
+
     if (!c)
         return -1;
-    cJSON *parsed = cJSON_Parse(json_text);
+    parsed = cJSON_Parse(json_text);
     if (!parsed)
         return -1;
-    cJSON *target = parsed;
+    target = parsed;
     if (cJSON_IsObject(parsed)) {
         /* merge into existing root */
         cJSON *item = parsed->child;
@@ -59,22 +62,27 @@ int config_apply_json(config *c, const char *json_text) {
         cJSON_Delete(parsed);
         return -1;
     }
+
     return 0;
 }
 
 int config_load_file(config *c, const char *path) {
     char *text = fs_read_file(path);
+    int r;
+
     if (!text)
         return -1;
-    int r = config_apply_json(c, text);
+    r = config_apply_json(c, text);
     free(text);
     return r;
 }
 
 void config_apply_env(config *c, const char *prefix) {
+    size_t plen;
+
     if (!c || !prefix || !*prefix)
         return;
-    size_t plen = strlen(prefix);
+    plen = strlen(prefix);
     for (char **e = ENVIRON; e && *e; e++) {
         const char *eq = strchr(*e, '=');
         if (!eq)
@@ -113,26 +121,31 @@ void config_free(config *c) {
  * navigation. Without this order an empty-string default like "llm.base_url":""
  * would shadow a LLM_BASE_URL env value. */
 static cJSON *config_get_path(const config *c, const char *key) {
+    char flat[512];
+    size_t j = 0;
+    cJSON *n;
+    cJSON *node;
+    char path[512];
+    /* manual dot-splitting (strtok_r is not portable to MSVC) */
+    char *seg;
+
     if (!c || !c->root || !cJSON_IsObject(c->root))
         return NULL;
     if (!key || !*key)
         return NULL;
-    char flat[512];
-    size_t j = 0;
     for (size_t i = 0; key[i] && j + 1 < sizeof(flat); i++)
         flat[j++] = (key[i] == '_') ? '.' : key[i];
     flat[j] = '\0';
-    cJSON *n = cJSON_GetObjectItemCaseSensitive(c->root, flat);
+    n = cJSON_GetObjectItemCaseSensitive(c->root, flat);
     if (n)
         return n;
     n = cJSON_GetObjectItemCaseSensitive(c->root, key);
     if (n)
         return n;
-    cJSON *node = c->root;
-    char path[512];
+    node = c->root;
     snprintf(path, sizeof(path), "%s", key);
     /* manual dot-splitting (strtok_r is not portable to MSVC) */
-    char *seg = path;
+    seg = path;
     for (;;) {
         char *dot = strchr(seg, '.');
         if (dot)
@@ -144,6 +157,7 @@ static cJSON *config_get_path(const config *c, const char *key) {
             break;
         seg = dot + 1;
     }
+
     return node;
 }
 
@@ -169,9 +183,11 @@ int config_get_bool(const config *c, const char *key, int def) {
 }
 
 char *config_to_json(const config *c) {
+    char *s;
+
     if (!c || !c->root)
         return xstrdup("{}");
-    char *s = cJSON_PrintUnformatted(c->root);
+    s = cJSON_PrintUnformatted(c->root);
     return s; /* cJSON returns malloc'd string */
 }
 
@@ -194,12 +210,15 @@ void config_set_int(config *c, const char *key, int64_t value) {
 }
 
 int config_save_file(config *c, const char *path) {
+    char *js;
+    int rc;
+
     if (!c || !path)
         return -1;
-    char *js = config_to_json(c);
+    js = config_to_json(c);
     if (!js)
         return -1;
-    int rc = fs_write_file(path, js, strlen(js));
+    rc = fs_write_file(path, js, strlen(js));
     free(js);
     return rc;
 }

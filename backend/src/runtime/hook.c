@@ -45,12 +45,15 @@ void hook_registry_free(hook_registry *h) {
         free(c);
         c = n;
     }
+
     mutex_unlock(&h->mtx);
     mutex_destroy(&h->mtx);
     free(h);
 }
 
 int hook_register(hook_registry *h, const char *event, hook_fn fn, void *ud) {
+    int id;
+
     if (!h || !event || !*event || !fn)
         return -1;
     hook *hk = calloc(1, sizeof(*hk));
@@ -61,13 +64,14 @@ int hook_register(hook_registry *h, const char *event, hook_fn fn, void *ud) {
         free(hk);
         return -1;
     }
+
     mutex_lock(&h->mtx);
     hk->id = h->next_id++;
     hk->fn = fn;
     hk->ud = ud;
     hk->next = h->head;
     h->head = hk;
-    int id = hk->id;
+    id = hk->id;
     mutex_unlock(&h->mtx);
     return id;
 }
@@ -88,20 +92,22 @@ int hook_unregister(hook_registry *h, int id) {
         }
         pp = &(*pp)->next;
     }
+
     mutex_unlock(&h->mtx);
     return -1;
 }
 
 int hook_dispatch(hook_registry *h, const char *event, const char *payload_json) {
-    if (!h || !event || !*event)
-        return -1;
     int blocked = 0;
-    /* registration order is reversed (head insert); collect matching ids first
-     * under the lock, then fire outside it so a hook may register/unregister */
     int ids[64];
-    hook_fn fns[64];
     void *uds[64];
     int n = 0;
+
+    if (!h || !event || !*event)
+        return -1;
+    /* registration order is reversed (head insert); collect matching ids first
+     * under the lock, then fire outside it so a hook may register/unregister */
+    hook_fn fns[64];
     mutex_lock(&h->mtx);
     for (hook *c = h->head; c && n < 64; c = c->next) {
         if (strcmp(c->event, event) == 0 || strcmp(c->event, "*") == 0) {
@@ -111,40 +117,49 @@ int hook_dispatch(hook_registry *h, const char *event, const char *payload_json)
             n++;
         }
     }
+
     mutex_unlock(&h->mtx);
     for (int i = n - 1; i >= 0; i--) { /* fire in registration order */
         int rc = fns[i](event, payload_json, uds[i]);
         if (rc != 0)
             blocked = 1;
     }
+
     return blocked ? 1 : 0;
 }
 
 char *hook_registry_json(hook_registry *h) {
+    cJSON *arr;
+    char *s;
+
     if (!h)
         return xstrdup("[]");
     mutex_lock(&h->mtx);
-    cJSON *arr = cJSON_CreateArray();
+    arr = cJSON_CreateArray();
     for (hook *c = h->head; c; c = c->next) {
         cJSON *o = cJSON_CreateObject();
         cJSON_AddNumberToObject(o, "id", c->id);
         cJSON_AddStringToObject(o, "event", c->event);
         cJSON_AddItemToArray(arr, o);
     }
+
     mutex_unlock(&h->mtx);
-    char *s = cJSON_PrintUnformatted(arr);
+    s = cJSON_PrintUnformatted(arr);
     cJSON_Delete(arr);
     return s ? s : xstrdup("[]");
 }
 
 int hook_audit_file(const char *event, const char *payload_json, void *ud) {
     const char *path = ud;
+    FILE *f;
+    cJSON *o;
+
     if (!path || !event)
         return 0;
-    FILE *f = fopen(path, "a");
+    f = fopen(path, "a");
     if (!f)
         return 0;
-    cJSON *o = cJSON_CreateObject();
+    o = cJSON_CreateObject();
     if (o) {
         cJSON_AddNumberToObject(o, "ts_ms", (double)time_now_ms());
         cJSON_AddStringToObject(o, "event", event);
@@ -156,6 +171,7 @@ int hook_audit_file(const char *event, const char *payload_json, void *ud) {
         }
         cJSON_Delete(o);
     }
+
     fclose(f);
     return 0; /* audit never blocks */
 }

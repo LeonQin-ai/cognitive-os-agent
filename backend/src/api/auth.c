@@ -37,6 +37,7 @@ void auth_add_key(auth *a, const char *key) {
         a->keys = nk;
         a->cap = cap;
     }
+
     a->keys[a->count++] = xstrdup(key);
 }
 
@@ -47,14 +48,18 @@ int auth_count(auth *a) {
 /* Constant-time string equality: scans the full length of both inputs and
  * accumulates differences so the runtime does not depend on matching length. */
 static int ct_equal(const char *a, const char *b) {
+    int diff;
+    size_t n;
+
     size_t la = strlen(a), lb = strlen(b);
-    int diff = (int)(la ^ lb);
-    size_t n = la > lb ? la : lb;
+    diff = (int)(la ^ lb);
+    n = la > lb ? la : lb;
     for (size_t i = 0; i < n; i++) {
         unsigned char ca = i < la ? (unsigned char)a[i] : 0;
         unsigned char cb = i < lb ? (unsigned char)b[i] : 0;
         diff |= (int)(ca ^ cb);
     }
+
     return diff == 0;
 }
 
@@ -78,13 +83,15 @@ static int prefix_ieq(const char *s, const char *prefix) {
         if (a != b)
             return 0;
     }
+
     return 1;
 }
 
 int auth_check_header(auth *a, const char *authorization) {
+    const char *tok = authorization;
+
     if (!a || !authorization)
         return 0;
-    const char *tok = authorization;
     if (prefix_ieq(authorization, "bearer "))
         tok = authorization + 7;
     while (*tok == ' ' || *tok == '\t')
@@ -106,10 +113,12 @@ static unsigned long long xorshift64(unsigned long long *s) {
 }
 
 void auth_generate_token(char *out, size_t bytes) {
+    static int seeded = 0;
+    static const char hexc[] = "0123456789abcdef";
+
     if (!out || bytes == 0)
         return;
     static unsigned long long state;
-    static int seeded = 0;
     if (!seeded) {
         unsigned long long a = (unsigned long long)time(NULL);
         unsigned long long b = (unsigned long long)(uintptr_t)&state;
@@ -118,11 +127,12 @@ void auth_generate_token(char *out, size_t bytes) {
             state = 1;
         seeded = 1;
     }
-    static const char hexc[] = "0123456789abcdef";
+
     for (size_t i = 0; i < bytes; i++) {
         unsigned long long r = xorshift64(&state);
         out[i * 2] = hexc[(r >> 4) & 0xF];
         out[i * 2 + 1] = hexc[r & 0xF];
     }
+
     out[bytes * 2] = '\0';
 }

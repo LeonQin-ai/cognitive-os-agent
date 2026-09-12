@@ -50,11 +50,14 @@ static int ci_strstr(const char *hay, const char *needle) {
         if (j == nlen)
             return 1;
     }
+
     return 0;
 }
 
 char *security_audit(const char *text) {
     cJSON *out = cJSON_CreateObject();
+    char *s;
+
     if (out) {
         cJSON *findings = cJSON_CreateArray();
         for (size_t i = 0; i < N_RULES; i++) {
@@ -68,7 +71,8 @@ char *security_audit(const char *text) {
         }
         cJSON_AddItemToObject(out, "findings", findings);
     }
-    char *s = out ? cJSON_PrintUnformatted(out) : NULL;
+
+    s = out ? cJSON_PrintUnformatted(out) : NULL;
     if (out)
         cJSON_Delete(out);
     return s ? s : xstrdup("{}");

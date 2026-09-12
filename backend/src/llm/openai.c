@@ -34,8 +34,11 @@ static void openai_destroy(llm *llm) {
 
 static char *build_request_body(const llm_request *req, const char *model, int stream) {
     cJSON *root = cJSON_CreateObject();
+    cJSON *msgs;
+    char *s;
+
     cJSON_AddStringToObject(root, "model", model ? model : "default");
-    cJSON *msgs = cJSON_AddArrayToObject(root, "messages");
+    msgs = cJSON_AddArrayToObject(root, "messages");
     for (size_t i = 0; i < req->num_messages; i++) {
         const llm_message *m = &req->messages[i];
         cJSON *o = cJSON_CreateObject();
@@ -71,12 +74,13 @@ static char *build_request_body(const llm_request *req, const char *model, int s
         free(content);
         cJSON_AddItemToArray(msgs, o);
     }
+
     cJSON_AddNumberToObject(root, "temperature", req->temperature);
     if (req->max_tokens > 0)
         cJSON_AddNumberToObject(root, "max_tokens", req->max_tokens);
     if (stream)
         cJSON_AddBoolToObject(root, "stream", 1);
-    char *s = cJSON_PrintUnformatted(root);
+    s = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
     return s;
 }
@@ -86,36 +90,47 @@ static void set_error(llm_response *resp, const char *msg) {
 }
 
 static char *normalize_base(const char *base, const char **path_out) {
+    size_t n;
+
     /* The fixed OPENAI_PATH already starts with /v1; if the user supplied a
      * base_url that already ends in /v1 (e.g. https://api.deepseek.com/v1),
      * strip it to avoid a doubled /v1/v1/... path. A base ending in any other
      * /vN (e.g. Volcengine Ark Coding Plan "https://ark.../api/coding/v3")
      * keeps its own version, so only "/chat/completions" is appended. */
     *path_out = OPENAI_PATH;
-    size_t n = base ? strlen(base) : 0;
+    n = base ? strlen(base) : 0;
     if (n >= 3 && strcmp(base + n - 3, "/v1") == 0) {
         char *s = xstrdup(base);
         s[n - 3] = '\0';
         return s;
     }
+
     if (n >= 3 && base[n - 3] == '/' && base[n - 2] == 'v' && base[n - 1] >= '0' && base[n - 1] <= '9') {
         char *s = xstrdup(base);
         *path_out = "/chat/completions";
         return s;
     }
+
     return xstrdup(base);
 }
 
 static int openai_chat(llm *llm, const llm_request *req, llm_response *resp) {
     char *body = build_request_body(req, llm->model, 0);
+    const char *path;
+    char *base;
+    strmap *hdrs = NULL;
+    http_response *r;
+    cJSON *root;
+    cJSON *choices;
+    cJSON *msg;
+    cJSON *content;
+
     if (!body) {
         set_error(resp, "request build failed");
         return -1;
     }
 
-    const char *path;
-    char *base = normalize_base(impl_of(llm)->base_url, &path);
-    strmap *hdrs = NULL;
+    base = normalize_base(impl_of(llm)->base_url, &path);
     if (llm->api_key) {
         hdrs = (strmap *)calloc(1, sizeof(strmap));
         char auth[2048];
@@ -123,13 +138,14 @@ static int openai_chat(llm *llm, const llm_request *req, llm_response *resp) {
         strmap_set(hdrs, "Authorization", auth);
     }
 
-    http_response *r = http_post(base, path, body, "application/json", hdrs, llm_timeout_ms());
+    r = http_post(base, path, body, "application/json", hdrs, llm_timeout_ms());
     free(body);
     free(base);
     if (hdrs) {
         strmap_free(hdrs);
         free(hdrs);
     }
+
     if (!r) {
         set_error(resp, "http request failed");
         return -1;
@@ -143,16 +159,16 @@ static int openai_chat(llm *llm, const llm_request *req, llm_response *resp) {
         return -1;
     }
 
-    cJSON *root = cJSON_Parse(r->body);
+    root = cJSON_Parse(r->body);
     http_response_free(r);
     if (!root) {
         set_error(resp, "openai: invalid JSON response");
         return -1;
     }
 
-    cJSON *choices = cJSON_GetObjectItemCaseSensitive(root, "choices");
-    cJSON *msg = choices && choices->child ? cJSON_GetObjectItemCaseSensitive(choices->child, "message") : NULL;
-    cJSON *content = msg ? cJSON_GetObjectItemCaseSensitive(msg, "content") : NULL;
+    choices = cJSON_GetObjectItemCaseSensitive(root, "choices");
+    msg = choices && choices->child ? cJSON_GetObjectItemCaseSensitive(choices->child, "message") : NULL;
+    content = msg ? cJSON_GetObjectItemCaseSensitive(msg, "content") : NULL;
     if (content && cJSON_IsString(content) && content->valuestring[0]) {
         resp->content = xstrdup(content->valuestring);
     } else {
@@ -171,18 +187,24 @@ static int openai_chat(llm *llm, const llm_request *req, llm_response *resp) {
             set_error(resp, em);
         }
     }
+
     cJSON_Delete(root);
     return resp->error ? -1 : 0;
 }
 
 static int openai_stream(llm *llm, const llm_request *req, llm_stream_cb cb, void *ud) {
     char *body = build_request_body(req, llm->model, 1);
+    const char *path;
+    char *base;
+    strmap *hdrs = NULL;
+    sse *s;
+    char line[16384];
+    int rc = 0;
+
     if (!body)
         return -1;
 
-    const char *path;
-    char *base = normalize_base(impl_of(llm)->base_url, &path);
-    strmap *hdrs = NULL;
+    base = normalize_base(impl_of(llm)->base_url, &path);
     if (llm->api_key) {
         hdrs = (strmap *)calloc(1, sizeof(strmap));
         char auth[2048];
@@ -190,13 +212,14 @@ static int openai_stream(llm *llm, const llm_request *req, llm_stream_cb cb, voi
         strmap_set(hdrs, "Authorization", auth);
     }
 
-    sse *s = sse_start(base, path, body, "application/json", hdrs, llm_timeout_ms());
+    s = sse_start(base, path, body, "application/json", hdrs, llm_timeout_ms());
     free(body);
     free(base);
     if (hdrs) {
         strmap_free(hdrs);
         free(hdrs);
     }
+
     if (!s)
         return -1;
     if (sse_status(s) != 200) {
@@ -205,8 +228,6 @@ static int openai_stream(llm *llm, const llm_request *req, llm_stream_cb cb, voi
         return -1;
     }
 
-    char line[16384];
-    int rc = 0;
     while (sse_next(s, line, sizeof(line)) == 1) {
         if (llm->cancel) {
             rc = -1;
@@ -223,6 +244,7 @@ static int openai_stream(llm *llm, const llm_request *req, llm_stream_cb cb, voi
             cb(content->valuestring, ud);
         cJSON_Delete(root);
     }
+
     sse_close(s);
     return rc;
 }
@@ -235,6 +257,7 @@ llm *openai_create(const char *base_url, const char *api_key, const char *model)
         free(im);
         return NULL;
     }
+
     static const llm_vtable vt = {openai_destroy, openai_chat, openai_stream};
     llm->vt = &vt;
     llm->provider = xstrdup("openai");

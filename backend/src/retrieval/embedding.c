@@ -28,10 +28,12 @@ static int utf8_char_len(unsigned char c) {
 }
 
 static void local_embed(const char *text, float *out) {
+    const char *p = text;
+    float norm = 0.0f;
+
     memset(out, 0, EMBED_DIM * sizeof(float));
     if (!text)
         return;
-    const char *p = text;
     while (*p) {
         while (*p && !isalnum((unsigned char)*p))
             p++;
@@ -47,6 +49,7 @@ static void local_embed(const char *text, float *out) {
             out[bucket] += 1.0f;
         }
     }
+
     /* CJK fallback: non-ASCII text produces no alnum tokens (an all-zero
      * vector), so hash overlapping UTF-8 character bigrams — Chinese queries
      * then share buckets with documents containing the same words. */
@@ -64,7 +67,7 @@ static void local_embed(const char *text, float *out) {
         }
         q += (size_t)cl;
     }
-    float norm = 0.0f;
+
     for (int i = 0; i < EMBED_DIM; i++)
         norm += out[i] * out[i];
     norm = sqrtf(norm);
@@ -92,26 +95,36 @@ static void l2norm(float *v, int dim) {
 }
 
 static int remote_embed(const char *text, float *out) {
+    cJSON *body;
+    cJSON *input;
+    char *js;
+    strmap headers;
+    http_response *r;
+    cJSON *root;
+    cJSON *data;
+    cJSON *first;
+    cJSON *emb;
+    int rc = -1;
+
     memset(out, 0, EMBED_DIM * sizeof(float));
     if (!g_base[0])
         return -1;
 
-    cJSON *body = cJSON_CreateObject();
+    body = cJSON_CreateObject();
     if (g_model[0])
         cJSON_AddStringToObject(body, "model", g_model);
-    cJSON *input = cJSON_AddArrayToObject(body, "input");
+    input = cJSON_AddArrayToObject(body, "input");
     cJSON_AddItemToArray(input, cJSON_CreateString(text ? text : ""));
-    char *js = cJSON_PrintUnformatted(body);
+    js = cJSON_PrintUnformatted(body);
     cJSON_Delete(body);
     if (!js)
         return -1;
 
-    strmap headers;
     memset(&headers, 0, sizeof(headers));
     if (g_key[0])
         strmap_set(&headers, "Authorization", g_key); /* caller prefixes "Bearer " */
 
-    http_response *r = http_post(g_base, "/embeddings", js, "application/json", &headers, 15000);
+    r = http_post(g_base, "/embeddings", js, "application/json", &headers, 15000);
     free(js);
     strmap_free(&headers);
     if (!r || r->status != 200 || !r->body) {
@@ -120,14 +133,13 @@ static int remote_embed(const char *text, float *out) {
         return -1;
     }
 
-    cJSON *root = cJSON_Parse(r->body);
+    root = cJSON_Parse(r->body);
     http_response_free(r);
     if (!root)
         return -1;
-    cJSON *data = cJSON_GetObjectItemCaseSensitive(root, "data");
-    cJSON *first = data && cJSON_IsArray(data) ? cJSON_GetArrayItem(data, 0) : NULL;
-    cJSON *emb = first ? cJSON_GetObjectItemCaseSensitive(first, "embedding") : NULL;
-    int rc = -1;
+    data = cJSON_GetObjectItemCaseSensitive(root, "data");
+    first = data && cJSON_IsArray(data) ? cJSON_GetArrayItem(data, 0) : NULL;
+    emb = first ? cJSON_GetObjectItemCaseSensitive(first, "embedding") : NULL;
     if (emb && cJSON_IsArray(emb)) {
         int n = cJSON_GetArraySize(emb);
         if (n > EMBED_DIM)
@@ -140,6 +152,7 @@ static int remote_embed(const char *text, float *out) {
         l2norm(out, EMBED_DIM);
         rc = 0;
     }
+
     cJSON_Delete(root);
     return rc;
 }
@@ -155,9 +168,10 @@ void embed_text(const char *text, float *out) {
 }
 
 float embed_cosine(const float *a, const float *b, int dim) {
+    double dot = 0.0;
+
     if (!a || !b || dim <= 0)
         return 0.0f;
-    double dot = 0.0;
     for (int i = 0; i < dim; i++)
         dot += (double)a[i] * (double)b[i];
     return (float)dot; /* unit-normalized: dot == cosine */
@@ -169,11 +183,14 @@ void embedding_use_local(void) {
 }
 
 int embedding_use_remote(const char *base_url, const char *api_key, const char *model) {
+    /* strip a trailing slash so we always build {base}/embeddings */
+    size_t l;
+
     if (!base_url || !*base_url)
         return -1;
     snprintf(g_base, sizeof(g_base), "%s", base_url);
     /* strip a trailing slash so we always build {base}/embeddings */
-    size_t l = strlen(g_base);
+    l = strlen(g_base);
     while (l > 0 && g_base[l - 1] == '/')
         g_base[--l] = '\0';
     g_key[0] = '\0';
@@ -183,6 +200,7 @@ int embedding_use_remote(const char *base_url, const char *api_key, const char *
         else
             snprintf(g_key, sizeof(g_key), "Bearer %s", api_key);
     }
+
     snprintf(g_model, sizeof(g_model), "%s", model ? model : "");
     g_remote = 1;
     return 0;
@@ -198,10 +216,13 @@ const char *embedding_provider_name(void) {
  * text. Catches morphological variants the exact token match misses
  * ("connect"~"connects"). Result in [0,1]. */
 static float char_bigram_jaccard(const char *a, const char *b) {
+    const char *srcs[2] = {a, b};
+    int inter = 0;
+    int uni;
+
     /* bigram sets bounded to a fixed cap (256 each) — enough for rerank */
     unsigned short A[256], B[256];
     int na = 0, nb = 0;
-    const char *srcs[2] = {a, b};
     unsigned short *dsts[2] = {A, B};
     int *cnts[2] = {&na, &nb};
     for (int s = 0; s < 2; s++) {
@@ -221,9 +242,9 @@ static float char_bigram_jaccard(const char *a, const char *b) {
             p++;
         }
     }
+
     if (na == 0 || nb == 0)
         return 0.0f;
-    int inter = 0;
     for (int i = 0; i < na; i++) {
         for (int j = 0; j < nb; j++) {
             if (A[i] == B[j]) {
@@ -232,7 +253,8 @@ static float char_bigram_jaccard(const char *a, const char *b) {
             }
         }
     }
-    int uni = na + nb - inter;
+
+    uni = na + nb - inter;
     return uni > 0 ? (float)inter / (float)uni : 0.0f;
 }
 
@@ -250,6 +272,7 @@ static int count_tokens(const char *s) {
         if ((size_t)(p - start) >= 2)
             n++;
     }
+
     return n;
 }
 
@@ -298,15 +321,20 @@ static int token_overlap(const char *q, const char *doc) {
             }
         }
     }
+
     return hits;
 }
 
 int embed_keyword_score(const char *query, const char *doc, float *score_out) {
+    int qt;
+    float overlap;
+    float bigr;
+
     if (!query || !doc || !score_out)
         return -1;
-    int qt = count_tokens(query);
-    float overlap = (qt > 0) ? (float)token_overlap(query, doc) / (float)qt : 0.0f;
-    float bigr = char_bigram_jaccard(query, doc);
+    qt = count_tokens(query);
+    overlap = (qt > 0) ? (float)token_overlap(query, doc) / (float)qt : 0.0f;
+    bigr = char_bigram_jaccard(query, doc);
     *score_out = 0.6f * overlap + 0.4f * bigr;
     return 0;
 }

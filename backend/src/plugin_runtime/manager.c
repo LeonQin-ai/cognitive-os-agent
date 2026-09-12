@@ -17,16 +17,20 @@ struct plugin {
 static char g_err[512] = "";
 
 plugin *plugin_load(const char *path) {
+    plugin *p;
+
     HMODULE h = LoadLibraryA(path);
     if (!h) {
         snprintf(g_err, sizeof(g_err), "LoadLibrary failed (%lu)", (unsigned long)GetLastError());
         return NULL;
     }
-    plugin *p = malloc(sizeof(plugin));
+
+    p = malloc(sizeof(plugin));
     if (!p) {
         FreeLibrary(h);
         return NULL;
     }
+
     p->h = h;
     g_err[0] = '\0';
     return p;
@@ -59,15 +63,19 @@ static char g_err[512] = "";
 
 plugin *plugin_load(const char *path) {
     void *h = dlopen(path, RTLD_NOW | RTLD_LOCAL);
+    plugin *p;
+
     if (!h) {
         snprintf(g_err, sizeof(g_err), "%s", dlerror() ? dlerror() : "dlopen failed");
         return NULL;
     }
-    plugin *p = malloc(sizeof(plugin));
+
+    p = malloc(sizeof(plugin));
     if (!p) {
         dlclose(h);
         return NULL;
     }
+
     p->h = h;
     g_err[0] = '\0';
     return p;

@@ -67,6 +67,7 @@ int vectorstore_add(vectorstore *v, const char *id, const char *text, const char
             return 0;
         }
     }
+
     if (v->count == v->cap) {
         size_t cap = v->cap ? v->cap * 2 : 8;
         vec_entry *ni = (vec_entry *)realloc(v->items, cap * sizeof(vec_entry));
@@ -77,6 +78,7 @@ int vectorstore_add(vectorstore *v, const char *id, const char *text, const char
         v->items = ni;
         v->cap = cap;
     }
+
     vec_entry *e = &v->items[v->count++];
     memset(e, 0, sizeof(*e));
     e->id = xstrdup(id);
@@ -101,30 +103,39 @@ int vectorstore_remove(vectorstore *v, const char *id) {
             return 1;
         }
     }
+
     mutex_unlock(&v->mtx);
     return 0;
 }
 
 int vectorstore_count(vectorstore *v) {
+    int n;
+
     if (!v)
         return 0;
     mutex_lock(&v->mtx);
-    int n = (int)v->count;
+    n = (int)v->count;
     mutex_unlock(&v->mtx);
     return n;
 }
 
 char *vectorstore_nearest(vectorstore *v, const char *query, int k) {
+    float qvec[EMBED_DIM];
+    /* collect top-k with a simple insertion into a small sorted list of indices */
+    int *top_idx;
+    float *top_score;
+    int ntop = 0;
+    cJSON *arr;
+    char *s;
+
     if (!v)
         return xstrdup("[]");
-    float qvec[EMBED_DIM];
     embed_text(query, qvec);
 
     mutex_lock(&v->mtx);
     /* collect top-k with a simple insertion into a small sorted list of indices */
-    int *top_idx = (int *)malloc(k > 0 ? (size_t)k * sizeof(int) : sizeof(int));
-    float *top_score = (float *)malloc(k > 0 ? (size_t)k * sizeof(float) : sizeof(float));
-    int ntop = 0;
+    top_idx = (int *)malloc(k > 0 ? (size_t)k * sizeof(int) : sizeof(int));
+    top_score = (float *)malloc(k > 0 ? (size_t)k * sizeof(float) : sizeof(float));
     if (!top_idx || !top_score) {
         free(top_idx);
         free(top_score);
@@ -159,7 +170,7 @@ char *vectorstore_nearest(vectorstore *v, const char *query, int k) {
         }
     }
 
-    cJSON *arr = cJSON_CreateArray();
+    arr = cJSON_CreateArray();
     if (arr) {
         for (int i = 0; i < ntop; i++) {
             vec_entry *e = &v->items[top_idx[i]];
@@ -171,11 +182,12 @@ char *vectorstore_nearest(vectorstore *v, const char *query, int k) {
             cJSON_AddItemToArray(arr, o);
         }
     }
+
     free(top_idx);
     free(top_score);
     mutex_unlock(&v->mtx);
 
-    char *s = arr ? cJSON_PrintUnformatted(arr) : NULL;
+    s = arr ? cJSON_PrintUnformatted(arr) : NULL;
     if (arr)
         cJSON_Delete(arr);
     return s ? s : xstrdup("[]");
@@ -187,8 +199,10 @@ char *vectorstore_nearest(vectorstore *v, const char *query, int k) {
  * entry. w_vec >= 0.999 skips the keyword pass (pure vector). */
 static void score_all(vectorstore *v, const char *query, float w_vec, float *out) {
     float qvec[EMBED_DIM];
+    int do_kw;
+
     embed_text(query, qvec);
-    int do_kw = w_vec < 0.999f;
+    do_kw = w_vec < 0.999f;
     for (size_t i = 0; i < v->count; i++) {
         float cos = embed_cosine(qvec, v->items[i].vec, EMBED_DIM);
         if (cos < 0)
@@ -205,16 +219,22 @@ static void score_all(vectorstore *v, const char *query, float w_vec, float *out
 
 /* Caller holds v->mtx. Top-k by the given per-entry scores -> JSON array. */
 static char *topk_json(vectorstore *v, const float *scores, int k) {
+    int *top_idx;
+    float *top_score;
+    int ntop = 0;
+    cJSON *arr;
+    char *s;
+
     if (k <= 0)
         return xstrdup("[]");
-    int *top_idx = (int *)malloc((size_t)k * sizeof(int));
-    float *top_score = (float *)malloc((size_t)k * sizeof(float));
+    top_idx = (int *)malloc((size_t)k * sizeof(int));
+    top_score = (float *)malloc((size_t)k * sizeof(float));
     if (!top_idx || !top_score) {
         free(top_idx);
         free(top_score);
         return xstrdup("[]");
     }
-    int ntop = 0;
+
     for (size_t i = 0; i < v->count; i++) {
         float s = scores[i];
         if (ntop >= k && s <= top_score[ntop - 1])
@@ -231,7 +251,8 @@ static char *topk_json(vectorstore *v, const float *scores, int k) {
         top_idx[pos] = (int)i;
         top_score[pos] = s;
     }
-    cJSON *arr = cJSON_CreateArray();
+
+    arr = cJSON_CreateArray();
     if (arr) {
         for (int i = 0; i < ntop; i++) {
             vec_entry *e = &v->items[top_idx[i]];
@@ -243,15 +264,19 @@ static char *topk_json(vectorstore *v, const float *scores, int k) {
             cJSON_AddItemToArray(arr, o);
         }
     }
+
     free(top_idx);
     free(top_score);
-    char *s = arr ? cJSON_PrintUnformatted(arr) : NULL;
+    s = arr ? cJSON_PrintUnformatted(arr) : NULL;
     if (arr)
         cJSON_Delete(arr);
     return s ? s : xstrdup("[]");
 }
 
 char *vectorstore_nearest_hybrid(vectorstore *v, const char *query, int k, float w_vec) {
+    float *scores;
+    char *out;
+
     if (!v || !query || k <= 0)
         return xstrdup("[]");
     if (w_vec < 0)
@@ -263,19 +288,24 @@ char *vectorstore_nearest_hybrid(vectorstore *v, const char *query, int k, float
         mutex_unlock(&v->mtx);
         return xstrdup("[]");
     }
-    float *scores = (float *)malloc(v->count * sizeof(float));
+
+    scores = (float *)malloc(v->count * sizeof(float));
     if (!scores) {
         mutex_unlock(&v->mtx);
         return xstrdup("[]");
     }
+
     score_all(v, query, w_vec, scores);
-    char *out = topk_json(v, scores, k);
+    out = topk_json(v, scores, k);
     free(scores);
     mutex_unlock(&v->mtx);
     return out;
 }
 
 char *vectorstore_nearest_multi(vectorstore *v, const char *const *queries, int nq, int k) {
+    float *best;
+    char *out;
+
     if (!v || !queries || nq <= 0 || k <= 0)
         return xstrdup("[]");
     mutex_lock(&v->mtx);
@@ -283,11 +313,13 @@ char *vectorstore_nearest_multi(vectorstore *v, const char *const *queries, int 
         mutex_unlock(&v->mtx);
         return xstrdup("[]");
     }
-    float *best = (float *)calloc(v->count, sizeof(float));
+
+    best = (float *)calloc(v->count, sizeof(float));
     if (!best) {
         mutex_unlock(&v->mtx);
         return xstrdup("[]");
     }
+
     for (int q = 0; q < nq; q++) {
         if (!queries[q] || !*queries[q])
             continue;
@@ -300,7 +332,8 @@ char *vectorstore_nearest_multi(vectorstore *v, const char *const *queries, int 
                 best[i] = scores[i];
         free(scores);
     }
-    char *out = topk_json(v, best, k);
+
+    out = topk_json(v, best, k);
     free(best);
     mutex_unlock(&v->mtx);
     return out;

@@ -46,17 +46,20 @@ static void log_line_to(FILE *f, int color, loglevel lvl, const char *text) {
 }
 
 void log_write(loglevel lvl, const char *fmt, ...) {
+    char text[16384];
+    va_list ap;
+    int use_color;
+
     if (lvl < g_log.level || lvl > LOG_FATAL)
         return;
-    char text[16384]; /* tool plans embed whole file bodies; 2048 cut them
+     /* tool plans embed whole file bodies; 2048 cut them
                        * off mid-JSON and made LLM-plan diagnostics useless */
-    va_list ap;
     va_start(ap, fmt);
     vsnprintf(text, sizeof(text), fmt, ap);
     va_end(ap);
 
     mutex_lock(&g_log.mtx);
-    int use_color = g_log.color && !g_log.file;
+    use_color = g_log.color && !g_log.file;
     log_line_to(stderr, use_color, lvl, text);
     if (g_log.file)
         log_line_to(g_log.file, 0, lvl, text);

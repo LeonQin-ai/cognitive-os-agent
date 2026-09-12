@@ -57,17 +57,21 @@ int skill_register(skill_registry *r, const skill *s) {
 }
 
 int skill_register_ex(skill_registry *r, const skill *s, int replace) {
+    int i;
+    skill *e;
+
     if (!r || !s || !s->name || !*s->name)
         return -1;
     const char *kind = (s->kind && *s->kind) ? s->kind : "shell";
     if (strcmp(kind, "shell") != 0 && strcmp(kind, "python") != 0 && strcmp(kind, "prompt") != 0)
         return -1;
     mutex_lock(&r->mtx);
-    int i = find_skill(r, s->name);
+    i = find_skill(r, s->name);
     if (i >= 0 && !replace) {
         mutex_unlock(&r->mtx);
         return -1;
     }
+
     if (i >= 0) {
         /* upsert: overwrite in place */
         skill *e = &r->items[i];
@@ -85,6 +89,7 @@ int skill_register_ex(skill_registry *r, const skill *s, int replace) {
         mutex_unlock(&r->mtx);
         return 0;
     }
+
     if (r->count == r->cap) {
         size_t ncap = r->cap ? r->cap * 2 : 8;
         skill *ni = (skill *)realloc(r->items, ncap * sizeof(*ni));
@@ -95,7 +100,8 @@ int skill_register_ex(skill_registry *r, const skill *s, int replace) {
         r->items = ni;
         r->cap = ncap;
     }
-    skill *e = &r->items[r->count++];
+
+    e = &r->items[r->count++];
     memset(e, 0, sizeof(*e));
     e->name = xstrdup(s->name);
     e->description = xstrdup(s->description ? s->description : "");
@@ -107,11 +113,13 @@ int skill_register_ex(skill_registry *r, const skill *s, int replace) {
 }
 
 const skill *skill_find(skill_registry *r, const char *name) {
+    const skill *s = NULL;
+    int i;
+
     if (!r || !name)
         return NULL;
     mutex_lock(&r->mtx);
-    const skill *s = NULL;
-    int i = find_skill(r, name);
+    i = find_skill(r, name);
     if (i >= 0)
         s = &r->items[i];
     mutex_unlock(&r->mtx);
@@ -119,10 +127,12 @@ const skill *skill_find(skill_registry *r, const char *name) {
 }
 
 int skill_count(skill_registry *r) {
+    int n;
+
     if (!r)
         return 0;
     mutex_lock(&r->mtx);
-    int n = (int)r->count;
+    n = (int)r->count;
     mutex_unlock(&r->mtx);
     return n;
 }
@@ -141,11 +151,13 @@ const skill *skill_get(skill_registry *r, size_t i) {
  * malloc'd body (or a copy of body when args are absent/invalid). */
 static char *bind_args(const char *body, const char *args_json) {
     cJSON *args = args_json && *args_json ? cJSON_Parse(args_json) : NULL;
+    strbuf sb;
+
     if (!args || !cJSON_IsObject(args)) {
         cJSON_Delete(args);
         return xstrdup(body);
     }
-    strbuf sb;
+
     strbuf_init(&sb);
     for (const char *p = body; *p;) {
         if (p[0] == '{' && p[1] == '{') {
@@ -181,6 +193,7 @@ static char *bind_args(const char *body, const char *args_json) {
         strbuf_append(&sb, tmp);
         p++;
     }
+
     cJSON_Delete(args);
     return strbuf_detach(&sb);
 }
@@ -199,10 +212,11 @@ static int cap_covers(const char *granted, const char *need) {
 /* Capability gate for plugin skills: the command's operation classes must be
  * covered by the granted csv. Legacy skills (caps == NULL) are unrestricted. */
 static int caps_allow(const char *caps_csv, const char *cmd, char *denied, size_t dcap) {
-    if (!caps_csv || !*caps_csv || !cmd)
-        return 1;
     const char *required[4];
     int n_req = 0;
+
+    if (!caps_csv || !*caps_csv || !cmd)
+        return 1;
     if (strstr(cmd, ">") || strstr(cmd, "rm ") || strstr(cmd, "mv ") || strstr(cmd, "tee "))
         required[n_req++] = "fs.write";
     if (strstr(cmd, "curl") || strstr(cmd, "wget") || strstr(cmd, "http://") || strstr(cmd, "https://"))
@@ -237,19 +251,26 @@ static int caps_allow(const char *caps_csv, const char *cmd, char *denied, size_
             return 0;
         }
     }
+
     return 1;
 }
 
 skill_result *skill_execute(skill_registry *r, const char *name, const char *args_json,
                                     const char *workspace, int timeout_ms) {
+    char *bound;
+    char *cmd = NULL;
+    char pyfile[1024] = "";
+    char denied[64] = "";
+    proc_result *pr;
+    skill_result *res;
+
     if (!r || !name)
         return NULL;
     const skill *s = skill_find(r, name);
     if (!s)
         return NULL;
 
-    char *bound = bind_args(s->body, args_json);
-    char *cmd = NULL;
+    bound = bind_args(s->body, args_json);
     if (strcmp(s->kind, "prompt") == 0) {
         /* prompt skills need an LLM backend — not runnable as a process */
         free(bound);
@@ -260,12 +281,12 @@ skill_result *skill_execute(skill_registry *r, const char *name, const char *arg
         }
         return res;
     }
+
     /* the workspace may not exist yet (first action of a fresh session);
      * create it BEFORE python skills write their temp file there, otherwise
      * the write fails and the raw python source falls through to the shell */
     if (workspace && *workspace)
         fs_mkdirs(workspace);
-    char pyfile[1024] = "";
     if (strcmp(s->kind, "python") == 0) {
         /* Write the substituted source to a temp file instead of a fragile
          * `python -c "..."` quoting chain. */
@@ -285,11 +306,11 @@ skill_result *skill_execute(skill_registry *r, const char *name, const char *arg
     } else {
         cmd = xstrdup(bound);
     }
+
     free(bound);
 
     if (!cmd)
         return NULL;
-    char denied[64] = "";
     if (!caps_allow(s->caps, cmd, denied, sizeof(denied))) {
         free(cmd);
         if (pyfile[0])
@@ -304,24 +325,27 @@ skill_result *skill_execute(skill_registry *r, const char *name, const char *arg
         }
         return res;
     }
+
     if (sandbox_forbidden(cmd)) {
         free(cmd);
         if (pyfile[0])
             fs_remove(pyfile);
         return NULL;
     }
-    proc_result *pr = proc_run_in(cmd, timeout_ms, workspace);
+
+    pr = proc_run_in(cmd, timeout_ms, workspace);
     free(cmd);
     if (pyfile[0])
         fs_remove(pyfile);
     if (!pr)
         return NULL;
 
-    skill_result *res = (skill_result *)calloc(1, sizeof(skill_result));
+    res = (skill_result *)calloc(1, sizeof(skill_result));
     if (!res) {
         proc_result_free(pr);
         return NULL;
     }
+
     res->ok = (pr->exit_code == 0 && !pr->timed_out) ? 1 : 0;
     res->output = xstrdup(pr->output ? pr->output : "");
     proc_result_free(pr);
@@ -346,6 +370,8 @@ char *skill_render_prompt(skill_registry *r, const char *name, const char *args_
 
 char *skill_list_json(skill_registry *r) {
     cJSON *arr = cJSON_CreateArray();
+    char *s;
+
     if (!r)
         return cJSON_PrintUnformatted(arr);
     mutex_lock(&r->mtx);
@@ -357,29 +383,36 @@ char *skill_list_json(skill_registry *r) {
         cJSON_AddStringToObject(o, "kind", e->kind);
         cJSON_AddItemToArray(arr, o);
     }
+
     mutex_unlock(&r->mtx);
-    char *s = cJSON_PrintUnformatted(arr);
+    s = cJSON_PrintUnformatted(arr);
     cJSON_Delete(arr);
     return s;
 }
 
 static char *slurp_file(const char *path) {
     FILE *f = fopen(path, "rb");
+    long n;
+    char *buf;
+    size_t rd;
+
     if (!f)
         return NULL;
     fseek(f, 0, SEEK_END);
-    long n = ftell(f);
+    n = ftell(f);
     if (n < 0) {
         fclose(f);
         return NULL;
     }
+
     fseek(f, 0, SEEK_SET);
-    char *buf = (char *)malloc((size_t)n + 1);
+    buf = (char *)malloc((size_t)n + 1);
     if (!buf) {
         fclose(f);
         return NULL;
     }
-    size_t rd = fread(buf, 1, (size_t)n, f);
+
+    rd = fread(buf, 1, (size_t)n, f);
     buf[rd] = '\0';
     fclose(f);
     return buf;
@@ -395,14 +428,17 @@ static int dump_file(const char *path, const char *text) {
 }
 
 int skill_unregister(skill_registry *r, const char *name) {
+    int idx;
+
     if (!r || !name)
         return -1;
     mutex_lock(&r->mtx);
-    int idx = find_skill(r, name);
+    idx = find_skill(r, name);
     if (idx < 0) {
         mutex_unlock(&r->mtx);
         return -1;
     }
+
     skill_free(&r->items[idx]);
     if ((size_t)idx + 1 < r->count)
         memmove(&r->items[idx], &r->items[idx + 1], (r->count - (size_t)idx - 1) * sizeof(skill));
@@ -412,11 +448,15 @@ int skill_unregister(skill_registry *r, const char *name) {
 }
 
 int skill_registry_persist(skill_registry *r, const char *state_root) {
+    char path[1024];
+    cJSON *arr;
+    char *s;
+    int rc;
+
     if (!r || !state_root)
         return -1;
-    char path[1024];
     path_join(path, sizeof(path), state_root, "skills.json");
-    cJSON *arr = cJSON_CreateArray();
+    arr = cJSON_CreateArray();
     mutex_lock(&r->mtx);
     for (size_t i = 0; i < r->count; i++) {
         skill *e = &r->items[i];
@@ -429,29 +469,34 @@ int skill_registry_persist(skill_registry *r, const char *state_root) {
             cJSON_AddStringToObject(o, "caps", e->caps);
         cJSON_AddItemToArray(arr, o);
     }
+
     mutex_unlock(&r->mtx);
-    char *s = cJSON_PrintUnformatted(arr);
+    s = cJSON_PrintUnformatted(arr);
     cJSON_Delete(arr);
-    int rc = dump_file(path, s ? s : "[]");
+    rc = dump_file(path, s ? s : "[]");
     free(s);
     return rc;
 }
 
 int skill_registry_load(skill_registry *r, const char *state_root) {
+    char path[1024];
+    char *txt;
+    cJSON *arr;
+
     if (!r || !state_root)
         return -1;
-    char path[1024];
     path_join(path, sizeof(path), state_root, "skills.json");
-    char *txt = slurp_file(path);
+    txt = slurp_file(path);
     if (!txt)
         return 0;
-    cJSON *arr = cJSON_Parse(txt);
+    arr = cJSON_Parse(txt);
     free(txt);
     if (!arr || !cJSON_IsArray(arr)) {
         if (arr)
             cJSON_Delete(arr);
         return 0;
     }
+
     for (int i = 0; i < cJSON_GetArraySize(arr); i++) {
         cJSON *o = cJSON_GetArrayItem(arr, i);
         if (!cJSON_IsObject(o))
@@ -469,6 +514,7 @@ int skill_registry_load(skill_registry *r, const char *state_root) {
                         (cp && cJSON_IsString(cp)) ? cp->valuestring : ""};
         skill_register(r, &sk); /* skips duplicate names */
     }
+
     cJSON_Delete(arr);
     return 0;
 }

@@ -16,17 +16,26 @@
 #define SKILL_TIMEOUT_MS 30000
 
 static tool_result *skill_exec(const tool *self, const tool_ctx *ctx, const char *args_json) {
+    cJSON *args;
+    cJSON *name_j;
+    /* Pass the optional args object through for {{placeholder}} binding. */
+    char *args_out = NULL;
+    cJSON *a_j;
+    skill_result *r;
+    tool_result *tr;
+
     (void)self;
     if (!ctx || !ctx->skills)
         return tool_result_new(0, "skill: no skill registry available");
-    cJSON *args = cJSON_Parse(args_json);
+    args = cJSON_Parse(args_json);
     if (!args)
         return tool_result_new(0, "skill: invalid args JSON");
-    cJSON *name_j = cJSON_GetObjectItemCaseSensitive(args, "name");
+    name_j = cJSON_GetObjectItemCaseSensitive(args, "name");
     if (!name_j || !cJSON_IsString(name_j)) {
         cJSON_Delete(args);
         return tool_result_new(0, "skill: missing string arg 'name'");
     }
+
     const char *name = name_j->valuestring;
 
     if (!skill_find(ctx->skills, name)) {
@@ -38,18 +47,16 @@ static tool_result *skill_exec(const tool *self, const tool_ctx *ctx, const char
         return tool_result_new(0, msg);
     }
 
-    /* Pass the optional args object through for {{placeholder}} binding. */
-    char *args_out = NULL;
-    cJSON *a_j = cJSON_GetObjectItemCaseSensitive(args, "args");
+    a_j = cJSON_GetObjectItemCaseSensitive(args, "args");
     if (a_j && cJSON_IsObject(a_j))
         args_out = cJSON_PrintUnformatted(a_j);
-    skill_result *r =
+    r =
         skill_execute(ctx->skills, name, args_out ? args_out : "{}", ctx->workspace, SKILL_TIMEOUT_MS);
     free(args_out);
     cJSON_Delete(args);
     if (!r)
         return tool_result_new(0, "skill: execution rejected (sandbox/policy)");
-    tool_result *tr = tool_result_new(r->ok ? 1 : 0, r->output ? r->output : "");
+    tr = tool_result_new(r->ok ? 1 : 0, r->output ? r->output : "");
     skill_result_free(r);
     return tr;
 }
@@ -78,6 +85,8 @@ typedef struct generated_tool_ud {
 } generated_tool_ud;
 
 static tool_result *generated_tool_exec(const tool *self, const tool_ctx *ctx, const char *args_json) {
+    tool_result *tr;
+
     (void)self;
     generated_tool_ud *ud = self ? (generated_tool_ud *)self->ud : NULL;
     if (!ud || !ud->skills)
@@ -86,30 +95,33 @@ static tool_result *generated_tool_exec(const tool *self, const tool_ctx *ctx, c
                                             ctx ? ctx->workspace : NULL, SKILL_TIMEOUT_MS);
     if (!r)
         return tool_result_new(0, "generated tool: execution rejected (sandbox/policy)");
-    tool_result *tr = tool_result_new(r->ok ? 1 : 0, r->output ? r->output : "");
+    tr = tool_result_new(r->ok ? 1 : 0, r->output ? r->output : "");
     skill_result_free(r);
     return tr;
 }
 
 int tool_register_generated(tool_registry *reg, struct skill_registry *skills, const char *tool_name,
                                 const char *skill_name) {
+    tool *t;
+    char desc[512];
+
     if (!reg || !skills || !tool_name || !skill_name)
         return -1;
     if (!skill_find(skills, skill_name))
         return -1; /* skill must exist */
     if (tool_find(reg, tool_name))
         return 0; /* already present */
-    tool *t = (tool *)calloc(1, sizeof(*t));
+    t = (tool *)calloc(1, sizeof(*t));
     generated_tool_ud *ud = (generated_tool_ud *)calloc(1, sizeof(*ud));
     if (!t || !ud) {
         free(t);
         free(ud);
         return -1;
     }
+
     ud->skills = skills;
     ud->skill_name = xstrdup(skill_name);
     t->name = xstrdup(tool_name);
-    char desc[512];
     snprintf(desc, sizeof(desc), "[generated plugin] capability auto-created at runtime (skill: %s)", skill_name);
     t->description = xstrdup(desc);
     t->json_schema = NULL;
@@ -127,51 +139,61 @@ int tool_register_generated(tool_registry *reg, struct skill_registry *skills, c
  * them at startup. */
 
 int tool_generated_save_mapping(const char *state_root, const char *tool, const char *skill) {
+    char path[600];
+    cJSON *arr = NULL;
+    char *old;
+    cJSON *it;
+    cJSON *e;
+    char *js;
+    int rc;
+
     if (!state_root || !*state_root || !tool || !*tool || !skill || !*skill)
         return -1;
-    char path[600];
     snprintf(path, sizeof(path), "%s/generated_tools.json", state_root);
-    cJSON *arr = NULL;
-    char *old = fs_read_file(path);
+    old = fs_read_file(path);
     if (old) {
         arr = cJSON_Parse(old);
         free(old);
     }
+
     if (!arr || !cJSON_IsArray(arr)) {
         if (arr)
             cJSON_Delete(arr);
         arr = cJSON_CreateArray();
     }
+
     /* upsert: an entry bound to the same tool name is replaced */
     int idx = 0, found = 0;
-    cJSON *it;
     cJSON_ArrayForEach(it, arr) {
         cJSON *t = cJSON_GetObjectItemCaseSensitive(it, "tool");
         if (t && cJSON_IsString(t) && strcmp(t->valuestring, tool) == 0) {
             found = 1;
             break;
         }
+
         idx++;
     }
+
     if (found)
         cJSON_DeleteItemFromArray(arr, idx);
-    cJSON *e = cJSON_CreateObject();
+    e = cJSON_CreateObject();
     cJSON_AddStringToObject(e, "tool", tool);
     cJSON_AddStringToObject(e, "skill", skill);
     cJSON_AddItemToArray(arr, e);
-    char *js = cJSON_PrintUnformatted(arr);
+    js = cJSON_PrintUnformatted(arr);
     cJSON_Delete(arr);
     if (!js)
         return -1;
-    int rc = fs_write_file(path, js, strlen(js));
+    rc = fs_write_file(path, js, strlen(js));
     free(js);
     return rc == 0 ? 0 : -1;
 }
 
 char *tool_generated_load_mapping(const char *state_root) {
+    char path[600];
+
     if (!state_root || !*state_root)
         return NULL;
-    char path[600];
     snprintf(path, sizeof(path), "%s/generated_tools.json", state_root);
     return fs_read_file(path);
 }

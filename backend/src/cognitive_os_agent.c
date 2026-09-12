@@ -27,9 +27,10 @@ const char *version(void) {
  * layer's task state slot (architecture v1.0 §5). */
 static void task_done(task *t, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    const char *st = "UNKNOWN";
+
     if (!ctx->state || !t)
         return;
-    const char *st = "UNKNOWN";
     switch (t->status) {
     case TS_QUEUED:
         st = "QUEUED";
@@ -52,15 +53,26 @@ static void task_done(task *t, void *ud) {
     default:
         break;
     }
+
     state_store_task_set(ctx->state, t->id, st, t->input);
 }
 
 /* ---------- process/state snapshot (architecture v1.0 §9) ---------- */
 
 int state_export(runtime_ctx *ctx, const char *path) {
+    cJSON *root;
+    /* Context layer state slots */
+    char *st;
+    /* long-term memory facts */
+    char *facts;
+    /* agent roster (informational; agents.json is persisted separately) */
+    char *roster;
+    char *body;
+    int rc;
+
     if (!ctx || !path || !*path)
         return -1;
-    cJSON *root = cJSON_CreateObject();
+    root = cJSON_CreateObject();
     if (!root)
         return -1;
     cJSON_AddStringToObject(root, "version", CAGENT_VERSION);
@@ -68,49 +80,56 @@ int state_export(runtime_ctx *ctx, const char *path) {
     if (ctx->provider)
         cJSON_AddStringToObject(root, "provider", ctx->provider);
     /* Context layer state slots */
-    char *st = ctx->state ? state_store_json(ctx->state) : NULL;
+    st = ctx->state ? state_store_json(ctx->state) : NULL;
     if (st)
         cJSON_AddStringToObject(root, "state", st);
     free(st);
     /* long-term memory facts */
-    char *facts = ctx->memory ? memory_longterm_json(ctx->memory) : NULL;
+    facts = ctx->memory ? memory_longterm_json(ctx->memory) : NULL;
     if (facts)
         cJSON_AddStringToObject(root, "facts", facts);
     free(facts);
     /* agent roster (informational; agents.json is persisted separately) */
-    char *roster = ctx->agents ? agent_pool_snapshot_json(ctx->agents) : NULL;
+    roster = ctx->agents ? agent_pool_snapshot_json(ctx->agents) : NULL;
     if (roster)
         cJSON_AddStringToObject(root, "agents", roster);
     free(roster);
-    char *body = cJSON_PrintUnformatted(root);
+    body = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
     if (!body)
         return -1;
-    int rc = fs_write_file(path, body, strlen(body));
+    rc = fs_write_file(path, body, strlen(body));
     free(body);
     return rc == 0 ? 0 : -1;
 }
 
 int state_import(runtime_ctx *ctx, const char *path) {
+    char *body;
+    cJSON *root;
+    int rc = 0;
+    cJSON *st;
+    cJSON *facts;
+
     if (!ctx || !path || !*path)
         return -1;
-    char *body = fs_read_file(path);
+    body = fs_read_file(path);
     if (!body)
         return -1;
-    cJSON *root = cJSON_Parse(body);
+    root = cJSON_Parse(body);
     free(body);
     if (!root || !cJSON_IsObject(root)) {
         if (root)
             cJSON_Delete(root);
         return -1;
     }
-    int rc = 0;
-    cJSON *st = cJSON_GetObjectItemCaseSensitive(root, "state");
+
+    st = cJSON_GetObjectItemCaseSensitive(root, "state");
     if (st && cJSON_IsString(st) && ctx->state) {
         if (state_store_load_json(ctx->state, st->valuestring) < 0)
             rc = -1;
     }
-    cJSON *facts = cJSON_GetObjectItemCaseSensitive(root, "facts");
+
+    facts = cJSON_GetObjectItemCaseSensitive(root, "facts");
     if (facts && cJSON_IsString(facts) && ctx->memory) {
         cJSON *fobj = cJSON_Parse(facts->valuestring);
         if (fobj && cJSON_IsObject(fobj)) {
@@ -125,6 +144,7 @@ int state_import(runtime_ctx *ctx, const char *path) {
         else
             rc = -1;
     }
+
     cJSON_Delete(root);
     return rc;
 }
@@ -134,12 +154,14 @@ int state_import(runtime_ctx *ctx, const char *path) {
  * serialized; the scheduler/worker machinery is still exercised). */
 static void sched_trampoline(task *t, scheduler *s, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    char *answer = NULL;
+
     (void)s;
     if (task_should_abort(t)) {
         t->status = TS_CANCELLED;
         return;
     }
-    char *answer = NULL;
+
     scheduler_yield(); /* cooperative fairness: let another task start first */
     if (t->userdata) {
         /* userdata marker (set by /v1/orchestrate = 1, /v1/flows = 2): run the
@@ -153,6 +175,7 @@ static void sched_trampoline(task *t, scheduler *s, void *ud) {
         reasoning_run_ex(ctx->reasoning, t->tag, t->input, &answer);
         mutex_unlock(&ctx->run_lock);
     }
+
     t->output = answer ? answer : xstrdup("(no output)");
     if (!answer)
         t->status = TS_FAILED;
@@ -162,16 +185,21 @@ static void sched_trampoline(task *t, scheduler *s, void *ud) {
  * session linked to that channel, then push it to WebSocket clients. */
 static void channel_ingest(const char *channel_name, const char *sender, const char *text, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    int64_t sid;
+    int64_t id;
+    cJSON *o;
+    char *js;
+
     if (!ctx || !ctx->im || !text)
         return;
-    int64_t sid = im_session_by_channel(ctx->im, channel_name);
+    sid = im_session_by_channel(ctx->im, channel_name);
     if (sid < 0)
         return;
-    int64_t id = im_send_ex(ctx->im, sid, "user", text, sender);
+    id = im_send_ex(ctx->im, sid, "user", text, sender);
     if (id < 0)
         return;
 
-    cJSON *o = cJSON_CreateObject();
+    o = cJSON_CreateObject();
     cJSON_AddStringToObject(o, "type", "im.message");
     cJSON_AddNumberToObject(o, "session_id", (double)sid);
     cJSON_AddNumberToObject(o, "id", (double)id);
@@ -180,13 +208,14 @@ static void channel_ingest(const char *channel_name, const char *sender, const c
         cJSON_AddStringToObject(o, "sender", sender);
     cJSON_AddStringToObject(o, "content", text);
     cJSON_AddNumberToObject(o, "ts_ms", (double)time_now_ms());
-    char *js = cJSON_PrintUnformatted(o);
+    js = cJSON_PrintUnformatted(o);
     cJSON_Delete(o);
     if (js) {
         if (ctx->http)
             http_server_ws_broadcast(ctx->http, js);
         free(js);
     }
+
     if (ctx->memory) {
         char buf[384];
         snprintf(buf, sizeof(buf), "im channel %s (%s)", channel_name, sender ? sender : "phone");
@@ -230,9 +259,12 @@ static void heartbeat_loop(void *arg) {
 /* Forward every bus event to WebSocket clients as {"type":"event",...}. */
 static void bus_to_ws(const event *ev, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    cJSON *o;
+    char *s;
+
     if (!ctx || !ctx->http)
         return;
-    cJSON *o = cJSON_CreateObject();
+    o = cJSON_CreateObject();
     if (!o)
         return;
     cJSON_AddStringToObject(o, "type", "event");
@@ -241,7 +273,7 @@ static void bus_to_ws(const event *ev, void *ud) {
     cJSON_AddNumberToObject(o, "ts", (double)ev->ts_ms);
     if (ev->payload)
         cJSON_AddItemToObject(o, "payload", cJSON_Duplicate(ev->payload, 1));
-    char *s = cJSON_PrintUnformatted(o);
+    s = cJSON_PrintUnformatted(o);
     cJSON_Delete(o);
     if (s) {
         http_server_ws_broadcast(ctx->http, s);
@@ -275,6 +307,7 @@ int init(runtime_ctx *ctx, const config *cfg) {
         if (config_load_file(ctx->config, cfgfile) != 0)
             log_debug("no config file at %s (using defaults + env)", cfgfile);
     }
+
     config_apply_env(ctx->config, "COA_");
 
     /* effective values: explicit cfg > config > defaults */
@@ -356,6 +389,7 @@ int init(runtime_ctx *ctx, const config *cfg) {
         if (ctx->memory && (hl > 0 || ms > 0))
             memory_set_lifecycle(ctx->memory, hl, ms, arc);
     }
+
     {
         char uploads[600];
         path_join(uploads, sizeof(uploads), ctx->state_root, "uploads");
@@ -363,6 +397,7 @@ int init(runtime_ctx *ctx, const config *cfg) {
         if (nch > 0)
             log_info("memory: reindexed %d chunk(s) from uploads", nch);
     }
+
     ctx->snapshot = snapshot_open(ctx->state_root);
     /* snapshot.max_file (bytes; 0 = unlimited) overrides default/env when set */
     if (ctx->snapshot) {
@@ -382,6 +417,7 @@ int init(runtime_ctx *ctx, const config *cfg) {
         else
             state_store_save(ctx->state, spath); /* bind path: enables auto-flush */
     }
+
     /* Memory Service interface (default backend = the memory facade) */
     ctx->memsvc = memory_service_new_default(ctx->memory);
 
@@ -404,6 +440,7 @@ int init(runtime_ctx *ctx, const config *cfg) {
         runtime_shutdown(ctx);
         return -1;
     }
+
     ctx->txm = tx_manager_new();
 
     /* multi-agent coordination: shared blackboard + agent pool + optional auth */
@@ -416,6 +453,7 @@ int init(runtime_ctx *ctx, const config *cfg) {
             log_info("agents: %d roster entr%s restored from %s/agents.json", nagents, nagents == 1 ? "y" : "ies",
                          ctx->state_root);
     }
+
     {
         const char *auth_key = config_get_str(ctx->config, "auth.key", NULL);
         if (auth_key && *auth_key) {
@@ -536,6 +574,7 @@ int init(runtime_ctx *ctx, const config *cfg) {
         if (ctx->reasoning && ctx->router)
             reasoning_set_router(ctx->reasoning, ctx->router);
     }
+
     if (!ctx->reasoning) {
         log_error("init: reasoning engine failed to initialize");
         runtime_shutdown(ctx);
@@ -548,6 +587,7 @@ int init(runtime_ctx *ctx, const config *cfg) {
         runtime_shutdown(ctx);
         return -1;
     }
+
     /* mirror task lifecycle into the Context layer's task state slot */
     scheduler_set_completion_cb(ctx->scheduler, task_done, ctx);
 
@@ -569,6 +609,7 @@ int init(runtime_ctx *ctx, const config *cfg) {
         cJSON_AddStringToObject(p, "provider", provider);
         event_bus_publish(ctx->bus, EV_SYSTEM, "cognitive-os-agent", p);
     }
+
     return 0;
 }
 
@@ -580,9 +621,11 @@ void runtime_shutdown(runtime_ctx *ctx) {
         http_server_free(ctx->http);
         ctx->http = NULL;
     }
+
     if (ctx->scheduler) {
         scheduler_shutdown(ctx->scheduler, 3000);
     }
+
     if (ctx->scheduler) {
         scheduler_free(ctx->scheduler);
         ctx->scheduler = NULL;
@@ -598,14 +641,17 @@ void runtime_shutdown(runtime_ctx *ctx) {
         auth_free(ctx->auth);
         ctx->auth = NULL;
     }
+
     if (ctx->agents) {
         agent_pool_free(ctx->agents);
         ctx->agents = NULL;
     }
+
     if (ctx->blackboard) {
         blackboard_free(ctx->blackboard);
         ctx->blackboard = NULL;
     }
+
     tool_registry_free(ctx->tools);
     ctx->tools = NULL;
     if (ctx->snapshot)
@@ -621,14 +667,17 @@ void runtime_shutdown(runtime_ctx *ctx) {
         hook_registry_free(ctx->hooks);
         ctx->hooks = NULL;
     }
+
     if (ctx->state) {
         state_store_free(ctx->state);
         ctx->state = NULL;
     }
+
     if (ctx->memsvc) {
         memory_service_free(ctx->memsvc);
         ctx->memsvc = NULL;
     }
+
     if (ctx->bus)
         event_bus_free(ctx->bus);
     ctx->bus = NULL;
@@ -639,58 +688,71 @@ void runtime_shutdown(runtime_ctx *ctx) {
         attention_free(ctx->attention);
         ctx->attention = NULL;
     }
+
     if (ctx->index) {
         index_free(ctx->index);
         ctx->index = NULL;
     }
+
     if (ctx->im) {
         im_free(ctx->im);
         ctx->im = NULL;
     }
+
     /* stop and join the channel poller before freeing the channel registry */
     ctx->channels_stop = 1;
     if (ctx->channels_poller) {
         thread_join(ctx->channels_poller);
         ctx->channels_poller = NULL;
     }
+
     if (ctx->channels) {
         im_channels_free(ctx->channels);
         ctx->channels = NULL;
     }
+
     /* stop the cluster heartbeat before freeing the node registry */
     ctx->hb_stop = 1;
     if (ctx->hb_poller) {
         thread_join(ctx->hb_poller);
         ctx->hb_poller = NULL;
     }
+
     if (ctx->cluster) {
         cluster_free(ctx->cluster);
         ctx->cluster = NULL;
     }
+
     if (ctx->mcp) {
         mcp_manager_free(ctx->mcp);
         ctx->mcp = NULL;
     }
+
     if (ctx->skills) {
         skill_registry_free(ctx->skills);
         ctx->skills = NULL;
     }
+
     if (ctx->registry) {
         plugin_registry_free(ctx->registry);
         ctx->registry = NULL;
     }
+
     if (ctx->usage) {
         usage_free(ctx->usage);
         ctx->usage = NULL;
     }
+
     if (ctx->router) {
         router_free(ctx->router);
         ctx->router = NULL;
     }
+
     if (ctx->trace) {
         trace_free(ctx->trace);
         ctx->trace = NULL;
     }
+
     if (ctx->config)
         config_free(ctx->config);
     ctx->config = NULL;
@@ -708,14 +770,17 @@ void runtime_shutdown(runtime_ctx *ctx) {
 }
 
 int set_llm(runtime_ctx *ctx, const char *provider, const char *base_url, const char *model, const char *api_key) {
+    llm *nl;
+    llm *old;
+
     if (!ctx || !provider || !*provider)
         return -1;
-    llm *nl = llm_create(provider, base_url, api_key, model);
+    nl = llm_create(provider, base_url, api_key, model);
     if (!nl)
         return -1;
 
     mutex_lock(&ctx->run_lock);
-    llm *old = ctx->llm;
+    old = ctx->llm;
     ctx->llm = nl;
     if (ctx->reasoning)
         reasoning_set_llm(ctx->reasoning, nl);
@@ -726,6 +791,7 @@ int set_llm(runtime_ctx *ctx, const char *provider, const char *base_url, const 
             router_remove(ctx->router, ctx->provider);
         router_add(ctx->router, provider, provider, base_url, api_key, model, 1.0);
     }
+
     mutex_unlock(&ctx->run_lock);
     if (old)
         llm_destroy(old);
@@ -744,6 +810,7 @@ int set_llm(runtime_ctx *ctx, const char *provider, const char *base_url, const 
         if (ctx->router && router_save_file(ctx->router, rpath) != 0)
             log_warn("set_llm: could not persist routes to %s", rpath);
     }
+
     free(ctx->provider);
     ctx->provider = xstrdup(provider);
     log_info("cognitive-os-agent: active LLM switched to provider=%s model=%s", provider,
@@ -752,10 +819,12 @@ int set_llm(runtime_ctx *ctx, const char *provider, const char *base_url, const 
 }
 
 int run(runtime_ctx *ctx, const char *prompt, char **answer) {
+    int rc;
+
     if (!ctx || !prompt || !ctx->reasoning)
         return -1;
     mutex_lock(&ctx->run_lock);
-    int rc = reasoning_run(ctx->reasoning, prompt, answer);
+    rc = reasoning_run(ctx->reasoning, prompt, answer);
     mutex_unlock(&ctx->run_lock);
     return rc;
 }
@@ -764,18 +833,21 @@ int run(runtime_ctx *ctx, const char *prompt, char **answer) {
  * publishes the result on the shared blackboard under the agent's name so
  * other agents can read it (multi-agent coordination). */
 int agent_run(runtime_ctx *ctx, const char *agent, const char *task, char **answer) {
+    int rc;
+
     if (!ctx || !agent || !task || !ctx->reasoning || !ctx->agents)
         return -1;
     if (agent_pool_find(ctx->agents, agent) < 0)
         return -2; /* unknown agent */
     mutex_lock(&ctx->run_lock);
-    int rc = reasoning_run(ctx->reasoning, task, answer);
+    rc = reasoning_run(ctx->reasoning, task, answer);
     mutex_unlock(&ctx->run_lock);
     if (rc == 0 && answer && *answer) {
         char key[160];
         snprintf(key, sizeof(key), "result:%s", agent);
         agent_post(ctx->agents, agent, key, *answer);
     }
+
     return rc;
 }
 

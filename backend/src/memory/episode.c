@@ -38,6 +38,7 @@ void episodic_free(episodic *e) {
         free(e->task[i]);
         free(e->result[i]);
     }
+
     free(e->task);
     free(e->result);
     free(e->ts);
@@ -56,6 +57,9 @@ void episodic_add_ts(episodic *e, const char *task, const char *result, long lon
 }
 
 void episodic_add_full(episodic *e, const char *task, const char *result, long long ts, double strength) {
+    char *t2;
+    char *r2;
+
     if (!e || !task)
         return;
     long long now = ts > 0 ? ts : time_now_ms();
@@ -74,6 +78,7 @@ void episodic_add_full(episodic *e, const char *task, const char *result, long l
             return;
         }
     }
+
     if (e->count == e->cap) {
         size_t cap = e->cap ? e->cap * 2 : 8;
         char **nt = (char **)realloc(e->task, cap * sizeof(char *));
@@ -94,14 +99,16 @@ void episodic_add_full(episodic *e, const char *task, const char *result, long l
         e->strength = nw;
         e->cap = cap;
     }
-    char *t2 = xstrdup(task);
-    char *r2 = xstrdup(result ? result : "");
+
+    t2 = xstrdup(task);
+    r2 = xstrdup(result ? result : "");
     if (!t2 || !r2) {
         free(t2);
         free(r2);
         mutex_unlock(&e->mtx);
         return;
     }
+
     /* bounded: drop the oldest entry when at capacity */
     if (e->count >= EPISODES_CAP) {
         free(e->task[0]);
@@ -112,6 +119,7 @@ void episodic_add_full(episodic *e, const char *task, const char *result, long l
         memmove(e->strength, e->strength + 1, (e->count - 1) * sizeof(double));
         e->count--;
     }
+
     e->task[e->count] = t2;
     e->result[e->count] = r2;
     e->ts[e->count] = now;
@@ -125,10 +133,12 @@ void episodic_add(episodic *e, const char *task, const char *result) {
 }
 
 int episodic_count(episodic *e) {
+    int n;
+
     if (!e)
         return 0;
     mutex_lock(&e->mtx);
-    int n = (int)e->count;
+    n = (int)e->count;
     mutex_unlock(&e->mtx);
     return n;
 }
@@ -161,10 +171,12 @@ long long episodic_ts(episodic *e, int i) {
 }
 
 double episodic_strength(episodic *e, int i) {
+    double v;
+
     if (!e || i < 0)
         return 0.0;
     mutex_lock(&e->mtx);
-    double v = ((size_t)i < e->count) ? e->strength[i] : 0.0;
+    v = ((size_t)i < e->count) ? e->strength[i] : 0.0;
     mutex_unlock(&e->mtx);
     return v;
 }
@@ -180,15 +192,17 @@ void episodic_reinforce(episodic *e, const char *task) {
             break;
         }
     }
+
     mutex_unlock(&e->mtx);
 }
 
 int episodic_decay(episodic *e, long long now_ms, long long half_life_ms, double floor_strength) {
+    int decayed = 0;
+
     if (!e || half_life_ms <= 0)
         return 0;
     if (floor_strength <= 0)
         floor_strength = 0.001;
-    int decayed = 0;
     mutex_lock(&e->mtx);
     for (size_t i = 0; i < e->count; i++) {
         long long age = now_ms - e->ts[i];
@@ -207,16 +221,18 @@ int episodic_decay(episodic *e, long long now_ms, long long half_life_ms, double
             decayed++;
         }
     }
+
     mutex_unlock(&e->mtx);
     return decayed;
 }
 
 int episodic_drop_below(episodic *e, double min_strength) {
+    int dropped = 0;
+    size_t w = 0;
+
     if (!e || min_strength <= 0)
         return 0;
-    int dropped = 0;
     mutex_lock(&e->mtx);
-    size_t w = 0;
     for (size_t i = 0; i < e->count; i++) {
         if (e->strength[i] < min_strength) {
             free(e->task[i]);
@@ -230,16 +246,20 @@ int episodic_drop_below(episodic *e, double min_strength) {
         e->strength[w] = e->strength[i];
         w++;
     }
+
     e->count = w;
     mutex_unlock(&e->mtx);
     return dropped;
 }
 
 char *episodic_below_json(episodic *e, double min_strength) {
+    cJSON *arr;
+    char *s;
+
     if (!e)
         return xstrdup("[]");
     mutex_lock(&e->mtx);
-    cJSON *arr = cJSON_CreateArray();
+    arr = cJSON_CreateArray();
     if (arr) {
         for (size_t i = 0; i < e->count; i++) {
             if (e->strength[i] >= min_strength)
@@ -252,7 +272,8 @@ char *episodic_below_json(episodic *e, double min_strength) {
             cJSON_AddItemToArray(arr, o);
         }
     }
-    char *s = arr ? cJSON_PrintUnformatted(arr) : NULL;
+
+    s = arr ? cJSON_PrintUnformatted(arr) : NULL;
     if (arr)
         cJSON_Delete(arr);
     mutex_unlock(&e->mtx);
@@ -260,10 +281,13 @@ char *episodic_below_json(episodic *e, double min_strength) {
 }
 
 char *episodic_json(episodic *e) {
+    cJSON *arr;
+    char *s;
+
     if (!e)
         return xstrdup("[]");
     mutex_lock(&e->mtx);
-    cJSON *arr = cJSON_CreateArray();
+    arr = cJSON_CreateArray();
     if (arr) {
         for (size_t i = 0; i < e->count; i++) {
             cJSON *o = cJSON_CreateObject();
@@ -274,7 +298,8 @@ char *episodic_json(episodic *e) {
             cJSON_AddItemToArray(arr, o);
         }
     }
-    char *s = arr ? cJSON_PrintUnformatted(arr) : NULL;
+
+    s = arr ? cJSON_PrintUnformatted(arr) : NULL;
     if (arr)
         cJSON_Delete(arr);
     mutex_unlock(&e->mtx);

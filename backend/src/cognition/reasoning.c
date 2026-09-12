@@ -62,6 +62,7 @@ static struct session *session_new(const char *id) {
         free(s);
         return NULL;
     }
+
     mutex_init(&s->mtx);
     s->last_active_ms = (long long)time_now_ms();
     return s;
@@ -74,6 +75,7 @@ static void session_free(struct session *s) {
         free(s->hist_q[i]);
         free(s->hist_a[i]);
     }
+
     free(s->hist_q);
     free(s->hist_a);
     mutex_destroy(&s->mtx);
@@ -157,6 +159,8 @@ struct reasoning {
 
 static struct session *session_get(reasoning *r, const char *id) {
     const char *want = (id && *id) ? id : "default";
+    struct session *s = NULL;
+
     mutex_lock(&r->sess_mtx);
     for (size_t i = 0; i < r->nsessions; i++)
         if (strcmp(r->sessions[i]->id, want) == 0) {
@@ -164,7 +168,7 @@ static struct session *session_get(reasoning *r, const char *id) {
             mutex_unlock(&r->sess_mtx);
             return s;
         }
-    struct session *s = NULL;
+
     if (r->nsessions < SESSION_MAX) {
         s = session_new(want);
         if (s) {
@@ -178,6 +182,7 @@ static struct session *session_get(reasoning *r, const char *id) {
             }
         }
     }
+
     if (!s) { /* cap reached or alloc failed: fall back to default */
         for (size_t i = 0; i < r->nsessions; i++)
             if (strcmp(r->sessions[i]->id, "default") == 0) {
@@ -185,6 +190,7 @@ static struct session *session_get(reasoning *r, const char *id) {
                 break;
             }
     }
+
     mutex_unlock(&r->sess_mtx);
     return s;
 }
@@ -194,6 +200,7 @@ static void clear_actions(reasoning *r) {
         free(r->actions[i].tool);
         free(r->actions[i].args_json);
     }
+
     free(r->actions);
     r->actions = NULL;
     r->n_actions = 0;
@@ -224,11 +231,14 @@ static void clear_actions(reasoning *r) {
 /* Append text to the round log, tail-keeping: once past ROUND_LOG_CAP the
  * oldest half is dropped so recent action results always stay available. */
 static void round_log_append(reasoning *r, const char *text) {
-    if (!text || !*text)
-        return;
     const char *add = text;
     char *elided = NULL;
-    size_t len = strlen(text);
+    size_t len;
+    size_t need;
+
+    if (!text || !*text)
+        return;
+    len = strlen(text);
     if (len > ROUND_LOG_ENTRY_CAP) {
         /* head+tail keep with an explicit elision marker: the model sees
          * the beginning and end of the output, not a silent hole */
@@ -248,7 +258,8 @@ static void round_log_append(reasoning *r, const char *text) {
             len = strlen(elided);
         }
     }
-    size_t need = r->round_log_len + len + 1;
+
+    need = r->round_log_len + len + 1;
     if (need > r->round_log_cap) {
         size_t ncap = r->round_log_cap ? r->round_log_cap * 2 : 2048;
         while (ncap < need)
@@ -261,6 +272,7 @@ static void round_log_append(reasoning *r, const char *text) {
         r->round_log = nb;
         r->round_log_cap = ncap;
     }
+
     memcpy(r->round_log + r->round_log_len, add, len + 1);
     r->round_log_len += len;
     free(elided);
@@ -290,10 +302,15 @@ static void round_log_reset(reasoning *r) {
 /* session notes: append "line\n" to a fixed-size buffer, keeping the TAIL
  * (oldest lines are dropped from the front when the cap would be exceeded). */
 static void sn_append_line(char *dst, size_t cap, const char *line) {
+    size_t cur;
+    size_t add;
+    size_t room;
+    size_t keep;
+
     if (!dst || !line || !*line)
         return;
-    size_t cur = strlen(dst);
-    size_t add = strlen(line) + 1; /* line chars + '\n' */
+    cur = strlen(dst);
+    add = strlen(line) + 1; /* line chars + '\n' */
     while (cur + add + 1 > cap) {
         char *nl = strchr(dst, '\n');
         if (!nl) {
@@ -305,12 +322,13 @@ static void sn_append_line(char *dst, size_t cap, const char *line) {
         memmove(dst, dst + cut, cur - cut + 1);
         cur -= cut;
     }
-    size_t room = cap - 1 - cur;
+
+    room = cap - 1 - cur;
     if (room < 2)
         return;
     if (add > room)
         add = room;
-    size_t keep = add - 1;
+    keep = add - 1;
     while (keep > 0 && ((unsigned char)line[keep] & 0xC0) == 0x80)
         keep--; /* utf-8 boundary */
     memcpy(dst + cur, line, keep);
@@ -320,27 +338,34 @@ static void sn_append_line(char *dst, size_t cap, const char *line) {
 
 /* Track a file touched by a file_* action (extract "path" from its args). */
 static void sn_note_file(reasoning *r, const char *args_json) {
+    cJSON *o;
+    cJSON *p;
+
     if (!args_json || !*args_json)
         return;
-    cJSON *o = cJSON_Parse(args_json);
+    o = cJSON_Parse(args_json);
     if (!o)
         return;
-    cJSON *p = cJSON_GetObjectItemCaseSensitive(o, "path");
+    p = cJSON_GetObjectItemCaseSensitive(o, "path");
     if (p && cJSON_IsString(p) && p->valuestring)
         sn_append_line(r->cur->sn_files, sizeof(r->cur->sn_files), p->valuestring);
     cJSON_Delete(o);
 }
 
 static char *str_head(const char *s, size_t cap) {
+    size_t n;
+    int trunc;
+    char *out;
+
     if (!s)
         return NULL;
-    size_t n = strlen(s);
-    int trunc = n > cap;
+    n = strlen(s);
+    trunc = n > cap;
     if (trunc)
         n = cap;
     while (trunc && n > 0 && ((unsigned char)s[n] & 0xC0) == 0x80)
         n--; /* utf-8 boundary */
-    char *out = (char *)malloc(n + 4);
+    out = (char *)malloc(n + 4);
     if (!out)
         return NULL;
     memcpy(out, s, n);
@@ -355,18 +380,22 @@ static char *str_head(const char *s, size_t cap) {
  * Caller frees the returned string. */
 static char *build_context(reasoning *r, const char *prompt) {
     strbuf b;
+    size_t warm_used = 0;
+    size_t hot_mark;
+    size_t cold_mark;
+
     strbuf_init(&b);
 
     /* WARM tier: compaction summary + session notes under an explicit budget.
      * Over budget the lowest-value sections shed first:
      * worklog -> errors/files -> task/state only. */
-    size_t warm_used = 0;
     if (r->cur->summary && *r->cur->summary) {
         strbuf_append(&b, "## Earlier conversation summary\n");
         strbuf_append(&b, r->cur->summary);
         strbuf_append(&b, "\n\n");
         warm_used += strlen(r->cur->summary) + 34;
     }
+
     if (r->cur->sn_task[0] || r->cur->sn_state[0] || r->cur->sn_files[0] || r->cur->sn_errors[0] ||
         r->cur->sn_worklog[0]) {
         size_t budget_left = (warm_used < (size_t)r->budget_warm) ? (size_t)r->budget_warm - warm_used : 0;
@@ -397,7 +426,7 @@ static char *build_context(reasoning *r, const char *prompt) {
 
     /* HOT tier: multi-turn history (bounded, most-recent-last). Newest turns
      * are kept whole; older turns beyond the hot budget degrade to one line. */
-    size_t hot_mark = b.len;
+    hot_mark = b.len;
     mutex_lock(&r->cur->mtx);
     if (r->cur->hist_n > 0) {
         strbuf_append(&b, "## Conversation history\n");
@@ -431,6 +460,7 @@ static char *build_context(reasoning *r, const char *prompt) {
         }
         strbuf_append(&b, "\n");
     }
+
     mutex_unlock(&r->cur->mtx);
 
     /* COLD tier: retrieved long-term knowledge + code index, under budget.
@@ -438,7 +468,7 @@ static char *build_context(reasoning *r, const char *prompt) {
      * HyDE (optional): one LLM call rewrites the request as a hypothetical
      * answer passage; passage-to-passage similarity beats question-to-passage
      * for recall. */
-    size_t cold_mark = b.len;
+    cold_mark = b.len;
     if (r->mem && r->attention) {
         char hyde_query_buf[1024];
         const char *retrieval_query = prompt;
@@ -570,18 +600,21 @@ static char *build_context(reasoning *r, const char *prompt) {
 /* REASON: ask the LLM for a plan (JSON array of actions, or plain text). */
 static int h_reason(state_machine *sm, void *ud, const char *input, char **out) {
     reasoning *r = ud;
+    char *aug;
+    char *raw = NULL;
+    char *plan_err = NULL;
+
     (void)sm;
     clear_actions(r);
     r->ok_actions = 0;
     r->denied_actions = 0;
-    char *aug = build_context(r, input);
+    aug = build_context(r, input);
     if (!r->llm) {
         free(aug);
         *out = xstrdup("(no LLM provider configured)");
         return 0;
     }
-    char *raw = NULL;
-    char *plan_err = NULL;
+
     int rc = planner_plan_ex(r->llm, r->tools, r->skills, r->policy, aug ? aug : input, &r->actions, &r->n_actions,
                                  &raw, &plan_err);
     free(aug);
@@ -594,6 +627,7 @@ static int h_reason(state_machine *sm, void *ud, const char *input, char **out) 
         *out = msg; /* surfaced as the task result on FAILED */
         return -1;  /* move to FAILED */
     }
+
     log_info("reasoning: LLM plan: %s", raw);
     r->had_plan = r->n_actions > 0;
     /* remember this round's plan for stall detection (identical plan twice in
@@ -606,6 +640,7 @@ static int h_reason(state_machine *sm, void *ud, const char *input, char **out) 
         cJSON_AddStringToObject(p, "plan", raw);
         event_bus_publish(r->bus, EV_MODEL, "reasoning", p);
     }
+
     *out = raw;
     return 0;
 }
@@ -623,9 +658,13 @@ static int h_plan(state_machine *sm, void *ud, const char *input, char **out) {
 /* ACT: execute the planned actions, wrapped in a transaction. */
 static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
     reasoning *r = ud;
+    strbuf b;
+    tool_ctx tctx;
+    tx *tx = NULL;
+    executor *exec;
+
     (void)sm;
     r->all_actions_ok = 1;
-    strbuf b;
     strbuf_init(&b);
 
     if (r->n_actions == 0) {
@@ -634,7 +673,6 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
         return 0;
     }
 
-    tool_ctx tctx;
     memset(&tctx, 0, sizeof(tctx));
     tctx.reg = r->tools;
     tctx.policy = r->policy;
@@ -645,14 +683,13 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
     tctx.skills = r->skills;
     tctx.mcp = r->mcp;
 
-    tx *tx = NULL;
     if (r->use_transaction && r->snap)
         tx = tx_begin(r->txm, r->snap, r->tools, &tctx);
 
     /* Execution Runtime: all non-tx actions run behind the executor interface.
      * exec_backend routes shell commands through WSL / ssh by wrapping the
      * local executor (non-shell tools pass through unchanged). */
-    executor *exec = tx ? NULL : executor_new_local(r->tools, &tctx, r->snap);
+    exec = tx ? NULL : executor_new_local(r->tools, &tctx, r->snap);
     if (exec && r->exec_backend && strcmp(r->exec_backend, "wsl") == 0) {
         executor *w = executor_new_wsl(exec, r->exec_host);
         if (w)
@@ -800,10 +837,12 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
         snprintf(wl, sizeof(wl), "[%s] %s", r->actions[i].tool, rc == 0 ? "ok" : "FAILED");
         sn_append_line(r->cur->sn_worklog, sizeof(r->cur->sn_worklog), wl);
     }
+
     if (r->n_actions > 0) {
         snprintf(r->cur->sn_state, sizeof(r->cur->sn_state), "%d/%d 个动作已执行%s", r->ok_actions, r->n_actions,
                  r->all_actions_ok ? "" : "，部分失败");
     }
+
     executor_free(exec);
 
     if (tx) {
@@ -822,6 +861,7 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
         }
         tx_free(tx);
     }
+
     if (r->metrics)
         metrics_add(r->metrics, "actions.executed", (double)r->n_actions);
 
@@ -836,8 +876,10 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
  * completes with the refusal text). `input` is the ACT stage's report. */
 static int h_verify(state_machine *sm, void *ud, const char *input, char **out) {
     reasoning *r = ud;
+    int eff_total;
+
     (void)sm;
-    int eff_total = r->n_actions - r->denied_actions;
+    eff_total = r->n_actions - r->denied_actions;
     if (!evaluator_verify(r->eval, r->all_actions_ok, eff_total, r->ok_actions)) {
         strbuf b;
         strbuf_init(&b);
@@ -846,6 +888,7 @@ static int h_verify(state_machine *sm, void *ud, const char *input, char **out) 
         *out = strbuf_detach(&b);
         return -1;
     }
+
     *out = xstrdup(input);
     return 0;
 }
@@ -864,6 +907,7 @@ static int h_learn(state_machine *sm, void *ud, const char *input, char **out) {
             free(t);
         }
     }
+
     snprintf(r->cur->sn_state, sizeof(r->cur->sn_state), "%s",
              r->all_actions_ok ? "上一任务已完成" : "上一任务部分失败");
     if (r->mem) {
@@ -895,23 +939,28 @@ static int h_learn(state_machine *sm, void *ud, const char *input, char **out) {
         }
         memory_flush(r->mem);
     }
+
     if (r->metrics) {
         double q = evaluator_score(r->eval, r->n_actions, r->ok_actions, r->all_actions_ok, input);
         metrics_set(r->metrics, "reasoning.quality", q);
     }
+
     if (r->bus) {
         cJSON *p = cJSON_CreateObject();
         cJSON_AddStringToObject(p, "result", input);
         event_bus_publish(r->bus, EV_MEMORY, "reasoning", p);
     }
+
     *out = xstrdup(input);
     return 0;
 }
 
 reasoning *reasoning_new(const reasoning_config *cfg) {
+    reasoning *r;
+
     if (!cfg || !cfg->llm || !cfg->tools)
         return NULL;
-    reasoning *r = calloc(1, sizeof(reasoning));
+    r = calloc(1, sizeof(reasoning));
     if (!r)
         return NULL;
     mutex_init(&r->sess_mtx);
@@ -997,6 +1046,12 @@ void reasoning_set_router(reasoning *r, router *router) {
  * summary, then drop those turns. On LLM failure the turns are kept and the
  * attempt is retried next threshold; 3 consecutive failures trip the breaker. */
 static void compact_history(reasoning *r, size_t n_drop) {
+    strbuf tb;
+    char *turns;
+    strbuf pb;
+    char *user_prompt;
+    char *sum;
+
     if (!r || r->cur->hist_n == 0)
         return;
     if (n_drop > r->cur->hist_n)
@@ -1004,15 +1059,14 @@ static void compact_history(reasoning *r, size_t n_drop) {
     if (n_drop == 0)
         return;
 
-    strbuf tb;
     strbuf_init(&tb);
     for (size_t i = 0; i < n_drop; i++) {
         strbuf_appendf(&tb, "User: %s\nAssistant: %s\n\n", r->cur->hist_q[i] ? r->cur->hist_q[i] : "",
                            r->cur->hist_a[i] ? r->cur->hist_a[i] : "");
     }
-    char *turns = strbuf_detach(&tb);
 
-    strbuf pb;
+    turns = strbuf_detach(&tb);
+
     strbuf_init(&pb);
     strbuf_append(&pb, "将以下早期对话压缩为结构化纪要，严格按以下 9 个小节输出（Markdown，"
                            "每节 1-4 行，没有内容的写「无」）：\n"
@@ -1022,9 +1076,9 @@ static void compact_history(reasoning *r, size_t n_drop) {
                            "总长度不超过 2000 字，只输出纪要本身，不要任何前言。\n\n## 待压缩对话\n");
     strbuf_append(&pb, turns ? turns : "");
     free(turns);
-    char *user_prompt = strbuf_detach(&pb);
+    user_prompt = strbuf_detach(&pb);
 
-    char *sum = llm_chat_simple(r->llm, "你是会话压缩器。输出简体中文 Markdown 纪要。", user_prompt);
+    sum = llm_chat_simple(r->llm, "你是会话压缩器。输出简体中文 Markdown 纪要。", user_prompt);
     free(user_prompt);
     if (sum && *sum) {
         free(r->cur->summary);
@@ -1041,10 +1095,12 @@ static void compact_history(reasoning *r, size_t n_drop) {
         log_warn("reasoning: compaction LLM call failed (%d consecutive)", r->cur->compact_fails);
         return; /* keep the turns; retry at the next threshold */
     }
+
     for (size_t i = 0; i < n_drop; i++) {
         free(r->cur->hist_q[i]);
         free(r->cur->hist_a[i]);
     }
+
     memmove(r->cur->hist_q, r->cur->hist_q + n_drop, (r->cur->hist_n - n_drop) * sizeof(char *));
     memmove(r->cur->hist_a, r->cur->hist_a + n_drop, (r->cur->hist_n - n_drop) * sizeof(char *));
     r->cur->hist_n -= n_drop;
@@ -1098,6 +1154,7 @@ static void record_turn(reasoning *r, const char *q, const char *a) {
         r->cur->hist_q = calloc(r->cur->hist_cap, sizeof(char *));
         r->cur->hist_a = calloc(r->cur->hist_cap, sizeof(char *));
     }
+
     if (r->cur->hist_n >= r->cur->hist_cap) {
         free(r->cur->hist_q[0]);
         free(r->cur->hist_a[0]);
@@ -1105,6 +1162,7 @@ static void record_turn(reasoning *r, const char *q, const char *a) {
         memmove(r->cur->hist_a, r->cur->hist_a + 1, (r->cur->hist_cap - 1) * sizeof(char *));
         r->cur->hist_n--;
     }
+
     r->cur->hist_q[r->cur->hist_n] = str_head(q, HIST_TURN_CAP);
     r->cur->hist_a[r->cur->hist_n] = str_head(a, HIST_TURN_CAP);
     if (!r->cur->hist_q[r->cur->hist_n])
@@ -1119,24 +1177,30 @@ static void record_turn(reasoning *r, const char *q, const char *a) {
 }
 
 char *reasoning_history_json_ex(reasoning *r, const char *session_id, int max_turns) {
+    struct session *s;
+    size_t start;
+    cJSON *arr;
+    char *sjson;
+
     if (!r)
         return xstrdup("[]");
     if (max_turns <= 0)
         max_turns = 20;
-    struct session *s = session_get(r, session_id);
+    s = session_get(r, session_id);
     if (!s)
         return xstrdup("[]");
     mutex_lock(&s->mtx);
-    size_t start = (s->hist_n > (size_t)max_turns) ? s->hist_n - (size_t)max_turns : 0;
-    cJSON *arr = cJSON_CreateArray();
+    start = (s->hist_n > (size_t)max_turns) ? s->hist_n - (size_t)max_turns : 0;
+    arr = cJSON_CreateArray();
     for (size_t i = start; i < s->hist_n; i++) {
         cJSON *t = cJSON_CreateObject();
         cJSON_AddStringToObject(t, "q", s->hist_q[i] ? s->hist_q[i] : "");
         cJSON_AddStringToObject(t, "a", s->hist_a[i] ? s->hist_a[i] : "");
         cJSON_AddItemToArray(arr, t);
     }
+
     mutex_unlock(&s->mtx);
-    char *sjson = cJSON_PrintUnformatted(arr);
+    sjson = cJSON_PrintUnformatted(arr);
     cJSON_Delete(arr);
     return sjson ? sjson : xstrdup("[]");
 }
@@ -1147,10 +1211,13 @@ char *reasoning_history_json(reasoning *r, int max_turns) {
 
 /* Sessions listing for the UI: [{id, turns, last_active_ms, task}]. */
 char *reasoning_sessions_json(reasoning *r) {
+    cJSON *arr;
+    char *sjson;
+
     if (!r)
         return xstrdup("[]");
     mutex_lock(&r->sess_mtx);
-    cJSON *arr = cJSON_CreateArray();
+    arr = cJSON_CreateArray();
     for (size_t i = 0; i < r->nsessions; i++) {
         struct session *s = r->sessions[i];
         cJSON *o = cJSON_CreateObject();
@@ -1162,24 +1229,27 @@ char *reasoning_sessions_json(reasoning *r) {
         cJSON_AddNumberToObject(o, "last_active_ms", (double)s->last_active_ms);
         cJSON_AddItemToArray(arr, o);
     }
+
     mutex_unlock(&r->sess_mtx);
-    char *sjson = cJSON_PrintUnformatted(arr);
+    sjson = cJSON_PrintUnformatted(arr);
     cJSON_Delete(arr);
     return sjson ? sjson : xstrdup("[]");
 }
 
 /* Clear one session's conversation (keeps the session itself). */
 int reasoning_session_clear(reasoning *r, const char *session_id) {
+    const char *want = (session_id && *session_id) ? session_id : "default";
+    struct session *s = NULL;
+
     if (!r)
         return -1;
-    const char *want = (session_id && *session_id) ? session_id : "default";
     mutex_lock(&r->sess_mtx);
-    struct session *s = NULL;
     for (size_t i = 0; i < r->nsessions; i++)
         if (strcmp(r->sessions[i]->id, want) == 0) {
             s = r->sessions[i];
             break;
         }
+
     mutex_unlock(&r->sess_mtx);
     if (!s)
         return -1;
@@ -1188,6 +1258,7 @@ int reasoning_session_clear(reasoning *r, const char *session_id) {
         free(s->hist_q[i]);
         free(s->hist_a[i]);
     }
+
     s->hist_n = 0;
     free(s->summary);
     s->summary = NULL;
@@ -1202,6 +1273,18 @@ int reasoning_run(reasoning *r, const char *prompt, char **answer) {
 }
 
 int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, char **answer) {
+    char *safe_prompt;
+    /* Router: pick a provider for this run (weighted round-robin). */
+    llm *picked = NULL;
+    llm *saved = NULL;
+    char *final_text = NULL;
+    char *result = NULL;
+    int stalled = 0;
+    /* compose the answer: everything that happened + the final reply */
+    strbuf out;
+    char *combined;
+    int ret = -1;
+
     if (!r || !prompt)
         return -1;
 
@@ -1213,13 +1296,10 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
 
     /* Ingestion guard: a prompt with invalid UTF-8 (e.g. a non-UTF-8 API
      * client) would poison memory/history and break every later LLM call. */
-    char *safe_prompt = str_utf8_sanitize(prompt);
+    safe_prompt = str_utf8_sanitize(prompt);
     if (safe_prompt)
         prompt = safe_prompt;
 
-    /* Router: pick a provider for this run (weighted round-robin). */
-    llm *picked = NULL;
-    llm *saved = NULL;
     if (r->router) {
         const route *rt = router_pick(r->router);
         if (rt) {
@@ -1271,10 +1351,9 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     r->stall_nudged = 0;
     r->intent_nudged = 0;
 
-    char *final_text = NULL; /* LLM's plain-text answer (had_plan == 0) */
-    char *result = NULL;     /* per-round pipeline output */
+     /* LLM's plain-text answer (had_plan == 0) */
+         /* per-round pipeline output */
     state st = ST_FAILED;
-    int stalled = 0;
     for (r->round_idx = 1; r->round_idx <= r->max_rounds; r->round_idx++) {
         free(result);
         result = NULL;
@@ -1376,8 +1455,6 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
         }
     }
 
-    /* compose the answer: everything that happened + the final reply */
-    strbuf out;
     strbuf_init(&out);
     if (r->round_log_len > 0)
         strbuf_append(&out, r->round_log);
@@ -1392,18 +1469,18 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
         else
             strbuf_appendf(&out, "\n(已达到最大轮数 %d，任务可能未完全完成)", r->max_rounds);
     }
+
     free(final_text);
     free(result);
     free(r->last_plan_raw);
     r->last_plan_raw = NULL;
     free(r->prev_plan);
     r->prev_plan = NULL;
-    char *combined = strbuf_detach(&out);
+    combined = strbuf_detach(&out);
 
     if (r->metrics)
         metrics_inc(r->metrics, st == ST_DONE ? "tasks.done" : "tasks.failed");
 
-    int ret = -1;
     if (st == ST_DONE) {
         if (r->mem)
             memory_working_push(r->mem, combined);
@@ -1448,15 +1525,19 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
         r->llm = saved;
         llm_destroy(picked);
     }
+
     free(safe_prompt);
     return ret;
 }
 
 /* Session-memory snapshot: fixed-section notes + compaction state (JSON). */
 char *reasoning_session_json(reasoning *r) {
+    cJSON *o;
+    char *s;
+
     if (!r)
         return xstrdup("{}");
-    cJSON *o = cJSON_CreateObject();
+    o = cJSON_CreateObject();
     if (!o)
         return xstrdup("{}");
     cJSON_AddStringToObject(o, "task", r->cur->sn_task);
@@ -1467,7 +1548,7 @@ char *reasoning_session_json(reasoning *r) {
     cJSON_AddStringToObject(o, "summary", r->cur->summary ? r->cur->summary : "");
     cJSON_AddNumberToObject(o, "history_turns", (double)r->cur->hist_n);
     cJSON_AddBoolToObject(o, "compaction_disabled", r->cur->compact_disabled ? 1 : 0);
-    char *s = cJSON_PrintUnformatted(o);
+    s = cJSON_PrintUnformatted(o);
     cJSON_Delete(o);
     return s ? s : xstrdup("{}");
 }
@@ -1475,9 +1556,10 @@ char *reasoning_session_json(reasoning *r) {
 /* HyDE primitive: LLM writes a hypothetical answer passage for `query`; the
  * caller embeds passage-to-passage for retrieval (see reasoning.h). */
 char *hyde_passage(llm *llm, const char *query) {
+    char prompt[1200];
+
     if (!llm || !query || !*query)
         return NULL;
-    char prompt[1200];
     snprintf(prompt, sizeof(prompt),
              "Write a short passage (3-5 sentences) that directly answers the "
              "question. Output only the passage, no preamble.\n\nQuestion: %.900s",

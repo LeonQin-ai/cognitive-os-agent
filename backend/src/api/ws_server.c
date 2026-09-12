@@ -36,10 +36,12 @@ struct ws_server {
 
 /* Total wire size of the frame starting at b (0 if incomplete). */
 static size_t ws_frame_len(const unsigned char *b, size_t len, size_t *payload_len) {
+    size_t plen;
+    size_t off = 2;
+
     if (len < 2)
         return 0;
-    size_t plen = b[1] & 0x7F;
-    size_t off = 2;
+    plen = b[1] & 0x7F;
     if (plen == 126) {
         if (len < off + 2)
             return 0;
@@ -53,6 +55,7 @@ static size_t ws_frame_len(const unsigned char *b, size_t len, size_t *payload_l
             plen = (plen << 8) | b[off + i];
         off += 8;
     }
+
     if (b[1] & 0x80)
         off += 4; /* masked client frames */
     if (len < off + plen)
@@ -63,13 +66,16 @@ static size_t ws_frame_len(const unsigned char *b, size_t len, size_t *payload_l
 }
 
 static void ws_send_frame(ws_client *c, int opcode, const unsigned char *payload, size_t len) {
+    size_t out_len = 0;
+    char *frame;
+    int n;
+
     if (c->closed)
         return;
-    size_t out_len = 0;
-    char *frame = ws_build_frame(opcode, payload, len, 0, &out_len);
+    frame = ws_build_frame(opcode, payload, len, 0, &out_len);
     if (!frame)
         return;
-    int n = sock_send(c->sock, frame, out_len);
+    n = sock_send(c->sock, frame, out_len);
     free(frame);
     if (n != (int)out_len)
         c->closed = 1;
@@ -79,6 +85,8 @@ static void ws_send_frame(ws_client *c, int opcode, const unsigned char *payload
 static void ws_client_flush(ws_client *c) {
     char local[16384];
     size_t local_len = 0;
+    size_t start = 0;
+
     mutex_lock(&c->send_mtx);
     if (c->queue.len) {
         size_t take = c->queue.len > sizeof(local) ? sizeof(local) : c->queue.len;
@@ -95,8 +103,8 @@ static void ws_client_flush(ws_client *c) {
         c->queue.len -= keep;
         local_len = keep;
     }
+
     mutex_unlock(&c->send_mtx);
-    size_t start = 0;
     for (size_t i = 0; i < local_len; i++) {
         if (local[i] == '\n') {
             ws_send_frame(c, 0x1, (unsigned char *)local + start, i - start);
@@ -114,6 +122,7 @@ static void ws_server_remove(ws_server *s, ws_client *c) {
             break;
         }
     }
+
     mutex_unlock(&s->mtx);
 }
 
@@ -166,6 +175,7 @@ static void ws_client_loop(void *arg) {
                 break;
         }
     }
+
     if (c->sock)
         sock_close(c->sock);
     ws_server_remove(c->server, c);
@@ -192,11 +202,13 @@ void ws_server_on_message(ws_server *s, ws_msg_handler fn, void *ud) {
 }
 
 int ws_server_accept(ws_server *s, sock *sock, const char *sec_ws_key) {
+    char accept_key[29];
+    char resp[512];
+    thread_t *t;
+
     if (!s || !sock || !sec_ws_key)
         return -1;
-    char accept_key[29];
     ws_accept_key(sec_ws_key, accept_key);
-    char resp[512];
     int n = snprintf(resp, sizeof(resp),
                      "HTTP/1.1 101 Switching Protocols\r\n"
                      "Upgrade: websocket\r\n"
@@ -213,6 +225,7 @@ int ws_server_accept(ws_server *s, sock *sock, const char *sec_ws_key) {
         sock_close(sock);
         return -1;
     }
+
     c->sock = sock;
     c->server = s;
     mutex_init(&c->send_mtx);
@@ -233,11 +246,12 @@ int ws_server_accept(ws_server *s, sock *sock, const char *sec_ws_key) {
         s->clients = nc;
         s->cap = cap;
     }
+
     c->id = s->next_id++;
     s->clients[s->count++] = c;
     mutex_unlock(&s->mtx);
 
-    thread_t *t = thread_create(ws_client_loop, c);
+    t = thread_create(ws_client_loop, c);
     if (!t) {
         ws_server_remove(s, c);
         sock_close(sock);
@@ -246,14 +260,17 @@ int ws_server_accept(ws_server *s, sock *sock, const char *sec_ws_key) {
         free(c);
         return -1;
     }
+
     thread_detach(t);
     return 0;
 }
 
 void ws_server_broadcast(ws_server *s, const char *json_text) {
+    size_t len;
+
     if (!s || !json_text)
         return;
-    size_t len = strlen(json_text);
+    len = strlen(json_text);
     mutex_lock(&s->mtx);
     for (size_t i = 0; i < s->count; i++) {
         ws_client *c = s->clients[i];
@@ -275,6 +292,7 @@ void ws_server_broadcast(ws_server *s, const char *json_text) {
         }
         mutex_unlock(&c->send_mtx);
     }
+
     mutex_unlock(&s->mtx);
 }
 
@@ -289,6 +307,7 @@ void ws_server_free(ws_server *s) {
         if (s->clients[i]->sock)
             sock_close(s->clients[i]->sock);
     }
+
     mutex_unlock(&s->mtx);
     time_sleep_ms(400);
     mutex_destroy(&s->mtx);

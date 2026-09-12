@@ -98,6 +98,7 @@ static void json_esc(char *dst, size_t cap, const char *src) {
             dst[o++] = *p;
         }
     }
+
     dst[o] = '\0';
 }
 
@@ -165,6 +166,9 @@ static const mcp_entry MCPS[] = {
 
 char *catalog_models_json(void) {
     char *out = xstrdup("[");
+    size_t cur;
+    char *no;
+
     for (int i = 0; i < N_MODELS; i++) {
         char buf[1600];
         const model_entry *m = &MODELS[i];
@@ -189,17 +193,22 @@ char *catalog_models_json(void) {
         out = no;
         memcpy(out + cur, buf, blen + 1);
     }
-    size_t cur = strlen(out);
-    char *no = realloc(out, cur + 2);
+
+    cur = strlen(out);
+    no = realloc(out, cur + 2);
     if (no) {
         out = no;
         memcpy(out + cur, "]", 2);
     }
+
     return out;
 }
 
 char *catalog_mcp_json(void) {
     char *out = xstrdup("[");
+    size_t cur;
+    char *no;
+
     for (int i = 0; i < N_MCPS; i++) {
         char buf[1400];
         const mcp_entry *m = &MCPS[i];
@@ -227,12 +236,14 @@ char *catalog_mcp_json(void) {
         out = no;
         memcpy(out + cur, buf, blen + 1);
     }
-    size_t cur = strlen(out);
-    char *no = realloc(out, cur + 2);
+
+    cur = strlen(out);
+    no = realloc(out, cur + 2);
     if (no) {
         out = no;
         memcpy(out + cur, "]", 2);
     }
+
     return out;
 }
 
@@ -389,11 +400,15 @@ const catalog_remote_skill *catalog_remote_skill_find(const char *repo, const ch
             continue;
         return e;
     }
+
     return NULL;
 }
 
 char *catalog_remote_skills_json(void) {
     char *out = xstrdup("[");
+    size_t cur;
+    char *no;
+
     for (int i = 0; i < N_REMOTE; i++) {
         char buf[900];
         const catalog_remote_skill *e = &REMOTE_SKILLS[i];
@@ -415,12 +430,14 @@ char *catalog_remote_skills_json(void) {
         out = no;
         memcpy(out + cur, buf, blen + 1);
     }
-    size_t cur = strlen(out);
-    char *no = realloc(out, cur + 2);
+
+    cur = strlen(out);
+    no = realloc(out, cur + 2);
     if (no) {
         out = no;
         memcpy(out + cur, "]", 2);
     }
+
     return out;
 }
 
@@ -428,13 +445,15 @@ char *catalog_remote_skills_json(void) {
  * ("/path"). Returns 0 ok, -1 malformed. */
 static int split_url(const char *url, char **base_out, char **path_out) {
     const char *scheme = strstr(url, "://");
+    size_t blen;
+
     if (!scheme)
         return -1;
     const char *host = scheme + 3;
     const char *slash = strchr(host, '/');
     if (!slash || slash == host)
         return -1;
-    size_t blen = (size_t)(slash - url);
+    blen = (size_t)(slash - url);
     *base_out = (char *)malloc(blen + 1);
     *path_out = xstrdup(slash);
     if (!*base_out || !*path_out) {
@@ -442,6 +461,7 @@ static int split_url(const char *url, char **base_out, char **path_out) {
         free(*path_out);
         return -1;
     }
+
     memcpy(*base_out, url, blen);
     (*base_out)[blen] = '\0';
     return 0;
@@ -478,6 +498,7 @@ char *catalog_remote_skill_fetch(const catalog_remote_skill *e) {
         if (r)
             http_response_free(r);
     }
+
     return NULL;
 }
 
@@ -488,68 +509,91 @@ char *catalog_remote_skill_fetch(const catalog_remote_skill *e) {
 
 char *catalog_skillhub_list_json(void) {
     http_response *r = http_get(SKILLHUB_API, SKILLHUB_LIST_PATH, NULL, 10000);
+    /* body is not NUL-terminated — copy for cJSON */
+    char *body;
+    cJSON *root;
+    cJSON *sets;
+    char *out;
+    int i = 0;
+    cJSON *item;
+    size_t cur;
+    char *no;
+
     if (!r || r->status != 200 || !r->body || r->body_len == 0) {
         if (r)
             http_response_free(r);
         return NULL;
     }
+
     /* body is not NUL-terminated — copy for cJSON */
-    char *body = (char *)malloc(r->body_len + 1);
+    body = (char *)malloc(r->body_len + 1);
     if (!body) {
         http_response_free(r);
         return NULL;
     }
+
     memcpy(body, r->body, r->body_len);
     body[r->body_len] = '\0';
     http_response_free(r);
-    cJSON *root = cJSON_Parse(body);
+    root = cJSON_Parse(body);
     free(body);
     if (!root)
         return NULL;
-    cJSON *sets = cJSON_GetObjectItemCaseSensitive(root, "skillSets");
+    sets = cJSON_GetObjectItemCaseSensitive(root, "skillSets");
     if (!cJSON_IsArray(sets)) {
         cJSON_Delete(root);
         return NULL;
     }
-    char *out = xstrdup("[");
-    int i = 0;
-    cJSON *item;
+
+    out = xstrdup("[");
     cJSON_ArrayForEach(item, sets) {
         cJSON *jslug = cJSON_GetObjectItemCaseSensitive(item, "slug");
         cJSON *jname = cJSON_GetObjectItemCaseSensitive(item, "displayName");
         cJSON *jsum = cJSON_GetObjectItemCaseSensitive(item, "summary");
         cJSON *jcnt = cJSON_GetObjectItemCaseSensitive(item, "skillCount");
+    int cnt;
+    char buf[1700];
+    char *no;
+
         if (!cJSON_IsString(jslug) || !jslug->valuestring[0])
             continue;
         char id[128], name[256], desc[1200];
         json_esc(id, sizeof(id), jslug->valuestring);
         json_esc(name, sizeof(name), cJSON_IsString(jname) ? jname->valuestring : "");
         json_esc(desc, sizeof(desc), cJSON_IsString(jsum) ? jsum->valuestring : "");
-        int cnt = cJSON_IsNumber(jcnt) ? (int)jcnt->valuedouble : 0;
-        char buf[1700];
+        cnt = cJSON_IsNumber(jcnt) ? (int)jcnt->valuedouble : 0;
         snprintf(buf, sizeof(buf),
                  "%s{\"id\":\"%s\",\"name\":\"%s\",\"description\":\"%s\","
                  "\"skill_count\":%d,\"source\":\"https://skillhub.cn/skills/%s\"}",
                  i ? "," : "", id, name, desc, cnt, id);
         size_t cur = strlen(out), blen = strlen(buf);
-        char *no = realloc(out, cur + blen + 2);
+        no = realloc(out, cur + blen + 2);
         if (!no)
             break;
         out = no;
         memcpy(out + cur, buf, blen + 1);
         i++;
     }
-    size_t cur = strlen(out);
-    char *no = realloc(out, cur + 2);
+
+    cur = strlen(out);
+    no = realloc(out, cur + 2);
     if (no) {
         out = no;
         memcpy(out + cur, "]", 2);
     }
+
     cJSON_Delete(root);
     return out;
 }
 
 char *catalog_skillhub_fetch_skill(const char *slug) {
+    char path[256];
+    http_response *r;
+    char *body;
+    cJSON *root;
+    cJSON *content;
+    char *text = NULL;
+
     if (!slug)
         return NULL;
     /* slug must be a plain path segment: letters/digits/._- only */
@@ -558,9 +602,9 @@ char *catalog_skillhub_fetch_skill(const char *slug) {
               *p == '_' || *p == '.'))
             return NULL;
     }
-    char path[256];
+
     snprintf(path, sizeof(path), "/api/v1/skills/%s/file?path=SKILL.md", slug);
-    http_response *r = http_get(SKILLHUB_API, path, NULL, 15000);
+    r = http_get(SKILLHUB_API, path, NULL, 15000);
     if (r && r->status == 200 && r->body && r->body_len > 0) {
         size_t n = r->body_len;
         if (n > REMOTE_SKILL_MAX)
@@ -573,6 +617,7 @@ char *catalog_skillhub_fetch_skill(const char *slug) {
         http_response_free(r);
         return text;
     }
+
     if (r)
         http_response_free(r);
     /* skill-package entries (skillsets) have no file endpoint — their SKILL.md
@@ -584,20 +629,21 @@ char *catalog_skillhub_fetch_skill(const char *slug) {
             http_response_free(r);
         return NULL;
     }
-    char *body = (char *)malloc(r->body_len + 1);
+
+    body = (char *)malloc(r->body_len + 1);
     if (!body) {
         http_response_free(r);
         return NULL;
     }
+
     memcpy(body, r->body, r->body_len);
     body[r->body_len] = '\0';
     http_response_free(r);
-    cJSON *root = cJSON_Parse(body);
+    root = cJSON_Parse(body);
     free(body);
     if (!root)
         return NULL;
-    cJSON *content = cJSON_GetObjectItemCaseSensitive(root, "content");
-    char *text = NULL;
+    content = cJSON_GetObjectItemCaseSensitive(root, "content");
     if (cJSON_IsString(content) && content->valuestring[0]) {
         size_t n = strlen(content->valuestring);
         if (n > REMOTE_SKILL_MAX)
@@ -608,6 +654,7 @@ char *catalog_skillhub_fetch_skill(const char *slug) {
             text[n] = '\0';
         }
     }
+
     cJSON_Delete(root);
     return text;
 }
@@ -622,6 +669,9 @@ const catalog_skill *catalog_skill_at(int i) {
 
 char *catalog_skills_json(void) {
     char *out = xstrdup("[");
+    size_t cur;
+    char *no;
+
     for (int i = 0; i < N_SKILLS; i++) {
         char buf[1800];
         const catalog_skill *s = &SKILLS[i];
@@ -646,11 +696,13 @@ char *catalog_skills_json(void) {
         out = no;
         memcpy(out + cur, buf, blen + 1);
     }
-    size_t cur = strlen(out);
-    char *no = realloc(out, cur + 2);
+
+    cur = strlen(out);
+    no = realloc(out, cur + 2);
     if (no) {
         out = no;
         memcpy(out + cur, "]", 2);
     }
+
     return out;
 }

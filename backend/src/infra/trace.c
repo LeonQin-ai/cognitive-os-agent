@@ -17,9 +17,11 @@ struct trace {
 };
 
 trace *trace_new(size_t capacity) {
+    trace *t;
+
     if (capacity == 0)
         capacity = 256;
-    trace *t = (trace *)calloc(1, sizeof(trace));
+    t = (trace *)calloc(1, sizeof(trace));
     if (!t)
         return NULL;
     t->spans = (trace_span *)calloc(capacity, sizeof(trace_span));
@@ -27,6 +29,7 @@ trace *trace_new(size_t capacity) {
         free(t);
         return NULL;
     }
+
     t->cap = capacity;
     t->next_id = 1;
     mutex_init(&t->mtx);
@@ -46,10 +49,13 @@ void trace_free(trace *t) {
 }
 
 int64_t trace_begin(trace *t, const char *name) {
+    trace_span *s;
+    int64_t id;
+
     if (!t || !name)
         return 0;
     mutex_lock(&t->mtx);
-    trace_span *s = &t->spans[t->next];
+    s = &t->spans[t->next];
     if (t->count < t->cap)
         t->count++;
     free(s->name);
@@ -59,7 +65,7 @@ int64_t trace_begin(trace *t, const char *name) {
     s->end_ms = 0;
     s->status = 0;
     t->next = (t->next + 1) % t->cap;
-    int64_t id = s->id;
+    id = s->id;
     mutex_unlock(&t->mtx);
     return id;
 }
@@ -76,14 +82,17 @@ void trace_end(trace *t, int64_t id, int status) {
             break;
         }
     }
+
     mutex_unlock(&t->mtx);
 }
 
 int trace_count(trace *t) {
+    int n;
+
     if (!t)
         return 0;
     mutex_lock(&t->mtx);
-    int n = (int)t->count;
+    n = (int)t->count;
     mutex_unlock(&t->mtx);
     return n;
 }
@@ -101,6 +110,8 @@ void trace_clear(trace *t) {
 
 char *trace_json(trace *t) {
     cJSON *arr = cJSON_CreateArray();
+    char *js;
+
     if (!t)
         return cJSON_PrintUnformatted(arr);
     mutex_lock(&t->mtx);
@@ -117,8 +128,9 @@ char *trace_json(trace *t) {
         cJSON_AddNumberToObject(o, "status", s->status);
         cJSON_AddItemToArray(arr, o);
     }
+
     mutex_unlock(&t->mtx);
-    char *js = cJSON_PrintUnformatted(arr);
+    js = cJSON_PrintUnformatted(arr);
     cJSON_Delete(arr);
     return js;
 }

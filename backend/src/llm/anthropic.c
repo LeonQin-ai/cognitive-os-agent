@@ -34,6 +34,9 @@ static void anthropic_destroy(llm *llm) {
 /* Anthropic puts the system prompt at top level and only user/assistant in messages. */
 static char *build_request_body(const llm_request *req, const char *model, int stream) {
     cJSON *root = cJSON_CreateObject();
+    cJSON *msgs;
+    char *s;
+
     cJSON_AddStringToObject(root, "model", model ? model : "claude-sonnet-4-6");
     cJSON_AddNumberToObject(root, "max_tokens", req->max_tokens > 0 ? req->max_tokens : 1024);
     if (req->temperature > 0)
@@ -41,7 +44,7 @@ static char *build_request_body(const llm_request *req, const char *model, int s
     if (stream)
         cJSON_AddBoolToObject(root, "stream", 1);
 
-    cJSON *msgs = cJSON_AddArrayToObject(root, "messages");
+    msgs = cJSON_AddArrayToObject(root, "messages");
     for (size_t i = 0; i < req->num_messages; i++) {
         const llm_message *m = &req->messages[i];
         /* Tool observations can carry non-UTF-8 bytes (binary files, PDF
@@ -76,7 +79,8 @@ static char *build_request_body(const llm_request *req, const char *model, int s
         free(content);
         cJSON_AddItemToArray(msgs, o);
     }
-    char *s = cJSON_PrintUnformatted(root);
+
+    s = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
     return s;
 }
@@ -86,9 +90,11 @@ static void set_error(llm_response *resp, const char *msg) {
 }
 
 static strmap *anthropic_headers(llm *llm) {
+    strmap *hdrs;
+
     if (!llm->api_key)
         return NULL;
-    strmap *hdrs = calloc(1, sizeof(strmap));
+    hdrs = calloc(1, sizeof(strmap));
     if (!hdrs)
         return NULL;
     strmap_set(hdrs, "x-api-key", llm->api_key);
@@ -98,23 +104,32 @@ static strmap *anthropic_headers(llm *llm) {
 
 static int anthropic_chat(llm *llm, const llm_request *req, llm_response *resp) {
     char *body = build_request_body(req, llm->model, 0);
+    strmap *hdrs;
+    http_response *r;
+    cJSON *root;
+    strbuf sb;
+    cJSON *content;
+
     if (!body) {
         set_error(resp, "request build failed");
         return -1;
     }
-    strmap *hdrs = anthropic_headers(llm);
 
-    http_response *r =
+    hdrs = anthropic_headers(llm);
+
+    r =
         http_post(impl_of(llm)->base_url, ANTHROPIC_PATH, body, "application/json", hdrs, llm_timeout_ms());
     free(body);
     if (hdrs) {
         strmap_free(hdrs);
         free(hdrs);
     }
+
     if (!r) {
         set_error(resp, "http request failed");
         return -1;
     }
+
     if (r->status != 200) {
         char err[512];
         snprintf(err, sizeof(err), "anthropic http %d: %s", r->status, r->body && r->body[0] ? r->body : "(empty)");
@@ -123,16 +138,15 @@ static int anthropic_chat(llm *llm, const llm_request *req, llm_response *resp) 
         return -1;
     }
 
-    cJSON *root = cJSON_Parse(r->body);
+    root = cJSON_Parse(r->body);
     http_response_free(r);
     if (!root) {
         set_error(resp, "anthropic: invalid JSON response");
         return -1;
     }
 
-    strbuf sb;
     strbuf_init(&sb);
-    cJSON *content = cJSON_GetObjectItemCaseSensitive(root, "content");
+    content = cJSON_GetObjectItemCaseSensitive(root, "content");
     if (content && cJSON_IsArray(content)) {
         cJSON *it;
         cJSON_ArrayForEach(it, content) {
@@ -141,6 +155,7 @@ static int anthropic_chat(llm *llm, const llm_request *req, llm_response *resp) 
                 strbuf_append(&sb, text->valuestring);
         }
     }
+
     resp->content = strbuf_detach(&sb);
     if (!resp->content || !*resp->content) {
         cJSON *err_obj = cJSON_GetObjectItemCaseSensitive(root, "error");
@@ -149,23 +164,29 @@ static int anthropic_chat(llm *llm, const llm_request *req, llm_response *resp) 
         free(resp->content);
         resp->content = NULL;
     }
+
     cJSON_Delete(root);
     return resp->error ? -1 : 0;
 }
 
 static int anthropic_stream(llm *llm, const llm_request *req, llm_stream_cb cb, void *ud) {
     char *body = build_request_body(req, llm->model, 1);
+    strmap *hdrs;
+    sse *s;
+    char line[32768];
+
     if (!body)
         return -1;
-    strmap *hdrs = anthropic_headers(llm);
+    hdrs = anthropic_headers(llm);
 
-    sse *s =
+    s =
         sse_start(impl_of(llm)->base_url, ANTHROPIC_PATH, body, "application/json", hdrs, llm_timeout_ms());
     free(body);
     if (hdrs) {
         strmap_free(hdrs);
         free(hdrs);
     }
+
     if (!s)
         return -1;
     if (sse_status(s) != 200) {
@@ -174,7 +195,6 @@ static int anthropic_stream(llm *llm, const llm_request *req, llm_stream_cb cb, 
         return -1;
     }
 
-    char line[32768];
     while (sse_next(s, line, sizeof(line)) == 1) {
         if (llm->cancel) {
             sse_close(s);
@@ -190,6 +210,7 @@ static int anthropic_stream(llm *llm, const llm_request *req, llm_stream_cb cb, 
             cb(text->valuestring, ud);
         cJSON_Delete(root);
     }
+
     sse_close(s);
     return 0;
 }
@@ -202,6 +223,7 @@ llm *anthropic_create(const char *base_url, const char *api_key, const char *mod
         free(im);
         return NULL;
     }
+
     static const llm_vtable vt = {anthropic_destroy, anthropic_chat, anthropic_stream};
     llm->vt = &vt;
     llm->provider = xstrdup("anthropic");

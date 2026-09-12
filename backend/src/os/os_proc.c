@@ -30,6 +30,7 @@ static void to_posix_dir(const char *win, char *out, size_t cap) {
             return;
         }
     }
+
     snprintf(out, cap, "%s", win);
 }
 
@@ -49,10 +50,13 @@ typedef enum {
 static const char *shell_fmt_kind(sh_kind *kind) {
     static char buf[768];
     static int done = 0;
+    int nb = 0;
+
     if (done) {
         *kind = (strstr(buf, "cmd.exe /s /c") == buf) ? SH_CMDLINE : SH_QUOTED;
         return buf;
     }
+
     done = 1;
     *kind = SH_QUOTED;
     const char *override = getenv("COA_SHELL");
@@ -60,6 +64,7 @@ static const char *shell_fmt_kind(sh_kind *kind) {
         snprintf(buf, sizeof(buf), "%s \"%%s\"", override);
         return buf;
     }
+
     /* Probe common POSIX shell installs: Git for Windows, MSYS2, per-user Git. */
     const char *rel[] = {
         "\\Git\\usr\\bin\\bash.exe",
@@ -68,7 +73,6 @@ static const char *shell_fmt_kind(sh_kind *kind) {
         "\\msys64\\usr\\bin\\bash.exe",
     };
     char base[8][64];
-    int nb = 0;
     const char *pf = getenv("ProgramFiles");
     const char *pf86 = getenv("ProgramFiles(x86)");
     const char *local = getenv("LOCALAPPDATA");
@@ -103,6 +107,7 @@ static const char *shell_fmt_kind(sh_kind *kind) {
             }
         }
     }
+
     /* /s makes cmd strip ONLY the outer quotes of the /c argument, so inner
      * quotes in the command survive (plain /c mangles multi-quoted lines). */
     *kind = SH_CMDLINE;
@@ -133,6 +138,7 @@ static void compose_shell_command(const char *cmd, char *full, size_t cap) {
             return;
         }
     }
+
     snprintf(full, cap, fmt, cmd);
 }
 
@@ -153,10 +159,17 @@ static wchar_t *utf8_to_wide(const char *s) {
         free(w);
         return NULL;
     }
+
     return w;
 }
 
 proc_result *proc_run_in(const char *cmd, int timeout_ms, const char *cwd) {
+    char full[4096];
+    proc_result *r;
+    char *buf;
+    int64_t deadline;
+    int alive = 1;
+
     SECURITY_ATTRIBUTES sa;
     sa.nLength = sizeof(sa);
     sa.bInheritHandle = TRUE;
@@ -176,7 +189,6 @@ proc_result *proc_run_in(const char *cmd, int timeout_ms, const char *cwd) {
     si.hStdError = wr;
     si.dwFlags |= STARTF_USESTDHANDLES;
 
-    char full[4096];
     compose_shell_command(cmd, full, sizeof(full));
     wchar_t *wfull = utf8_to_wide(full);
 
@@ -207,7 +219,7 @@ proc_result *proc_run_in(const char *cmd, int timeout_ms, const char *cwd) {
         return NULL;
     }
 
-    proc_result *r = calloc(1, sizeof(proc_result));
+    r = calloc(1, sizeof(proc_result));
     if (!r) {
         CloseHandle(rd);
         CloseHandle(pi.hProcess);
@@ -215,7 +227,7 @@ proc_result *proc_run_in(const char *cmd, int timeout_ms, const char *cwd) {
         return NULL;
     }
 
-    char *buf = malloc(65536);
+    buf = malloc(65536);
     size_t cap = 65536, len = 0;
     if (!buf) {
         CloseHandle(rd);
@@ -225,8 +237,7 @@ proc_result *proc_run_in(const char *cmd, int timeout_ms, const char *cwd) {
         return NULL;
     }
 
-    int64_t deadline = timeout_ms > 0 ? time_now_ms() + timeout_ms : 0;
-    int alive = 1;
+    deadline = timeout_ms > 0 ? time_now_ms() + timeout_ms : 0;
     while (alive) {
         if (timeout_ms > 0 && time_now_ms() >= deadline)
             break;
@@ -269,6 +280,7 @@ proc_result *proc_run_in(const char *cmd, int timeout_ms, const char *cwd) {
         r->timed_out = 1;
         exitc = (DWORD)-1;
     }
+
     r->exit_code = (int)exitc;
     r->output = buf;
     buf[len] = '\0';
@@ -294,9 +306,10 @@ proc_result *proc_run(const char *cmd, int timeout_ms) {
 }
 
 int proc_spawn_detached(const char *cmd) {
+    char full[4096];
+
     if (!cmd || !*cmd)
         return -1;
-    char full[4096];
     compose_shell_command(cmd, full, sizeof(full));
     wchar_t *wfull = utf8_to_wide(full);
     if (!wfull)
@@ -342,6 +355,7 @@ static void quote_arg(const char *a, char *out, size_t cap) {
         } else
             out[o++] = *p;
     }
+
     if (o < cap)
         out[o++] = '"';
     out[o] = '\0';
@@ -352,6 +366,10 @@ proc_popen *proc_popen_new(char *const argv[]) {
 }
 
 proc_popen *proc_popen_new_ex(char *const argv[], int merge_stderr) {
+    char cmdline[4096];
+    size_t off;
+    proc_popen *p;
+
     if (!argv || !argv[0])
         return NULL;
 
@@ -362,8 +380,7 @@ proc_popen *proc_popen_new_ex(char *const argv[], int merge_stderr) {
      * breaks cmd's PATH-search semantics (%~dp0 inside the resolved .cmd
      * shim then resolves to the CWD instead of the shim's directory, which
      * crashes nvm4w/npm shims instantly). */
-    char cmdline[4096];
-    size_t off = (size_t)snprintf(cmdline, sizeof(cmdline), "cmd.exe /s /c \"");
+    off = (size_t)snprintf(cmdline, sizeof(cmdline), "cmd.exe /s /c \"");
     for (int i = 0; argv[i] && off < sizeof(cmdline); i++) {
         char q[800];
         if (i == 0 && !strchr(argv[i], ' ') && !strchr(argv[i], '"'))
@@ -384,6 +401,7 @@ proc_popen *proc_popen_new_ex(char *const argv[], int merge_stderr) {
             break;
         off += (size_t)wr;
     }
+
     if (off < sizeof(cmdline) - 1) {
         cmdline[off++] = '"';
         cmdline[off] = '\0';
@@ -398,6 +416,7 @@ proc_popen *proc_popen_new_ex(char *const argv[], int merge_stderr) {
         CloseHandle(in_wr);
         return NULL;
     }
+
     SetHandleInformation(in_wr, HANDLE_FLAG_INHERIT, 0);
     SetHandleInformation(out_rd, HANDLE_FLAG_INHERIT, 0);
 
@@ -422,6 +441,7 @@ proc_popen *proc_popen_new_ex(char *const argv[], int merge_stderr) {
             free(wcmdline);
         }
     }
+
     CloseHandle(in_rd);
     CloseHandle(out_wr);
     if (nul)
@@ -431,9 +451,10 @@ proc_popen *proc_popen_new_ex(char *const argv[], int merge_stderr) {
         CloseHandle(out_rd);
         return NULL;
     }
+
     CloseHandle(pi.hThread);
 
-    proc_popen *p = calloc(1, sizeof(*p));
+    p = calloc(1, sizeof(*p));
     if (!p) {
         TerminateProcess(pi.hProcess, 1);
         CloseHandle(pi.hProcess);
@@ -441,6 +462,7 @@ proc_popen *proc_popen_new_ex(char *const argv[], int merge_stderr) {
         CloseHandle(out_rd);
         return NULL;
     }
+
     p->proc = pi.hProcess;
     p->in_wr = in_wr;
     p->out_rd = out_rd;
@@ -453,6 +475,7 @@ proc_popen *proc_popen_new_ex(char *const argv[], int merge_stderr) {
         free(p);
         return NULL;
     }
+
     p->buf[0] = '\0';
     return p;
 }
@@ -467,10 +490,13 @@ int proc_popen_write(proc_popen *p, const char *data, size_t len) {
 }
 
 size_t proc_popen_read(proc_popen *p, int timeout_ms) {
+    int64_t deadline;
+    size_t start_len;
+
     if (!p)
         return 0;
-    int64_t deadline = timeout_ms > 0 ? time_now_ms() + timeout_ms : 0;
-    size_t start_len = p->len;
+    deadline = timeout_ms > 0 ? time_now_ms() + timeout_ms : 0;
+    start_len = p->len;
     for (;;) {
         DWORD avail = 0;
         if (PeekNamedPipe(p->out_rd, NULL, 0, NULL, &avail, NULL) && avail > 0) {
@@ -497,6 +523,7 @@ size_t proc_popen_read(proc_popen *p, int timeout_ms) {
             break;
         time_sleep_ms(10);
     }
+
     return p->len - start_len;
 }
 
@@ -520,6 +547,7 @@ void proc_popen_trim(proc_popen *p, size_t n) {
         proc_popen_reset(p);
         return;
     }
+
     memmove(p->buf, p->buf + n, p->len - n);
     p->len -= n;
     p->buf[p->len] = '\0';
@@ -541,6 +569,7 @@ void proc_popen_free(proc_popen *p) {
         TerminateProcess(p->proc, 1);
         CloseHandle(p->proc);
     }
+
     if (p->in_wr)
         CloseHandle(p->in_wr);
     if (p->out_rd)
@@ -560,18 +589,28 @@ void proc_popen_free(proc_popen *p) {
 
 proc_result *proc_run_in(const char *cmd, int timeout_ms, const char *cwd) {
     int pfd[2];
+    /* make read end non-blocking for the read loop */
+    int flags;
+    pid_t pid;
+    proc_result *r;
+    char *buf;
+    int64_t deadline;
+    /* timeout handling */
+    int status = 0;
+
     if (pipe(pfd) != 0)
         return NULL;
     /* make read end non-blocking for the read loop */
-    int flags = fcntl(pfd[0], F_GETFL, 0);
+    flags = fcntl(pfd[0], F_GETFL, 0);
     fcntl(pfd[0], F_SETFL, flags | O_NONBLOCK);
 
-    pid_t pid = fork();
+    pid = fork();
     if (pid < 0) {
         close(pfd[0]);
         close(pfd[1]);
         return NULL;
     }
+
     if (pid == 0) {
         /* child */
         if (cwd && *cwd) {
@@ -585,10 +624,11 @@ proc_result *proc_run_in(const char *cmd, int timeout_ms, const char *cwd) {
         execl("/bin/sh", "sh", "-c", cmd, (char *)NULL);
         _exit(127);
     }
+
     close(pfd[1]);
 
-    proc_result *r = calloc(1, sizeof(proc_result));
-    char *buf = malloc(65536);
+    r = calloc(1, sizeof(proc_result));
+    buf = malloc(65536);
     size_t cap = 65536, len = 0;
     if (!r || !buf) {
         if (r)
@@ -601,7 +641,7 @@ proc_result *proc_run_in(const char *cmd, int timeout_ms, const char *cwd) {
         return NULL;
     }
 
-    int64_t deadline = timeout_ms > 0 ? time_now_ms() + timeout_ms : 0;
+    deadline = timeout_ms > 0 ? time_now_ms() + timeout_ms : 0;
     for (;;) {
         if (timeout_ms > 0 && time_now_ms() >= deadline)
             break;
@@ -629,14 +669,13 @@ proc_result *proc_run_in(const char *cmd, int timeout_ms, const char *cwd) {
         time_sleep_ms(5);
     }
 
-    /* timeout handling */
-    int status = 0;
     if (waitpid(pid, &status, WNOHANG) == 0) {
         kill(pid, SIGKILL);
         waitpid(pid, &status, 0);
         r->timed_out = 1;
         r->exit_code = -1;
     }
+
     /* drain remaining */
     for (;;) {
         ssize_t got = read(pfd[0], buf + len, cap - len - 1);
@@ -644,6 +683,7 @@ proc_result *proc_run_in(const char *cmd, int timeout_ms, const char *cwd) {
             break;
         len += (size_t)got;
     }
+
     close(pfd[0]);
     buf[len] = '\0';
     while (len > 0 && (buf[len - 1] == '\n' || buf[len - 1] == '\r' || buf[len - 1] == ' '))
@@ -664,9 +704,11 @@ proc_result *proc_run(const char *cmd, int timeout_ms) {
 }
 
 int proc_spawn_detached(const char *cmd) {
+    pid_t pid;
+
     if (!cmd || !*cmd)
         return -1;
-    pid_t pid = fork();
+    pid = fork();
     if (pid < 0)
         return -1;
     if (pid == 0) {
@@ -681,6 +723,7 @@ int proc_spawn_detached(const char *cmd) {
         execl("/bin/sh", "sh", "-c", cmd, (char *)NULL);
         _exit(127);
     }
+
     return 0;
 }
 
@@ -702,6 +745,11 @@ proc_popen *proc_popen_new(char *const argv[]) {
 }
 
 proc_popen *proc_popen_new_ex(char *const argv[], int merge_stderr) {
+    pid_t pid;
+    /* non-blocking read end for polling */
+    int fl;
+    proc_popen *p;
+
     if (!argv || !argv[0])
         return NULL;
     int in_p[2], out_p[2];
@@ -712,7 +760,8 @@ proc_popen *proc_popen_new_ex(char *const argv[], int merge_stderr) {
         close(in_p[1]);
         return NULL;
     }
-    pid_t pid = fork();
+
+    pid = fork();
     if (pid < 0) {
         close(in_p[0]);
         close(in_p[1]);
@@ -720,6 +769,7 @@ proc_popen *proc_popen_new_ex(char *const argv[], int merge_stderr) {
         close(out_p[1]);
         return NULL;
     }
+
     if (pid == 0) {
         dup2(in_p[0], STDIN_FILENO);
         dup2(out_p[1], STDOUT_FILENO);
@@ -737,13 +787,14 @@ proc_popen *proc_popen_new_ex(char *const argv[], int merge_stderr) {
         execvp(argv[0], argv);
         _exit(127);
     }
+
     close(in_p[0]);
     close(out_p[1]);
     /* non-blocking read end for polling */
-    int fl = fcntl(out_p[0], F_GETFL, 0);
+    fl = fcntl(out_p[0], F_GETFL, 0);
     fcntl(out_p[0], F_SETFL, fl | O_NONBLOCK);
 
-    proc_popen *p = calloc(1, sizeof(*p));
+    p = calloc(1, sizeof(*p));
     if (!p) {
         kill(pid, SIGKILL);
         waitpid(pid, NULL, 0);
@@ -751,6 +802,7 @@ proc_popen *proc_popen_new_ex(char *const argv[], int merge_stderr) {
         close(out_p[0]);
         return NULL;
     }
+
     p->pid = pid;
     p->in_wr = in_p[1];
     p->out_rd = out_p[0];
@@ -764,14 +816,16 @@ proc_popen *proc_popen_new_ex(char *const argv[], int merge_stderr) {
         free(p);
         return NULL;
     }
+
     p->buf[0] = '\0';
     return p;
 }
 
 int proc_popen_write(proc_popen *p, const char *data, size_t len) {
+    size_t off = 0;
+
     if (!p || !data)
         return -1;
-    size_t off = 0;
     while (off < len) {
         ssize_t w = write(p->in_wr, data + off, len - off);
         if (w <= 0) {
@@ -781,14 +835,18 @@ int proc_popen_write(proc_popen *p, const char *data, size_t len) {
         }
         off += (size_t)w;
     }
+
     return 0;
 }
 
 size_t proc_popen_read(proc_popen *p, int timeout_ms) {
+    int64_t deadline;
+    size_t start_len;
+
     if (!p)
         return 0;
-    int64_t deadline = timeout_ms > 0 ? time_now_ms() + timeout_ms : 0;
-    size_t start_len = p->len;
+    deadline = timeout_ms > 0 ? time_now_ms() + timeout_ms : 0;
+    start_len = p->len;
     for (;;) {
         struct pollfd pf = {p->out_rd, POLLIN, 0};
         int timeout = timeout_ms > 0 ? (int)(deadline - time_now_ms()) : 100;
@@ -827,6 +885,7 @@ size_t proc_popen_read(proc_popen *p, int timeout_ms) {
         if (pr == 0 && timeout_ms <= 0)
             break; /* poll timeout in no-deadline mode */
     }
+
     return p->len - start_len;
 }
 
@@ -850,22 +909,26 @@ void proc_popen_trim(proc_popen *p, size_t n) {
         proc_popen_reset(p);
         return;
     }
+
     memmove(p->buf, p->buf + n, p->len - n);
     p->len -= n;
     p->buf[p->len] = '\0';
 }
 
 int proc_popen_alive(proc_popen *p) {
+    int status = 0;
+    pid_t wr;
+
     if (!p)
         return 0;
     if (p->dead)
         return 0;
-    int status = 0;
-    pid_t wr = waitpid(p->pid, &status, WNOHANG);
+    wr = waitpid(p->pid, &status, WNOHANG);
     if (wr == p->pid) {
         p->dead = 1;
         return 0;
     }
+
     return 1;
 }
 

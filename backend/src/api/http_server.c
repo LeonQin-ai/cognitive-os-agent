@@ -45,6 +45,7 @@ http_server *http_server_new_bind(const char *host, uint16_t port) {
         free(s);
         return NULL;
     }
+
     mutex_init(&s->mtx);
     log_info("http server listening on %s:%u", (host && *host) ? host : "*", (unsigned)port);
     return s;
@@ -64,6 +65,8 @@ void http_server_free(http_server *s) {
 
 void http_server_route(http_server *s, const char *method, const char *path_prefix, http_handler fn,
                            void *ud) {
+    route *r;
+
     if (!s || !fn)
         return;
     if (s->n_routes == s->cap_routes) {
@@ -74,7 +77,8 @@ void http_server_route(http_server *s, const char *method, const char *path_pref
         s->routes = nr;
         s->cap_routes = cap;
     }
-    route *r = &s->routes[s->n_routes++];
+
+    r = &s->routes[s->n_routes++];
     snprintf(r->method, sizeof(r->method), "%s", method ? method : "*");
     snprintf(r->prefix, sizeof(r->prefix), "%s", path_prefix ? path_prefix : "/");
     r->fn = fn;
@@ -121,6 +125,7 @@ static int startswith_icase(const char *s, const char *p) {
         if (a != b)
             return 0;
     }
+
     return 1;
 }
 
@@ -147,6 +152,9 @@ static const char *status_reason(int code) {
 static int read_request(sock *sock, char *buf, size_t cap, size_t *head_len, size_t *body_len) {
     size_t got = 0;
     size_t hlen = 0;
+    /* parse Content-Length */
+    size_t clen = 0;
+
     for (;;) {
         /* look for \r\n\r\n terminator */
         size_t i;
@@ -167,8 +175,6 @@ static int read_request(sock *sock, char *buf, size_t cap, size_t *head_len, siz
         buf[got] = '\0';
     }
 
-    /* parse Content-Length */
-    size_t clen = 0;
     const char *cl = strstr(buf, "Content-Length:");
     if (cl) {
         cl += 15;
@@ -176,6 +182,7 @@ static int read_request(sock *sock, char *buf, size_t cap, size_t *head_len, siz
             cl++;
         clen = (size_t)strtoul(cl, NULL, 10);
     }
+
     if (clen > MAX_BODY_BYTES)
         return -1;
 
@@ -189,6 +196,7 @@ static int read_request(sock *sock, char *buf, size_t cap, size_t *head_len, siz
         got += (size_t)n;
         buf[got] = '\0';
     }
+
     *head_len = hlen;
     *body_len = clen;
     return 0;
@@ -197,6 +205,16 @@ static int read_request(sock *sock, char *buf, size_t cap, size_t *head_len, siz
 /* Handle one accepted connection (buf supplied by the heap-allocating
  * wrapper; MAX_BODY_BYTES is 32MB — far too large for the stack). */
 static int handle_conn_buf(http_server *s, sock *sock, char *buf) {
+    char line[1024];
+    size_t linelen = 0;
+    char *qm;
+    http_request req;
+    http_response resp;
+    route *best = NULL;
+    int status = 200;
+    /* serialize response */
+    char head[512];
+
     size_t hlen = 0, blen = 0;
     if (read_request(sock, buf, MAX_HEADER_BYTES + MAX_BODY_BYTES, &hlen, &blen) != 0)
         return 0;
@@ -204,22 +222,20 @@ static int handle_conn_buf(http_server *s, sock *sock, char *buf) {
     /* parse request line */
     char method[16], path[1024], query[512];
     method[0] = path[0] = query[0] = '\0';
-    char line[1024];
-    size_t linelen = 0;
     while (linelen < hlen && linelen + 1 < sizeof(line) && !(buf[linelen] == '\r' && buf[linelen + 1] == '\n')) {
         line[linelen] = buf[linelen];
         linelen++;
     }
+
     line[linelen] = '\0';
     if (sscanf(line, "%15s %1023s", method, path) != 2)
         return 0;
-    char *qm = strchr(path, '?');
+    qm = strchr(path, '?');
     if (qm) {
         snprintf(query, sizeof(query), "%s", qm + 1);
         *qm = '\0';
     }
 
-    http_request req;
     memset(&req, 0, sizeof(req));
     snprintf(req.method, sizeof(req.method), "%s", method);
     snprintf(req.path, sizeof(req.path), "%s", path);
@@ -260,10 +276,10 @@ static int handle_conn_buf(http_server *s, sock *sock, char *buf) {
             break;
         }
     }
+
     req.body = blen ? buf + hlen : NULL;
     req.body_len = blen;
 
-    http_response resp;
     memset(&resp, 0, sizeof(resp));
     resp.status = 0; /* unknown: filled by the dispatcher unless the handler set it */
     snprintf(resp.content_type, sizeof(resp.content_type), "application/json");
@@ -275,7 +291,6 @@ static int handle_conn_buf(http_server *s, sock *sock, char *buf) {
      * "GET /v1/routes"). The bare "/" catch-all serves the web UI for non-API
      * paths only; an unknown /v1/... endpoint is a genuine 404, not an SPA
      * route. */
-    route *best = NULL;
     for (size_t i = 0; i < s->n_routes; i++) {
         route *r = &s->routes[i];
         if (r->prefix[0] == '/' && r->prefix[1] == '\0')
@@ -293,7 +308,7 @@ static int handle_conn_buf(http_server *s, sock *sock, char *buf) {
         else if (meth == bmeth && strlen(r->prefix) > strlen(best->prefix))
             best = r;
     }
-    int status = 200;
+
     if (!best && strncmp(req.path, "/v1", 3) != 0) {
         /* no specific API route matched: fall back to the "/" catch-all for
          * non-API paths (web UI); an unknown /v1/... endpoint is a 404 */
@@ -303,6 +318,7 @@ static int handle_conn_buf(http_server *s, sock *sock, char *buf) {
                 best = r;
         }
     }
+
     if (!best) {
         status = 404;
         http_resp_json(&resp, "{\"error\":\"not found\"}");
@@ -312,13 +328,12 @@ static int handle_conn_buf(http_server *s, sock *sock, char *buf) {
     } else if (best->fn(&req, &resp, best->ud) != 0) {
         status = 500;
     }
+
     /* Respect a status the handler set itself (e.g. 400 on bad input);
      * otherwise fall back to the dispatcher's status. */
     if (resp.status == 0)
         resp.status = status;
 
-    /* serialize response */
-    char head[512];
     int n = snprintf(head, sizeof(head),
                      "HTTP/1.1 %d %s\r\nContent-Type: %s\r\n"
                      "Content-Length: %zu\r\nConnection: close\r\n\r\n",
@@ -336,9 +351,11 @@ static int handle_conn_buf(http_server *s, sock *sock, char *buf) {
  * a WebSocket client thread (caller must not close it), 0 otherwise. */
 static int handle_conn(http_server *s, sock *sock) {
     char *buf = malloc(MAX_HEADER_BYTES + MAX_BODY_BYTES);
+    int rc;
+
     if (!buf)
         return 0;
-    int rc = handle_conn_buf(s, sock, buf);
+    rc = handle_conn_buf(s, sock, buf);
     free(buf);
     return rc;
 }
@@ -356,6 +373,7 @@ int http_server_serve(http_server *s) {
         if (handle_conn(s, c) == 0)
             sock_close(c);
     }
+
     return 0;
 }
 
@@ -366,10 +384,11 @@ void http_resp_append(http_response *resp, const char *s) {
 }
 
 void http_resp_appendf(http_response *resp, const char *fmt, ...) {
-    if (!resp)
-        return;
     char tmp[4096];
     va_list ap;
+
+    if (!resp)
+        return;
     va_start(ap, fmt);
     vsnprintf(tmp, sizeof(tmp), fmt, ap);
     va_end(ap);

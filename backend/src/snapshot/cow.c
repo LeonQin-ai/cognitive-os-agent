@@ -19,6 +19,7 @@ cow *cow_open(const char *blocks_dir) {
         free(c);
         return NULL;
     }
+
     return c;
 }
 
@@ -28,26 +29,31 @@ void cow_close(cow *c) {
 
 const char *cow_put(cow *c, const void *data, size_t len) {
     static char hash[17];
+    char path[1100];
+
     hash_hex(hash, hash64(data, len));
 
-    char path[1100];
     path_join(path, sizeof(path), c->dir, hash);
     if (!fs_exists(path)) {
         if (fs_write_file(path, data, len) != 0)
             return NULL;
     }
+
     return hash;
 }
 
 char *cow_get(cow *c, const char *hash, size_t *len) {
     char path[1100];
+    char *data;
+
     path_join(path, sizeof(path), c->dir, hash);
-    char *data = fs_read_file(path);
+    data = fs_read_file(path);
     if (!data) {
         if (len)
             *len = 0;
         return NULL;
     }
+
     if (len)
         *len = strlen(data);
     return data;

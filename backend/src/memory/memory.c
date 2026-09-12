@@ -63,6 +63,7 @@ static void mem_path(const memory *m, char *out, size_t n, const char *file) {
         path_join(out, n, out, file);
         return;
     }
+
     out[0] = 0;
 }
 
@@ -74,10 +75,11 @@ static char *mem_read(const memory *m, const char *file) {
 
 static int mem_write(const memory *m, const char *file, const char *text) {
     char p[1024];
+    char dir[1024];
+
     mem_path(m, p, sizeof p, file);
     if (!p[0])
         return -1;
-    char dir[1024];
     path_join(dir, sizeof dir, m->root, "memory");
     fs_mkdirs(dir);
     return fs_write_file(p, text, strlen(text));
@@ -85,6 +87,13 @@ static int mem_write(const memory *m, const char *file, const char *text) {
 
 memory *memory_new(const char *state_root) {
     memory *m = (memory *)calloc(1, sizeof(memory));
+    /* load persisted facts */
+    char *facts_json;
+    /* load persisted episodes (experience survives restarts) */
+    char *ep_json;
+    /* load persisted entity graph */
+    char *g_json;
+
     if (!m)
         return NULL;
     snprintf(m->root, sizeof(m->root), "%s", state_root);
@@ -108,7 +117,7 @@ memory *memory_new(const char *state_root) {
     }
 
     /* load persisted facts */
-    char *facts_json = mem_read(m, "facts.json");
+    facts_json = mem_read(m, "facts.json");
     if (facts_json) {
         cJSON *root = cJSON_Parse(facts_json);
         if (root && cJSON_IsObject(root)) {
@@ -121,7 +130,7 @@ memory *memory_new(const char *state_root) {
     }
 
     /* load persisted episodes (experience survives restarts) */
-    char *ep_json = mem_read(m, "episodes.json");
+    ep_json = mem_read(m, "episodes.json");
     if (ep_json) {
         cJSON *root = cJSON_Parse(ep_json);
         if (root && cJSON_IsArray(root)) {
@@ -163,7 +172,7 @@ memory *memory_new(const char *state_root) {
     }
 
     /* load persisted entity graph */
-    char *g_json = mem_read(m, "graph.json");
+    g_json = mem_read(m, "graph.json");
     if (g_json) {
         cJSON *root = cJSON_Parse(g_json);
         cJSON *edges = root ? cJSON_GetObjectItemCaseSensitive(root, "edges") : NULL;
@@ -185,6 +194,7 @@ memory *memory_new(const char *state_root) {
             cJSON_Delete(root);
         free(g_json);
     }
+
     return m;
 }
 
@@ -196,6 +206,7 @@ void memory_free(memory *m) {
         if (m->working.ids)
             free(m->working.ids[i]);
     }
+
     free(m->working.items);
     free(m->working.ids);
     kvstore_free(m->facts);
@@ -207,10 +218,13 @@ void memory_free(memory *m) {
 }
 
 void memory_working_push(memory *m, const char *text) {
+    char id[32];
+    char *evict_id = NULL;
+    char **ni;
+
     if (!m || !text)
         return;
-    char id[32];
-    char *evict_id = NULL; /* vector-store id of the evicted ring item */
+     /* vector-store id of the evicted ring item */
     mutex_lock(&m->mtx);
     /* id list mirrors the ring 1:1 (ring never exceeds WORKING_CAP, so one
      * lazy allocation is enough); NULL entries mean "not tracked" (OOM). */
@@ -224,12 +238,14 @@ void memory_working_push(memory *m, const char *text) {
         }
         m->working.count--;
     }
-    char **ni = (char **)realloc(m->working.items, (m->working.count + 1) * sizeof(char *));
+
+    ni = (char **)realloc(m->working.items, (m->working.count + 1) * sizeof(char *));
     if (!ni) {
         mutex_unlock(&m->mtx);
         free(evict_id);
         return;
     }
+
     m->working.items = ni;
     memmove(m->working.items + 1, m->working.items, m->working.count * sizeof(char *));
     m->working.items[0] = xstrdup(text);
@@ -239,6 +255,7 @@ void memory_working_push(memory *m, const char *text) {
         memmove(m->working.ids + 1, m->working.ids, (m->working.count - 1) * sizeof(char *));
         m->working.ids[0] = xstrdup(id);
     }
+
     mutex_unlock(&m->mtx);
 
     vectorstore_add(m->vectors, id, text, "working");
@@ -251,10 +268,12 @@ void memory_working_push(memory *m, const char *text) {
 }
 
 int memory_working_count(memory *m) {
+    int n;
+
     if (!m)
         return 0;
     mutex_lock(&m->mtx);
-    int n = (int)m->working.count;
+    n = (int)m->working.count;
     mutex_unlock(&m->mtx);
     return n;
 }
@@ -281,9 +300,10 @@ const char *memory_recall(memory *m, const char *key) {
 }
 
 void memory_record_experience(memory *m, const char *task, const char *result) {
+    char id[32];
+
     if (!m || !task)
         return;
-    char id[32];
     mutex_lock(&m->mtx);
     snprintf(id, sizeof(id), "e:%zu", m->seq++);
     mutex_unlock(&m->mtx);
@@ -307,9 +327,10 @@ int memory_index_document(memory *m, const char *id, const char *text, const cha
  * (blank lines) and index each with id "<base>#<i>". Returns chunks added. */
 int memory_index_text(memory *m, const char *base, const char *text) {
     strbuf cur;
+    const char *p = text;
+
     strbuf_init(&cur);
     int n = 0, idx = 0;
-    const char *p = text;
     while (*p) {
         /* one paragraph: up to a blank line or EOF */
         const char *nl = strstr(p, "\n\n");
@@ -326,23 +347,26 @@ int memory_index_text(memory *m, const char *base, const char *text) {
         strbuf_append(&cur, "\n");
         p += nl ? (size_t)(nl - p) + 2 : plen;
     }
+
     if (cur.len > 0) {
         char id[128];
         snprintf(id, sizeof(id), "%s#%d", base, idx++);
         memory_index_document(m, id, cur.buf, "upload");
         n++;
     }
+
     strbuf_free(&cur);
     return n;
 }
 
 int memory_index_uploads(memory *m, const char *dir) {
+    dir_list dl;
+    int total = 0;
+
     if (!m || !dir || !*dir)
         return 0;
-    dir_list dl;
     if (fs_list_dir(dir, &dl) != 0)
         return 0;
-    int total = 0;
     for (size_t i = 0; i < dl.count; i++) {
         if (dl.items[i].is_dir)
             continue;
@@ -359,6 +383,7 @@ int memory_index_uploads(memory *m, const char *dir) {
         total += memory_index_text(m, base, text);
         free(text);
     }
+
     fs_list_free(&dl);
     return total;
 }
@@ -392,28 +417,40 @@ static int label_hit(const char *label, const char **tokens, const int *tlens, i
 }
 
 char *memory_graph_related(memory *m, const char *query, int limit) {
-    if (!m || !query || limit <= 0)
-        return xstrdup("[]");
     const char *tokens[64];
     int tlens[64];
     int ntok = 0;
+    char *snap;
+    cJSON *root;
+    cJSON *arr;
+    cJSON *edges;
+    char *s;
+
+    if (!m || !query || limit <= 0)
+        return xstrdup("[]");
     tokenize(query, tokens, tlens, &ntok);
     if (ntok == 0)
         return xstrdup("[]");
 
-    char *snap = graph_snapshot_json(m->graph);
-    cJSON *root = snap ? cJSON_Parse(snap) : NULL;
+    snap = graph_snapshot_json(m->graph);
+    root = snap ? cJSON_Parse(snap) : NULL;
     free(snap);
-    cJSON *arr = cJSON_CreateArray();
-    cJSON *edges = root ? cJSON_GetObjectItemCaseSensitive(root, "edges") : NULL;
+    arr = cJSON_CreateArray();
+    edges = root ? cJSON_GetObjectItemCaseSensitive(root, "edges") : NULL;
     if (arr && edges && cJSON_IsArray(edges)) {
         cJSON *it;
         cJSON_ArrayForEach(it, edges) {
+    cJSON *f;
+    cJSON *t;
+    cJSON *r;
+    char text[700];
+    cJSON *o;
+
             if (cJSON_GetArraySize(arr) >= limit)
                 break;
-            cJSON *f = cJSON_GetObjectItemCaseSensitive(it, "from");
-            cJSON *t = cJSON_GetObjectItemCaseSensitive(it, "to");
-            cJSON *r = cJSON_GetObjectItemCaseSensitive(it, "relation");
+            f = cJSON_GetObjectItemCaseSensitive(it, "from");
+            t = cJSON_GetObjectItemCaseSensitive(it, "to");
+            r = cJSON_GetObjectItemCaseSensitive(it, "relation");
             const char *fs = f && cJSON_IsString(f) ? f->valuestring : NULL;
             const char *ts = t && cJSON_IsString(t) ? t->valuestring : NULL;
             const char *rs = r && cJSON_IsString(r) ? r->valuestring : "";
@@ -421,16 +458,16 @@ char *memory_graph_related(memory *m, const char *query, int limit) {
                 continue;
             if (!label_hit(fs, tokens, tlens, ntok) && !label_hit(ts, tokens, tlens, ntok))
                 continue;
-            char text[700];
             snprintf(text, sizeof(text), "%s -%s-> %s", fs, rs, ts);
-            cJSON *o = cJSON_CreateObject();
+            o = cJSON_CreateObject();
             cJSON_AddStringToObject(o, "text", text);
             cJSON_AddItemToArray(arr, o);
         }
     }
+
     if (root)
         cJSON_Delete(root);
-    char *s = arr ? cJSON_PrintUnformatted(arr) : NULL;
+    s = arr ? cJSON_PrintUnformatted(arr) : NULL;
     if (arr)
         cJSON_Delete(arr);
     return s ? s : xstrdup("[]");
@@ -439,6 +476,10 @@ char *memory_graph_related(memory *m, const char *query, int limit) {
 /* ---- consolidation engine: recurring episode themes -> long-term facts ---- */
 
 int memory_consolidate(memory *m) {
+    size_t n_acc = 0;
+    int n;
+    int written = 0;
+
     if (!m)
         return 0;
     /* token -> how many distinct episodes contain it (episodes are oldest
@@ -449,9 +490,8 @@ int memory_consolidate(memory *m) {
         size_t last;
     } topic;
     topic acc[128];
-    size_t n_acc = 0;
 
-    int n = episodic_count(m->episodes);
+    n = episodic_count(m->episodes);
     for (int i = 0; i < n; i++) {
         const char *task = episodic_task(m->episodes, i);
         if (!task)
@@ -498,7 +538,6 @@ int memory_consolidate(memory *m) {
         }
     }
 
-    int written = 0;
     for (size_t a = 0; a < n_acc; a++) {
         if (acc[a].eps < 3)
             continue; /* recurring theme threshold */
@@ -509,14 +548,17 @@ int memory_consolidate(memory *m) {
         kvstore_set(m->facts, key, val);
         written++;
     }
+
     return written;
 }
 
 int memory_consolidation_count(memory *m) {
+    int n;
+
     if (!m)
         return 0;
     mutex_lock(&m->mtx);
-    int n = m->consol_count;
+    n = m->consol_count;
     mutex_unlock(&m->mtx);
     return n;
 }
@@ -526,40 +568,46 @@ int memory_consolidation_count(memory *m) {
 static int consolidate_procedural(memory *m, int min_tasks) {
     char *snap = graph_snapshot_json(m->graph);
     cJSON *root = snap ? cJSON_Parse(snap) : NULL;
+    cJSON *edges;
+    size_t n_seen = 0;
+    cJSON *it;
+    int written = 0;
+
     free(snap);
     if (!root)
         return 0;
-    cJSON *edges = cJSON_GetObjectItemCaseSensitive(root, "edges");
+    edges = cJSON_GetObjectItemCaseSensitive(root, "edges");
     if (!edges || !cJSON_IsArray(edges)) {
         cJSON_Delete(root);
         return 0;
     }
+
     typedef struct {
         const char *tool;
         int n;
     } proc;
     proc seen[64];
-    size_t n_seen = 0;
-    cJSON *it;
     cJSON_ArrayForEach(it, edges) {
         cJSON *rel = cJSON_GetObjectItemCaseSensitive(it, "relation");
         cJSON *to = cJSON_GetObjectItemCaseSensitive(it, "to");
+    size_t a = 0;
+
         if (!rel || !cJSON_IsString(rel) || strcmp(rel->valuestring, "used_tool") != 0 || !to || !cJSON_IsString(to) ||
             !to->valuestring)
             continue;
-        size_t a = 0;
         for (; a < n_seen; a++)
             if (strcmp(seen[a].tool, to->valuestring) == 0) {
                 seen[a].n++;
                 break;
             }
+
         if (a == n_seen && n_seen < sizeof(seen) / sizeof(seen[0])) {
             seen[n_seen].tool = to->valuestring;
             seen[n_seen].n = 1;
             n_seen++;
         }
     }
-    int written = 0;
+
     for (size_t a = 0; a < n_seen; a++) {
         if (seen[a].n < min_tasks)
             continue;
@@ -569,11 +617,16 @@ static int consolidate_procedural(memory *m, int min_tasks) {
         kvstore_set(m->facts, key, val);
         written++;
     }
+
     cJSON_Delete(root);
     return written;
 }
 
 int memory_maybe_consolidate(memory *m, int threshold_eps, long long interval_ms) {
+    int n;
+    double ms;
+    int arc;
+
     if (!m || threshold_eps <= 0)
         return -1;
     long long now = time_now_ms();
@@ -582,11 +635,13 @@ int memory_maybe_consolidate(memory *m, int threshold_eps, long long interval_ms
         mutex_unlock(&m->mtx);
         return 0;
     }
-    int n = episodic_count(m->episodes);
+
+    n = episodic_count(m->episodes);
     if (n - (int)m->consolidated_at < threshold_eps) {
         mutex_unlock(&m->mtx);
         return 0;
     }
+
     m->last_consol_ms = now;
     m->consolidated_at = (size_t)n;
     m->consol_count++;
@@ -598,8 +653,8 @@ int memory_maybe_consolidate(memory *m, int threshold_eps, long long interval_ms
     /* automatic lifecycle pass rides along with consolidation (decay+forget) */
     mutex_lock(&m->mtx);
     long long hl = m->lc_half_life_ms;
-    double ms = m->lc_min_strength;
-    int arc = m->lc_archive;
+    ms = m->lc_min_strength;
+    arc = m->lc_archive;
     mutex_unlock(&m->mtx);
     if (hl > 0 || ms > 0) {
         memory_lifecycle_cfg lc = {0};
@@ -609,6 +664,7 @@ int memory_maybe_consolidate(memory *m, int threshold_eps, long long interval_ms
         lc.archive = arc;
         memory_lifecycle_pass(m, &lc);
     }
+
     return 1;
 }
 
@@ -634,16 +690,18 @@ int memory_episode_count(memory *m) {
 }
 
 int memory_lifecycle_pass(memory *m, const memory_lifecycle_cfg *cfg) {
+    double ms;
+    int dropped = 0;
+
     if (!m)
         return -1;
     long long now = (cfg && cfg->now_ms > 0) ? cfg->now_ms : time_now_ms();
     long long hl = cfg ? cfg->half_life_ms : 0;
-    double ms = cfg ? cfg->min_strength : 0;
+    ms = cfg ? cfg->min_strength : 0;
     if (hl > 0)
         episodic_decay(m->episodes, now, hl, 0.001);
     if (ms <= 0)
         return 0;
-    int dropped = 0;
     if (cfg && cfg->archive) {
         char *below = episodic_below_json(m->episodes, ms);
         if (below && strcmp(below, "[]") != 0) {
@@ -663,6 +721,7 @@ int memory_lifecycle_pass(memory *m, const memory_lifecycle_cfg *cfg) {
         }
         free(below);
     }
+
     dropped = episodic_drop_below(m->episodes, ms);
     return dropped;
 }
@@ -686,6 +745,7 @@ static void tokenize(const char *s, const char *tokens[64], int tlens[64], int *
             n++;
         }
     }
+
     *ntok = n;
 }
 
@@ -700,6 +760,7 @@ static int ci_eq_n(const char *a, const char *b, size_t n) {
         if (ca != cb)
             return 0;
     }
+
     return 1;
 }
 
@@ -716,6 +777,7 @@ static int token_match(const char *text, const char *tok, size_t tlen) {
         if ((size_t)(p - s) == tlen && ci_eq_n(s, tok, tlen))
             return 1;
     }
+
     return 0;
 }
 
@@ -723,11 +785,14 @@ char *memory_search(memory *m, const char *query, int limit) {
     const char *tokens[64];
     int tlens[64];
     int ntok = 0;
+    cJSON *arr;
+    char *s;
+
     tokenize(query, tokens, tlens, &ntok);
     if (ntok == 0)
         return xstrdup("[]");
 
-    cJSON *arr = cJSON_CreateArray();
+    arr = cJSON_CreateArray();
     if (!arr)
         return xstrdup("[]");
 
@@ -748,6 +813,7 @@ char *memory_search(memory *m, const char *query, int limit) {
                 break;
         }
     }
+
     mutex_unlock(&m->mtx);
 
     /* score experiences */
@@ -774,7 +840,7 @@ char *memory_search(memory *m, const char *query, int limit) {
         }
     }
 
-    char *s = cJSON_PrintUnformatted(arr);
+    s = cJSON_PrintUnformatted(arr);
     cJSON_Delete(arr);
     return s ? s : xstrdup("[]");
 }
@@ -786,6 +852,20 @@ char *memory_retrieve(memory *m, const char *query, int k) {
 }
 
 char *memory_retrieve_ex(memory *m, const char *query, int k, float w_vec) {
+    /* stage 1: hybrid recall of an oversized candidate pool */
+    char *cand_json;
+    cJSON *cand;
+    int nc;
+    float *rel;
+    float *recall;
+    int i = 0;
+    cJSON *it;
+    /* order candidate indices by final score, take top k */
+    int *order;
+    cJSON *out;
+    int kmax;
+    char *s;
+
     if (!m || !query || k <= 0)
         return xstrdup("[]");
     if (w_vec < 0)
@@ -793,16 +873,17 @@ char *memory_retrieve_ex(memory *m, const char *query, int k, float w_vec) {
     if (w_vec > 1)
         w_vec = 1;
     /* stage 1: hybrid recall of an oversized candidate pool */
-    char *cand_json = vectorstore_nearest_hybrid(m->vectors, query, k * 3, w_vec);
+    cand_json = vectorstore_nearest_hybrid(m->vectors, query, k * 3, w_vec);
     if (!cand_json)
         return xstrdup("[]");
-    cJSON *cand = cJSON_Parse(cand_json);
+    cand = cJSON_Parse(cand_json);
     free(cand_json);
     if (!cand || !cJSON_IsArray(cand)) {
         cJSON_Delete(cand);
         return xstrdup("[]");
     }
-    int nc = cJSON_GetArraySize(cand);
+
+    nc = cJSON_GetArraySize(cand);
     if (nc == 0) {
         cJSON_Delete(cand);
         return xstrdup("[]");
@@ -810,8 +891,8 @@ char *memory_retrieve_ex(memory *m, const char *query, int k, float w_vec) {
 
     /* stage 2: rerank the candidates, blend with the recall score */
     const char **docs = (const char **)calloc((size_t)nc, sizeof(char *));
-    float *rel = (float *)calloc((size_t)nc, sizeof(float));
-    float *recall = (float *)calloc((size_t)nc, sizeof(float));
+    rel = (float *)calloc((size_t)nc, sizeof(float));
+    recall = (float *)calloc((size_t)nc, sizeof(float));
     if (!docs || !rel || !recall) {
         free(docs);
         free(rel);
@@ -819,8 +900,7 @@ char *memory_retrieve_ex(memory *m, const char *query, int k, float w_vec) {
         cJSON_Delete(cand);
         return xstrdup("[]");
     }
-    int i = 0;
-    cJSON *it;
+
     cJSON_ArrayForEach(it, cand) {
         cJSON *t = cJSON_GetObjectItemCaseSensitive(it, "text");
         cJSON *s = cJSON_GetObjectItemCaseSensitive(it, "score");
@@ -828,6 +908,7 @@ char *memory_retrieve_ex(memory *m, const char *query, int k, float w_vec) {
         recall[i] = (s && cJSON_IsNumber(s)) ? (float)s->valuedouble : 0.0f;
         i++;
     }
+
     embed_rerank(query, docs, (size_t)nc, rel);
     /* final = 0.6*rerank + 0.4*recall(hybrid) — rerank dominates but a strong
      * vector match survives a weak keyword overlap */
@@ -835,7 +916,7 @@ char *memory_retrieve_ex(memory *m, const char *query, int k, float w_vec) {
         rel[j] = 0.6f * rel[j] + 0.4f * recall[j];
 
     /* order candidate indices by final score, take top k */
-    int *order = (int *)malloc((size_t)nc * sizeof(int));
+    order = (int *)malloc((size_t)nc * sizeof(int));
     if (!order) {
         free(docs);
         free(rel);
@@ -843,6 +924,7 @@ char *memory_retrieve_ex(memory *m, const char *query, int k, float w_vec) {
         cJSON_Delete(cand);
         return xstrdup("[]");
     }
+
     for (int j = 0; j < nc; j++)
         order[j] = j;
     for (int a = 1; a < nc; a++) {
@@ -855,20 +937,22 @@ char *memory_retrieve_ex(memory *m, const char *query, int k, float w_vec) {
         }
         order[b + 1] = idx;
     }
-    cJSON *out = cJSON_CreateArray();
-    int kmax = k < nc ? k : nc;
+
+    out = cJSON_CreateArray();
+    kmax = k < nc ? k : nc;
     for (int j = 0; j < kmax && out; j++) {
         cJSON *src = cJSON_GetArrayItem(cand, order[j]);
         cJSON *dup = cJSON_Duplicate(src, 1);
         if (dup)
             cJSON_AddItemToArray(out, dup);
     }
+
     free(order);
     free(docs);
     free(rel);
     free(recall);
     cJSON_Delete(cand);
-    char *s = out ? cJSON_PrintUnformatted(out) : NULL;
+    s = out ? cJSON_PrintUnformatted(out) : NULL;
     if (out)
         cJSON_Delete(out);
     return s ? s : xstrdup("[]");
@@ -881,19 +965,25 @@ char *memory_retrieve_mqe(memory *m, const char *const *queries, int nq, int k) 
 }
 
 void memory_flush(memory *m) {
+    char *s;
+    char *e;
+    char *g;
+
     if (!m)
         return;
-    char *s = kvstore_snapshot_json(m->facts);
+    s = kvstore_snapshot_json(m->facts);
     if (s) {
         mem_write(m, "facts.json", s);
         free(s);
     }
-    char *e = episodic_json(m->episodes);
+
+    e = episodic_json(m->episodes);
     if (e) {
         mem_write(m, "episodes.json", e);
         free(e);
     }
-    char *g = graph_snapshot_json(m->graph);
+
+    g = graph_snapshot_json(m->graph);
     if (g) {
         mem_write(m, "graph.json", g);
         free(g);
@@ -901,15 +991,18 @@ void memory_flush(memory *m) {
 }
 
 char *memory_working_json(memory *m) {
+    cJSON *arr;
+    char *s;
+
     if (!m)
         return xstrdup("[]");
     mutex_lock(&m->mtx);
-    cJSON *arr = cJSON_CreateArray();
+    arr = cJSON_CreateArray();
     if (arr)
         for (size_t i = 0; i < m->working.count; i++)
             cJSON_AddItemToArray(arr, cJSON_CreateString(m->working.items[i]));
     mutex_unlock(&m->mtx);
-    char *s = arr ? cJSON_PrintUnformatted(arr) : NULL;
+    s = arr ? cJSON_PrintUnformatted(arr) : NULL;
     if (arr)
         cJSON_Delete(arr);
     return s ? s : xstrdup("[]");

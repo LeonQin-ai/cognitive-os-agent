@@ -44,6 +44,11 @@ static int snapshot_restore_from_manifest(snapshot *s, const char *json_text, co
 
 snapshot *snapshot_open(const char *state_root) {
     snapshot *s = calloc(1, sizeof(snapshot));
+    char blocks[600];
+    /* load committed snapshots from state_root/snapshots/ */
+    char manifest_dir[600];
+    dir_list dl;
+
     if (!s)
         return NULL;
     snprintf(s->root, sizeof(s->root), "%s", state_root);
@@ -56,7 +61,7 @@ snapshot *snapshot_open(const char *state_root) {
                 s->max_file = v; /* 0 disables the limit entirely */
         }
     }
-    char blocks[600];
+
     path_join(blocks, sizeof(blocks), state_root, "snapshots/blocks");
     s->cow = cow_open(blocks);
     if (!s->cow) {
@@ -64,10 +69,7 @@ snapshot *snapshot_open(const char *state_root) {
         return NULL;
     }
 
-    /* load committed snapshots from state_root/snapshots/ */
-    char manifest_dir[600];
     path_join(manifest_dir, sizeof(manifest_dir), state_root, "snapshots");
-    dir_list dl;
     if (fs_list_dir(manifest_dir, &dl) == 0) {
         for (size_t i = 0; i < dl.count; i++) {
             if (dl.items[i].is_dir)
@@ -85,6 +87,7 @@ snapshot *snapshot_open(const char *state_root) {
         }
         fs_list_free(&dl);
     }
+
     return s;
 }
 
@@ -101,33 +104,43 @@ long long snapshot_get_max_file(const snapshot *s) {
 /* helper used above to rebuild committed list from a persisted manifest */
 static int snapshot_restore_from_manifest(snapshot *s, const char *json_text, const char *fname) {
     cJSON *root = cJSON_Parse(json_text);
+    cJSON *created;
+    cJSON *files;
+
     if (!root || !cJSON_IsObject(root)) {
         if (root)
             cJSON_Delete(root);
         return -1;
     }
+
     snapshot_entry *e = calloc(1, sizeof(snapshot_entry));
     if (!e) {
         cJSON_Delete(root);
         return -1;
     }
+
     /* id from filename minus .json */
     snprintf(e->id, sizeof(e->id), "%.*s", (int)(strlen(fname) > 5 ? strlen(fname) - 5 : 0), fname);
-    cJSON *created = cJSON_GetObjectItemCaseSensitive(root, "created");
+    created = cJSON_GetObjectItemCaseSensitive(root, "created");
     if (created && cJSON_IsString(created))
         snprintf(e->created, sizeof(e->created), "%s", created->valuestring);
-    cJSON *files = cJSON_GetObjectItemCaseSensitive(root, "files");
+    files = cJSON_GetObjectItemCaseSensitive(root, "files");
     if (files && cJSON_IsArray(files)) {
         e->files = calloc((size_t)cJSON_GetArraySize(files), sizeof(captured));
         e->nfiles = (size_t)cJSON_GetArraySize(files);
         cJSON *it;
         size_t idx = 0;
         cJSON_ArrayForEach(it, files) {
+    cJSON *p;
+    cJSON *h;
+    cJSON *ex;
+    cJSON *sk;
+
             captured *cap = &e->files[idx++];
-            cJSON *p = cJSON_GetObjectItemCaseSensitive(it, "path");
-            cJSON *h = cJSON_GetObjectItemCaseSensitive(it, "hash");
-            cJSON *ex = cJSON_GetObjectItemCaseSensitive(it, "existed");
-            cJSON *sk = cJSON_GetObjectItemCaseSensitive(it, "skipped");
+            p = cJSON_GetObjectItemCaseSensitive(it, "path");
+            h = cJSON_GetObjectItemCaseSensitive(it, "hash");
+            ex = cJSON_GetObjectItemCaseSensitive(it, "existed");
+            sk = cJSON_GetObjectItemCaseSensitive(it, "skipped");
             cap->path = (p && cJSON_IsString(p)) ? xstrdup(p->valuestring) : xstrdup("");
             if (h && cJSON_IsString(h))
                 snprintf(cap->hash, sizeof(cap->hash), "%s", h->valuestring);
@@ -135,11 +148,13 @@ static int snapshot_restore_from_manifest(snapshot *s, const char *json_text, co
             cap->skipped = sk ? cJSON_IsTrue(sk) : 0;
         }
     }
+
     if (s->committed_count == s->committed_cap) {
         size_t cap = s->committed_cap ? s->committed_cap * 2 : 8;
         s->committed = realloc(s->committed, cap * sizeof(snapshot_entry));
         s->committed_cap = cap;
     }
+
     s->committed[s->committed_count++] = *e;
     free(e);
     cJSON_Delete(root);
@@ -157,6 +172,7 @@ void snapshot_close(snapshot *s) {
             free(s->committed[i].files[j].path);
         free(s->committed[i].files);
     }
+
     free(s->committed);
     cow_close(s->cow);
     free(s);
@@ -183,28 +199,37 @@ int snapshot_capture(snapshot *s, const char *path) {
             }
         }
     }
+
     if (s->pending_count == s->pending_cap) {
         size_t capn = s->pending_cap ? s->pending_cap * 2 : 8;
         s->pending = realloc(s->pending, capn * sizeof(captured));
         s->pending_cap = capn;
     }
+
     s->pending[s->pending_count++] = cap;
     return 0;
 }
 
 const char *snapshot_commit(snapshot *s) {
+    char id[32];
+    char created[40];
+    /* persist manifest */
+    cJSON *root;
+    cJSON *files;
+    char *text;
+    char manifest[700];
+    char fname[64];
+
     if (s->pending_count == 0)
         return NULL;
-    char id[32];
     snprintf(id, sizeof(id), "s%lld", (long long)time_now_ms());
-    char created[40];
     time_now_iso(created, sizeof(created));
 
     /* persist manifest */
-    cJSON *root = cJSON_CreateObject();
+    root = cJSON_CreateObject();
     cJSON_AddStringToObject(root, "id", id);
     cJSON_AddStringToObject(root, "created", created);
-    cJSON *files = cJSON_AddArrayToObject(root, "files");
+    files = cJSON_AddArrayToObject(root, "files");
     for (size_t i = 0; i < s->pending_count; i++) {
         cJSON *o = cJSON_CreateObject();
         cJSON_AddStringToObject(o, "path", s->pending[i].path);
@@ -214,11 +239,10 @@ const char *snapshot_commit(snapshot *s) {
             cJSON_AddBoolToObject(o, "skipped", 1);
         cJSON_AddItemToArray(files, o);
     }
-    char *text = cJSON_PrintUnformatted(root);
+
+    text = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
 
-    char manifest[700];
-    char fname[64];
     snprintf(fname, sizeof(fname), "%s.json", id);
     path_join(manifest, sizeof(manifest), s->root, "snapshots");
     fs_mkdirs(manifest);
@@ -234,6 +258,7 @@ const char *snapshot_commit(snapshot *s) {
         s->committed = realloc(s->committed, cap * sizeof(snapshot_entry));
         s->committed_cap = cap;
     }
+
     snapshot_entry *e = &s->committed[s->committed_count++];
     memset(e, 0, sizeof(*e));
     snprintf(e->id, sizeof(e->id), "%s", id);
@@ -257,6 +282,8 @@ void snapshot_abort(snapshot *s) {
 
 char *snapshot_list(snapshot *s) {
     cJSON *arr = cJSON_CreateArray();
+    char *s_out;
+
     for (size_t i = 0; i < s->committed_count; i++) {
         snapshot_entry *e = &s->committed[i];
         cJSON *o = cJSON_CreateObject();
@@ -268,7 +295,8 @@ char *snapshot_list(snapshot *s) {
             cJSON_AddItemToArray(fl, cJSON_CreateString(e->files[j].path));
         cJSON_AddItemToArray(arr, o);
     }
-    char *s_out = cJSON_PrintUnformatted(arr);
+
+    s_out = cJSON_PrintUnformatted(arr);
     cJSON_Delete(arr);
     return s_out ? s_out : xstrdup("[]");
 }
@@ -292,6 +320,7 @@ static int restore_entry(snapshot *s, snapshot_entry *e) {
             fs_remove(cap->path);
         }
     }
+
     return 0;
 }
 
@@ -306,15 +335,18 @@ int snapshot_restore(snapshot *s, const char *id) {
         if (strcmp(s->committed[i].id, id) == 0)
             return restore_entry(s, &s->committed[i]);
     }
+
     return -1;
 }
 
 int snapshot_restore_pending(snapshot *s) {
+    int rc;
+
     snapshot_entry e;
     memset(&e, 0, sizeof(e));
     e.files = s->pending;
     e.nfiles = s->pending_count;
-    int rc = restore_entry(s, &e);
+    rc = restore_entry(s, &e);
     snapshot_abort(s);
     return rc;
 }

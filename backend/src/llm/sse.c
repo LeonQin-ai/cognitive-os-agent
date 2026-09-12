@@ -12,13 +12,16 @@ struct sse {
 sse *sse_start(const char *base_url, const char *path, const char *body, const char *content_type,
                        strmap *extra_headers, int timeout_ms) {
     http_stream *h = http_stream_open(base_url, "POST", path, body, content_type, extra_headers, timeout_ms);
+    sse *s;
+
     if (!h)
         return NULL;
-    sse *s = malloc(sizeof(sse));
+    s = malloc(sizeof(sse));
     if (!s) {
         http_stream_close(h);
         return NULL;
     }
+
     s->h = h;
     return s;
 }

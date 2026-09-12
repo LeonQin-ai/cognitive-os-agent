@@ -21,6 +21,12 @@ int wasm3_available(void) {
 }
 
 char *wasm3_run(const void *wasm, size_t wasm_len, const char *fn_name, const char *args_json) {
+    int loaded = 0;
+    const char *argv[MAX_ARGS];
+    int argc = 0;
+    uint64_t ret = 0;
+    char out[640];
+
     if (!wasm || !fn_name)
         return xstrdup("{\"ok\":false,\"error\":\"bad arguments\"}");
 
@@ -34,7 +40,6 @@ char *wasm3_run(const void *wasm, size_t wasm_len, const char *fn_name, const ch
     }
 
     IM3Module mod = NULL;
-    int loaded = 0;
     M3Result res = m3_ParseModule(env, &mod, wasm, wasm_len);
     if (!res)
         res = m3_LoadModule(rt, mod);
@@ -45,9 +50,7 @@ char *wasm3_run(const void *wasm, size_t wasm_len, const char *fn_name, const ch
     if (!res)
         res = m3_FindFunction(&f, rt, fn_name);
 
-    const char *argv[MAX_ARGS];
     char buf[MAX_ARGS][32];
-    int argc = 0;
 
     if (!res) {
         cJSON *root = args_json ? cJSON_Parse(args_json) : NULL;
@@ -86,13 +89,11 @@ char *wasm3_run(const void *wasm, size_t wasm_len, const char *fn_name, const ch
         res = m3_CallArgv(f, (uint32_t)argc, argv);
     }
 
-    uint64_t ret = 0;
     if (!res) {
         const void *rets[1] = {&ret};
         res = m3_GetResults(f, 1, rets);
     }
 
-    char out[640];
     if (res) {
         snprintf(out, sizeof(out), "{\"ok\":false,\"error\":\"wasm3: %s\"}", res ? res : "?");
     } else {

@@ -64,6 +64,7 @@ void filetracker_clear(filetracker *ft) {
         free(e);
         e = n;
     }
+
     ft->head = NULL;
     ft->count = 0;
     mutex_unlock(&ft->mtx);
@@ -81,6 +82,7 @@ int filetracker_record(filetracker *ft, const char *path, int ops) {
             return acc;
         }
     }
+
     if (ft->count < FT_MAX_ENTRIES) {
         ft_entry *e = calloc(1, sizeof(*e));
         if (e) {
@@ -97,15 +99,18 @@ int filetracker_record(filetracker *ft, const char *path, int ops) {
             free(e);
         }
     }
+
     mutex_unlock(&ft->mtx);
     return 0;
 }
 
 int filetracker_count(filetracker *ft) {
+    int n;
+
     if (!ft)
         return 0;
     mutex_lock(&ft->mtx);
-    int n = ft->count;
+    n = ft->count;
     mutex_unlock(&ft->mtx);
     return n;
 }
@@ -120,46 +125,57 @@ const char *filetracker_ops_str(int ops) {
             strcat(buf, ",");
         strcat(buf, "write");
     }
+
     if (ops & FT_DELETE) {
         if (buf[0])
             strcat(buf, ",");
         strcat(buf, "delete");
     }
+
     if (ops & FT_EXEC) {
         if (buf[0])
             strcat(buf, ",");
         strcat(buf, "exec");
     }
+
     if (!buf[0])
         strcat(buf, "none");
     return buf;
 }
 
 char *filetracker_json(filetracker *ft) {
+    cJSON *arr;
+    /* walk in registration order: list is LIFO, so reverse-collect */
+    size_t n;
+    int *opsv;
+    size_t i = 0;
+    char *s;
+
     if (!ft)
         return xstrdup("[]");
     mutex_lock(&ft->mtx);
-    cJSON *arr = cJSON_CreateArray();
+    arr = cJSON_CreateArray();
     /* walk in registration order: list is LIFO, so reverse-collect */
-    size_t n = (size_t)ft->count;
+    n = (size_t)ft->count;
     const char **paths = n ? calloc(n, sizeof(char *)) : NULL;
-    int *opsv = n ? calloc(n, sizeof(int)) : NULL;
-    size_t i = 0;
+    opsv = n ? calloc(n, sizeof(int)) : NULL;
     for (ft_entry *e = ft->head; e && i < n; e = e->next) {
         paths[i] = e->path;
         opsv[i] = e->ops;
         i++;
     }
+
     for (size_t k = i; k-- > 0;) {
         cJSON *o = cJSON_CreateObject();
         cJSON_AddStringToObject(o, "path", paths[k]);
         cJSON_AddStringToObject(o, "ops", filetracker_ops_str(opsv[k]));
         cJSON_AddItemToArray(arr, o);
     }
+
     free(paths);
     free(opsv);
     mutex_unlock(&ft->mtx);
-    char *s = cJSON_PrintUnformatted(arr);
+    s = cJSON_PrintUnformatted(arr);
     cJSON_Delete(arr);
     return s ? s : xstrdup("[]");
 }
@@ -178,9 +194,10 @@ static void snap_add(ft_snapshot *s, const char *path, long long size) {
 }
 
 static void scan_dir(ft_snapshot *s, const char *dir, int depth) {
+    dir_list list;
+
     if (!s || !dir || depth > FT_SCAN_MAX_DEPTH)
         return;
-    dir_list list;
     memset(&list, 0, sizeof(list));
     if (fs_list_dir(dir, &list) != 0)
         return;
@@ -197,6 +214,7 @@ static void scan_dir(ft_snapshot *s, const char *dir, int depth) {
                 snap_add(s, full, sz);
         }
     }
+
     fs_list_free(&list);
 }
 
@@ -209,6 +227,7 @@ ft_snapshot *filetracker_dir_snapshot(const char *dir) {
         free(s);
         return NULL;
     }
+
     if (dir && *dir && fs_is_dir(dir))
         scan_dir(s, dir, 0);
     return s;
@@ -231,12 +250,14 @@ static int snap_find(const ft_snapshot *s, const char *path) {
 }
 
 int filetracker_dir_diff(filetracker *ft, const ft_snapshot *before, const char *dir) {
+    ft_snapshot *after;
+    int changes = 0;
+
     if (!ft || !before)
         return 0;
-    ft_snapshot *after = filetracker_dir_snapshot(dir);
+    after = filetracker_dir_snapshot(dir);
     if (!after)
         return 0;
-    int changes = 0;
     /* new / modified */
     for (size_t i = 0; i < after->count; i++) {
         int j = snap_find(before, after->items[i].path);
@@ -245,6 +266,7 @@ int filetracker_dir_diff(filetracker *ft, const ft_snapshot *before, const char 
             changes++;
         }
     }
+
     /* vanished */
     for (size_t i = 0; i < before->count; i++) {
         if (snap_find(after, before->items[i].path) < 0) {
@@ -252,6 +274,7 @@ int filetracker_dir_diff(filetracker *ft, const ft_snapshot *before, const char 
             changes++;
         }
     }
+
     filetracker_snapshot_free(after);
     return changes;
 }
@@ -265,6 +288,7 @@ static void record_if_exists(filetracker *ft, const char *token, const char *wor
         filetracker_record(ft, token, FT_READ);
         return;
     }
+
     if (workspace && *workspace) {
         char full[1024];
         snprintf(full, sizeof(full), "%s/%s", workspace, token);
@@ -274,10 +298,11 @@ static void record_if_exists(filetracker *ft, const char *token, const char *wor
 }
 
 int filetracker_cmd_reads(filetracker *ft, const char *cmd, const char *workspace) {
-    if (!ft || !cmd)
-        return 0;
     int reads = 0;
     const char *p = cmd;
+
+    if (!ft || !cmd)
+        return 0;
     while (*p) {
         /* skip separators */
         while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '"' || *p == '\'')
@@ -298,5 +323,6 @@ int filetracker_cmd_reads(filetracker *ft, const char *cmd, const char *workspac
                 reads++;
         }
     }
+
     return reads;
 }

@@ -8,16 +8,19 @@
 #include "cJSON.h"
 
 static int has_kw(const char *s, const char *kw) {
+    size_t klen;
+    const char *p = s;
+
     if (!s)
         return 0;
-    size_t klen = strlen(kw);
+    klen = strlen(kw);
     if (klen == 0)
         return 0;
-    const char *p = s;
     while ((p = strstr(p, kw)) != NULL) {
         p += klen;
         return 1;
     }
+
     return 0;
 }
 
@@ -29,6 +32,8 @@ char *analyzer_analyze(const char *spec_json) {
     const char *d = desc && cJSON_IsString(desc) ? desc->valuestring : "";
 
     cJSON *out = cJSON_CreateObject();
+    char *s;
+
     if (out) {
         cJSON_AddStringToObject(out, "name", n);
         cJSON *caps = cJSON_CreateArray();
@@ -71,7 +76,7 @@ char *analyzer_analyze(const char *spec_json) {
 
     if (root)
         cJSON_Delete(root);
-    char *s = out ? cJSON_PrintUnformatted(out) : NULL;
+    s = out ? cJSON_PrintUnformatted(out) : NULL;
     if (out)
         cJSON_Delete(out);
     return s ? s : xstrdup("{}");

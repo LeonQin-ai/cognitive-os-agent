@@ -40,6 +40,7 @@ int llm_timeout_ms(void) {
         if (v >= 10000 && v <= 600000)
             return (int)v;
     }
+
     return 300000;
 }
 
@@ -50,9 +51,11 @@ int llm_chat(llm *llm, const llm_request *req, llm_response *resp) {
 }
 
 int llm_stream(llm *llm, const llm_request *req, llm_stream_cb cb, void *ud) {
+    int rc;
+
     if (!llm || !llm->vt || !llm->vt->stream)
         return -1;
-    int rc = llm->vt->stream(llm, req, cb, ud);
+    rc = llm->vt->stream(llm, req, cb, ud);
     llm->cancel = 0; /* consumed: the next stream starts uncancelled */
     return rc;
 }
@@ -83,16 +86,18 @@ char *llm_chat_simple(llm *llm, const char *system_prompt, const char *user_prom
 }
 
 char *llm_chat_simple_ex(llm *llm, const char *system_prompt, const char *user_prompt, int max_tokens) {
+    llm_request req = {0};
+    llm_response resp = {0};
+    char *out;
+
     llm_message msgs[2] = {
         {"system", system_prompt ? system_prompt : ""},
         {"user", user_prompt ? user_prompt : ""},
     };
-    llm_request req = {0};
     req.messages = msgs;
     req.num_messages = 2;
     req.temperature = 0.2;
     req.max_tokens = max_tokens > 0 ? max_tokens : 1024;
-    llm_response resp = {0};
     if (llm_chat(llm, &req, &resp) != 0) {
         if (resp.error) {
             log_warn("llm: chat_simple failed: %s", resp.error);
@@ -102,7 +107,8 @@ char *llm_chat_simple_ex(llm *llm, const char *system_prompt, const char *user_p
         }
         return NULL;
     }
-    char *out = resp.content;
+
+    out = resp.content;
     resp.content = NULL;
     return out;
 }

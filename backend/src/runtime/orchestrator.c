@@ -26,14 +26,17 @@
  * Returns malloc'd text ("name (role)" per line) or NULL. */
 static char *roster_text(runtime_ctx *ctx) {
     char *snap = agent_pool_snapshot_json(ctx->agents);
+    cJSON *root;
+    cJSON *agents;
+    char *out = NULL;
+
     if (!snap)
         return NULL;
-    cJSON *root = cJSON_Parse(snap);
+    root = cJSON_Parse(snap);
     free(snap);
     if (!root)
         return NULL;
-    cJSON *agents = cJSON_GetObjectItemCaseSensitive(root, "agents");
-    char *out = NULL;
+    agents = cJSON_GetObjectItemCaseSensitive(root, "agents");
     if (cJSON_IsArray(agents) && cJSON_GetArraySize(agents) > 0) {
         size_t cap = 256, len = 0;
         out = (char *)malloc(cap);
@@ -56,10 +59,12 @@ static char *roster_text(runtime_ctx *ctx) {
                     }
                     out = nb;
                 }
+
                 len += (size_t)snprintf(out + len, cap - len, "- %s (%s)\n", name, role);
             }
         }
     }
+
     cJSON_Delete(root);
     return out;
 }
@@ -70,33 +75,42 @@ static char *roster_text(runtime_ctx *ctx) {
  * Returns the number of valid steps (0 = parse fail). */
 static int parse_plan(runtime_ctx *ctx, const char *raw, char agents[][64], char tasks[][512],
                       int after[][ORCH_MAX_STEPS]) {
+    size_t alen;
+    char *arr_txt;
+    cJSON *arr;
+    int n = 0;
+    cJSON *it;
+
     if (!raw)
         return 0;
     const char *lb = strchr(raw, '[');
     const char *rb = strrchr(raw, ']');
     if (!lb || !rb || rb < lb)
         return 0;
-    size_t alen = (size_t)(rb - lb + 1);
-    char *arr_txt = (char *)malloc(alen + 1);
+    alen = (size_t)(rb - lb + 1);
+    arr_txt = (char *)malloc(alen + 1);
     if (!arr_txt)
         return 0;
     memcpy(arr_txt, lb, alen);
     arr_txt[alen] = '\0';
-    cJSON *arr = cJSON_Parse(arr_txt);
+    arr = cJSON_Parse(arr_txt);
     free(arr_txt);
     if (!arr || !cJSON_IsArray(arr)) {
         cJSON_Delete(arr);
         return 0;
     }
-    int n = 0;
-    cJSON *it;
+
     cJSON_ArrayForEach(it, arr) {
+    cJSON *a;
+    cJSON *t;
+    cJSON *jaf;
+
         if (n >= ORCH_MAX_STEPS)
             break;
         if (!cJSON_IsObject(it))
             continue;
-        cJSON *a = cJSON_GetObjectItemCaseSensitive(it, "agent");
-        cJSON *t = cJSON_GetObjectItemCaseSensitive(it, "task");
+        a = cJSON_GetObjectItemCaseSensitive(it, "agent");
+        t = cJSON_GetObjectItemCaseSensitive(it, "task");
         if (!a || !cJSON_IsString(a) || !a->valuestring || !*a->valuestring)
             continue;
         if (!t || !cJSON_IsString(t) || !t->valuestring || !*t->valuestring)
@@ -108,21 +122,24 @@ static int parse_plan(runtime_ctx *ctx, const char *raw, char agents[][64], char
         /* "after": [1-based step indices] → 0-based, forward-only, deduped;
          * -1 terminated (calloc'd 0xFF == -1) */
         memset(after[n], 0xFF, sizeof(after[n]));
-        cJSON *jaf = cJSON_GetObjectItemCaseSensitive(it, "after");
+        jaf = cJSON_GetObjectItemCaseSensitive(it, "after");
         if (jaf && cJSON_IsArray(jaf)) {
             cJSON *jd;
             cJSON_ArrayForEach(jd, jaf) {
+    int idx;
+    int dup = 0;
+
                 if (!cJSON_IsNumber(jd))
                     continue;
-                int idx = (int)jd->valuedouble - 1; /* 1-based → 0-based */
+                idx = (int)jd->valuedouble - 1; /* 1-based → 0-based */
                 if (idx < 0 || idx >= n)
                     continue; /* only earlier steps */
-                int dup = 0;
                 for (int k = 0; k < ORCH_MAX_STEPS && after[n][k] >= 0; k++)
                     if (after[n][k] == idx) {
                         dup = 1;
                         break;
                     }
+
                 if (!dup) {
                     for (int k = 0; k < ORCH_MAX_STEPS; k++) {
                         if (after[n][k] < 0) {
@@ -133,8 +150,10 @@ static int parse_plan(runtime_ctx *ctx, const char *raw, char agents[][64], char
                 }
             }
         }
+
         n++;
     }
+
     cJSON_Delete(arr);
     return n;
 }
@@ -145,6 +164,11 @@ static int parse_plan(runtime_ctx *ctx, const char *raw, char agents[][64], char
  * always flows. Returns malloc'd JSON. */
 static char *build_dag_json(char agents[][64], char tasks[][512], int after[][ORCH_MAX_STEPS], int n) {
     int any_dep = 0;
+    cJSON *root;
+    cJSON *nodes;
+    cJSON *edges;
+    char *s;
+
     for (int i = 0; i < n && !any_dep; i++)
         for (int k = 0; k < ORCH_MAX_STEPS; k++)
             if (after[i][k] >= 0) {
@@ -152,15 +176,16 @@ static char *build_dag_json(char agents[][64], char tasks[][512], int after[][OR
                 break;
             }
 
-    cJSON *root = cJSON_CreateObject();
-    cJSON *nodes = cJSON_CreateArray();
-    cJSON *edges = cJSON_CreateArray();
+    root = cJSON_CreateObject();
+    nodes = cJSON_CreateArray();
+    edges = cJSON_CreateArray();
     if (!root || !nodes || !edges) {
         cJSON_Delete(root);
         cJSON_Delete(nodes);
         cJSON_Delete(edges);
         return NULL;
     }
+
     for (int i = 0; i < n; i++) {
         cJSON *nd = cJSON_CreateObject();
         char id[16];
@@ -187,9 +212,10 @@ static char *build_dag_json(char agents[][64], char tasks[][512], int after[][OR
             cJSON_AddItemToArray(edges, e);
         }
     }
+
     cJSON_AddItemToObject(root, "nodes", nodes);
     cJSON_AddItemToObject(root, "edges", edges);
-    char *s = cJSON_PrintUnformatted(root);
+    s = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
     return s;
 }
@@ -223,6 +249,7 @@ static int decompose_task(runtime_ctx *ctx, const char *task, char (*agents)[64]
             }
         }
     }
+
     free(roster);
     return nsteps;
 }
@@ -230,6 +257,8 @@ static int decompose_task(runtime_ctx *ctx, const char *task, char (*agents)[64]
 /* Compile a task into a Flow DAG without executing it (0 ok, -1 no plan).
  * *dag_json receives a malloc'd {"nodes":[...],"edges":[]} document. */
 int flow_decompose(runtime_ctx *ctx, const char *task, char **dag_json) {
+    int nsteps;
+
     if (!ctx || !task || !*task || !dag_json)
         return -1;
     *dag_json = NULL;
@@ -242,13 +271,15 @@ int flow_decompose(runtime_ctx *ctx, const char *task, char **dag_json) {
         free(after);
         return -1;
     }
-    int nsteps = decompose_task(ctx, task, agents, tasks, after);
+
+    nsteps = decompose_task(ctx, task, agents, tasks, after);
     if (nsteps == 0) {
         free(agents);
         free(tasks);
         free(after);
         return -1;
     }
+
     *dag_json = build_dag_json(agents, tasks, after, nsteps);
     free(agents);
     free(tasks);
@@ -257,6 +288,16 @@ int flow_decompose(runtime_ctx *ctx, const char *task, char **dag_json) {
 }
 
 int orchestrate(runtime_ctx *ctx, const char *task, char **answer, char **trace_json) {
+    int nsteps;
+    char *dag;
+    /* ---- EXECUTE through the Flow engine (parallel, isolated per node) ---- */
+    char *flow_answer = NULL;
+    char *trace = NULL;
+    int rc;
+    /* ---- MERGE into the final answer ---- */
+    char *final = NULL;
+    char *merged = NULL;
+
     if (!ctx || !task || !*task || !answer)
         return -1;
     *answer = NULL;
@@ -273,7 +314,8 @@ int orchestrate(runtime_ctx *ctx, const char *task, char **answer, char **trace_
         free(after);
         return -1;
     }
-    int nsteps = decompose_task(ctx, task, agents, tasks, after);
+
+    nsteps = decompose_task(ctx, task, agents, tasks, after);
 
     if (nsteps == 0) {
         /* fallback: no agents / no parseable plan → plain single-agent run */
@@ -283,24 +325,19 @@ int orchestrate(runtime_ctx *ctx, const char *task, char **answer, char **trace_
         log_info("orchestrator: no multi-agent plan, running single-agent");
         return run(ctx, task, answer);
     }
-    char *dag = build_dag_json(agents, tasks, after, nsteps);
+
+    dag = build_dag_json(agents, tasks, after, nsteps);
     free(agents);
     free(tasks);
     free(after);
     if (!dag)
         return -1;
 
-    /* ---- EXECUTE through the Flow engine (parallel, isolated per node) ---- */
-    char *flow_answer = NULL;
-    char *trace = NULL;
-    int rc = flow_run(ctx, dag, &flow_answer, &trace);
+    rc = flow_run(ctx, dag, &flow_answer, &trace);
     free(dag);
     if (rc != 0)
         return -1;
 
-    /* ---- MERGE into the final answer ---- */
-    char *final = NULL;
-    char *merged = NULL;
     if (trace) {
         cJSON *arr = cJSON_Parse(trace);
         if (arr) {
@@ -322,6 +359,7 @@ int orchestrate(runtime_ctx *ctx, const char *task, char **answer, char **trace_
             merged = b.buf;
         }
     }
+
     if (ctx->llm && merged) {
         char sys2[] = "你是编排器。综合各 agent 的子任务结果，针对任务给出最终统一答案。"
                       "直接输出答案正文，不要罗列过程。\n"
@@ -332,6 +370,7 @@ int orchestrate(runtime_ctx *ctx, const char *task, char **answer, char **trace_
                       "必须如实报告该部分未完成，并说明缺失了什么，不得声称成功。";
         final = llm_chat_simple(ctx->llm, sys2, merged);
     }
+
     if (!final || !*final)
         final = xstrdup(merged && *merged ? merged : flow_answer);
 

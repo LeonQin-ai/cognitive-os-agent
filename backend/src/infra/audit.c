@@ -21,19 +21,22 @@ audit *audit_open(const char *path) {
         free(a);
         return NULL;
     }
+
     mutex_init(&a->mtx);
     return a;
 }
 
 void audit_log(audit *a, const char *action, const char *subject, const char *result, const char *detail_json) {
-    if (!a || !a->f)
-        return;
     char ts[40];
-    time_now_iso(ts, sizeof(ts));
     /* Escape detail_json minimally: strip raw newlines/tabs. */
     const char *detail = detail_json ? detail_json : "";
     char *esc = NULL;
-    size_t dl = strlen(detail);
+    size_t dl;
+
+    if (!a || !a->f)
+        return;
+    time_now_iso(ts, sizeof(ts));
+    dl = strlen(detail);
     if (dl > 0 && (strchr(detail, '\n') || strchr(detail, '\t') || strchr(detail, '"'))) {
         strbuf sb;
         strbuf_init(&sb);
@@ -53,6 +56,7 @@ void audit_log(audit *a, const char *action, const char *subject, const char *re
         esc = strbuf_detach(&sb);
         detail = esc;
     }
+
     mutex_lock(&a->mtx);
     fprintf(a->f, "{\"ts\":\"%s\",\"action\":\"%s\",\"subject\":\"%s\",\"result\":\"%s\",\"detail\":%s}\n", ts,
             action ? action : "", subject ? subject : "", result ? result : "", detail);

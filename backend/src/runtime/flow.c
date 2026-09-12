@@ -24,9 +24,12 @@
 #define FLOW_SUBST_CAP 4096 /* max chars substituted per {{ref}} */
 
 static void flow_event(runtime_ctx *ctx, const char *stage, const char *id, const char *agent, const char *detail) {
+    cJSON *o;
+    char *js;
+
     if (!ctx || !ctx->bus)
         return;
-    cJSON *o = cJSON_CreateObject();
+    o = cJSON_CreateObject();
     if (!o)
         return;
     cJSON_AddStringToObject(o, "stage", stage);
@@ -36,7 +39,7 @@ static void flow_event(runtime_ctx *ctx, const char *stage, const char *id, cons
         cJSON_AddStringToObject(o, "agent", agent);
     if (detail)
         cJSON_AddStringToObject(o, "detail", detail);
-    char *js = cJSON_PrintUnformatted(o);
+    js = cJSON_PrintUnformatted(o);
     cJSON_Delete(o);
     if (js) {
         event_bus_publish_json(ctx->bus, EV_SYSTEM, "flow", js);
@@ -45,11 +48,12 @@ static void flow_event(runtime_ctx *ctx, const char *stage, const char *id, cons
 }
 
 static void flow_err(char **err, const char *fmt, ...) {
+    va_list ap;
+    char buf[512];
+
     if (!err)
         return;
-    va_list ap;
     va_start(ap, fmt);
-    char buf[512];
     vsnprintf(buf, sizeof(buf), fmt, ap);
     va_end(ap);
     *err = xstrdup(buf);
@@ -81,25 +85,33 @@ static int flow_node_index(flow_dag *d, const char *id) {
 
 /* Parse the JSON document into `d`. Returns 0 ok; on failure -1 with *err. */
 static int flow_parse(const char *dag_json, flow_dag *d, char **err) {
+    cJSON *root;
+    cJSON *jnodes;
+    cJSON *jn;
+    /* edges: [{"from","to"}] or [["from","to"]] */
+    cJSON *jedges;
+
     memset(d, 0, sizeof(*d));
-    cJSON *root = cJSON_Parse(dag_json);
+    root = cJSON_Parse(dag_json);
     if (!root || !cJSON_IsObject(root)) {
         cJSON_Delete(root);
         flow_err(err, "invalid JSON document");
         return -1;
     }
-    cJSON *jnodes = cJSON_GetObjectItemCaseSensitive(root, "nodes");
+
+    jnodes = cJSON_GetObjectItemCaseSensitive(root, "nodes");
     if (!jnodes || !cJSON_IsArray(jnodes) || cJSON_GetArraySize(jnodes) == 0) {
         cJSON_Delete(root);
         flow_err(err, "missing 'nodes' array");
         return -1;
     }
+
     if (cJSON_GetArraySize(jnodes) > FLOW_MAX_NODES) {
         cJSON_Delete(root);
         flow_err(err, "too many nodes (max %d)", FLOW_MAX_NODES);
         return -1;
     }
-    cJSON *jn;
+
     cJSON_ArrayForEach(jn, jnodes) {
         cJSON *jid = cJSON_GetObjectItemCaseSensitive(jn, "id");
         cJSON *jag = cJSON_GetObjectItemCaseSensitive(jn, "agent");
@@ -110,12 +122,14 @@ static int flow_parse(const char *dag_json, flow_dag *d, char **err) {
             flow_err(err, "each node needs string 'id', 'agent' and 'task'");
             return -1;
         }
+
         flow_node *nd = &d->nodes[d->n];
         snprintf(nd->id, sizeof(nd->id), "%s", jid->valuestring);
         snprintf(nd->agent, sizeof(nd->agent), "%s", jag->valuestring);
         snprintf(nd->task, sizeof(nd->task), "%s", jtk->valuestring);
         d->n++;
     }
+
     /* unique ids */
     for (int i = 0; i < d->n; i++)
         for (int j = i + 1; j < d->n; j++)
@@ -126,7 +140,7 @@ static int flow_parse(const char *dag_json, flow_dag *d, char **err) {
             }
 
     /* edges: [{"from","to"}] or [["from","to"]] */
-    cJSON *jedges = cJSON_GetObjectItemCaseSensitive(root, "edges");
+    jedges = cJSON_GetObjectItemCaseSensitive(root, "edges");
     if (jedges && cJSON_IsArray(jedges)) {
         cJSON *je;
         cJSON_ArrayForEach(je, jedges) {
@@ -146,11 +160,13 @@ static int flow_parse(const char *dag_json, flow_dag *d, char **err) {
                 if (cJSON_IsString(jt))
                     to = jt->valuestring;
             }
+
             if (!from || !to) {
                 cJSON_Delete(root);
                 flow_err(err, "each edge needs 'from' and 'to'");
                 return -1;
             }
+
             int fi = flow_node_index(d, from), ti = flow_node_index(d, to);
             if (fi < 0 || ti < 0) {
                 /* from/to borrow into the cJSON tree — copy before freeing it */
@@ -161,12 +177,14 @@ static int flow_parse(const char *dag_json, flow_dag *d, char **err) {
                 flow_err(err, "edge references unknown node ('%s' -> '%s')", fbuf, tbuf);
                 return -1;
             }
+
             if (d->nodes[fi].nadj >= FLOW_MAX_NODES)
                 continue;
             d->nodes[fi].adj[d->nodes[fi].nadj++] = ti;
             d->nodes[ti].indeg++;
         }
     }
+
     cJSON_Delete(root);
     return 0;
 }
@@ -174,14 +192,16 @@ static int flow_parse(const char *dag_json, flow_dag *d, char **err) {
 /* Kahn's algorithm: assign layers (longest path from sources); detect cycles.
  * Returns number of nodes assigned (< n means a cycle exists). */
 static int flow_layer(flow_dag *d) {
+    /* working copy of indeg so the dag stays reusable */
+    int indeg[FLOW_MAX_NODES];
+
     int queue[FLOW_MAX_NODES], qh = 0, qt = 0, done = 0;
     for (int i = 0; i < d->n; i++) {
         d->nodes[i].layer = 0;
         if (d->nodes[i].indeg == 0)
             queue[qt++] = i;
     }
-    /* working copy of indeg so the dag stays reusable */
-    int indeg[FLOW_MAX_NODES];
+
     for (int i = 0; i < d->n; i++)
         indeg[i] = d->nodes[i].indeg;
     while (qh < qt) {
@@ -195,6 +215,7 @@ static int flow_layer(flow_dag *d) {
                 queue[qt++] = v;
         }
     }
+
     return done;
 }
 
@@ -227,17 +248,20 @@ static reasoning *flow_reasoning_new(runtime_ctx *ctx) {
 }
 
 static void flow_worker(void *arg) {
+    reasoning *r;
+    char key[96];
+
     flow_job *j = (flow_job *)arg;
     flow_event(j->ctx, "execute", j->nd->id, j->nd->agent, j->task);
-    reasoning *r = flow_reasoning_new(j->ctx);
+    r = flow_reasoning_new(j->ctx);
     if (r) {
         j->rc = reasoning_run(r, j->task, &j->out);
         reasoning_free(r);
     } else {
         j->rc = -1;
     }
+
     const char *result = j->out && *j->out ? j->out : "";
-    char key[96];
     snprintf(key, sizeof(key), "flow/%s/result", j->nd->id);
     blackboard_put(j->ctx->blackboard, key, result);
     flow_event(j->ctx, "done", j->nd->id, j->nd->agent, j->rc == 0 ? "ok" : "error");
@@ -308,6 +332,7 @@ static void flow_substitute(flow_dag *d, flow_node *nd, char **results, char *ou
         }
         out[o++] = *t++;
     }
+
     out[o] = '\0';
 }
 
@@ -318,6 +343,7 @@ int flow_validate(const char *dag_json, char **err) {
         flow_err(err, "empty flow document");
         return -1;
     }
+
     flow_dag d;
     if (flow_parse(dag_json, &d, err) != 0)
         return -1;
@@ -325,10 +351,20 @@ int flow_validate(const char *dag_json, char **err) {
         flow_err(err, "cycle detected in flow graph");
         return -1;
     }
+
     return 0;
 }
 
 int flow_run(runtime_ctx *ctx, const char *dag_json, char **answer, char **trace_json) {
+    char *err = NULL;
+    int maxlayer = 0;
+    char **results;
+    char **tasks;
+    /* trace + answer (sink nodes = no outgoing edges) */
+    cJSON *trace;
+    strbuf fin;
+    char *trace_str;
+
     if (answer)
         *answer = NULL;
     if (trace_json)
@@ -337,16 +373,17 @@ int flow_run(runtime_ctx *ctx, const char *dag_json, char **answer, char **trace
         return -1;
 
     flow_dag d;
-    char *err = NULL;
     if (flow_parse(dag_json, &d, &err) != 0) {
         log_warn("flow: parse failed: %s", err ? err : "?");
         free(err);
         return -1;
     }
+
     if (flow_layer(&d) < d.n) {
         log_warn("flow: cycle detected");
         return -1;
     }
+
     /* every node's agent must be registered */
     for (int i = 0; i < d.n; i++) {
         if (agent_pool_find(ctx->agents, d.nodes[i].agent) < 0) {
@@ -355,13 +392,12 @@ int flow_run(runtime_ctx *ctx, const char *dag_json, char **answer, char **trace
         }
     }
 
-    int maxlayer = 0;
     for (int i = 0; i < d.n; i++)
         if (d.nodes[i].layer > maxlayer)
             maxlayer = d.nodes[i].layer;
 
-    char **results = (char **)calloc((size_t)d.n, sizeof(char *));
-    char **tasks = (char **)calloc((size_t)d.n, sizeof(char *));
+    results = (char **)calloc((size_t)d.n, sizeof(char *));
+    tasks = (char **)calloc((size_t)d.n, sizeof(char *));
     flow_job *jobs = (flow_job *)calloc((size_t)d.n, sizeof(flow_job));
     if (!results || !tasks || !jobs) {
         free(results);
@@ -407,8 +443,7 @@ int flow_run(runtime_ctx *ctx, const char *dag_json, char **answer, char **trace
     }
 
     /* trace + answer (sink nodes = no outgoing edges) */
-    cJSON *trace = cJSON_CreateArray();
-    strbuf fin;
+    trace = cJSON_CreateArray();
     strbuf_init(&fin);
     for (int i = 0; i < d.n; i++) {
         const char *result = results[i] ? results[i] : "";
@@ -439,13 +474,14 @@ int flow_run(runtime_ctx *ctx, const char *dag_json, char **answer, char **trace
         }
     }
 
-    char *trace_str = cJSON_PrintUnformatted(trace);
+    trace_str = cJSON_PrintUnformatted(trace);
     if (trace_str) {
         blackboard_put(ctx->blackboard, "flow/trace", trace_str);
         if (trace_json)
             *trace_json = xstrdup(trace_str);
         free(trace_str);
     }
+
     cJSON_Delete(trace);
     for (int i = 0; i < d.n; i++)
         free(results[i]);

@@ -20,9 +20,11 @@ struct ringbuf {
 };
 
 ringbuf *ringbuf_new(size_t capacity) {
+    ringbuf *r;
+
     if (capacity < 2 || (capacity & (capacity - 1)) != 0)
         return NULL;
-    ringbuf *r = (ringbuf *)calloc(1, sizeof(*r));
+    r = (ringbuf *)calloc(1, sizeof(*r));
     if (!r)
         return NULL;
     r->data = (_Atomic(void *) *)calloc(capacity, sizeof(_Atomic(void *)));
@@ -33,6 +35,7 @@ ringbuf *ringbuf_new(size_t capacity) {
         free(r);
         return NULL;
     }
+
     r->capacity = capacity;
     r->mask = capacity - 1;
     for (size_t i = 0; i < capacity; i++)
@@ -51,10 +54,12 @@ void ringbuf_free(ringbuf *r) {
 }
 
 int ringbuf_push(ringbuf *r, void *item) {
+    size_t pos;
+
     if (!r || !item)
         return -1;
     const size_t mask = r->mask;
-    size_t pos = atomic_load_explicit(&r->enqueue_pos, memory_order_relaxed);
+    pos = atomic_load_explicit(&r->enqueue_pos, memory_order_relaxed);
     for (;;) {
         const size_t cell = pos & mask;
         const size_t seq = atomic_load_explicit(&r->seq[cell], memory_order_acquire);
@@ -75,10 +80,12 @@ int ringbuf_push(ringbuf *r, void *item) {
 }
 
 int ringbuf_pop(ringbuf *r, void **out) {
+    size_t pos;
+
     if (!r || !out)
         return -1;
     const size_t mask = r->mask;
-    size_t pos = atomic_load_explicit(&r->dequeue_pos, memory_order_relaxed);
+    pos = atomic_load_explicit(&r->dequeue_pos, memory_order_relaxed);
     for (;;) {
         const size_t cell = pos & mask;
         const size_t seq = atomic_load_explicit(&r->seq[cell], memory_order_acquire);

@@ -90,12 +90,13 @@ static const char *SYS_PROMPT_TAIL =
  * (Claude Code: deny rules both block calls AND remove from the tool pool). */
 static char *build_catalog_prompt(const tool_registry *tools, struct skill_registry *skills,
                                   struct policy_engine *policy) {
+    strbuf b;
+    int have_skill_tool = 0;
+
     if (!tools)
         return NULL;
-    strbuf b;
     strbuf_init(&b);
     strbuf_append(&b, SYS_PROMPT_HEAD);
-    int have_skill_tool = 0;
     for (size_t i = 0; i < (size_t)tool_registry_count(tools); i++) {
         const tool *t = tool_registry_get(tools, i);
         if (!t || !t->name)
@@ -118,6 +119,7 @@ static char *build_catalog_prompt(const tool_registry *tools, struct skill_regis
             }
         }
     }
+
     if (have_skill_tool && skills && skill_count(skills) > 0) {
         strbuf_append(&b, "Registered skills (capabilities you can RUN via the skill tool):\n");
         for (int i = 0; i < skill_count(skills); i++) {
@@ -131,6 +133,7 @@ static char *build_catalog_prompt(const tool_registry *tools, struct skill_regis
                               "\"list your skills\"), answer in PLAIN TEXT listing these skill names and "
                               "their use. Do NOT call any tool or skill to answer such a question.\n");
     }
+
     strbuf_append(&b, SYS_PROMPT_TAIL);
     return strbuf_detach(&b);
 }
@@ -148,6 +151,7 @@ static char *extract_json_span(const char *plan) {
             break;
         }
     }
+
     if (!start)
         return NULL;
     int depth = 0, in_str = 0, esc = 0;
@@ -175,6 +179,7 @@ static char *extract_json_span(const char *plan) {
             }
         }
     }
+
     return NULL; /* unbalanced (likely truncated reply) */
 }
 
@@ -197,13 +202,19 @@ static char *args_to_json(cJSON *args) {
                 return s;
         }
     }
+
     return xstrdup("{}");
 }
 
 static int parse_plan_actions(const char *plan, planned_action **actions, int *n_actions) {
+    cJSON *root;
+    planned_action *a = NULL;
+    int n = 0;
+    cJSON *it;
+
     *actions = NULL;
     *n_actions = 0;
-    cJSON *root = cJSON_Parse(plan);
+    root = cJSON_Parse(plan);
     if (!root) {
         char *slice = extract_json_span(plan);
         if (slice) {
@@ -211,6 +222,7 @@ static int parse_plan_actions(const char *plan, planned_action **actions, int *n
             free(slice);
         }
     }
+
     if (!root)
         return 0;
     /* also accept a single tool object (not wrapped in an array) */
@@ -219,18 +231,22 @@ static int parse_plan_actions(const char *plan, planned_action **actions, int *n
         cJSON_AddItemToArray(arr, root);
         root = arr;
     }
+
     if (!cJSON_IsArray(root)) {
         cJSON_Delete(root);
         return 0;
     }
-    planned_action *a = NULL;
-    int n = 0;
-    cJSON *it;
+
     cJSON_ArrayForEach(it, root) {
+    cJSON *tool;
+    cJSON *args;
+    char *args_json;
+    planned_action *na;
+
         if (!cJSON_IsObject(it))
             continue;
-        cJSON *tool = cJSON_GetObjectItemCaseSensitive(it, "tool");
-        cJSON *args = cJSON_GetObjectItemCaseSensitive(it, "args");
+        tool = cJSON_GetObjectItemCaseSensitive(it, "tool");
+        args = cJSON_GetObjectItemCaseSensitive(it, "args");
         if (!tool || !cJSON_IsString(tool)) {
             /* models occasionally drift into the OpenAI/Claude tool-call
              * envelope; a plan parsed to zero actions used to be treated as
@@ -249,19 +265,22 @@ static int parse_plan_actions(const char *plan, planned_action **actions, int *n
                 args = cJSON_GetObjectItemCaseSensitive(it, "arguments");
             }
         }
+
         if (!tool || !cJSON_IsString(tool))
             continue;
-        char *args_json = args_to_json(args);
-        planned_action *na = (planned_action *)realloc(a, (size_t)(n + 1) * sizeof(planned_action));
+        args_json = args_to_json(args);
+        na = (planned_action *)realloc(a, (size_t)(n + 1) * sizeof(planned_action));
         if (!na) {
             free(args_json);
             break;
         }
+
         a = na;
         a[n].tool = xstrdup(tool->valuestring);
         a[n].args_json = args_json;
         n++;
     }
+
     cJSON_Delete(root);
     *actions = a;
     *n_actions = n;
@@ -271,6 +290,13 @@ static int parse_plan_actions(const char *plan, planned_action **actions, int *n
 /* Shared planning core. Takes ownership of nothing; frees sys_prompt. */
 static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_action **actions, int *n_actions,
                      char **raw_out, char **err_out) {
+    llm_request req = {0};
+    llm_response resp = {0};
+    int rc;
+    char *plan;
+    int looks_like_plan;
+    int have;
+
     if (actions)
         *actions = NULL;
     if (n_actions)
@@ -290,7 +316,6 @@ static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_act
         {"system", sys_prompt ? sys_prompt : SYS_PROMPT},
         {"user", prompt},
     };
-    llm_request req = {0};
     req.messages = msgs;
     req.num_messages = 2;
     req.temperature = 0.2;
@@ -299,8 +324,7 @@ static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_act
                             * JSON mid-string and the plan was lost. Thinking
                             * models spend reasoning tokens from the same
                             * budget; 1024 risked empty-content replies */
-    llm_response resp = {0};
-    int rc = llm_chat(llm, &req, &resp);
+    rc = llm_chat(llm, &req, &resp);
     free(sys_prompt);
     if (rc != 0) {
         if (err_out)
@@ -309,7 +333,8 @@ static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_act
         free(resp.error);
         return -1;
     }
-    char *plan = resp.content;
+
+    plan = resp.content;
     resp.content = NULL;
     free(resp.error);
     if (!plan) {
@@ -317,6 +342,7 @@ static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_act
             *err_out = xstrdup("LLM returned an empty response");
         return -1;
     }
+
     if (raw_out)
         *raw_out = plan; /* ownership moves to the caller */
     if (!actions || !n_actions) {
@@ -329,8 +355,8 @@ static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_act
      * prose, and sometimes emit structurally invalid JSON (mis-ordered
      * brackets), which used to silently demote a real plan to a plain-text
      * answer — the agent then "answered" instead of acting. */
-    int looks_like_plan = strstr(plan, "\"tool\"") != NULL || strstr(plan, "'tool'") != NULL;
-    int have = parse_plan_actions(plan, actions, n_actions);
+    looks_like_plan = strstr(plan, "\"tool\"") != NULL || strstr(plan, "'tool'") != NULL;
+    have = parse_plan_actions(plan, actions, n_actions);
     if (!have && looks_like_plan) {
         const char *epos = cJSON_GetErrorPtr();
         size_t off = (epos && epos >= plan && epos < plan + strlen(plan)) ? (size_t)(epos - plan) : 0;
@@ -363,6 +389,7 @@ static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_act
         }
         free(user);
     }
+
     if (!raw_out)
         free(plan);
     return 0;
@@ -373,6 +400,7 @@ void planner_actions_free(planned_action *a, int n) {
         free(a[i].tool);
         free(a[i].args_json);
     }
+
     free(a);
 }
 

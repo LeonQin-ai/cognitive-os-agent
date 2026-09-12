@@ -61,9 +61,12 @@ const char *task_status_name(task_status st) {
 }
 
 char *task_to_json(const task *t) {
+    cJSON *o;
+    char *s;
+
     if (!t)
         return xstrdup("{}");
-    cJSON *o = cJSON_CreateObject();
+    o = cJSON_CreateObject();
     if (!o)
         return xstrdup("{}");
     cJSON_AddNumberToObject(o, "id", (double)t->id);
@@ -72,7 +75,7 @@ char *task_to_json(const task *t) {
     cJSON_AddStringToObject(o, "input", t->input ? t->input : "");
     cJSON_AddStringToObject(o, "output", t->output ? t->output : "");
     cJSON_AddNumberToObject(o, "timeout_ms", (double)t->timeout_ms);
-    char *s = cJSON_PrintUnformatted(o);
+    s = cJSON_PrintUnformatted(o);
     cJSON_Delete(o);
     return s ? s : xstrdup("{}");
 }

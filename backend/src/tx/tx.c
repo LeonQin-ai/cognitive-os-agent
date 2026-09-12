@@ -30,9 +30,10 @@ struct tx {
  * for git worktrees/submodules). Git already provides version control, so
  * the snapshot engine stays out of the way for git-managed workspaces. */
 static int is_git_managed(const char *dir) {
+    char buf[2048];
+
     if (!dir || !*dir)
         return 0;
-    char buf[2048];
     snprintf(buf, sizeof(buf), "%s", dir);
     for (int depth = 0; depth < 32; depth++) {
         char gitp[2200];
@@ -56,6 +57,7 @@ static int is_git_managed(const char *dir) {
             return fs_exists(gitp);
         }
     }
+
     return 0;
 }
 
@@ -68,10 +70,12 @@ void tx_manager_free(tx_manager *m) {
 }
 
 tx *tx_begin(tx_manager *m, snapshot *snap, tool_registry *tools, const tool_ctx *ctx) {
+    tx *tx;
+
     (void)m;
     /* sizeof(*tx): a local named `tx` shadows the typedef, so a bare
      * sizeof(tx) here would yield pointer size (8) — classic heap overflow */
-    tx *tx = calloc(1, sizeof(*tx));
+    tx = calloc(1, sizeof(*tx));
     if (!tx)
         return NULL;
     tx->snap = snap;
@@ -88,19 +92,24 @@ tx *tx_begin(tx_manager *m, snapshot *snap, tool_registry *tools, const tool_ctx
  * Paths are resolved against the transaction workspace so rollback restores
  * the same files the tools actually write to. */
 static void extract_paths(const char *args_json, const char *workspace, char *paths[16], int *npaths) {
+    cJSON *args;
+    cJSON *p;
+    cJSON *files;
+
     *npaths = 0;
     if (!args_json)
         return;
-    cJSON *args = cJSON_Parse(args_json);
+    args = cJSON_Parse(args_json);
     if (!args)
         return;
-    cJSON *p = cJSON_GetObjectItemCaseSensitive(args, "path");
+    p = cJSON_GetObjectItemCaseSensitive(args, "path");
     if (p && cJSON_IsString(p) && *npaths < 16) {
         char full[2048];
         path_resolve(full, sizeof(full), workspace, p->valuestring);
         paths[(*npaths)++] = xstrdup(full);
     }
-    cJSON *files = cJSON_GetObjectItemCaseSensitive(args, "files");
+
+    files = cJSON_GetObjectItemCaseSensitive(args, "files");
     if (files && cJSON_IsArray(files)) {
         cJSON *it;
         cJSON_ArrayForEach(it, files) {
@@ -111,6 +120,7 @@ static void extract_paths(const char *args_json, const char *workspace, char *pa
             }
         }
     }
+
     cJSON_Delete(args);
 }
 
@@ -128,11 +138,15 @@ static void tx_append_output(tx *tx, const char *tool, const char *output) {
         tx->output = nb;
         tx->output_cap = ncap;
     }
+
     tx->output_len +=
         (size_t)snprintf(tx->output + tx->output_len, tx->output_cap - tx->output_len, "[%s] %s\n", tool, out);
 }
 
 int tx_run(tx *tx, const char *tool_name, const char *args_json) {
+    tool_result *r;
+    int ok;
+
     if (!tx || !tx->tools)
         return -1;
     const tool *tool = tool_find(tx->tools, tool_name);
@@ -153,12 +167,12 @@ int tx_run(tx *tx, const char *tool_name, const char *args_json) {
         }
     }
 
-    tool_result *r = tool_execute(tx->tools, tool_name, args_json, &tx->ctx);
+    r = tool_execute(tx->tools, tool_name, args_json, &tx->ctx);
     if (!r)
         return -1;
     tx->n_actions++;
     tx_append_output(tx, tool_name, r->output);
-    int ok = r->ok;
+    ok = r->ok;
     if (!ok)
         tx->all_ok = 0;
     tool_result_free(r);

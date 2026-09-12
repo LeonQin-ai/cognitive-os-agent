@@ -25,9 +25,11 @@ struct http_stream {
 };
 
 static wchar_t *to_wide(const char *s) {
+    int wn;
+
     if (!s)
         return NULL;
-    int wn = MultiByteToWideChar(CP_UTF8, 0, s, -1, NULL, 0);
+    wn = MultiByteToWideChar(CP_UTF8, 0, s, -1, NULL, 0);
     if (wn <= 0)
         return NULL;
     wchar_t *w = (wchar_t *)malloc((size_t)wn * sizeof(wchar_t));
@@ -41,6 +43,9 @@ static wchar_t *to_wide(const char *s) {
 static int parse_url(const char *url, char *host, size_t hostsz, int *port, char *basepath, size_t bpsz) {
     const char *p = url;
     int https = 0;
+    size_t i = 0;
+    size_t j = 0;
+
     if (strncmp(p, "https://", 8) == 0) {
         https = 1;
         p += 8;
@@ -49,7 +54,6 @@ static int parse_url(const char *url, char *host, size_t hostsz, int *port, char
     } else
         return -1;
 
-    size_t i = 0;
     while (*p && *p != ':' && *p != '/' && i + 1 < hostsz)
         host[i++] = *p++;
     host[i] = '\0';
@@ -64,11 +68,11 @@ static int parse_url(const char *url, char *host, size_t hostsz, int *port, char
         *port = https ? 443 : 80;
     }
 
-    size_t j = 0;
     if (*p == '/') {
         while (*p && j + 1 < bpsz)
             basepath[j++] = *p++;
     }
+
     if (j == 0) {
         basepath[0] = '/';
         basepath[1] = '\0';
@@ -79,14 +83,20 @@ static int parse_url(const char *url, char *host, size_t hostsz, int *port, char
 
 static http_response *do_request(const char *method, const char *base_url, const char *path, const char *body,
                                      const char *content_type, strmap *extra_headers, int timeout_ms) {
-    char host[256], basepath[1024];
     int port;
-    int https = parse_url(base_url, host, sizeof(host), &port, basepath, sizeof(basepath));
+    int https;
+    /* final request path = base_url path + caller path (avoid // and /v1/v1) */
+    char fpath[1536];
+    /* build headers (Content-Type + any extra) */
+    strbuf hdr;
+    strbuf body_buf;
+    http_response *r;
+
+    char host[256], basepath[1024];
+    https = parse_url(base_url, host, sizeof(host), &port, basepath, sizeof(basepath));
     if (https < 0)
         return NULL;
 
-    /* final request path = base_url path + caller path (avoid // and /v1/v1) */
-    char fpath[1536];
     if (strcmp(basepath, "/") == 0) {
         snprintf(fpath, sizeof(fpath), "%s", path ? path : "/");
     } else {
@@ -142,8 +152,6 @@ static http_response *do_request(const char *method, const char *base_url, const
         return NULL;
     }
 
-    /* build headers (Content-Type + any extra) */
-    strbuf hdr;
     strbuf_init(&hdr);
     if (content_type && body && *body)
         strbuf_appendf(&hdr, "Content-Type: %s\r\n", content_type);
@@ -151,6 +159,7 @@ static http_response *do_request(const char *method, const char *base_url, const
         for (size_t i = 0; i < extra_headers->count; i++)
             strbuf_appendf(&hdr, "%s: %s\r\n", extra_headers->items[i].key, extra_headers->items[i].val);
     }
+
     wchar_t *whdr = to_wide(hdr.buf && hdr.len ? hdr.buf : "");
     if (!whdr) {
         WinHttpCloseHandle(hReq);
@@ -191,7 +200,6 @@ static http_response *do_request(const char *method, const char *base_url, const
     DWORD dwStatus = 0, dwSize = sizeof(dwStatus);
     WinHttpQueryHeaders(hReq, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, NULL, &dwStatus, &dwSize, NULL);
 
-    strbuf body_buf;
     strbuf_init(&body_buf);
     DWORD available = 0;
     do {
@@ -208,7 +216,7 @@ static http_response *do_request(const char *method, const char *base_url, const
         free(tmp);
     } while (available > 0);
 
-    http_response *r = (http_response *)calloc(1, sizeof(*r));
+    r = (http_response *)calloc(1, sizeof(*r));
     r->status = (int)dwStatus;
     r->body = strbuf_detach(&body_buf);
     r->body_len = r->body ? strlen(r->body) : 0;
@@ -242,9 +250,11 @@ http_response *http_get(const char *base_url, const char *path, strmap *extra_he
 http_stream *http_stream_open(const char *base_url, const char *method, const char *path, const char *body,
                                       const char *content_type, strmap *extra_headers, int timeout_ms) {
     http_response *r = do_request(method, base_url, path, body, content_type, extra_headers, timeout_ms);
+    http_stream *h;
+
     if (!r)
         return NULL;
-    http_stream *h = (http_stream *)calloc(1, sizeof(*h));
+    h = (http_stream *)calloc(1, sizeof(*h));
     h->body = r->body; /* transfer ownership */
     h->len = r->body_len;
     h->pos = 0;
@@ -258,21 +268,25 @@ int http_stream_status(http_stream *h) {
 }
 
 int http_stream_read(http_stream *h, char *out, size_t cap) {
+    size_t avail;
+    size_t n;
+
     if (!h)
         return -1;
-    size_t avail = h->len - h->pos;
+    avail = h->len - h->pos;
     if (avail == 0)
         return 0;
-    size_t n = avail < cap ? avail : cap;
+    n = avail < cap ? avail : cap;
     memcpy(out, h->body + h->pos, n);
     h->pos += n;
     return (int)n;
 }
 
 int http_stream_read_line(http_stream *h, char *out, size_t cap) {
+    size_t n = 0;
+
     if (!h)
         return -1;
-    size_t n = 0;
     while (h->pos < h->len && n + 1 < cap) {
         char c = h->body[h->pos++];
         if (c == '\n')
@@ -281,6 +295,7 @@ int http_stream_read_line(http_stream *h, char *out, size_t cap) {
             continue;
         out[n++] = c;
     }
+
     out[n] = '\0';
     return (int)n;
 }

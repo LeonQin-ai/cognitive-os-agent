@@ -76,6 +76,7 @@ thread_t *thread_create(thread_fn fn, void *arg) {
         free(t);
         return NULL;
     }
+
     return t;
 }
 void thread_join(thread_t *t) {
@@ -85,6 +86,7 @@ void thread_join(thread_t *t) {
         CloseHandle(wt->h);
         wt->h = NULL;
     }
+
     free(t);
 }
 void thread_detach(thread_t *t) {
@@ -93,6 +95,7 @@ void thread_detach(thread_t *t) {
         CloseHandle(wt->h);
         wt->h = NULL;
     }
+
     free(t);
 }
 
@@ -142,6 +145,8 @@ void cond_wait(cond *c, mutex_t *m) {
 }
 int cond_timedwait_ms(cond *c, mutex_t *m, int ms) {
     struct timespec ts;
+    int r;
+
     clock_gettime(CLOCK_REALTIME, &ts);
     ts.tv_sec += ms / 1000;
     ts.tv_nsec += (long)(ms % 1000) * 1000000L;
@@ -149,7 +154,8 @@ int cond_timedwait_ms(cond *c, mutex_t *m, int ms) {
         ts.tv_sec++;
         ts.tv_nsec -= 1000000000L;
     }
-    int r = pthread_cond_timedwait(&((PosixCond *)c)->c, &((PosixMutex *)m)->m, &ts);
+
+    r = pthread_cond_timedwait(&((PosixCond *)c)->c, &((PosixMutex *)m)->m, &ts);
     return r == 0 ? 0 : -1;
 }
 void cond_signal(cond *c) {
@@ -163,9 +169,11 @@ void cond_broadcast(cond *c) {
  * thread itself — thread_detach may free the PosixThread handle at any
  * moment, so the handle must never be touched from inside the thread. */
 static void *posix_thread_proc(void *arg) {
+    void *a;
+
     PosixBoot *b = (PosixBoot *)arg;
     thread_fn fn = b->fn;
-    void *a = b->arg;
+    a = b->arg;
     free(b);
     fn(a);
     return NULL;
@@ -181,6 +189,7 @@ thread_t *thread_create(thread_fn fn, void *arg) {
         free(t);
         return NULL;
     }
+
     b->fn = fn;
     b->arg = arg;
     if (pthread_create(&pt->t, NULL, posix_thread_proc, b) != 0) {
@@ -188,6 +197,7 @@ thread_t *thread_create(thread_fn fn, void *arg) {
         free(t);
         return NULL;
     }
+
     return t;
 }
 void thread_join(thread_t *t) {

@@ -57,6 +57,8 @@ int router_add(router *r, const char *name, const char *provider, const char *ba
 
 int router_add_ex(router *r, const char *name, const char *provider, const char *base_url, const char *api_key,
                       const char *model, double weight, int cost_rank, int latency_ms, const char *caps) {
+    route *e;
+
     if (!r || !name || !provider)
         return -1;
     if (weight <= 0)
@@ -83,6 +85,7 @@ int router_add_ex(router *r, const char *name, const char *provider, const char 
             return 0;
         }
     }
+
     if (r->count == r->cap) {
         size_t ncap = r->cap ? r->cap * 2 : 8;
         route *nr = (route *)realloc(r->routes, ncap * sizeof(route));
@@ -93,7 +96,8 @@ int router_add_ex(router *r, const char *name, const char *provider, const char 
         r->routes = nr;
         r->cap = ncap;
     }
-    route *e = &r->routes[r->count++];
+
+    e = &r->routes[r->count++];
     memset(e, 0, sizeof(*e));
     e->name = xstrdup(name);
     e->provider = xstrdup(provider);
@@ -121,14 +125,16 @@ int router_remove(router *r, const char *name) {
             return 1;
         }
     }
+
     mutex_unlock(&r->mtx);
     return 0;
 }
 
 int router_set_policy(router *r, const char *policy) {
+    const char *p = (policy && *policy) ? policy : "round_robin";
+
     if (!r)
         return -1;
-    const char *p = (policy && *policy) ? policy : "round_robin";
     if (strcmp(p, "round_robin") != 0 && strcmp(p, "cost") != 0 && strcmp(p, "latency") != 0 &&
         strncmp(p, "capability:", 11) != 0)
         return -1;
@@ -150,9 +156,11 @@ const char *router_policy(router *r) {
 
 /* Does a route carry the capability tag (comma-separated exact match)? */
 static int route_has_cap(const route *e, const char *tag) {
+    size_t tlen;
+
     if (!e->caps)
         return 0;
-    size_t tlen = strlen(tag);
+    tlen = strlen(tag);
     const char *p = e->caps;
     while (*p) {
         const char *comma = strchr(p, ',');
@@ -163,18 +171,28 @@ static int route_has_cap(const route *e, const char *tag) {
             break;
         p = comma + 1;
     }
+
     return 0;
 }
 
 /* Pick under lock. Metrics-only policies restrict to configured routes and
  * choose the best value; equal-value ties rotate (secondary round-robin). */
 static route *pick_locked(router *r) {
+    int is_cost;
+    int is_lat;
+    int is_cap;
+    size_t cand[64];
+    size_t n = 0;
+    /* best metric value (lower = better; 0 = unknown, never preferred) */
+    size_t best;
+    int best_v;
+
     if (r->count == 0)
         return NULL;
     const char *pol = r->policy ? r->policy : "round_robin";
-    int is_cost = strcmp(pol, "cost") == 0;
-    int is_lat = strcmp(pol, "latency") == 0;
-    int is_cap = strncmp(pol, "capability:", 11) == 0;
+    is_cost = strcmp(pol, "cost") == 0;
+    is_lat = strcmp(pol, "latency") == 0;
+    is_cap = strncmp(pol, "capability:", 11) == 0;
     if (!is_cost && !is_lat && !is_cap) {
         /* weighted round-robin: advance by the current route's weight */
         route *e = &r->routes[r->cursor % r->count];
@@ -183,8 +201,6 @@ static route *pick_locked(router *r) {
         return e;
     }
 
-    size_t cand[64];
-    size_t n = 0;
     if (is_cap) {
         const char *tag = pol + 11;
         for (size_t i = 0; i < r->count && n < 64; i++)
@@ -202,7 +218,7 @@ static route *pick_locked(router *r) {
     }
 
     /* best metric value (lower = better; 0 = unknown, never preferred) */
-    size_t best = cand[0];
+    best = cand[0];
     for (size_t i = 1; i < n; i++) {
         route *a = &r->routes[cand[i]], *b = &r->routes[best];
         int av = is_lat ? a->latency_ms : a->cost_rank;
@@ -210,7 +226,8 @@ static route *pick_locked(router *r) {
         if (av > 0 && (bv <= 0 || av < bv))
             best = cand[i];
     }
-    int best_v = is_lat ? r->routes[best].latency_ms : r->routes[best].cost_rank;
+
+    best_v = is_lat ? r->routes[best].latency_ms : r->routes[best].cost_rank;
     if (best_v > 0) {
         size_t ties[64];
         size_t nt = 0;
@@ -225,14 +242,17 @@ static route *pick_locked(router *r) {
             return &r->routes[ties[r->tie_cursor]];
         }
     }
+
     return &r->routes[best];
 }
 
 const route *router_pick(router *r) {
+    route *e;
+
     if (!r)
         return NULL;
     mutex_lock(&r->mtx);
-    route *e = pick_locked(r);
+    e = pick_locked(r);
     if (e)
         e->calls++;
     mutex_unlock(&r->mtx);
@@ -240,10 +260,12 @@ const route *router_pick(router *r) {
 }
 
 int router_count(router *r) {
+    int n;
+
     if (!r)
         return 0;
     mutex_lock(&r->mtx);
-    int n = (int)r->count;
+    n = (int)r->count;
     mutex_unlock(&r->mtx);
     return n;
 }
@@ -259,6 +281,8 @@ const route *router_get(router *r, size_t i) {
 
 char *router_json(router *r) {
     cJSON *arr = cJSON_CreateArray();
+    char *js;
+
     if (!r)
         return cJSON_PrintUnformatted(arr);
     mutex_lock(&r->mtx);
@@ -281,83 +305,113 @@ char *router_json(router *r) {
             cJSON_AddStringToObject(o, "caps", e->caps);
         cJSON_AddItemToArray(arr, o);
     }
+
     mutex_unlock(&r->mtx);
-    char *js = cJSON_PrintUnformatted(arr);
+    js = cJSON_PrintUnformatted(arr);
     cJSON_Delete(arr);
     return js;
 }
 
 int router_save_file(router *r, const char *path) {
+    char *js;
+    FILE *f;
+    size_t n;
+    size_t w;
+
     if (!r || !path)
         return -1;
-    char *js = router_json(r);
+    js = router_json(r);
     if (!js)
         return -1;
-    FILE *f = fopen(path, "wb");
+    f = fopen(path, "wb");
     if (!f) {
         free(js);
         return -1;
     }
-    size_t n = strlen(js);
-    size_t w = fwrite(js, 1, n, f);
+
+    n = strlen(js);
+    w = fwrite(js, 1, n, f);
     fclose(f);
     free(js);
     return (w == n) ? 0 : -1;
 }
 
 int router_load_file(router *r, const char *path) {
+    FILE *f;
+    long sz;
+    char *buf;
+    size_t rd;
+    cJSON *arr;
+    cJSON *it;
+
     if (!r || !path)
         return -1;
-    FILE *f = fopen(path, "rb");
+    f = fopen(path, "rb");
     if (!f)
         return -1; /* no saved routes (first run) */
     fseek(f, 0, SEEK_END);
-    long sz = ftell(f);
+    sz = ftell(f);
     fseek(f, 0, SEEK_SET);
     if (sz <= 0) {
         fclose(f);
         return 0;
     }
-    char *buf = (char *)malloc((size_t)sz + 1);
+
+    buf = (char *)malloc((size_t)sz + 1);
     if (!buf) {
         fclose(f);
         return -1;
     }
-    size_t rd = fread(buf, 1, (size_t)sz, f);
+
+    rd = fread(buf, 1, (size_t)sz, f);
     fclose(f);
     buf[rd] = '\0';
-    cJSON *arr = cJSON_Parse(buf);
+    arr = cJSON_Parse(buf);
     free(buf);
     if (!arr || !cJSON_IsArray(arr)) {
         if (arr)
             cJSON_Delete(arr);
         return -1;
     }
+
     /* collect routes first, then add them *without* holding r->mtx (router_add
      * locks it internally — holding it here would deadlock on a non-recursive mutex) */
-    cJSON *it;
     cJSON_ArrayForEach(it, arr) {
+    cJSON *name;
+    cJSON *prov;
+    cJSON *b;
+    cJSON *m;
+    cJSON *k;
+    cJSON *w;
+    cJSON *c;
+    cJSON *l;
+    cJSON *cp;
+    double weight;
+    int cost;
+    int lat;
+
         if (!cJSON_IsObject(it))
             continue;
-        cJSON *name = cJSON_GetObjectItemCaseSensitive(it, "name");
-        cJSON *prov = cJSON_GetObjectItemCaseSensitive(it, "provider");
+        name = cJSON_GetObjectItemCaseSensitive(it, "name");
+        prov = cJSON_GetObjectItemCaseSensitive(it, "provider");
         if (!name || !cJSON_IsString(name) || !prov || !cJSON_IsString(prov))
             continue;
-        cJSON *b = cJSON_GetObjectItemCaseSensitive(it, "base_url");
-        cJSON *m = cJSON_GetObjectItemCaseSensitive(it, "model");
-        cJSON *k = cJSON_GetObjectItemCaseSensitive(it, "api_key");
-        cJSON *w = cJSON_GetObjectItemCaseSensitive(it, "weight");
-        cJSON *c = cJSON_GetObjectItemCaseSensitive(it, "cost_rank");
-        cJSON *l = cJSON_GetObjectItemCaseSensitive(it, "latency_ms");
-        cJSON *cp = cJSON_GetObjectItemCaseSensitive(it, "caps");
-        double weight = (w && cJSON_IsNumber(w)) ? w->valuedouble : 1.0;
-        int cost = (c && cJSON_IsNumber(c)) ? (int)c->valuedouble : 0;
-        int lat = (l && cJSON_IsNumber(l)) ? (int)l->valuedouble : 0;
+        b = cJSON_GetObjectItemCaseSensitive(it, "base_url");
+        m = cJSON_GetObjectItemCaseSensitive(it, "model");
+        k = cJSON_GetObjectItemCaseSensitive(it, "api_key");
+        w = cJSON_GetObjectItemCaseSensitive(it, "weight");
+        c = cJSON_GetObjectItemCaseSensitive(it, "cost_rank");
+        l = cJSON_GetObjectItemCaseSensitive(it, "latency_ms");
+        cp = cJSON_GetObjectItemCaseSensitive(it, "caps");
+        weight = (w && cJSON_IsNumber(w)) ? w->valuedouble : 1.0;
+        cost = (c && cJSON_IsNumber(c)) ? (int)c->valuedouble : 0;
+        lat = (l && cJSON_IsNumber(l)) ? (int)l->valuedouble : 0;
         const char *caps = (cp && cJSON_IsString(cp)) ? cp->valuestring : NULL;
         router_add_ex(r, name->valuestring, prov->valuestring, (b && cJSON_IsString(b)) ? b->valuestring : NULL,
                           (k && cJSON_IsString(k)) ? k->valuestring : NULL,
                           (m && cJSON_IsString(m)) ? m->valuestring : NULL, weight, cost, lat, caps);
     }
+
     cJSON_Delete(arr);
     return 0;
 }

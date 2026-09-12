@@ -28,9 +28,11 @@
 
 /* Copy the (not null-terminated) request body into a C string. */
 static char *body_str(const http_request *req) {
+    char *s;
+
     if (!req->body || req->body_len == 0)
         return xstrdup("");
-    char *s = malloc(req->body_len + 1);
+    s = malloc(req->body_len + 1);
     if (!s)
         return NULL;
     memcpy(s, req->body, req->body_len);
@@ -81,17 +83,24 @@ static const char *task_status_str(task_status st) {
 
 static int h_task_create(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    char *b;
+    cJSON *root;
+    const char *prompt = NULL;
+    int64_t id;
+    /* prompt borrows into the cJSON tree — copy before freeing it */
+    char prompt_copy[512];
+
     if (!authz_ok(ctx, req, resp))
         return 0;
-    char *b = body_str(req);
-    cJSON *root = b ? cJSON_Parse(b) : NULL;
+    b = body_str(req);
+    root = b ? cJSON_Parse(b) : NULL;
     free(b);
-    const char *prompt = NULL;
     if (root && cJSON_IsObject(root)) {
         cJSON *p = cJSON_GetObjectItemCaseSensitive(root, "prompt");
         if (p && cJSON_IsString(p))
             prompt = p->valuestring;
     }
+
     if (!prompt || !*prompt) {
         if (root)
             cJSON_Delete(root);
@@ -99,9 +108,8 @@ static int h_task_create(const http_request *req, http_response *resp, void *ud)
         http_resp_json(resp, "{\"error\":\"missing 'prompt' string\"}");
         return 0;
     }
-    int64_t id = scheduler_submit(ctx->scheduler, 0, prompt, NULL, 0);
-    /* prompt borrows into the cJSON tree — copy before freeing it */
-    char prompt_copy[512];
+
+    id = scheduler_submit(ctx->scheduler, 0, prompt, NULL, 0);
     snprintf(prompt_copy, sizeof(prompt_copy), "%s", prompt);
     cJSON_Delete(root);
     if (id < 0) {
@@ -109,6 +117,7 @@ static int h_task_create(const http_request *req, http_response *resp, void *ud)
         http_resp_json(resp, "{\"error\":\"scheduler submit failed\"}");
         return 0;
     }
+
     if (ctx->state)
         state_store_task_set(ctx->state, id, "QUEUED", prompt_copy);
     http_resp_appendf(resp, "{\"id\":%lld,\"status\":\"queued\"}", (long long)id);
@@ -117,6 +126,11 @@ static int h_task_create(const http_request *req, http_response *resp, void *ud)
 
 static int h_task_get(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    int64_t id;
+    task *t;
+    cJSON *o;
+    char *s;
+
     if (!authz_ok(ctx, req, resp))
         return 0;
     const char *suffix = req->path + strlen("/v1/tasks/");
@@ -125,26 +139,29 @@ static int h_task_get(const http_request *req, http_response *resp, void *ud) {
         http_resp_json(resp, "{\"error\":\"missing task id\"}");
         return 0;
     }
-    int64_t id = atoll(suffix);
-    task *t = scheduler_get(ctx->scheduler, id);
+
+    id = atoll(suffix);
+    t = scheduler_get(ctx->scheduler, id);
     if (!t) {
         resp->status = 404;
         http_resp_json(resp, "{\"error\":\"task not found\"}");
         return 0;
     }
-    cJSON *o = cJSON_CreateObject();
+
+    o = cJSON_CreateObject();
     cJSON_AddNumberToObject(o, "id", (double)t->id);
     cJSON_AddStringToObject(o, "status", task_status_str(t->status));
     if (t->input)
         cJSON_AddStringToObject(o, "input", t->input);
     if (t->output)
         cJSON_AddStringToObject(o, "output", t->output);
-    char *s = cJSON_PrintUnformatted(o);
+    s = cJSON_PrintUnformatted(o);
     cJSON_Delete(o);
     if (s) {
         http_resp_append(resp, s);
         free(s);
     }
+
     return 0;
 }
 
@@ -156,13 +173,17 @@ static int h_task_get(const http_request *req, http_response *resp, void *ud) {
  * can run side by side (default = the shared default session). */
 static int h_chat(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
-    if (!authz_ok(ctx, req, resp))
-        return 0;
-    char *b = body_str(req);
-    cJSON *root = b ? cJSON_Parse(b) : NULL;
-    free(b);
+    char *b;
+    cJSON *root;
     const char *msg = NULL;
     const char *session = NULL;
+    int64_t id;
+
+    if (!authz_ok(ctx, req, resp))
+        return 0;
+    b = body_str(req);
+    root = b ? cJSON_Parse(b) : NULL;
+    free(b);
     if (root && cJSON_IsObject(root)) {
         cJSON *p = cJSON_GetObjectItemCaseSensitive(root, "message");
         if (p && cJSON_IsString(p))
@@ -171,6 +192,7 @@ static int h_chat(const http_request *req, http_response *resp, void *ud) {
         if (s && cJSON_IsString(s) && s->valuestring[0])
             session = s->valuestring;
     }
+
     if (!msg || !*msg) {
         if (root)
             cJSON_Delete(root);
@@ -178,13 +200,15 @@ static int h_chat(const http_request *req, http_response *resp, void *ud) {
         http_resp_json(resp, "{\"error\":\"missing 'message' string\"}");
         return 0;
     }
-    int64_t id = scheduler_submit_tag(ctx->scheduler, 0, msg, NULL, 0, session);
+
+    id = scheduler_submit_tag(ctx->scheduler, 0, msg, NULL, 0, session);
     cJSON_Delete(root);
     if (id < 0) {
         resp->status = 500;
         http_resp_json(resp, "{\"error\":\"scheduler submit failed\"}");
         return 0;
     }
+
     http_resp_appendf(resp, "{\"id\":%lld,\"status\":\"queued\"}", (long long)id);
     return 0;
 }
@@ -193,6 +217,9 @@ static int h_chat(const http_request *req, http_response *resp, void *ud) {
  * DELETE /v1/chat/sessions/<id> — clear that session's history and notes. */
 static int h_chat_sessions(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    char sid[128];
+    int rc;
+
     if (!authz_ok(ctx, req, resp))
         return 0;
     if (strcmp(req->method, "GET") == 0) {
@@ -201,6 +228,7 @@ static int h_chat_sessions(const http_request *req, http_response *resp, void *u
         free(js);
         return 0;
     }
+
     /* DELETE /v1/chat/sessions/<id> */
     const char *suffix = req->path + strlen("/v1/chat/sessions/");
     if (!*suffix) {
@@ -208,14 +236,15 @@ static int h_chat_sessions(const http_request *req, http_response *resp, void *u
         http_resp_json(resp, "{\"error\":\"missing session id\"}");
         return 0;
     }
-    char sid[128];
+
     snprintf(sid, sizeof(sid), "%s", suffix);
-    int rc = reasoning_session_clear(ctx->reasoning, sid);
+    rc = reasoning_session_clear(ctx->reasoning, sid);
     if (rc != 0) {
         resp->status = 404;
         http_resp_json(resp, "{\"error\":\"session not found\"}");
         return 0;
     }
+
     http_resp_json(resp, "{\"status\":\"cleared\"}");
     return 0;
 }
@@ -226,17 +255,23 @@ static int h_chat_sessions(const http_request *req, http_response *resp, void *u
  * over WebSocket (source "orchestrator"); steps land on the blackboard "orch/". */
 static int h_orchestrate(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    char *b;
+    cJSON *root;
+    const char *task = NULL;
+    /* userdata = marker so the task runner routes to orchestrate */
+    int64_t id;
+
     if (!authz_ok(ctx, req, resp))
         return 0;
-    char *b = body_str(req);
-    cJSON *root = b ? cJSON_Parse(b) : NULL;
+    b = body_str(req);
+    root = b ? cJSON_Parse(b) : NULL;
     free(b);
-    const char *task = NULL;
     if (root && cJSON_IsObject(root)) {
         cJSON *p = cJSON_GetObjectItemCaseSensitive(root, "task");
         if (p && cJSON_IsString(p))
             task = p->valuestring;
     }
+
     if (!task || !*task) {
         if (root)
             cJSON_Delete(root);
@@ -244,14 +279,16 @@ static int h_orchestrate(const http_request *req, http_response *resp, void *ud)
         http_resp_json(resp, "{\"error\":\"missing 'task' string\"}");
         return 0;
     }
+
     /* userdata = marker so the task runner routes to orchestrate */
-    int64_t id = scheduler_submit(ctx->scheduler, 0, task, (void *)1, 0);
+    id = scheduler_submit(ctx->scheduler, 0, task, (void *)1, 0);
     cJSON_Delete(root);
     if (id < 0) {
         resp->status = 500;
         http_resp_json(resp, "{\"error\":\"scheduler submit failed\"}");
         return 0;
     }
+
     http_resp_appendf(resp, "{\"id\":%lld,\"status\":\"queued\"}", (long long)id);
     return 0;
 }
@@ -261,12 +298,19 @@ static int h_orchestrate(const http_request *req, http_response *resp, void *ud)
  * {"flow": <that object>}. Validated synchronously so 400s carry the reason. */
 static int h_flow_run(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    char *b;
+    cJSON *root;
+    cJSON *dag = NULL;
+    char *dag_json;
+    char *verr = NULL;
+    /* userdata marker 2 routes the task runner to flow_run */
+    int64_t id;
+
     if (!authz_ok(ctx, req, resp))
         return 0;
-    char *b = body_str(req);
-    cJSON *root = b ? cJSON_Parse(b) : NULL;
+    b = body_str(req);
+    root = b ? cJSON_Parse(b) : NULL;
     free(b);
-    cJSON *dag = NULL;
     if (root && cJSON_IsObject(root)) {
         dag = root;
         cJSON *f = cJSON_GetObjectItemCaseSensitive(root, "flow");
@@ -275,6 +319,7 @@ static int h_flow_run(const http_request *req, http_response *resp, void *ud) {
         if (!cJSON_GetObjectItemCaseSensitive(dag, "nodes"))
             dag = NULL;
     }
+
     if (!dag) {
         if (root)
             cJSON_Delete(root);
@@ -282,14 +327,15 @@ static int h_flow_run(const http_request *req, http_response *resp, void *ud) {
         http_resp_json(resp, "{\"error\":\"need a flow object with 'nodes'\"}");
         return 0;
     }
-    char *dag_json = cJSON_PrintUnformatted(dag);
+
+    dag_json = cJSON_PrintUnformatted(dag);
     cJSON_Delete(root);
     if (!dag_json) {
         resp->status = 500;
         http_resp_json(resp, "{\"error\":\"serialize failed\"}");
         return 0;
     }
-    char *verr = NULL;
+
     if (flow_validate(dag_json, &verr) != 0) {
         http_resp_appendf(resp, "{\"error\":\"invalid flow: %s\"}", verr ? verr : "unknown");
         free(verr);
@@ -297,15 +343,17 @@ static int h_flow_run(const http_request *req, http_response *resp, void *ud) {
         resp->status = 400;
         return 0;
     }
+
     free(verr);
     /* userdata marker 2 routes the task runner to flow_run */
-    int64_t id = scheduler_submit(ctx->scheduler, 0, dag_json, (void *)2, 0);
+    id = scheduler_submit(ctx->scheduler, 0, dag_json, (void *)2, 0);
     free(dag_json);
     if (id < 0) {
         resp->status = 500;
         http_resp_json(resp, "{\"error\":\"scheduler submit failed\"}");
         return 0;
     }
+
     http_resp_appendf(resp, "{\"id\":%lld,\"status\":\"queued\"}", (long long)id);
     return 0;
 }
@@ -315,41 +363,53 @@ static int h_flow_run(const http_request *req, http_response *resp, void *ud) {
  * the client can inspect/modify it before POST /v1/flows. */
 static int h_flow_decompose(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    char *b;
+    cJSON *root;
+    cJSON *t;
+    char *dag_json = NULL;
+    int rc;
+    cJSON *dag;
+    cJSON *out;
+    char *js;
+
     if (!authz_ok(ctx, req, resp))
         return 0;
-    char *b = body_str(req);
-    cJSON *root = b ? cJSON_Parse(b) : NULL;
+    b = body_str(req);
+    root = b ? cJSON_Parse(b) : NULL;
     free(b);
-    cJSON *t = root ? cJSON_GetObjectItemCaseSensitive(root, "task") : NULL;
+    t = root ? cJSON_GetObjectItemCaseSensitive(root, "task") : NULL;
     if (!t || !cJSON_IsString(t) || !t->valuestring || !*t->valuestring) {
         cJSON_Delete(root);
         resp->status = 400;
         http_resp_json(resp, "{\"error\":\"missing 'task' string\"}");
         return 0;
     }
-    char *dag_json = NULL;
-    int rc = flow_decompose(ctx, t->valuestring, &dag_json);
+
+    rc = flow_decompose(ctx, t->valuestring, &dag_json);
     cJSON_Delete(root);
     if (rc != 0 || !dag_json) {
         resp->status = 422;
         http_resp_json(resp, "{\"error\":\"no multi-agent plan (register agents or check LLM config)\"}");
         return 0;
     }
-    cJSON *dag = cJSON_Parse(dag_json);
+
+    dag = cJSON_Parse(dag_json);
     free(dag_json);
     if (!dag) {
         resp->status = 500;
         http_resp_json(resp, "{\"error\":\"dag serialize failed\"}");
         return 0;
     }
-    cJSON *out = cJSON_CreateObject();
+
+    out = cJSON_CreateObject();
     cJSON_AddItemToObject(out, "dag", dag);
-    char *js = cJSON_PrintUnformatted(out);
+    js = cJSON_PrintUnformatted(out);
     cJSON_Delete(out);
     if (js) {
         http_resp_json(resp, js);
         free(js);
     }
+
     return 0;
 }
 
@@ -361,11 +421,16 @@ static void policy_path_of(runtime_ctx *ctx, char *out, size_t cap) {
 
 static int h_policy_rules(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    cJSON *arr;
+    int n;
+    cJSON *root;
+    char *js;
+
     if (!authz_ok(ctx, req, resp))
         return 0;
     (void)req;
-    cJSON *arr = cJSON_CreateArray();
-    int n = ctx->policy ? policy_rule_count(ctx->policy) : 0;
+    arr = cJSON_CreateArray();
+    n = ctx->policy ? policy_rule_count(ctx->policy) : 0;
     for (int i = 0; i < n; i++) {
         const char *tool = NULL, *action = NULL, *reason = NULL;
         cJSON *o = cJSON_CreateObject();
@@ -377,27 +442,37 @@ static int h_policy_rules(const http_request *req, http_response *resp, void *ud
         }
         cJSON_AddItemToArray(arr, o);
     }
-    cJSON *root = cJSON_CreateObject();
+
+    root = cJSON_CreateObject();
     cJSON_AddItemToObject(root, "rules", arr);
-    char *js = cJSON_PrintUnformatted(root);
+    js = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
     if (js) {
         http_resp_append(resp, js);
         free(js);
     }
+
     return 0;
 }
 
 static int h_policy_add(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    char *b;
+    cJSON *root;
+    cJSON *t;
+    cJSON *a;
+    cJSON *r;
+    char ppath[600];
+    int saved;
+
     if (!authz_ok(ctx, req, resp))
         return 0;
-    char *b = body_str(req);
-    cJSON *root = b ? cJSON_Parse(b) : NULL;
+    b = body_str(req);
+    root = b ? cJSON_Parse(b) : NULL;
     free(b);
-    cJSON *t = root ? cJSON_GetObjectItemCaseSensitive(root, "tool") : NULL;
-    cJSON *a = root ? cJSON_GetObjectItemCaseSensitive(root, "action") : NULL;
-    cJSON *r = root ? cJSON_GetObjectItemCaseSensitive(root, "reason") : NULL;
+    t = root ? cJSON_GetObjectItemCaseSensitive(root, "tool") : NULL;
+    a = root ? cJSON_GetObjectItemCaseSensitive(root, "action") : NULL;
+    r = root ? cJSON_GetObjectItemCaseSensitive(root, "reason") : NULL;
     if (!t || !cJSON_IsString(t) || !t->valuestring || !*t->valuestring || !a || !cJSON_IsString(a) ||
         !a->valuestring) {
         cJSON_Delete(root);
@@ -405,27 +480,30 @@ static int h_policy_add(const http_request *req, http_response *resp, void *ud) 
         http_resp_json(resp, "{\"error\":\"need 'tool' and 'action' (allow|deny|ask)\"}");
         return 0;
     }
+
     policy_add_rule(ctx->policy, t->valuestring, a->valuestring, (r && cJSON_IsString(r)) ? r->valuestring : NULL);
     cJSON_Delete(root);
-    char ppath[600];
     policy_path_of(ctx, ppath, sizeof(ppath));
-    int saved = policy_save_file(ctx->policy, ppath);
+    saved = policy_save_file(ctx->policy, ppath);
     http_resp_appendf(resp, "{\"ok\":true,\"saved\":%s}", saved == 0 ? "true" : "false");
     return 0;
 }
 
 static int h_policy_delete(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    int idx;
+    char ppath[600];
+
     if (!authz_ok(ctx, req, resp))
         return 0;
-    int idx = atoi(req->path + strlen("/v1/policy/rules/"));
+    idx = atoi(req->path + strlen("/v1/policy/rules/"));
     if (idx < 0 || (size_t)idx >= (size_t)policy_rule_count(ctx->policy)) {
         resp->status = 404;
         http_resp_json(resp, "{\"error\":\"no such rule\"}");
         return 0;
     }
+
     policy_remove_rule(ctx->policy, (size_t)idx);
-    char ppath[600];
     policy_path_of(ctx, ppath, sizeof(ppath));
     policy_save_file(ctx->policy, ppath);
     http_resp_json(resp, "{\"ok\":true}");
@@ -435,10 +513,12 @@ static int h_policy_delete(const http_request *req, http_response *resp, void *u
 /* GET /v1/hooks — list registered hooks [{"id":N,"event":"..."}]. */
 static int h_hooks(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    char *js;
+
     if (!authz_ok(ctx, req, resp))
         return 0;
     (void)req;
-    char *js = ctx->hooks ? hook_registry_json(ctx->hooks) : xstrdup("[]");
+    js = ctx->hooks ? hook_registry_json(ctx->hooks) : xstrdup("[]");
     http_resp_appendf(resp, "{\"hooks\":%s}", js ? js : "[]");
     free(js);
     return 0;
@@ -450,6 +530,14 @@ static int h_hooks(const http_request *req, http_response *resp, void *ud) {
  * <state_root>/hooks-external.jsonl). Returns the hook id. */
 static int h_hook_add(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    char *b;
+    cJSON *root;
+    cJSON *ev;
+    char fpath[600];
+    cJSON *fj;
+    char *fpath_heap;
+    int id;
+
     if (!authz_ok(ctx, req, resp))
         return 0;
     if (!ctx->hooks) {
@@ -457,25 +545,27 @@ static int h_hook_add(const http_request *req, http_response *resp, void *ud) {
         http_resp_json(resp, "{\"error\":\"hook registry unavailable\"}");
         return 0;
     }
-    char *b = body_str(req);
-    cJSON *root = b ? cJSON_Parse(b) : NULL;
+
+    b = body_str(req);
+    root = b ? cJSON_Parse(b) : NULL;
     free(b);
-    cJSON *ev = root ? cJSON_GetObjectItemCaseSensitive(root, "event") : NULL;
+    ev = root ? cJSON_GetObjectItemCaseSensitive(root, "event") : NULL;
     if (!ev || !cJSON_IsString(ev) || !ev->valuestring || !*ev->valuestring) {
         cJSON_Delete(root);
         resp->status = 400;
         http_resp_json(resp, "{\"error\":\"need 'event' (name or '*') and optional 'file', 'type'='log'\"}");
         return 0;
     }
-    char fpath[600];
-    cJSON *fj = cJSON_GetObjectItemCaseSensitive(root, "file");
+
+    fj = cJSON_GetObjectItemCaseSensitive(root, "file");
     if (fj && cJSON_IsString(fj) && fj->valuestring && *fj->valuestring) {
         snprintf(fpath, sizeof(fpath), "%s", fj->valuestring);
     } else {
         path_join(fpath, sizeof(fpath), ctx->state_root ? ctx->state_root : "state", "hooks-external.jsonl");
     }
-    char *fpath_heap = xstrdup(fpath);
-    int id = fpath_heap ? hook_register(ctx->hooks, ev->valuestring, hook_audit_file, fpath_heap) : -1;
+
+    fpath_heap = xstrdup(fpath);
+    id = fpath_heap ? hook_register(ctx->hooks, ev->valuestring, hook_audit_file, fpath_heap) : -1;
     cJSON_Delete(root);
     if (id < 0) {
         free(fpath_heap);
@@ -483,6 +573,7 @@ static int h_hook_add(const http_request *req, http_response *resp, void *ud) {
         http_resp_json(resp, "{\"error\":\"register failed\"}");
         return 0;
     }
+
     http_resp_appendf(resp, "{\"ok\":true,\"id\":%d}", id);
     return 0;
 }
@@ -490,14 +581,17 @@ static int h_hook_add(const http_request *req, http_response *resp, void *ud) {
 /* DELETE /v1/hooks/<id> — unregister a hook (builtin audit hook id 1 stays). */
 static int h_hook_delete(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    int id;
+
     if (!authz_ok(ctx, req, resp))
         return 0;
-    int id = atoi(req->path + strlen("/v1/hooks/"));
+    id = atoi(req->path + strlen("/v1/hooks/"));
     if (id <= 0 || hook_unregister(ctx->hooks, id) != 0) {
         resp->status = 404;
         http_resp_json(resp, "{\"error\":\"no such hook\"}");
         return 0;
     }
+
     http_resp_json(resp, "{\"ok\":true}");
     return 0;
 }
@@ -511,6 +605,10 @@ static int h_hook_delete(const http_request *req, http_response *resp, void *ud)
 static void sanitize_upload_name(const char *in, char *out, size_t cap) {
     char dec[256];
     size_t di = 0;
+    size_t oi = 0;
+    /* strip leading dots: no hidden entries, no "." / ".." */
+    size_t strip = 0;
+
     for (const char *p = in; *p && *p != '&' && di + 1 < sizeof(dec); p++) {
         if (*p == '%' && p[1] && p[2]) {
             char hex[3] = {p[1], p[2], 0};
@@ -522,8 +620,8 @@ static void sanitize_upload_name(const char *in, char *out, size_t cap) {
             dec[di++] = *p;
         }
     }
+
     dec[di] = '\0';
-    size_t oi = 0;
     for (size_t k = 0; k < di && oi + 1 < cap; k++) {
         unsigned char c = (unsigned char)dec[k];
         if (c == '/' || c == '\\' || c == ':' || c == '*' || c == '?' || c == '"' || c == '<' || c == '>' || c == '|' ||
@@ -531,9 +629,8 @@ static void sanitize_upload_name(const char *in, char *out, size_t cap) {
             c = '_';
         out[oi++] = (char)c;
     }
+
     out[oi] = '\0';
-    /* strip leading dots: no hidden entries, no "." / ".." */
-    size_t strip = 0;
     while (out[strip] == '.')
         strip++;
     if (strip)
@@ -550,13 +647,15 @@ static void uploads_dir_of(const runtime_ctx *ctx, char *dir, size_t cap) {
  * is given. */
 static int h_chat_history(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    char sid[128] = "";
+    char *turns;
+
     if (!authz_ok(ctx, req, resp))
         return 0;
-    char sid[128] = "";
     const char *sp = strstr(req->query, "session=");
     if (sp)
         sanitize_upload_name(sp + 8, sid, sizeof(sid));
-    char *turns =
+    turns =
         ctx->reasoning ? reasoning_history_json_ex(ctx->reasoning, sid[0] ? sid : NULL, 20) : xstrdup("[]");
     http_resp_appendf(resp, "{\"turns\":%s}", turns ? turns : "[]");
     free(turns);
@@ -568,9 +667,12 @@ static int h_chat_history(const http_request *req, http_response *resp, void *ud
  * vector store so later prompts recall it via "## Retrieved context". */
 static int h_upload(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    char name[192];
+    /* text files (no NUL byte) go into the vector store */
+    int chunks = 0;
+
     if (!authz_ok(ctx, req, resp))
         return 0;
-    char name[192];
     const char *nmp = strstr(req->query, "name=");
     sanitize_upload_name(nmp ? nmp + 5 : req->query, name, sizeof(name));
     if (!name[0] || !req->body || req->body_len == 0) {
@@ -578,6 +680,7 @@ static int h_upload(const http_request *req, http_response *resp, void *ud) {
         http_resp_json(resp, "{\"error\":\"need ?name=<file> and a non-empty body\"}");
         return 0;
     }
+
     char dir[600], fpath[820];
     uploads_dir_of(ctx, dir, sizeof(dir));
     path_join(fpath, sizeof(fpath), dir, name);
@@ -586,8 +689,7 @@ static int h_upload(const http_request *req, http_response *resp, void *ud) {
         http_resp_json(resp, "{\"error\":\"write failed\"}");
         return 0;
     }
-    /* text files (no NUL byte) go into the vector store */
-    int chunks = 0;
+
     if (!memchr(req->body, 0, req->body_len) && ctx->memory) {
         char *text = malloc(req->body_len + 1);
         if (text) {
@@ -604,6 +706,7 @@ static int h_upload(const http_request *req, http_response *resp, void *ud) {
             free(text);
         }
     }
+
     http_resp_appendf(resp, "{\"ok\":true,\"name\":\"%s\",\"size\":%d,\"chunks\":%d}", name, (int)req->body_len,
                           chunks);
     return 0;
@@ -612,13 +715,16 @@ static int h_upload(const http_request *req, http_response *resp, void *ud) {
 /* GET /v1/uploads — uploaded files with sizes. */
 static int h_uploads(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    char dir[600];
+    dir_list dl;
+    cJSON *arr;
+    char *s;
+
     if (!authz_ok(ctx, req, resp))
         return 0;
     (void)req;
-    char dir[600];
     uploads_dir_of(ctx, dir, sizeof(dir));
-    dir_list dl;
-    cJSON *arr = cJSON_CreateArray();
+    arr = cJSON_CreateArray();
     if (fs_list_dir(dir, &dl) == 0) {
         for (size_t i = 0; i < dl.count; i++) {
             if (dl.items[i].is_dir)
@@ -632,7 +738,8 @@ static int h_uploads(const http_request *req, http_response *resp, void *ud) {
         }
         fs_list_free(&dl);
     }
-    char *s = cJSON_PrintUnformatted(arr);
+
+    s = cJSON_PrintUnformatted(arr);
     cJSON_Delete(arr);
     http_resp_appendf(resp, "{\"files\":%s}", s ? s : "[]");
     free(s);
@@ -643,15 +750,17 @@ static int h_uploads(const http_request *req, http_response *resp, void *ud) {
  * the next startup rebuild, which scans the directory). */
 static int h_upload_delete(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    char name[192];
+
     if (!authz_ok(ctx, req, resp))
         return 0;
-    char name[192];
     sanitize_upload_name(req->path + strlen("/v1/uploads/"), name, sizeof(name));
     if (!name[0]) {
         resp->status = 400;
         http_resp_json(resp, "{\"error\":\"missing file name\"}");
         return 0;
     }
+
     char dir[600], fpath[820];
     path_join(dir, sizeof(dir), ctx->state_root, "uploads");
     snprintf(fpath, sizeof(fpath), "%s/%s", dir, name);
@@ -660,16 +769,21 @@ static int h_upload_delete(const http_request *req, http_response *resp, void *u
         http_resp_json(resp, "{\"error\":\"not found\"}");
         return 0;
     }
+
     http_resp_json(resp, "{\"ok\":true}");
     return 0;
 }
 
 static int h_tools(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    cJSON *arr;
+    int n;
+    char *s;
+
     if (!authz_ok(ctx, req, resp))
         return 0;
-    cJSON *arr = cJSON_CreateArray();
-    int n = tool_registry_count(ctx->tools);
+    arr = cJSON_CreateArray();
+    n = tool_registry_count(ctx->tools);
     for (int i = 0; i < n; i++) {
         const tool *t = tool_registry_get(ctx->tools, (size_t)i);
         if (!t)
@@ -687,7 +801,8 @@ static int h_tools(const http_request *req, http_response *resp, void *ud) {
         }
         cJSON_AddItemToArray(arr, o);
     }
-    char *s = cJSON_PrintUnformatted(arr);
+
+    s = cJSON_PrintUnformatted(arr);
     cJSON_Delete(arr);
     http_resp_json(resp, s ? s : "[]");
     free(s);
@@ -696,9 +811,12 @@ static int h_tools(const http_request *req, http_response *resp, void *ud) {
 
 static int h_memory(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    cJSON *root;
+    char *s;
+
     if (!authz_ok(ctx, req, resp))
         return 0;
-    cJSON *root = cJSON_CreateObject();
+    root = cJSON_CreateObject();
     if (ctx->memory) {
         char *w = memory_working_json(ctx->memory);
         char *l = memory_longterm_json(ctx->memory);
@@ -709,7 +827,8 @@ static int h_memory(const http_request *req, http_response *resp, void *ud) {
         free(w);
         free(l);
     }
-    char *s = cJSON_PrintUnformatted(root);
+
+    s = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
     http_resp_json(resp, s ? s : "{}");
     free(s);
@@ -718,9 +837,11 @@ static int h_memory(const http_request *req, http_response *resp, void *ud) {
 
 static int h_snapshots(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    char *s;
+
     if (!authz_ok(ctx, req, resp))
         return 0;
-    char *s = ctx->snapshot ? snapshot_list(ctx->snapshot) : xstrdup("[]");
+    s = ctx->snapshot ? snapshot_list(ctx->snapshot) : xstrdup("[]");
     http_resp_json(resp, s ? s : "[]");
     free(s);
     return 0;
@@ -728,18 +849,22 @@ static int h_snapshots(const http_request *req, http_response *resp, void *ud) {
 
 static int h_snapshot_rollback(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    int rc;
+
     if (!authz_ok(ctx, req, resp))
         return 0;
-    int rc = ctx->snapshot ? snapshot_restore_latest(ctx->snapshot) : -1;
+    rc = ctx->snapshot ? snapshot_restore_latest(ctx->snapshot) : -1;
     http_resp_appendf(resp, "{\"ok\":%s}", rc == 0 ? "true" : "false");
     return 0;
 }
 
 static int h_blackboard(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    char *s;
+
     if (!authz_ok(ctx, req, resp))
         return 0;
-    char *s = ctx->blackboard ? blackboard_snapshot_json(ctx->blackboard) : xstrdup("{}");
+    s = ctx->blackboard ? blackboard_snapshot_json(ctx->blackboard) : xstrdup("{}");
     http_resp_json(resp, s ? s : "{}");
     free(s);
     return 0;
@@ -747,10 +872,13 @@ static int h_blackboard(const http_request *req, http_response *resp, void *ud) 
 
 static int h_blackboard_put(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    char *b;
+    cJSON *root;
+
     if (!authz_ok(ctx, req, resp))
         return 0;
-    char *b = body_str(req);
-    cJSON *root = b ? cJSON_Parse(b) : NULL;
+    b = body_str(req);
+    root = b ? cJSON_Parse(b) : NULL;
     free(b);
     const char *key = NULL, *val = NULL;
     if (root && cJSON_IsObject(root)) {
@@ -761,6 +889,7 @@ static int h_blackboard_put(const http_request *req, http_response *resp, void *
         if (v && cJSON_IsString(v))
             val = v->valuestring;
     }
+
     if (!key || !*key || !val) {
         if (root)
             cJSON_Delete(root);
@@ -768,6 +897,7 @@ static int h_blackboard_put(const http_request *req, http_response *resp, void *
         http_resp_json(resp, "{\"error\":\"need 'key' and 'value' strings\"}");
         return 0;
     }
+
     if (ctx->blackboard)
         blackboard_put(ctx->blackboard, key, val);
     cJSON_Delete(root);
@@ -777,9 +907,11 @@ static int h_blackboard_put(const http_request *req, http_response *resp, void *
 
 static int h_agents(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    char *s;
+
     if (!authz_ok(ctx, req, resp))
         return 0;
-    char *s = ctx->agents ? agent_pool_snapshot_json(ctx->agents) : xstrdup("{}");
+    s = ctx->agents ? agent_pool_snapshot_json(ctx->agents) : xstrdup("{}");
     http_resp_json(resp, s ? s : "{}");
     free(s);
     return 0;
@@ -787,10 +919,14 @@ static int h_agents(const http_request *req, http_response *resp, void *ud) {
 
 static int h_agent_add(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    char *b;
+    cJSON *root;
+    int idx;
+
     if (!authz_ok(ctx, req, resp))
         return 0;
-    char *b = body_str(req);
-    cJSON *root = b ? cJSON_Parse(b) : NULL;
+    b = body_str(req);
+    root = b ? cJSON_Parse(b) : NULL;
     free(b);
     const char *name = NULL, *role = NULL, *provider = NULL, *model = NULL;
     char name_buf[128], role_buf[256], prov_buf[128], model_buf[128];
@@ -820,6 +956,7 @@ static int h_agent_add(const http_request *req, http_response *resp, void *ud) {
         provider = *prov_buf ? prov_buf : NULL;
         model = *model_buf ? model_buf : NULL;
     }
+
     if (root)
         cJSON_Delete(root);
     if (!name || !*name) {
@@ -827,12 +964,14 @@ static int h_agent_add(const http_request *req, http_response *resp, void *ud) {
         http_resp_json(resp, "{\"error\":\"need 'name' string\"}");
         return 0;
     }
-    int idx = ctx->agents ? agent_pool_add_model(ctx->agents, name, role ? role : "", provider, model) : -1;
+
+    idx = ctx->agents ? agent_pool_add_model(ctx->agents, name, role ? role : "", provider, model) : -1;
     if (idx < 0) {
         resp->status = 400;
         http_resp_json(resp, "{\"error\":\"add agent failed (duplicate?)\"}");
         return 0;
     }
+
     agent_pool_save(ctx->agents, ctx->state_root); /* roster persists across restarts */
     if (ctx->state)
         state_store_agent_set(ctx->state, name, role, "idle");
@@ -846,6 +985,8 @@ static int h_agent_run(const http_request *req, http_response *resp, void *ud);
  * persist the roster. 404 when the name is unknown. */
 static int h_agent_delete(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    int rc;
+
     if (!authz_ok(ctx, req, resp))
         return 0;
     const char *name = req->path + strlen("/v1/agents/");
@@ -854,12 +995,14 @@ static int h_agent_delete(const http_request *req, http_response *resp, void *ud
         http_resp_json(resp, "{\"error\":\"need agent name in path\"}");
         return 0;
     }
-    int rc = ctx->agents ? agent_pool_remove(ctx->agents, name) : -1;
+
+    rc = ctx->agents ? agent_pool_remove(ctx->agents, name) : -1;
     if (rc != 0) {
         resp->status = 404;
         http_resp_json(resp, "{\"error\":\"unknown agent\"}");
         return 0;
     }
+
     agent_pool_save(ctx->agents, ctx->state_root);
     http_resp_json(resp, "{\"ok\":true}");
     return 0;
@@ -867,6 +1010,12 @@ static int h_agent_delete(const http_request *req, http_response *resp, void *ud
 
 static int h_agent_post(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    char name[128];
+    char *slash;
+    char *b;
+    cJSON *root;
+    int rc;
+
     if (!authz_ok(ctx, req, resp))
         return 0;
     /* dispatch: "<name>/run" executes a task through the reasoning engine */
@@ -876,14 +1025,14 @@ static int h_agent_post(const http_request *req, http_response *resp, void *ud) 
         if (plen >= 4 && strcmp(p + plen - 4, "/run") == 0)
             return h_agent_run(req, resp, ud);
     }
+
     const char *rest = req->path + strlen("/v1/agents/");
-    char name[128];
     snprintf(name, sizeof(name), "%s", rest);
-    char *slash = strstr(name, "/post");
+    slash = strstr(name, "/post");
     if (slash)
         *slash = '\0';
-    char *b = body_str(req);
-    cJSON *root = b ? cJSON_Parse(b) : NULL;
+    b = body_str(req);
+    root = b ? cJSON_Parse(b) : NULL;
     free(b);
     const char *key = NULL, *val = NULL;
     char key_buf[160], val_buf[2048];
@@ -900,6 +1049,7 @@ static int h_agent_post(const http_request *req, http_response *resp, void *ud) 
         key = key_buf;
         val = val_buf;
     }
+
     if (root)
         cJSON_Delete(root);
     if (!key || !*key || !val) {
@@ -907,7 +1057,8 @@ static int h_agent_post(const http_request *req, http_response *resp, void *ud) 
         http_resp_json(resp, "{\"error\":\"need 'key' and 'value' strings\"}");
         return 0;
     }
-    int rc = ctx->agents ? agent_post(ctx->agents, name, key, val) : -1;
+
+    rc = ctx->agents ? agent_post(ctx->agents, name, key, val) : -1;
     http_resp_appendf(resp, "{\"ok\":%s}", rc == 0 ? "true" : "false");
     return 0;
 }
@@ -917,23 +1068,32 @@ static int h_agent_post(const http_request *req, http_response *resp, void *ud) 
  * blackboard and returned here. (Dispatched from h_agent_post for /run.) */
 static int h_agent_run(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    char name[128];
+    char *slash;
+    char *b;
+    cJSON *root;
+    const char *task = NULL;
+    char *answer = NULL;
+    int rc;
+    cJSON *out;
+    char *s;
+
     if (!authz_ok(ctx, req, resp))
         return 0;
     const char *rest = req->path + strlen("/v1/agents/");
-    char name[128];
     snprintf(name, sizeof(name), "%s", rest);
-    char *slash = strstr(name, "/run");
+    slash = strstr(name, "/run");
     if (slash)
         *slash = '\0';
-    char *b = body_str(req);
-    cJSON *root = b ? cJSON_Parse(b) : NULL;
+    b = body_str(req);
+    root = b ? cJSON_Parse(b) : NULL;
     free(b);
-    const char *task = NULL;
     if (root && cJSON_IsObject(root)) {
         cJSON *t = cJSON_GetObjectItemCaseSensitive(root, "task");
         if (t && cJSON_IsString(t))
             task = t->valuestring;
     }
+
     if (!task || !*task) {
         if (root)
             cJSON_Delete(root);
@@ -941,8 +1101,8 @@ static int h_agent_run(const http_request *req, http_response *resp, void *ud) {
         http_resp_json(resp, "{\"error\":\"need 'task' string\"}");
         return 0;
     }
-    char *answer = NULL;
-    int rc = agent_run(ctx, name, task, &answer);
+
+    rc = agent_run(ctx, name, task, &answer);
     cJSON_Delete(root);
     if (rc == -2) {
         free(answer);
@@ -950,17 +1110,19 @@ static int h_agent_run(const http_request *req, http_response *resp, void *ud) {
         http_resp_json(resp, "{\"error\":\"unknown agent\"}");
         return 0;
     }
+
     if (rc != 0) {
         free(answer);
         resp->status = 500;
         http_resp_json(resp, "{\"error\":\"agent run failed\"}");
         return 0;
     }
-    cJSON *out = cJSON_CreateObject();
+
+    out = cJSON_CreateObject();
     cJSON_AddBoolToObject(out, "ok", 1);
     cJSON_AddStringToObject(out, "agent", name);
     cJSON_AddStringToObject(out, "answer", answer ? answer : "");
-    char *s = cJSON_PrintUnformatted(out);
+    s = cJSON_PrintUnformatted(out);
     cJSON_Delete(out);
     free(answer);
     http_resp_json(resp, s ? s : "{}");
@@ -969,10 +1131,13 @@ static int h_agent_run(const http_request *req, http_response *resp, void *ud) {
 }
 
 static int h_metrics(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx;
+    char *s;
+
     (void)req;
-    runtime_ctx *ctx = (runtime_ctx *)ud;
+    ctx = (runtime_ctx *)ud;
     snprintf(resp->content_type, sizeof(resp->content_type), "text/plain; version=0.0.4");
-    char *s = ctx->metrics ? metrics_render(ctx->metrics) : xstrdup("");
+    s = ctx->metrics ? metrics_render(ctx->metrics) : xstrdup("");
     http_resp_append(resp, s ? s : "");
     free(s);
     return 0;
@@ -995,9 +1160,11 @@ static int h_favicon(const http_request *req, http_response *resp, void *ud) {
 
 static int h_trace(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    char *s;
+
     if (!authz_ok(ctx, req, resp))
         return 0;
-    char *s = ctx->trace ? trace_json(ctx->trace) : xstrdup("[]");
+    s = ctx->trace ? trace_json(ctx->trace) : xstrdup("[]");
     http_resp_json(resp, s ? s : "[]");
     free(s);
     return 0;
@@ -1005,9 +1172,11 @@ static int h_trace(const http_request *req, http_response *resp, void *ud) {
 
 static int h_routes(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    char *s;
+
     if (!authz_ok(ctx, req, resp))
         return 0;
-    char *s = ctx->router ? router_json(ctx->router) : xstrdup("[]");
+    s = ctx->router ? router_json(ctx->router) : xstrdup("[]");
     http_resp_json(resp, s ? s : "[]");
     free(s);
     return 0;
@@ -1015,10 +1184,14 @@ static int h_routes(const http_request *req, http_response *resp, void *ud) {
 
 static int h_route_add(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    char *b;
+    cJSON *root;
+    char *s;
+
     if (!authz_ok(ctx, req, resp))
         return 0;
-    char *b = body_str(req);
-    cJSON *root = b ? cJSON_Parse(b) : NULL;
+    b = body_str(req);
+    root = b ? cJSON_Parse(b) : NULL;
     free(b);
     if (!root || !cJSON_IsObject(root)) {
         if (root)
@@ -1027,6 +1200,7 @@ static int h_route_add(const http_request *req, http_response *resp, void *ud) {
         http_resp_json(resp, "{\"error\":\"body must be a JSON object\"}");
         return 0;
     }
+
     const char *name = json_str(root, "name");
     const char *provider = json_str(root, "provider");
     if (!name || !*name || !provider || !*provider) {
@@ -1035,12 +1209,13 @@ static int h_route_add(const http_request *req, http_response *resp, void *ud) {
         http_resp_json(resp, "{\"error\":\"need 'name' and 'provider' strings\"}");
         return 0;
     }
+
     if (ctx->router)
         router_add_ex(ctx->router, name, provider, json_str(root, "base_url"), json_str(root, "api_key"),
                           json_str(root, "model"), json_dbl(root, "weight", 1.0), (int)json_dbl(root, "cost_rank", 0),
                           (int)json_dbl(root, "latency_ms", 0), json_str(root, "caps"));
     cJSON_Delete(root);
-    char *s = ctx->router ? router_json(ctx->router) : xstrdup("[]");
+    s = ctx->router ? router_json(ctx->router) : xstrdup("[]");
     http_resp_json(resp, s ? s : "[]");
     free(s);
     /* persist so configured routes survive restart */
@@ -1049,42 +1224,53 @@ static int h_route_add(const http_request *req, http_response *resp, void *ud) {
         path_join(rpath, sizeof(rpath), ctx->state_root, "routes.json");
         router_save_file(ctx->router, rpath);
     }
+
     return 0;
 }
 
 /* POST /v1/routes/policy {"policy":"cost|latency|round_robin|capability:<tag>"} */
 static int h_route_policy(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    char *b;
+    cJSON *root;
+    cJSON *p;
+    int rc;
+
     if (!authz_ok(ctx, req, resp))
         return 0;
-    char *b = body_str(req);
-    cJSON *root = b ? cJSON_Parse(b) : NULL;
+    b = body_str(req);
+    root = b ? cJSON_Parse(b) : NULL;
     free(b);
-    cJSON *p = root ? cJSON_GetObjectItemCaseSensitive(root, "policy") : NULL;
+    p = root ? cJSON_GetObjectItemCaseSensitive(root, "policy") : NULL;
     if (!p || !cJSON_IsString(p) || !p->valuestring) {
         cJSON_Delete(root);
         resp->status = 400;
         http_resp_json(resp, "{\"error\":\"need 'policy': cost|latency|round_robin|capability:<tag>\"}");
         return 0;
     }
-    int rc = router_set_policy(ctx->router, p->valuestring);
+
+    rc = router_set_policy(ctx->router, p->valuestring);
     cJSON_Delete(root);
     if (rc != 0) {
         resp->status = 400;
         http_resp_json(resp, "{\"error\":\"unknown policy\"}");
         return 0;
     }
+
     http_resp_appendf(resp, "{\"ok\":true,\"policy\":\"%s\"}", router_policy(ctx->router));
     return 0;
 }
 
 static int h_route_delete(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    int removed;
+    char *s;
+
     if (!authz_ok(ctx, req, resp))
         return 0;
     const char *name = req->path + strlen("/v1/routes/");
-    int removed = ctx->router ? router_remove(ctx->router, name) : 0;
-    char *s = ctx->router ? router_json(ctx->router) : xstrdup("[]");
+    removed = ctx->router ? router_remove(ctx->router, name) : 0;
+    s = ctx->router ? router_json(ctx->router) : xstrdup("[]");
     http_resp_appendf(resp, "{\"removed\":%s,\"routes\":", removed ? "true" : "false");
     http_resp_append(resp, s ? s : "[]");
     http_resp_append(resp, "}");
@@ -1095,22 +1281,27 @@ static int h_route_delete(const http_request *req, http_response *resp, void *ud
         path_join(rpath, sizeof(rpath), ctx->state_root, "routes.json");
         router_save_file(ctx->router, rpath);
     }
+
     return 0;
 }
 
 static int h_config_llm_get(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    /* active LLM as persisted in config (set by set_llm / env / defaults) */
+    cJSON *o;
+    char *s;
+
     if (!authz_ok(ctx, req, resp))
         return 0;
     (void)req;
     /* active LLM as persisted in config (set by set_llm / env / defaults) */
-    cJSON *o = cJSON_CreateObject();
+    o = cJSON_CreateObject();
     cJSON_AddStringToObject(o, "provider", config_get_str(ctx->config, "llm.provider", "mock"));
     cJSON_AddStringToObject(o, "model", config_get_str(ctx->config, "llm.model", ""));
     cJSON_AddStringToObject(o, "base_url", config_get_str(ctx->config, "llm.base_url", ""));
     const char *ak = config_get_str(ctx->config, "llm.api_key", NULL);
     cJSON_AddBoolToObject(o, "api_key_set", ak && *ak);
-    char *s = cJSON_PrintUnformatted(o);
+    s = cJSON_PrintUnformatted(o);
     http_resp_json(resp, s ? s : "{}");
     free(s);
     cJSON_Delete(o);
@@ -1119,10 +1310,15 @@ static int h_config_llm_get(const http_request *req, http_response *resp, void *
 
 static int h_config_llm(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    char *b;
+    cJSON *root;
+    int rc;
+    char *s;
+
     if (!authz_ok(ctx, req, resp))
         return 0;
-    char *b = body_str(req);
-    cJSON *root = b ? cJSON_Parse(b) : NULL;
+    b = body_str(req);
+    root = b ? cJSON_Parse(b) : NULL;
     free(b);
     if (!root || !cJSON_IsObject(root)) {
         if (root)
@@ -1131,6 +1327,7 @@ static int h_config_llm(const http_request *req, http_response *resp, void *ud) 
         http_resp_json(resp, "{\"error\":\"body must be a JSON object\"}");
         return 0;
     }
+
     const char *provider = json_str(root, "provider");
     if (!provider || !*provider) {
         cJSON_Delete(root);
@@ -1138,19 +1335,21 @@ static int h_config_llm(const http_request *req, http_response *resp, void *ud) 
         http_resp_json(resp, "{\"error\":\"need 'provider' string\"}");
         return 0;
     }
+
     const char *base_url = json_str(root, "base_url");
     const char *model = json_str(root, "model");
     const char *api_key = json_str(root, "api_key");
     /* set_llm dups every value; keep the JSON alive until after the call
      * so the pointers above stay valid (they live inside `root`) */
-    int rc = set_llm(ctx, provider, base_url, model, api_key);
+    rc = set_llm(ctx, provider, base_url, model, api_key);
     cJSON_Delete(root);
     if (rc != 0) {
         resp->status = 400;
         http_resp_json(resp, "{\"error\":\"unknown provider (mock|openai|anthropic)\"}");
         return 0;
     }
-    char *s = ctx->router ? router_json(ctx->router) : xstrdup("[]");
+
+    s = ctx->router ? router_json(ctx->router) : xstrdup("[]");
     http_resp_appendf(resp, "{\"ok\":true,\"routes\":");
     http_resp_append(resp, s ? s : "[]");
     http_resp_append(resp, "}");
@@ -1162,12 +1361,15 @@ static int h_config_llm(const http_request *req, http_response *resp, void *ud) 
  * override of the built-in 64MB default / SNAPSHOT_MAX_FILE env. */
 static int h_config_snapshot_get(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    cJSON *o;
+    char *s;
+
     if (!authz_ok(ctx, req, resp))
         return 0;
     (void)req;
-    cJSON *o = cJSON_CreateObject();
+    o = cJSON_CreateObject();
     cJSON_AddNumberToObject(o, "max_file", (double)(ctx->snapshot ? snapshot_get_max_file(ctx->snapshot) : -1));
-    char *s = cJSON_PrintUnformatted(o);
+    s = cJSON_PrintUnformatted(o);
     http_resp_json(resp, s ? s : "{}");
     free(s);
     cJSON_Delete(o);
@@ -1176,12 +1378,16 @@ static int h_config_snapshot_get(const http_request *req, http_response *resp, v
 
 static int h_config_snapshot(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    char *b;
+    cJSON *root;
+    cJSON *mf;
+
     if (!authz_ok(ctx, req, resp))
         return 0;
-    char *b = body_str(req);
-    cJSON *root = b ? cJSON_Parse(b) : NULL;
+    b = body_str(req);
+    root = b ? cJSON_Parse(b) : NULL;
     free(b);
-    cJSON *mf = root ? cJSON_GetObjectItemCaseSensitive(root, "max_file") : NULL;
+    mf = root ? cJSON_GetObjectItemCaseSensitive(root, "max_file") : NULL;
     if (!mf || !cJSON_IsNumber(mf) || mf->valuedouble < 0.0) {
         if (root)
             cJSON_Delete(root);
@@ -1189,6 +1395,7 @@ static int h_config_snapshot(const http_request *req, http_response *resp, void 
         http_resp_json(resp, "{\"error\":\"need 'max_file' number >= 0 (bytes; 0 = unlimited)\"}");
         return 0;
     }
+
     long long v = (long long)mf->valuedouble;
     cJSON_Delete(root);
     if (ctx->snapshot)
@@ -1199,6 +1406,7 @@ static int h_config_snapshot(const http_request *req, http_response *resp, void 
         path_join(cfgfile, sizeof(cfgfile), ctx->state_root, "cognitive-os-agent.json");
         config_save_file(ctx->config, cfgfile);
     }
+
     http_resp_json(resp, "{\"ok\":true}");
     return 0;
 }
@@ -1208,10 +1416,20 @@ static int h_config_snapshot(const http_request *req, http_response *resp, void 
  * and returns {ok, reply|error}. Lets the UI prove a config works before saving. */
 static int h_config_llm_test(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    char *b;
+    cJSON *root;
+    llm *nl;
+    llm_request lreq = {0};
+    llm_response lr = {0};
+    int rc;
+    cJSON *o;
+    int ok;
+    char *s;
+
     if (!authz_ok(ctx, req, resp))
         return 0;
-    char *b = body_str(req);
-    cJSON *root = b ? cJSON_Parse(b) : NULL;
+    b = body_str(req);
+    root = b ? cJSON_Parse(b) : NULL;
     free(b);
     if (!root || !cJSON_IsObject(root)) {
         if (root)
@@ -1220,6 +1438,7 @@ static int h_config_llm_test(const http_request *req, http_response *resp, void 
         http_resp_json(resp, "{\"error\":\"body must be a JSON object\"}");
         return 0;
     }
+
     const char *provider = json_str(root, "provider");
     if (!provider || !*provider) {
         cJSON_Delete(root);
@@ -1227,7 +1446,8 @@ static int h_config_llm_test(const http_request *req, http_response *resp, void 
         http_resp_json(resp, "{\"error\":\"need 'provider' string\"}");
         return 0;
     }
-    llm *nl =
+
+    nl =
         llm_create(provider, json_str(root, "base_url"), json_str(root, "api_key"), json_str(root, "model"));
     if (!nl) {
         cJSON_Delete(root);
@@ -1235,17 +1455,16 @@ static int h_config_llm_test(const http_request *req, http_response *resp, void 
         http_resp_json(resp, "{\"ok\":false,\"error\":\"unknown provider (mock|openai|anthropic)\"}");
         return 0;
     }
+
     llm_message msgs[2] = {{"system", "You are a concise assistant. Reply in at most a few words."},
                                {"user", "Reply with exactly the word: ok"}};
-    llm_request lreq = {0};
     lreq.messages = msgs;
     lreq.num_messages = 2;
     lreq.temperature = 0.2;
     lreq.max_tokens = 64;
-    llm_response lr = {0};
-    int rc = llm_chat(nl, &lreq, &lr);
-    cJSON *o = cJSON_CreateObject();
-    int ok = (rc == 0 && lr.content && *lr.content);
+    rc = llm_chat(nl, &lreq, &lr);
+    o = cJSON_CreateObject();
+    ok = (rc == 0 && lr.content && *lr.content);
     cJSON_AddBoolToObject(o, "ok", ok);
     if (lr.content)
         cJSON_AddStringToObject(o, "reply", lr.content);
@@ -1253,7 +1472,7 @@ static int h_config_llm_test(const http_request *req, http_response *resp, void 
         cJSON_AddStringToObject(o, "error", lr.error);
     else
         cJSON_AddStringToObject(o, "error", "no response from provider (check base_url / model / api_key / network)");
-    char *s = cJSON_PrintUnformatted(o);
+    s = cJSON_PrintUnformatted(o);
     http_resp_json(resp, s ? s : "{\"ok\":false}");
     free(s);
     cJSON_Delete(o);
@@ -1266,9 +1485,11 @@ static int h_config_llm_test(const http_request *req, http_response *resp, void 
 
 static int h_usage(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    char *s;
+
     if (!authz_ok(ctx, req, resp))
         return 0;
-    char *s = ctx->usage ? usage_json(ctx->usage) : xstrdup("{}");
+    s = ctx->usage ? usage_json(ctx->usage) : xstrdup("{}");
     http_resp_json(resp, s ? s : "{}");
     free(s);
     return 0;
@@ -1276,9 +1497,11 @@ static int h_usage(const http_request *req, http_response *resp, void *ud) {
 
 static int h_plugins(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    char *s;
+
     if (!authz_ok(ctx, req, resp))
         return 0;
-    char *s = ctx->registry ? plugin_registry_json(ctx->registry) : xstrdup("{}");
+    s = ctx->registry ? plugin_registry_json(ctx->registry) : xstrdup("{}");
     http_resp_json(resp, s ? s : "{}");
     free(s);
     return 0;
@@ -1286,18 +1509,23 @@ static int h_plugins(const http_request *req, http_response *resp, void *ud) {
 
 static int h_plugin_generate(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    char *b;
+    cJSON *root;
+    char desc_buf[1024] = "";
+    char *s;
+
     if (!authz_ok(ctx, req, resp))
         return 0;
-    char *b = body_str(req);
-    cJSON *root = b ? cJSON_Parse(b) : NULL;
+    b = body_str(req);
+    root = b ? cJSON_Parse(b) : NULL;
     free(b);
-    char desc_buf[1024] = "";
     if (root && cJSON_IsObject(root)) {
         cJSON *d = cJSON_GetObjectItemCaseSensitive(root, "description");
         /* copy before cJSON_Delete — borrowed valuestring */
         if (d && cJSON_IsString(d))
             snprintf(desc_buf, sizeof(desc_buf), "%s", d->valuestring);
     }
+
     if (root)
         cJSON_Delete(root);
     const char *description = desc_buf;
@@ -1306,7 +1534,8 @@ static int h_plugin_generate(const http_request *req, http_response *resp, void 
         http_resp_json(resp, "{\"ok\":false,\"error\":\"need 'description' string\"}");
         return 0;
     }
-    char *s = plugin_generate(ctx, description);
+
+    s = plugin_generate(ctx, description);
     http_resp_json(resp, s ? s : "{\"ok\":false,\"error\":\"pipeline failed\"}");
     free(s);
     return 0;
@@ -1318,13 +1547,22 @@ static int h_plugin_generate(const http_request *req, http_response *resp, void 
  * The library is unloaded after the probe; tests exercise the error paths. */
 static int h_plugin_native_load(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    char *b;
+    cJSON *root;
+    cJSON *pj;
+    cJSON *ej;
+    plugin *p;
+    void *sym;
+    cJSON *o;
+    char *s;
+
     if (!authz_ok(ctx, req, resp))
         return 0;
-    char *b = body_str(req);
-    cJSON *root = b ? cJSON_Parse(b) : NULL;
+    b = body_str(req);
+    root = b ? cJSON_Parse(b) : NULL;
     free(b);
-    cJSON *pj = root ? cJSON_GetObjectItemCaseSensitive(root, "path") : NULL;
-    cJSON *ej = root ? cJSON_GetObjectItemCaseSensitive(root, "entry") : NULL;
+    pj = root ? cJSON_GetObjectItemCaseSensitive(root, "path") : NULL;
+    ej = root ? cJSON_GetObjectItemCaseSensitive(root, "entry") : NULL;
     /* copy before cJSON_Delete — borrowed valuestrings */
     char path_buf[1024] = "", entry_buf[128] = "";
     if (pj && cJSON_IsString(pj))
@@ -1340,7 +1578,8 @@ static int h_plugin_native_load(const http_request *req, http_response *resp, vo
         http_resp_json(resp, "{\"ok\":false,\"error\":\"need 'path' string\"}");
         return 0;
     }
-    plugin *p = plugin_load(path);
+
+    p = plugin_load(path);
     if (!p) {
         resp->status = 400;
         cJSON *e = cJSON_CreateObject();
@@ -1352,13 +1591,14 @@ static int h_plugin_native_load(const http_request *req, http_response *resp, vo
         free(s);
         return 0;
     }
-    void *sym = plugin_symbol(p, entry);
-    cJSON *o = cJSON_CreateObject();
+
+    sym = plugin_symbol(p, entry);
+    o = cJSON_CreateObject();
     cJSON_AddBoolToObject(o, "ok", 1);
     cJSON_AddStringToObject(o, "path", path);
     cJSON_AddStringToObject(o, "entry", entry);
     cJSON_AddBoolToObject(o, "entry_found", sym ? 1 : 0);
-    char *s = cJSON_PrintUnformatted(o);
+    s = cJSON_PrintUnformatted(o);
     cJSON_Delete(o);
     plugin_unload(p);
     http_resp_json(resp, s ? s : "{}");
@@ -1368,9 +1608,11 @@ static int h_plugin_native_load(const http_request *req, http_response *resp, vo
 
 static int h_skills(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    char *s;
+
     if (!authz_ok(ctx, req, resp))
         return 0;
-    char *s = ctx->skills ? skill_list_json(ctx->skills) : xstrdup("[]");
+    s = ctx->skills ? skill_list_json(ctx->skills) : xstrdup("[]");
     http_resp_json(resp, s ? s : "[]");
     free(s);
     return 0;
@@ -1378,10 +1620,16 @@ static int h_skills(const http_request *req, http_response *resp, void *ud) {
 
 static int h_skill_run(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    char *b;
+    cJSON *root;
+    skill_result *r;
+    cJSON *o;
+    char *s;
+
     if (!authz_ok(ctx, req, resp))
         return 0;
-    char *b = body_str(req);
-    cJSON *root = b ? cJSON_Parse(b) : NULL;
+    b = body_str(req);
+    root = b ? cJSON_Parse(b) : NULL;
     free(b);
     const char *name = NULL, *args = NULL;
     if (root && cJSON_IsObject(root)) {
@@ -1392,6 +1640,7 @@ static int h_skill_run(const http_request *req, http_response *resp, void *ud) {
         if (a && cJSON_IsString(a))
             args = a->valuestring;
     }
+
     if (!name || !*name) {
         if (root)
             cJSON_Delete(root);
@@ -1399,6 +1648,7 @@ static int h_skill_run(const http_request *req, http_response *resp, void *ud) {
         http_resp_json(resp, "{\"error\":\"missing 'name' string\"}");
         return 0;
     }
+
     /* kind="prompt" skills run through the LLM (fabric-style patterns) */
     const skill *sk = ctx->skills ? skill_find(ctx->skills, name) : NULL;
     if (sk && sk->kind && strcmp(sk->kind, "prompt") == 0) {
@@ -1429,12 +1679,13 @@ static int h_skill_run(const http_request *req, http_response *resp, void *ud) {
         free(s);
         return 0;
     }
-    skill_result *r = ctx->skills ? skill_execute(ctx->skills, name, args, ctx->workspace, 10000) : NULL;
+
+    r = ctx->skills ? skill_execute(ctx->skills, name, args, ctx->workspace, 10000) : NULL;
     cJSON_Delete(root);
-    cJSON *o = cJSON_CreateObject();
+    o = cJSON_CreateObject();
     cJSON_AddBoolToObject(o, "ok", r ? (r->ok ? 1 : 0) : 0);
     cJSON_AddStringToObject(o, "output", (r && r->output) ? r->output : "");
-    char *s = cJSON_PrintUnformatted(o);
+    s = cJSON_PrintUnformatted(o);
     cJSON_Delete(o);
     if (r)
         skill_result_free(r);
@@ -1450,6 +1701,7 @@ static void fnv1a_hex(const char *s, char out[17]) {
         h ^= *p;
         h *= 1099511628211ULL;
     }
+
     snprintf(out, 17, "%016llx", (unsigned long long)h);
 }
 
@@ -1472,16 +1724,20 @@ static const skill_tmpl SKILL_TMPLS[] = {
 /* Append items from a remote market JSON array into `dest`, tagging each as
  * source=remote so the UI can show where an entry came from. */
 static void market_merge_remote(cJSON *dest, cJSON *remote) {
+    cJSON *it;
+
     if (!dest || !remote)
         return;
-    cJSON *it;
     cJSON_ArrayForEach(it, remote) {
+    cJSON *o;
+    cJSON *src;
+
         if (!cJSON_IsObject(it))
             continue;
-        cJSON *o = cJSON_Duplicate(it, 1);
+        o = cJSON_Duplicate(it, 1);
         if (!o)
             continue;
-        cJSON *src = cJSON_GetObjectItemCaseSensitive(o, "source");
+        src = cJSON_GetObjectItemCaseSensitive(o, "source");
         if (src)
             cJSON_DeleteItemFromObject(o, "source");
         cJSON_AddStringToObject(o, "source", "remote");
@@ -1492,12 +1748,15 @@ static void market_merge_remote(cJSON *dest, cJSON *remote) {
 /* Fetch a remote market catalog for a path and return its parsed JSON root
  * (or NULL when no market is configured or it is unreachable). */
 static cJSON *market_fetch_root(runtime_ctx *ctx, const char *path) {
+    char *body;
+    cJSON *root;
+
     if (!ctx->market_url || !*ctx->market_url)
         return NULL;
-    char *body = market_fetch(ctx->market_url, path, 4000);
+    body = market_fetch(ctx->market_url, path, 4000);
     if (!body)
         return NULL;
-    cJSON *root = cJSON_Parse(body);
+    root = cJSON_Parse(body);
     free(body);
     return root;
 }
@@ -1529,10 +1788,20 @@ static const struct {
 
 static int h_skills_market(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    cJSON *root;
+    cJSON *tmpl;
+    /* GitHub 热门应用（可安装为 skill 的开源工具/仓库，附仓库链接） */
+    cJSON *gh;
+    /* networked marketplace: merge remote templates + github apps when reachable */
+    int market_online = 0;
+    char *mine;
+    cJSON *inst;
+    char *s;
+
     if (!authz_ok(ctx, req, resp))
         return 0;
-    cJSON *root = cJSON_CreateObject();
-    cJSON *tmpl = cJSON_CreateArray();
+    root = cJSON_CreateObject();
+    tmpl = cJSON_CreateArray();
     for (int i = 0; i < N_SKILL_TMPLS; i++) {
         const skill_tmpl *t = &SKILL_TMPLS[i];
         cJSON *o = cJSON_CreateObject();
@@ -1543,9 +1812,10 @@ static int h_skills_market(const http_request *req, http_response *resp, void *u
         cJSON_AddBoolToObject(o, "installed", ctx->skills && skill_find(ctx->skills, t->name) != NULL);
         cJSON_AddItemToArray(tmpl, o);
     }
+
     cJSON_AddItemToObject(root, "templates", tmpl);
     /* GitHub 热门应用（可安装为 skill 的开源工具/仓库，附仓库链接） */
-    cJSON *gh = cJSON_CreateArray();
+    gh = cJSON_CreateArray();
     for (size_t i = 0; i < sizeof(GH_SKILLS) / sizeof(GH_SKILLS[0]); i++) {
         cJSON *o = cJSON_CreateObject();
         cJSON_AddStringToObject(o, "name", GH_SKILLS[i].name);
@@ -1555,10 +1825,9 @@ static int h_skills_market(const http_request *req, http_response *resp, void *u
         cJSON_AddStringToObject(o, "winget_id", GH_SKILLS[i].winget_id);
         cJSON_AddItemToArray(gh, o);
     }
+
     cJSON_AddItemToObject(root, "github", gh);
 
-    /* networked marketplace: merge remote templates + github apps when reachable */
-    int market_online = 0;
     if (ctx->market_url && *ctx->market_url) {
         cJSON *remote = market_fetch_root(ctx, "/v1/skills/market");
         if (remote) {
@@ -1567,15 +1836,16 @@ static int h_skills_market(const http_request *req, http_response *resp, void *u
             cJSON_Delete(remote);
         }
     }
+
     cJSON_AddBoolToObject(root, "market_online", market_online);
     if (ctx->market_url && *ctx->market_url)
         cJSON_AddStringToObject(root, "market_url", ctx->market_url);
 
-    char *mine = ctx->skills ? skill_list_json(ctx->skills) : NULL;
-    cJSON *inst = mine ? cJSON_Parse(mine) : NULL;
+    mine = ctx->skills ? skill_list_json(ctx->skills) : NULL;
+    inst = mine ? cJSON_Parse(mine) : NULL;
     free(mine);
     cJSON_AddItemToObject(root, "installed", inst ? inst : cJSON_CreateArray());
-    char *s = cJSON_PrintUnformatted(root);
+    s = cJSON_PrintUnformatted(root);
     http_resp_json(resp, s ? s : "{}");
     free(s);
     cJSON_Delete(root);
@@ -1586,17 +1856,21 @@ static int h_skills_market(const http_request *req, http_response *resp, void *u
  * runs DETACHED (winget can take minutes) — the single-threaded HTTP server
  * must never block inside a handler. */
 static int h_gh_install(const http_request *req, http_response *resp, void *ud) {
+    char *b;
+    cJSON *root;
+    char namebuf[128] = "";
+    const char *winget = NULL;
+    char cmd[512];
+
     (void)ud;
-    char *b = body_str(req);
-    cJSON *root = b ? cJSON_Parse(b) : NULL;
+    b = body_str(req);
+    root = b ? cJSON_Parse(b) : NULL;
     free(b);
     const char *name = json_str(root, "name");
-    char namebuf[128] = "";
     if (name && *name)
         snprintf(namebuf, sizeof(namebuf), "%s", name);
     cJSON_Delete(root);
     name = namebuf;
-    const char *winget = NULL;
     if (name && *name) {
         for (size_t i = 0; i < sizeof(GH_SKILLS) / sizeof(GH_SKILLS[0]); i++)
             if (strcmp(GH_SKILLS[i].name, name) == 0) {
@@ -1604,12 +1878,13 @@ static int h_gh_install(const http_request *req, http_response *resp, void *ud) 
                 break;
             }
     }
+
     if (!winget || !*winget) {
         resp->status = 404;
         http_resp_json(resp, "{\"error\":\"unknown tool or no winget package\"}");
         return 0;
     }
-    char cmd[512];
+
     snprintf(cmd, sizeof(cmd),
              "winget install --id %s -e --silent --accept-package-agreements "
              "--accept-source-agreements --disable-interactivity",
@@ -1619,6 +1894,7 @@ static int h_gh_install(const http_request *req, http_response *resp, void *ud) 
         http_resp_json(resp, "{\"error\":\"failed to start winget (is it installed?)\"}");
         return 0;
     }
+
     http_resp_appendf(resp,
                           "{\"ok\":true,\"started\":true,\"tool\":\"%s\",\"winget_id\":\"%s\","
                           "\"hint\":\"后台安装已启动，稍后在 shell 里运行该命令验证\"}",
@@ -1628,10 +1904,18 @@ static int h_gh_install(const http_request *req, http_response *resp, void *ud) 
 
 static int h_skills_publish(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    char *b;
+    cJSON *root;
+    skill sk;
+    int rc;
+    /* best-effort push to a networked marketplace */
+    int pushed = 0;
+    char *s;
+
     if (!authz_ok(ctx, req, resp))
         return 0;
-    char *b = body_str(req);
-    cJSON *root = b ? cJSON_Parse(b) : NULL;
+    b = body_str(req);
+    root = b ? cJSON_Parse(b) : NULL;
     free(b);
     const char *name = json_str(root, "name");
     const char *kind = json_str(root, "kind");
@@ -1642,7 +1926,7 @@ static int h_skills_publish(const http_request *req, http_response *resp, void *
         http_resp_json(resp, "{\"error\":\"need 'name' string\"}");
         return 0;
     }
-    skill sk;
+
     memset(&sk, 0, sizeof(sk));
     sk.name = name;
     sk.description = json_str(root, "description") ? json_str(root, "description") : "";
@@ -1650,17 +1934,16 @@ static int h_skills_publish(const http_request *req, http_response *resp, void *
     sk.body = json_str(root, "body") ? json_str(root, "body") : "";
     /* Upsert semantics: the market "install" button re-publishes templates,
      * so an existing skill with the same name is updated, not rejected. */
-    int rc = ctx->skills ? skill_register_ex(ctx->skills, &sk, 1) : -1;
+    rc = ctx->skills ? skill_register_ex(ctx->skills, &sk, 1) : -1;
     if (rc != 0) {
         cJSON_Delete(root);
         resp->status = 400;
         http_resp_json(resp, "{\"error\":\"register failed (invalid name or kind)\"}");
         return 0;
     }
+
     if (ctx->state_root)
         skill_registry_persist(ctx->skills, ctx->state_root);
-    /* best-effort push to a networked marketplace */
-    int pushed = 0;
     if (ctx->market_url && *ctx->market_url && root) {
         char *payload = cJSON_PrintUnformatted(root);
         if (payload) {
@@ -1668,7 +1951,8 @@ static int h_skills_publish(const http_request *req, http_response *resp, void *
             free(payload);
         }
     }
-    char *s = ctx->skills ? skill_list_json(ctx->skills) : xstrdup("[]");
+
+    s = ctx->skills ? skill_list_json(ctx->skills) : xstrdup("[]");
     http_resp_appendf(resp, "{\"ok\":true,\"pushed_to_market\":%s,\"skills\":", pushed ? "true" : "false");
     http_resp_append(resp, s ? s : "[]");
     http_resp_append(resp, "}");
@@ -1679,15 +1963,18 @@ static int h_skills_publish(const http_request *req, http_response *resp, void *
 
 static int h_skill_delete(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    int rc;
+
     if (!authz_ok(ctx, req, resp))
         return 0;
     const char *name = req->path + strlen("/v1/skills/");
-    int rc = ctx->skills ? skill_unregister(ctx->skills, name) : -1;
+    rc = ctx->skills ? skill_unregister(ctx->skills, name) : -1;
     if (rc != 0) {
         resp->status = 404;
         http_resp_json(resp, "{\"error\":\"skill not found\"}");
         return 0;
     }
+
     if (ctx->state_root)
         skill_registry_persist(ctx->skills, ctx->state_root);
     http_resp_json(resp, "{\"ok\":true}");
@@ -1698,24 +1985,34 @@ static int h_skill_delete(const http_request *req, http_response *resp, void *ud
 
 static int h_plugins_market(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    char *reg;
+    cJSON *root;
+    cJSON *tmpl;
+    static const char *tp[] = {"text-summarizer", "log-analyzer", "qemu-crash-analyzer", "web-fetcher"};
+    /* GitHub 热门应用（作为标准化插件来源的知名开源项目） */
+    cJSON *gh;
+    /* networked marketplace: merge remote templates + github apps when reachable */
+    int market_online = 0;
+    char *s;
+
     if (!authz_ok(ctx, req, resp))
         return 0;
-    char *reg = ctx->registry ? plugin_registry_json(ctx->registry) : xstrdup("{}");
-    cJSON *root = cJSON_Parse(reg ? reg : "{}");
+    reg = ctx->registry ? plugin_registry_json(ctx->registry) : xstrdup("{}");
+    root = cJSON_Parse(reg ? reg : "{}");
     free(reg);
     if (!root)
         root = cJSON_CreateObject();
-    cJSON *tmpl = cJSON_CreateArray();
-    static const char *tp[] = {"text-summarizer", "log-analyzer", "qemu-crash-analyzer", "web-fetcher"};
+    tmpl = cJSON_CreateArray();
     for (int i = 0; i < 4; i++) {
         cJSON *o = cJSON_CreateObject();
         cJSON_AddStringToObject(o, "name", tp[i]);
         cJSON_AddStringToObject(o, "description", "示例插件模板（AI 生成后可发布到市场）");
         cJSON_AddItemToArray(tmpl, o);
     }
+
     cJSON_AddItemToObject(root, "templates", tmpl);
     /* GitHub 热门应用（作为标准化插件来源的知名开源项目） */
-    cJSON *gh = cJSON_CreateArray();
+    gh = cJSON_CreateArray();
     static const struct {
         const char *name, *desc, *repo, *kind;
     } GH_PLUGINS[] = {
@@ -1736,10 +2033,9 @@ static int h_plugins_market(const http_request *req, http_response *resp, void *
         cJSON_AddStringToObject(o, "kind", GH_PLUGINS[i].kind);
         cJSON_AddItemToArray(gh, o);
     }
+
     cJSON_AddItemToObject(root, "github", gh);
 
-    /* networked marketplace: merge remote templates + github apps when reachable */
-    int market_online = 0;
     if (ctx->market_url && *ctx->market_url) {
         cJSON *remote = market_fetch_root(ctx, "/v1/plugins/market");
         if (remote) {
@@ -1748,11 +2044,12 @@ static int h_plugins_market(const http_request *req, http_response *resp, void *
             cJSON_Delete(remote);
         }
     }
+
     cJSON_AddBoolToObject(root, "market_online", market_online);
     if (ctx->market_url && *ctx->market_url)
         cJSON_AddStringToObject(root, "market_url", ctx->market_url);
 
-    char *s = cJSON_PrintUnformatted(root);
+    s = cJSON_PrintUnformatted(root);
     http_resp_json(resp, s ? s : "{}");
     free(s);
     cJSON_Delete(root);
@@ -1761,10 +2058,23 @@ static int h_plugins_market(const http_request *req, http_response *resp, void *
 
 static int h_plugins_publish(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    char *b;
+    cJSON *root;
+    /* make it runnable as a skill */
+    skill sk;
+    char sig[17];
+    plugin_meta m;
+    cJSON *caps;
+    int rc;
+    /* best-effort push to a networked marketplace */
+    int pushed = 0;
+    cJSON *o;
+    char *s;
+
     if (!authz_ok(ctx, req, resp))
         return 0;
-    char *b = body_str(req);
-    cJSON *root = b ? cJSON_Parse(b) : NULL;
+    b = body_str(req);
+    root = b ? cJSON_Parse(b) : NULL;
     free(b);
     const char *name = json_str(root, "name");
     const char *kind = json_str(root, "kind");
@@ -1776,8 +2086,7 @@ static int h_plugins_publish(const http_request *req, http_response *resp, void 
         http_resp_json(resp, "{\"ok\":false,\"error\":\"need 'name' and 'body'\"}");
         return 0;
     }
-    /* make it runnable as a skill */
-    skill sk;
+
     memset(&sk, 0, sizeof(sk));
     sk.name = name;
     sk.description = json_str(root, "description") ? json_str(root, "description") : "";
@@ -1785,9 +2094,7 @@ static int h_plugins_publish(const http_request *req, http_response *resp, void 
     sk.body = body;
     skill_register(ctx->skills, &sk); /* best-effort; skip if duplicate */
 
-    char sig[17];
     fnv1a_hex(body, sig);
-    plugin_meta m;
     memset(&m, 0, sizeof(m));
     m.name = (char *)name;
     m.version = "1.0.0";
@@ -1795,7 +2102,7 @@ static int h_plugins_publish(const http_request *req, http_response *resp, void 
     m.description = (char *)(json_str(root, "description") ? json_str(root, "description") : "");
     m.enabled = 1;
     m.built_ms = (int64_t)time(NULL) * 1000LL;
-    cJSON *caps = cJSON_GetObjectItemCaseSensitive(root, "capabilities");
+    caps = cJSON_GetObjectItemCaseSensitive(root, "capabilities");
     if (caps && cJSON_IsArray(caps)) {
         m.n_caps = (size_t)cJSON_GetArraySize(caps);
         m.caps = (char **)calloc(m.n_caps ? m.n_caps : 1, sizeof(char *));
@@ -1804,7 +2111,8 @@ static int h_plugins_publish(const http_request *req, http_response *resp, void 
             m.caps[i] = (ci && cJSON_IsString(ci)) ? xstrdup(ci->valuestring) : xstrdup("");
         }
     }
-    int rc = ctx->registry ? plugin_registry_register(ctx->registry, &m) : -1;
+
+    rc = ctx->registry ? plugin_registry_register(ctx->registry, &m) : -1;
     for (size_t i = 0; i < m.n_caps; i++)
         free(m.caps[i]);
     free(m.caps);
@@ -1814,12 +2122,12 @@ static int h_plugins_publish(const http_request *req, http_response *resp, void 
         http_resp_json(resp, "{\"ok\":false,\"error\":\"publish failed (duplicate version?)\"}");
         return 0;
     }
+
     if (ctx->state_root) {
         plugin_registry_persist(ctx->registry, ctx->state_root);
         skill_registry_persist(ctx->skills, ctx->state_root);
     }
-    /* best-effort push to a networked marketplace */
-    int pushed = 0;
+
     if (ctx->market_url && *ctx->market_url && root) {
         char *payload = cJSON_PrintUnformatted(root);
         if (payload) {
@@ -1827,11 +2135,12 @@ static int h_plugins_publish(const http_request *req, http_response *resp, void 
             free(payload);
         }
     }
-    cJSON *o = cJSON_CreateObject();
+
+    o = cJSON_CreateObject();
     cJSON_AddBoolToObject(o, "ok", 1);
     cJSON_AddStringToObject(o, "name", name);
     cJSON_AddBoolToObject(o, "pushed_to_market", pushed);
-    char *s = cJSON_PrintUnformatted(o);
+    s = cJSON_PrintUnformatted(o);
     http_resp_json(resp, s ? s : "{\"ok\":true}");
     free(s);
     cJSON_Delete(o);
@@ -1841,30 +2150,36 @@ static int h_plugins_publish(const http_request *req, http_response *resp, void 
 
 static int h_plugin_market_delete(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    int rc;
+
     if (!authz_ok(ctx, req, resp))
         return 0;
     const char *name = req->path + strlen("/v1/plugins/market/");
-    int rc = ctx->registry ? plugin_registry_unregister(ctx->registry, name) : -1;
+    rc = ctx->registry ? plugin_registry_unregister(ctx->registry, name) : -1;
     if (rc != 0) {
         resp->status = 404;
         http_resp_json(resp, "{\"error\":\"plugin not found\"}");
         return 0;
     }
+
     if (ctx->skills)
         skill_unregister(ctx->skills, name);
     if (ctx->state_root) {
         plugin_registry_persist(ctx->registry, ctx->state_root);
         skill_registry_persist(ctx->skills, ctx->state_root);
     }
+
     http_resp_json(resp, "{\"ok\":true}");
     return 0;
 }
 
 static int h_mcp(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    char *s;
+
     if (!authz_ok(ctx, req, resp))
         return 0;
-    char *s = ctx->mcp ? mcp_manager_json(ctx->mcp) : xstrdup("[]");
+    s = ctx->mcp ? mcp_manager_json(ctx->mcp) : xstrdup("[]");
     http_resp_json(resp, s ? s : "[]");
     free(s);
     return 0;
@@ -1872,14 +2187,19 @@ static int h_mcp(const http_request *req, http_response *resp, void *ud) {
 
 static int h_mcp_add(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    char *b;
+    cJSON *root;
+    mcp_conn c;
+    int ok_body = 0;
+    int rc;
+    char *s;
+
     if (!authz_ok(ctx, req, resp))
         return 0;
-    char *b = body_str(req);
-    cJSON *root = b ? cJSON_Parse(b) : NULL;
+    b = body_str(req);
+    root = b ? cJSON_Parse(b) : NULL;
     free(b);
-    mcp_conn c;
     memset(&c, 0, sizeof(c));
-    int ok_body = 0;
     /* copy fields into owned buffers BEFORE deleting the parsed JSON —
      * valuestrings are borrowed and would dangle after cJSON_Delete
      * (glibc reuses freed blocks, turning stale reads into garbage) */
@@ -1906,6 +2226,7 @@ static int h_mcp_add(const http_request *req, http_response *resp, void *ud) {
             snprintf(args_buf, sizeof(args_buf), "%s", a->valuestring);
         ok_body = name_buf[0] != '\0';
     }
+
     if (root)
         cJSON_Delete(root);
     c.name = name_buf;
@@ -1914,13 +2235,14 @@ static int h_mcp_add(const http_request *req, http_response *resp, void *ud) {
     c.token = *tok_buf ? tok_buf : NULL;
     c.command = *cmd_buf ? cmd_buf : NULL;
     c.args_csv = *args_buf ? args_buf : NULL;
-    int rc = ok_body ? (ctx->mcp ? mcp_manager_add_ex(ctx->mcp, &c) : -1) : -1;
+    rc = ok_body ? (ctx->mcp ? mcp_manager_add_ex(ctx->mcp, &c) : -1) : -1;
     if (rc != 0) {
         resp->status = 400;
         http_resp_json(resp, "{\"error\":\"add failed: need 'name' plus 'url' (http) or "
                                  "'command' (stdio), and a valid transport\"}");
         return 0;
     }
+
     /* re-discover tools for the (possibly new) server and persist. Only the
      * new server is probed (short bootstrap timeout) — a full sync here would
      * block the single-threaded HTTP server on every other cold npx server. */
@@ -1929,7 +2251,8 @@ static int h_mcp_add(const http_request *req, http_response *resp, void *ud) {
             mcp_manager_sync_tools_one(ctx->mcp, ctx->tools, name_buf);
         mcp_manager_persist(ctx->mcp, ctx->state_root);
     }
-    char *s = ctx->mcp ? mcp_manager_json(ctx->mcp) : xstrdup("[]");
+
+    s = ctx->mcp ? mcp_manager_json(ctx->mcp) : xstrdup("[]");
     http_resp_json(resp, s ? s : "[]");
     free(s);
     return 0;
@@ -1938,13 +2261,17 @@ static int h_mcp_add(const http_request *req, http_response *resp, void *ud) {
 /* Re-discover tools on every connection (manual refresh). */
 static int h_mcp_sync(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    int n;
+    cJSON *o;
+    char *s;
+
     if (!authz_ok(ctx, req, resp))
         return 0;
-    int n = (ctx->mcp && ctx->tools) ? mcp_manager_sync_tools(ctx->mcp, ctx->tools) : -1;
-    cJSON *o = cJSON_CreateObject();
+    n = (ctx->mcp && ctx->tools) ? mcp_manager_sync_tools(ctx->mcp, ctx->tools) : -1;
+    o = cJSON_CreateObject();
     cJSON_AddNumberToObject(o, "registered", n);
     cJSON_AddBoolToObject(o, "ok", n >= 0);
-    char *s = cJSON_PrintUnformatted(o);
+    s = cJSON_PrintUnformatted(o);
     cJSON_Delete(o);
     http_resp_json(resp, s ? s : "{}");
     free(s);
@@ -1956,11 +2283,16 @@ static int h_mcp_sync(const http_request *req, http_response *resp, void *ud) {
  * Response: {"ok":true,"transport":"...","count":N,"tools":[...]} or
  * {"ok":false,"error":"..."}; 400 when the request is malformed. */
 static int h_mcp_test(const http_request *req, http_response *resp, void *ud) {
+    char *b;
+    cJSON *root;
+    mcp_conn c;
+    char *s;
+
     (void)ud;
     if (!authz_ok((runtime_ctx *)ud, req, resp))
         return 0;
-    char *b = body_str(req);
-    cJSON *root = b ? cJSON_Parse(b) : NULL;
+    b = body_str(req);
+    root = b ? cJSON_Parse(b) : NULL;
     free(b);
     /* copy before cJSON_Delete — borrowed valuestrings */
     char tr_buf[32] = "", url_buf[512] = "", tok_buf[512] = "", cmd_buf[256] = "", args_buf[512] = "";
@@ -1981,9 +2313,9 @@ static int h_mcp_test(const http_request *req, http_response *resp, void *ud) {
         if (a && cJSON_IsString(a))
             snprintf(args_buf, sizeof(args_buf), "%s", a->valuestring);
     }
+
     if (root)
         cJSON_Delete(root);
-    mcp_conn c;
     memset(&c, 0, sizeof(c));
     c.name = (char *)"mcp-test";
     c.transport = *tr_buf ? tr_buf : (char *)"http";
@@ -1996,12 +2328,14 @@ static int h_mcp_test(const http_request *req, http_response *resp, void *ud) {
         http_resp_json(resp, "{\"ok\":false,\"error\":\"http transport needs 'url'\"}");
         return 0;
     }
+
     if (strcmp(c.transport, "stdio") == 0 && !*c.command) {
         resp->status = 400;
         http_resp_json(resp, "{\"ok\":false,\"error\":\"stdio transport needs 'command'\"}");
         return 0;
     }
-    char *s = mcp_test_json(&c);
+
+    s = mcp_test_json(&c);
     http_resp_json(resp, s ? s : "{\"ok\":false,\"error\":\"test failed\"}");
     free(s);
     return 0;
@@ -2009,10 +2343,12 @@ static int h_mcp_test(const http_request *req, http_response *resp, void *ud) {
 
 static int h_mcp_delete(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    int rc;
+
     if (!authz_ok(ctx, req, resp))
         return 0;
     const char *name = req->path + strlen("/v1/mcp/");
-    int rc = ctx->mcp ? mcp_manager_remove(ctx->mcp, name, ctx->tools) : -1;
+    rc = ctx->mcp ? mcp_manager_remove(ctx->mcp, name, ctx->tools) : -1;
     if (rc == 0 && ctx->mcp)
         mcp_manager_persist(ctx->mcp, ctx->state_root);
     http_resp_appendf(resp, "{\"removed\":%s}", rc == 0 ? "true" : "false");
@@ -2021,9 +2357,11 @@ static int h_mcp_delete(const http_request *req, http_response *resp, void *ud) 
 
 static int h_cluster(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    char *s;
+
     if (!authz_ok(ctx, req, resp))
         return 0;
-    char *s = ctx->cluster ? cluster_json(ctx->cluster) : xstrdup("[]");
+    s = ctx->cluster ? cluster_json(ctx->cluster) : xstrdup("[]");
     http_resp_json(resp, s ? s : "[]");
     free(s);
     return 0;
@@ -2033,16 +2371,24 @@ static int h_cluster(const http_request *req, http_response *resp, void *ud) {
  * Capability tags are comma-separated; the node must heartbeat to stay "up". */
 static int h_cluster_join(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    char *b;
+    cJSON *root;
+    cJSON *jid;
+    cJSON *jhost;
+    cJSON *jport;
+    cJSON *jrole;
+    cJSON *jcaps;
+
     if (!authz_ok(ctx, req, resp))
         return 0;
-    char *b = body_str(req);
-    cJSON *root = b ? cJSON_Parse(b) : NULL;
+    b = body_str(req);
+    root = b ? cJSON_Parse(b) : NULL;
     free(b);
-    cJSON *jid = root ? cJSON_GetObjectItemCaseSensitive(root, "id") : NULL;
-    cJSON *jhost = root ? cJSON_GetObjectItemCaseSensitive(root, "host") : NULL;
-    cJSON *jport = root ? cJSON_GetObjectItemCaseSensitive(root, "port") : NULL;
-    cJSON *jrole = root ? cJSON_GetObjectItemCaseSensitive(root, "role") : NULL;
-    cJSON *jcaps = root ? cJSON_GetObjectItemCaseSensitive(root, "caps") : NULL;
+    jid = root ? cJSON_GetObjectItemCaseSensitive(root, "id") : NULL;
+    jhost = root ? cJSON_GetObjectItemCaseSensitive(root, "host") : NULL;
+    jport = root ? cJSON_GetObjectItemCaseSensitive(root, "port") : NULL;
+    jrole = root ? cJSON_GetObjectItemCaseSensitive(root, "role") : NULL;
+    jcaps = root ? cJSON_GetObjectItemCaseSensitive(root, "caps") : NULL;
     if (!cJSON_IsString(jid) || !*jid->valuestring || !cJSON_IsString(jhost) || !*jhost->valuestring ||
         !cJSON_IsNumber(jport)) {
         cJSON_Delete(root);
@@ -2050,6 +2396,7 @@ static int h_cluster_join(const http_request *req, http_response *resp, void *ud
         http_resp_json(resp, "{\"error\":\"need 'id', 'host' and numeric 'port'\"}");
         return 0;
     }
+
     int rc = cluster_upsert_ex(ctx->cluster, jid->valuestring, jhost->valuestring, (uint16_t)jport->valuedouble,
                                    cJSON_IsString(jrole) ? jrole->valuestring : NULL,
                                    cJSON_IsString(jcaps) ? jcaps->valuestring : NULL);
@@ -2059,6 +2406,7 @@ static int h_cluster_join(const http_request *req, http_response *resp, void *ud
         http_resp_json(resp, "{\"error\":\"upsert failed\"}");
         return 0;
     }
+
     http_resp_json(resp, "{\"ok\":true}");
     return 0;
 }
@@ -2066,25 +2414,32 @@ static int h_cluster_join(const http_request *req, http_response *resp, void *ud
 /* POST /v1/cluster/heartbeat {id} — refresh a node's liveness. */
 static int h_cluster_heartbeat(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    char *b;
+    cJSON *root;
+    cJSON *jid;
+    int rc;
+
     if (!authz_ok(ctx, req, resp))
         return 0;
-    char *b = body_str(req);
-    cJSON *root = b ? cJSON_Parse(b) : NULL;
+    b = body_str(req);
+    root = b ? cJSON_Parse(b) : NULL;
     free(b);
-    cJSON *jid = root ? cJSON_GetObjectItemCaseSensitive(root, "id") : NULL;
+    jid = root ? cJSON_GetObjectItemCaseSensitive(root, "id") : NULL;
     if (!cJSON_IsString(jid) || !*jid->valuestring) {
         cJSON_Delete(root);
         resp->status = 400;
         http_resp_json(resp, "{\"error\":\"need 'id'\"}");
         return 0;
     }
-    int rc = cluster_heartbeat(ctx->cluster, jid->valuestring);
+
+    rc = cluster_heartbeat(ctx->cluster, jid->valuestring);
     cJSON_Delete(root);
     if (rc != 0) {
         resp->status = 404;
         http_resp_json(resp, "{\"error\":\"unknown node\"}");
         return 0;
     }
+
     http_resp_json(resp, "{\"ok\":true}");
     return 0;
 }
@@ -2100,11 +2455,13 @@ static int h_cluster_leave(const http_request *req, http_response *resp, void *u
         http_resp_json(resp, "{\"error\":\"need node id in path\"}");
         return 0;
     }
+
     if (cluster_remove(ctx->cluster, id) != 0) {
         resp->status = 404;
         http_resp_json(resp, "{\"error\":\"unknown node\"}");
         return 0;
     }
+
     http_resp_json(resp, "{\"ok\":true}");
     return 0;
 }
@@ -2114,15 +2471,18 @@ static int h_cluster_leave(const http_request *req, http_response *resp, void *u
 /* GET /v1/market/status — report networked marketplace configuration + reachability. */
 static int h_market_status(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    int configured;
+    int online = 0;
+
     if (!authz_ok(ctx, req, resp))
         return 0;
-    int configured = (ctx->market_url && *ctx->market_url) ? 1 : 0;
-    int online = 0;
+    configured = (ctx->market_url && *ctx->market_url) ? 1 : 0;
     if (configured) {
         char *body = market_fetch(ctx->market_url, "/v1/market/ping", 3000);
         online = body ? 1 : 0;
         free(body);
     }
+
     http_resp_appendf(resp, "{\"configured\":%s,\"url\":\"%s\",\"online\":%s}", configured ? "true" : "false",
                           ctx->market_url ? ctx->market_url : "", online ? "true" : "false");
     return 0;
@@ -2140,14 +2500,16 @@ static int h_market_status(const http_request *req, http_response *resp, void *u
 static int local_probe(const char *base_url, const char *path) {
     char host[64];
     int port = 80;
+    sock *s;
+    char req[320];
+    int ok = 0;
+
     if (sscanf(base_url, "http://%63[^:]:%d", host, &port) != 2)
         return 0;
-    sock *s = sock_connect(host, (uint16_t)port, 300);
+    s = sock_connect(host, (uint16_t)port, 300);
     if (!s)
         return 0;
-    char req[320];
     snprintf(req, sizeof req, "GET %s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n", path, host);
-    int ok = 0;
     if (sock_send(s, req, (int)strlen(req)) > 0 && sock_wait_readable(s, 300) > 0) {
         char buf[256];
         int n = sock_recv(s, buf, (int)sizeof buf - 1);
@@ -2157,6 +2519,7 @@ static int local_probe(const char *base_url, const char *path) {
                 ok = 1;
         }
     }
+
     sock_close(s);
     return ok;
 }
@@ -2164,13 +2527,15 @@ static int local_probe(const char *base_url, const char *path) {
 /* Is `name` resolvable on PATH (via the platform shell)? */
 static int tool_exists(const char *name) {
     char cmd[300];
+    int found;
+
 #if defined(_WIN32)
     snprintf(cmd, sizeof cmd, "where %s >nul 2>nul", name);
 #else
     snprintf(cmd, sizeof cmd, "command -v %s >/dev/null 2>&1", name);
 #endif
     proc_result *r = proc_run(cmd, 4000);
-    int found = r && r->exit_code == 0;
+    found = r && r->exit_code == 0;
     proc_result_free(r);
     return found;
 }
@@ -2224,19 +2589,25 @@ static int64_t g_local_status_at = 0;
 
 static int h_local_status(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    int64_t now;
+    int o_running;
+    char lp_url[128];
+    int l_running;
+    char cmdbuf[512];
+    int o_installed;
+
     if (!authz_ok(ctx, req, resp))
         return 0;
-    int64_t now = time_now_ms();
+    now = time_now_ms();
     if (g_local_status_cache && now - g_local_status_at < 3000) {
         http_resp_append(resp, g_local_status_cache);
         return 0;
     }
-    int o_running = local_probe("http://127.0.0.1:11434", "/api/version");
-    char lp_url[128];
+
+    o_running = local_probe("http://127.0.0.1:11434", "/api/version");
     llamacpp_probe_url(ctx->config, lp_url, sizeof lp_url);
-    int l_running = local_probe(lp_url, "/v1/models");
-    char cmdbuf[512];
-    int o_installed = ollama_start_cmd(cmdbuf, sizeof cmdbuf);
+    l_running = local_probe(lp_url, "/v1/models");
+    o_installed = ollama_start_cmd(cmdbuf, sizeof cmdbuf);
     http_resp_appendf(resp,
                           "{\"ollama\":{\"running\":%s,\"installed\":%s},"
                           "\"llamacpp\":{\"running\":%s}}",
@@ -2250,6 +2621,7 @@ static int h_local_status(const http_request *req, http_response *resp, void *ud
             g_local_status_at = now;
         }
     }
+
     return 0;
 }
 
@@ -2257,20 +2629,24 @@ static int h_local_status(const http_request *req, http_response *resp, void *ud
  * after launch; the UI polls /v1/local/status for readiness). */
 static int h_local_start(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
-    if (!authz_ok(ctx, req, resp))
-        return 0;
-    char *b = body_str(req);
-    cJSON *root = b ? cJSON_Parse(b) : NULL;
-    free(b);
-    const char *engine = root ? json_str(root, "engine") : NULL;
+    char *b;
+    cJSON *root;
     /* engine borrows into the cJSON tree — copy before freeing it */
     char engine_buf[64];
+
+    if (!authz_ok(ctx, req, resp))
+        return 0;
+    b = body_str(req);
+    root = b ? cJSON_Parse(b) : NULL;
+    free(b);
+    const char *engine = root ? json_str(root, "engine") : NULL;
     if (engine && *engine) {
         snprintf(engine_buf, sizeof(engine_buf), "%s", engine);
         engine = engine_buf;
     } else {
         engine = "ollama";
     }
+
     if (root)
         cJSON_Delete(root);
 
@@ -2294,6 +2670,7 @@ static int h_local_start(const http_request *req, http_response *resp, void *ud)
                                  "\"note\":\"已启动 ollama serve，首次运行需拉取模型，请稍候刷新状态\"}");
         return 0;
     }
+
     if (strcmp(engine, "llamacpp") == 0 || strcmp(engine, "llama") == 0) {
         char lp_url[128];
         llamacpp_probe_url(ctx->config, lp_url, sizeof lp_url);
@@ -2318,32 +2695,39 @@ static int h_local_start(const http_request *req, http_response *resp, void *ud)
                                  "\"note\":\"已启动，请稍候刷新状态\"}");
         return 0;
     }
+
     http_resp_json(resp, "{\"ok\":false,\"engine\":\"unknown\",\"error\":\"unknown engine (ollama|llamacpp)\"}");
     return 0;
 }
 
 static int h_catalog_mcp(const http_request *req, http_response *resp, void *ud) {
+    char *s;
+
     (void)req;
     (void)ud;
-    char *s = catalog_mcp_json();
+    s = catalog_mcp_json();
     http_resp_json(resp, s ? s : "[]");
     free(s);
     return 0;
 }
 
 static int h_catalog_models(const http_request *req, http_response *resp, void *ud) {
+    char *s;
+
     (void)req;
     (void)ud;
-    char *s = catalog_models_json();
+    s = catalog_models_json();
     http_resp_json(resp, s ? s : "[]");
     free(s);
     return 0;
 }
 
 static int h_catalog_skills(const http_request *req, http_response *resp, void *ud) {
+    char *s;
+
     (void)req;
     (void)ud;
-    char *s = catalog_skills_json();
+    s = catalog_skills_json();
     http_resp_json(resp, s ? s : "[]");
     free(s);
     return 0;
@@ -2354,18 +2738,24 @@ static int h_catalog_skills(const http_request *req, http_response *resp, void *
  * point at upstream repos rather than runnable bodies, are rejected). */
 static int h_skill_install(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    char *b;
+    cJSON *root;
+    char idbuf[128] = "";
+    const catalog_skill *cs = NULL;
+    skill sk;
+    cJSON *o;
+    char *s;
+
     if (!authz_ok(ctx, req, resp))
         return 0;
-    char *b = body_str(req);
-    cJSON *root = b ? cJSON_Parse(b) : NULL;
+    b = body_str(req);
+    root = b ? cJSON_Parse(b) : NULL;
     free(b);
     const char *id = json_str(root, "id");
-    char idbuf[128] = "";
     if (id && *id)
         snprintf(idbuf, sizeof(idbuf), "%s", id);
     cJSON_Delete(root);
     id = idbuf;
-    const catalog_skill *cs = NULL;
     if (id && *id) {
         int n = catalog_skill_count();
         for (int i = 0; i < n; i++) {
@@ -2376,17 +2766,19 @@ static int h_skill_install(const http_request *req, http_response *resp, void *u
             }
         }
     }
+
     if (!cs) {
         resp->status = 404;
         http_resp_json(resp, "{\"error\":\"unknown skill id\"}");
         return 0;
     }
+
     if (strcmp(cs->kind, "reference") == 0) {
         resp->status = 400;
         http_resp_json(resp, "{\"error\":\"reference entry (upstream repo), not installable\"}");
         return 0;
     }
-    skill sk;
+
     memset(&sk, 0, sizeof(sk));
     sk.name = cs->id; /* runtime name = ASCII id; cs->name is display */
     sk.description = cs->description;
@@ -2397,13 +2789,14 @@ static int h_skill_install(const http_request *req, http_response *resp, void *u
         http_resp_json(resp, "{\"error\":\"register failed\"}");
         return 0;
     }
+
     if (ctx->state_root)
         skill_registry_persist(ctx->skills, ctx->state_root);
-    cJSON *o = cJSON_CreateObject();
+    o = cJSON_CreateObject();
     cJSON_AddBoolToObject(o, "ok", 1);
     cJSON_AddStringToObject(o, "name", cs->id);
     cJSON_AddStringToObject(o, "kind", cs->kind);
-    char *s = cJSON_PrintUnformatted(o);
+    s = cJSON_PrintUnformatted(o);
     cJSON_Delete(o);
     http_resp_json(resp, s ? s : "{\"ok\":true}");
     free(s);
@@ -2411,9 +2804,11 @@ static int h_skill_install(const http_request *req, http_response *resp, void *u
 }
 
 static int h_catalog_github_skills(const http_request *req, http_response *resp, void *ud) {
+    char *s;
+
     (void)req;
     (void)ud;
-    char *s = catalog_remote_skills_json();
+    s = catalog_remote_skills_json();
     http_resp_json(resp, s ? s : "[]");
     free(s);
     return 0;
@@ -2425,10 +2820,18 @@ static int h_catalog_github_skills(const http_request *req, http_response *resp,
  * tradeoff as /v1/mcp/test on the single-threaded server. */
 static int h_skill_install_remote(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    char *b;
+    cJSON *root;
+    char *content;
+    skill sk;
+    int rc;
+    cJSON *o;
+    char *s;
+
     if (!authz_ok(ctx, req, resp))
         return 0;
-    char *b = body_str(req);
-    cJSON *root = b ? cJSON_Parse(b) : NULL;
+    b = body_str(req);
+    root = b ? cJSON_Parse(b) : NULL;
     free(b);
     const char *repo = json_str(root, "repo");
     const char *id = json_str(root, "id");
@@ -2443,41 +2846,44 @@ static int h_skill_install_remote(const http_request *req, http_response *resp, 
         http_resp_json(resp, "{\"error\":\"need 'repo' and 'id' strings\"}");
         return 0;
     }
+
     const catalog_remote_skill *e = catalog_remote_skill_find(repo_buf, id_buf);
     if (!e || strcmp(e->id, id_buf) != 0) {
         resp->status = 404;
         http_resp_json(resp, "{\"error\":\"unknown remote skill (repo/id)\"}");
         return 0;
     }
-    char *content = catalog_remote_skill_fetch(e);
+
+    content = catalog_remote_skill_fetch(e);
     if (!content) {
         resp->status = 502;
         http_resp_json(resp, "{\"error\":\"fetch failed: cannot download from raw.githubusercontent.com "
                                  "or mirror (check network)\"}");
         return 0;
     }
-    skill sk;
+
     memset(&sk, 0, sizeof(sk));
     sk.name = e->id;
     sk.description = e->description;
     sk.kind = "prompt";
     sk.body = content;
     sk.caps = "";
-    int rc = skill_register_ex(ctx->skills, &sk, 1);
+    rc = skill_register_ex(ctx->skills, &sk, 1);
     free(content);
     if (rc != 0) {
         resp->status = 400;
         http_resp_json(resp, "{\"error\":\"register failed\"}");
         return 0;
     }
+
     if (ctx->state_root)
         skill_registry_persist(ctx->skills, ctx->state_root);
-    cJSON *o = cJSON_CreateObject();
+    o = cJSON_CreateObject();
     cJSON_AddBoolToObject(o, "ok", 1);
     cJSON_AddStringToObject(o, "name", e->id);
     cJSON_AddStringToObject(o, "kind", "prompt");
     cJSON_AddStringToObject(o, "repo", e->repo);
-    char *s = cJSON_PrintUnformatted(o);
+    s = cJSON_PrintUnformatted(o);
     cJSON_Delete(o);
     http_resp_json(resp, s ? s : "{\"ok\":true}");
     free(s);
@@ -2490,14 +2896,17 @@ static int h_skill_install_remote(const http_request *req, http_response *resp, 
  * catalog). Blocking network I/O (~seconds) on the single-threaded server —
  * same tradeoff as /v1/skills/install-remote. */
 static int h_catalog_skillhub(const http_request *req, http_response *resp, void *ud) {
+    char *s;
+
     (void)req;
     (void)ud;
-    char *s = catalog_skillhub_list_json();
+    s = catalog_skillhub_list_json();
     if (!s) {
         resp->status = 502;
         http_resp_json(resp, "{\"error\":\"skillhub.cn list fetch failed (check network)\"}");
         return 0;
     }
+
     http_resp_json(resp, s);
     free(s);
     return 0;
@@ -2507,13 +2916,21 @@ static int h_catalog_skillhub(const http_request *req, http_response *resp, void
  * register it as a prompt-kind skill (same persistence flow as install-remote). */
 static int h_skill_install_skillhub(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    char *b;
+    cJSON *root;
+    char slug_buf[128] = "";
+    char *content;
+    skill sk;
+    int rc;
+    cJSON *o;
+    char *s;
+
     if (!authz_ok(ctx, req, resp))
         return 0;
-    char *b = body_str(req);
-    cJSON *root = b ? cJSON_Parse(b) : NULL;
+    b = body_str(req);
+    root = b ? cJSON_Parse(b) : NULL;
     free(b);
     const char *slug = json_str(root, "slug");
-    char slug_buf[128] = "";
     if (slug && *slug)
         snprintf(slug_buf, sizeof(slug_buf), "%s", slug);
     cJSON_Delete(root);
@@ -2522,37 +2939,39 @@ static int h_skill_install_skillhub(const http_request *req, http_response *resp
         http_resp_json(resp, "{\"error\":\"need 'slug' string\"}");
         return 0;
     }
-    char *content = catalog_skillhub_fetch_skill(slug_buf);
+
+    content = catalog_skillhub_fetch_skill(slug_buf);
     if (!content) {
         resp->status = 502;
         http_resp_json(resp, "{\"error\":\"fetch failed: cannot download SKILL.md from api.skillhub.cn\"}");
         return 0;
     }
+
     char name[160], desc[256];
     snprintf(name, sizeof(name), "skh_%s", slug_buf);
     snprintf(desc, sizeof(desc), "SkillHub 技能（skillhub.cn/skills/%s）", slug_buf);
-    skill sk;
     memset(&sk, 0, sizeof(sk));
     sk.name = name;
     sk.description = desc;
     sk.kind = "prompt";
     sk.body = content;
     sk.caps = "";
-    int rc = skill_register_ex(ctx->skills, &sk, 1);
+    rc = skill_register_ex(ctx->skills, &sk, 1);
     free(content);
     if (rc != 0) {
         resp->status = 400;
         http_resp_json(resp, "{\"error\":\"register failed\"}");
         return 0;
     }
+
     if (ctx->state_root)
         skill_registry_persist(ctx->skills, ctx->state_root);
-    cJSON *o = cJSON_CreateObject();
+    o = cJSON_CreateObject();
     cJSON_AddBoolToObject(o, "ok", 1);
     cJSON_AddStringToObject(o, "name", name);
     cJSON_AddStringToObject(o, "kind", "prompt");
     cJSON_AddStringToObject(o, "slug", slug_buf);
-    char *s = cJSON_PrintUnformatted(o);
+    s = cJSON_PrintUnformatted(o);
     cJSON_Delete(o);
     http_resp_json(resp, s ? s : "{\"ok\":true}");
     free(s);
@@ -2564,9 +2983,12 @@ static int h_skill_install_skillhub(const http_request *req, http_response *resp
 /* Push a new IM message to every WebSocket client + record an experience. */
 static void im_push(runtime_ctx *ctx, int64_t session_id, int64_t msg_id, const char *role, const char *sender,
                     const char *content) {
+    cJSON *o;
+    char *js;
+
     if (!ctx || !content)
         return;
-    cJSON *o = cJSON_CreateObject();
+    o = cJSON_CreateObject();
     cJSON_AddStringToObject(o, "type", "im.message");
     cJSON_AddNumberToObject(o, "session_id", (double)session_id);
     cJSON_AddNumberToObject(o, "id", (double)msg_id);
@@ -2575,13 +2997,14 @@ static void im_push(runtime_ctx *ctx, int64_t session_id, int64_t msg_id, const 
         cJSON_AddStringToObject(o, "sender", sender);
     cJSON_AddStringToObject(o, "content", content);
     cJSON_AddNumberToObject(o, "ts_ms", (double)time_now_ms());
-    char *js = cJSON_PrintUnformatted(o);
+    js = cJSON_PrintUnformatted(o);
     cJSON_Delete(o);
     if (js) {
         if (ctx->http)
             http_server_ws_broadcast(ctx->http, js);
         free(js);
     }
+
     if (ctx->memory) {
         char buf[384];
         snprintf(buf, sizeof(buf), "im session %lld (%s%s%s)", (long long)session_id, role ? role : "user",
@@ -2595,12 +3018,14 @@ static void im_push(runtime_ctx *ctx, int64_t session_id, int64_t msg_id, const 
  * injected directly via channel_ingest and never reach here, so there is no
  * echo. */
 static void im_forward_to_channel(runtime_ctx *ctx, int64_t session_id, const char *content) {
+    char *r;
+
     if (!ctx || !ctx->channels || !ctx->im || !content)
         return;
     const char *chn = im_session_channel(ctx->im, session_id);
     if (!chn || !*chn)
         return;
-    char *r = im_channel_send(ctx->channels, chn, content);
+    r = im_channel_send(ctx->channels, chn, content);
     if (r)
         free(r);
 }
@@ -2611,12 +3036,15 @@ static void im_forward_to_channel(runtime_ctx *ctx, int64_t session_id, const ch
  */
 static void on_ws_msg(const char *text, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    cJSON *root;
+    cJSON *type;
+
     if (!ctx || !text)
         return;
-    cJSON *root = cJSON_Parse(text);
+    root = cJSON_Parse(text);
     if (!root)
         return;
-    cJSON *type = cJSON_GetObjectItemCaseSensitive(root, "type");
+    type = cJSON_GetObjectItemCaseSensitive(root, "type");
     const char *t = type && cJSON_IsString(type) ? type->valuestring : "";
     if (strcmp(t, "im.send") == 0) {
         cJSON *sid = cJSON_GetObjectItemCaseSensitive(root, "session_id");
@@ -2634,14 +3062,17 @@ static void on_ws_msg(const char *text, void *ud) {
         if (ctx->http)
             http_server_ws_broadcast(ctx->http, "{\"type\":\"pong\"}");
     }
+
     cJSON_Delete(root);
 }
 
 static int h_im_sessions(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    char *s;
+
     if (!authz_ok(ctx, req, resp))
         return 0;
-    char *s = ctx->im ? im_sessions_json(ctx->im) : xstrdup("{}");
+    s = ctx->im ? im_sessions_json(ctx->im) : xstrdup("{}");
     http_resp_json(resp, s ? s : "{}");
     free(s);
     return 0;
@@ -2649,14 +3080,18 @@ static int h_im_sessions(const http_request *req, http_response *resp, void *ud)
 
 static int h_im_session_create(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
-    if (!authz_ok(ctx, req, resp))
-        return 0;
-    char *b = body_str(req);
-    cJSON *root = b ? cJSON_Parse(b) : NULL;
-    free(b);
-    const char *name = NULL, *kind = NULL, *channel = NULL;
+    char *b;
+    cJSON *root;
     const char *members[64];
     size_t n_members = 0;
+    int64_t id;
+
+    if (!authz_ok(ctx, req, resp))
+        return 0;
+    b = body_str(req);
+    root = b ? cJSON_Parse(b) : NULL;
+    free(b);
+    const char *name = NULL, *kind = NULL, *channel = NULL;
     if (root && cJSON_IsObject(root)) {
         cJSON *n = cJSON_GetObjectItemCaseSensitive(root, "name");
         cJSON *k = cJSON_GetObjectItemCaseSensitive(root, "kind");
@@ -2677,6 +3112,7 @@ static int h_im_session_create(const http_request *req, http_response *resp, voi
             }
         }
     }
+
     if (!ctx->im) {
         if (root)
             cJSON_Delete(root);
@@ -2684,13 +3120,15 @@ static int h_im_session_create(const http_request *req, http_response *resp, voi
         http_resp_json(resp, "{\"error\":\"im disabled\"}");
         return 0;
     }
-    int64_t id = im_create_session_ex(ctx->im, name ? name : "", kind ? kind : "direct", members, n_members);
+
+    id = im_create_session_ex(ctx->im, name ? name : "", kind ? kind : "direct", members, n_members);
     cJSON_Delete(root);
     if (id < 0) {
         resp->status = 500;
         http_resp_json(resp, "{\"error\":\"create failed\"}");
         return 0;
     }
+
     if (id > 0 && ctx->channels && channel && *channel)
         im_session_set_channel(ctx->im, id, channel);
     http_resp_appendf(resp, "{\"id\":%lld}", (long long)id);
@@ -2700,6 +3138,8 @@ static int h_im_session_create(const http_request *req, http_response *resp, voi
 /* Channel bridge: external messaging channels (feishu/wecom/generic/telegram). */
 static int h_im_channels(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    char *s;
+
     if (!authz_ok(ctx, req, resp))
         return 0;
     if (!ctx->channels) {
@@ -2707,7 +3147,8 @@ static int h_im_channels(const http_request *req, http_response *resp, void *ud)
         http_resp_json(resp, "{\"error\":\"channels disabled\"}");
         return 0;
     }
-    char *s = im_channels_json(ctx->channels);
+
+    s = im_channels_json(ctx->channels);
     http_resp_json(resp, s ? s : "{\"channels\":[]}");
     free(s);
     return 0;
@@ -2715,6 +3156,11 @@ static int h_im_channels(const http_request *req, http_response *resp, void *ud)
 
 static int h_im_channel_add(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    char *b;
+    cJSON *root;
+    int enabled = 1;
+    int rc = -1;
+
     if (!authz_ok(ctx, req, resp))
         return 0;
     if (!ctx->channels) {
@@ -2722,11 +3168,11 @@ static int h_im_channel_add(const http_request *req, http_response *resp, void *
         http_resp_json(resp, "{\"error\":\"channels disabled\"}");
         return 0;
     }
-    char *b = body_str(req);
-    cJSON *root = b ? cJSON_Parse(b) : NULL;
+
+    b = body_str(req);
+    root = b ? cJSON_Parse(b) : NULL;
     free(b);
     const char *name = NULL, *type = NULL, *endpoint = NULL, *token = NULL, *target = NULL;
-    int enabled = 1;
     if (root && cJSON_IsObject(root)) {
         cJSON *o;
         o = cJSON_GetObjectItemCaseSensitive(root, "name");
@@ -2748,7 +3194,7 @@ static int h_im_channel_add(const http_request *req, http_response *resp, void *
         if (o && cJSON_IsBool(o))
             enabled = cJSON_IsTrue(o);
     }
-    int rc = -1;
+
     if (name && *name && type && *type) {
         im_channel ch;
         memset(&ch, 0, sizeof(ch));
@@ -2760,6 +3206,7 @@ static int h_im_channel_add(const http_request *req, http_response *resp, void *
         ch.enabled = enabled;
         rc = im_channel_register(ctx->channels, &ch);
     }
+
     if (root)
         cJSON_Delete(root);
     if (rc != 0) {
@@ -2767,12 +3214,15 @@ static int h_im_channel_add(const http_request *req, http_response *resp, void *
         http_resp_json(resp, "{\"error\":\"need 'name' and 'type' (feishu|wecom|generic|telegram)\"}");
         return 0;
     }
+
     http_resp_json(resp, "{\"ok\":true}");
     return 0;
 }
 
 static int h_im_channel_remove(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    int rc;
+
     if (!authz_ok(ctx, req, resp))
         return 0;
     if (!ctx->channels) {
@@ -2780,8 +3230,9 @@ static int h_im_channel_remove(const http_request *req, http_response *resp, voi
         http_resp_json(resp, "{\"error\":\"channels disabled\"}");
         return 0;
     }
+
     const char *name = req->path + strlen("/v1/im/channels/");
-    int rc = im_channel_remove(ctx->channels, name);
+    rc = im_channel_remove(ctx->channels, name);
     if (rc == 0) {
         /* unbind any session that pointed at this channel */
         if (ctx->im) {
@@ -2793,12 +3244,21 @@ static int h_im_channel_remove(const http_request *req, http_response *resp, voi
             im_sessions_free(ss, n);
         }
     }
+
     http_resp_appendf(resp, "{\"removed\":%s}", rc == 0 ? "true" : "false");
     return 0;
 }
 
 static int h_im_channel_send(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    size_t blen;
+    const char *send = "/send";
+    char name[128];
+    char *b;
+    cJSON *root;
+    const char *text = NULL;
+    char *r;
+
     if (!authz_ok(ctx, req, resp))
         return 0;
     if (!ctx->channels) {
@@ -2806,12 +3266,11 @@ static int h_im_channel_send(const http_request *req, http_response *resp, void 
         http_resp_json(resp, "{\"error\":\"channels disabled\"}");
         return 0;
     }
+
     const char *base = req->path + strlen("/v1/im/channels/");
-    size_t blen = strlen(base);
-    const char *send = "/send";
+    blen = strlen(base);
     if (blen > strlen(send) && strcmp(base + blen - strlen(send), send) == 0)
         blen -= strlen(send);
-    char name[128];
     if (blen >= sizeof(name))
         blen = sizeof(name) - 1;
     memcpy(name, base, blen);
@@ -2821,15 +3280,16 @@ static int h_im_channel_send(const http_request *req, http_response *resp, void 
         http_resp_json(resp, "{\"error\":\"missing channel name\"}");
         return 0;
     }
-    char *b = body_str(req);
-    cJSON *root = b ? cJSON_Parse(b) : NULL;
+
+    b = body_str(req);
+    root = b ? cJSON_Parse(b) : NULL;
     free(b);
-    const char *text = NULL;
     if (root && cJSON_IsObject(root)) {
         cJSON *t = cJSON_GetObjectItemCaseSensitive(root, "text");
         if (t && cJSON_IsString(t))
             text = t->valuestring;
     }
+
     if (root)
         cJSON_Delete(root);
     if (!text || !*text) {
@@ -2837,7 +3297,8 @@ static int h_im_channel_send(const http_request *req, http_response *resp, void 
         http_resp_json(resp, "{\"error\":\"need 'text' string\"}");
         return 0;
     }
-    char *r = im_channel_send(ctx->channels, name, text);
+
+    r = im_channel_send(ctx->channels, name, text);
     http_resp_json(resp, r ? r : "{\"ok\":false,\"error\":\"channel not found\"}");
     free(r);
     return 0;
@@ -2846,6 +3307,16 @@ static int h_im_channel_send(const http_request *req, http_response *resp, void 
 /* Handles GET/POST/DELETE on /v1/im/sessions/{id} and /v1/im/sessions/{id}/messages */
 static int h_im_session_route(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    int is_messages = 0;
+    size_t rest_len;
+    char idbuf[64];
+    int64_t session_id;
+    /* GET */
+    size_t n = 0;
+    im_message *msgs;
+    cJSON *arr;
+    char *s;
+
     if (!authz_ok(ctx, req, resp))
         return 0;
     if (!ctx->im) {
@@ -2853,14 +3324,14 @@ static int h_im_session_route(const http_request *req, http_response *resp, void
         http_resp_json(resp, "{\"error\":\"im disabled\"}");
         return 0;
     }
+
     const char *rest = req->path + strlen("/v1/im/sessions/");
-    int is_messages = 0;
-    size_t rest_len = strlen(rest);
+    rest_len = strlen(rest);
     if (rest_len > strlen("/messages") && strcmp(rest + rest_len - strlen("/messages"), "/messages") == 0) {
         is_messages = 1;
         rest_len -= strlen("/messages");
     }
-    char idbuf[64];
+
     if (rest_len >= sizeof(idbuf))
         rest_len = sizeof(idbuf) - 1;
     memcpy(idbuf, rest, rest_len);
@@ -2870,13 +3341,15 @@ static int h_im_session_route(const http_request *req, http_response *resp, void
         http_resp_json(resp, "{\"error\":\"missing session id\"}");
         return 0;
     }
-    int64_t session_id = atoll(idbuf);
+
+    session_id = atoll(idbuf);
 
     if (strcmp(req->method, "DELETE") == 0) {
         int ok = im_delete_session(ctx->im, session_id);
         http_resp_appendf(resp, "{\"deleted\":%s}", ok ? "true" : "false");
         return 0;
     }
+
     if (strcmp(req->method, "POST") == 0) {
         if (!is_messages) {
             resp->status = 404;
@@ -2918,10 +3391,9 @@ static int h_im_session_route(const http_request *req, http_response *resp, void
         http_resp_appendf(resp, "{\"id\":%lld,\"ok\":true}", (long long)id);
         return 0;
     }
-    /* GET */
-    size_t n = 0;
-    im_message *msgs = im_messages(ctx->im, session_id, &n);
-    cJSON *arr = cJSON_CreateArray();
+
+    msgs = im_messages(ctx->im, session_id, &n);
+    arr = cJSON_CreateArray();
     for (size_t i = 0; i < n; i++) {
         cJSON *o = cJSON_CreateObject();
         cJSON_AddNumberToObject(o, "id", (double)msgs[i].id);
@@ -2932,8 +3404,9 @@ static int h_im_session_route(const http_request *req, http_response *resp, void
         cJSON_AddNumberToObject(o, "ts_ms", (double)msgs[i].ts_ms);
         cJSON_AddItemToArray(arr, o);
     }
+
     im_messages_free(msgs, n);
-    char *s = cJSON_PrintUnformatted(arr);
+    s = cJSON_PrintUnformatted(arr);
     cJSON_Delete(arr);
     http_resp_json(resp, s ? s : "[]");
     free(s);
@@ -2943,6 +3416,8 @@ static int h_im_session_route(const http_request *req, http_response *resp, void
 /* GET /v1/im/search?q=term  — history search across all sessions */
 static int h_im_search(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    char *s;
+
     if (!authz_ok(ctx, req, resp))
         return 0;
     if (!ctx->im) {
@@ -2950,9 +3425,10 @@ static int h_im_search(const http_request *req, http_response *resp, void *ud) {
         http_resp_json(resp, "{\"error\":\"im disabled\"}");
         return 0;
     }
+
     const char *q = strstr(req->query, "q=");
     const char *query = q ? q + 2 : "";
-    char *s = im_search(ctx->im, query, 200);
+    s = im_search(ctx->im, query, 200);
     http_resp_json(resp, s ? s : "[]");
     free(s);
     return 0;
@@ -2963,9 +3439,11 @@ static int h_im_search(const http_request *req, http_response *resp, void *ud) {
 /* GET /v1/state — the whole store */
 static int h_state_all(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    char *s;
+
     if (!authz_ok(ctx, req, resp))
         return 0;
-    char *s = ctx->state ? state_store_json(ctx->state) : xstrdup("{}");
+    s = ctx->state ? state_store_json(ctx->state) : xstrdup("{}");
     http_resp_appendf(resp,
                           "{\"ok\":true,\"count\":%d,\"state\":", ctx->state ? state_store_count(ctx->state) : 0);
     http_resp_append(resp, s ? s : "{}");
@@ -2977,6 +3455,15 @@ static int h_state_all(const http_request *req, http_response *resp, void *ud) {
 /* GET /v1/state/<ns>[/<key>] — one namespace or one entry (borrowed value) */
 static int h_state_get(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    char *slash;
+    /* whole namespace */
+    cJSON *o;
+    cJSON *sub;
+    char *all;
+    cJSON *root;
+    cJSON *nsobj;
+    char *s;
+
     if (!authz_ok(ctx, req, resp))
         return 0;
     if (!ctx->state) {
@@ -2984,10 +3471,11 @@ static int h_state_get(const http_request *req, http_response *resp, void *ud) {
         http_resp_json(resp, "{\"error\":\"state store disabled\"}");
         return 0;
     }
+
     const char *rest = req->path + strlen("/v1/state/");
     char ns[128], key[256];
     snprintf(ns, sizeof(ns), "%s", rest);
-    char *slash = strchr(ns, '/');
+    slash = strchr(ns, '/');
     if (slash) {
         *slash = '\0';
         snprintf(key, sizeof(key), "%s", slash + 1);
@@ -2998,6 +3486,7 @@ static int h_state_get(const http_request *req, http_response *resp, void *ud) {
         http_resp_json(resp, "{\"error\":\"missing namespace\"}");
         return 0;
     }
+
     if (*key) {
         const char *v = state_store_get(ctx->state, ns, key);
         if (!v) {
@@ -3011,13 +3500,14 @@ static int h_state_get(const http_request *req, http_response *resp, void *ud) {
         free(esc);
         return 0;
     }
+
     /* whole namespace */
-    cJSON *o = cJSON_CreateObject();
-    cJSON *sub = cJSON_CreateObject();
-    char *all = state_store_json(ctx->state);
-    cJSON *root = all ? cJSON_Parse(all) : NULL;
+    o = cJSON_CreateObject();
+    sub = cJSON_CreateObject();
+    all = state_store_json(ctx->state);
+    root = all ? cJSON_Parse(all) : NULL;
     free(all);
-    cJSON *nsobj = root ? cJSON_GetObjectItemCaseSensitive(root, ns) : NULL;
+    nsobj = root ? cJSON_GetObjectItemCaseSensitive(root, ns) : NULL;
     if (nsobj && cJSON_IsObject(nsobj)) {
         cJSON *it;
         cJSON_ArrayForEach(it, nsobj) {
@@ -3025,10 +3515,11 @@ static int h_state_get(const http_request *req, http_response *resp, void *ud) {
                 cJSON_AddStringToObject(sub, it->string, it->valuestring);
         }
     }
+
     if (root)
         cJSON_Delete(root);
     cJSON_AddItemToObject(o, ns, sub);
-    char *s = cJSON_PrintUnformatted(o);
+    s = cJSON_PrintUnformatted(o);
     cJSON_Delete(o);
     http_resp_json(resp, s ? s : "{}");
     free(s);
@@ -3038,6 +3529,10 @@ static int h_state_get(const http_request *req, http_response *resp, void *ud) {
 /* PUT /v1/state/<ns>/<key> — body is the raw value, or {"value":"..."} */
 static int h_state_put(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    char *slash;
+    char *b;
+    cJSON *root;
+
     if (!authz_ok(ctx, req, resp))
         return 0;
     if (!ctx->state) {
@@ -3045,15 +3540,17 @@ static int h_state_put(const http_request *req, http_response *resp, void *ud) {
         http_resp_json(resp, "{\"error\":\"state store disabled\"}");
         return 0;
     }
+
     const char *rest = req->path + strlen("/v1/state/");
     char ns[128], key[256];
     snprintf(ns, sizeof(ns), "%s", rest);
-    char *slash = strchr(ns, '/');
+    slash = strchr(ns, '/');
     if (!slash) {
         resp->status = 400;
         http_resp_json(resp, "{\"error\":\"need <ns>/<key>\"}");
         return 0;
     }
+
     *slash = '\0';
     snprintf(key, sizeof(key), "%s", slash + 1);
     if (!*ns || !*key) {
@@ -3061,8 +3558,9 @@ static int h_state_put(const http_request *req, http_response *resp, void *ud) {
         http_resp_json(resp, "{\"error\":\"need <ns>/<key>\"}");
         return 0;
     }
-    char *b = body_str(req);
-    cJSON *root = b ? cJSON_Parse(b) : NULL; /* JSON body {"value":...}? */
+
+    b = body_str(req);
+    root = b ? cJSON_Parse(b) : NULL; /* JSON body {"value":...}? */
     const char *val = (root && cJSON_IsObject(root)) ? json_str(root, "value") : NULL;
     if (!val)
         val = b ? b : "";
@@ -3077,6 +3575,9 @@ static int h_state_put(const http_request *req, http_response *resp, void *ud) {
 /* DELETE /v1/state/<ns>/<key> */
 static int h_state_del(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    char *slash;
+    int removed;
+
     if (!authz_ok(ctx, req, resp))
         return 0;
     if (!ctx->state) {
@@ -3084,18 +3585,20 @@ static int h_state_del(const http_request *req, http_response *resp, void *ud) {
         http_resp_json(resp, "{\"error\":\"state store disabled\"}");
         return 0;
     }
+
     const char *rest = req->path + strlen("/v1/state/");
     char ns[128], key[256];
     snprintf(ns, sizeof(ns), "%s", rest);
-    char *slash = strchr(ns, '/');
+    slash = strchr(ns, '/');
     if (!slash) {
         resp->status = 400;
         http_resp_json(resp, "{\"error\":\"need <ns>/<key>\"}");
         return 0;
     }
+
     *slash = '\0';
     snprintf(key, sizeof(key), "%s", slash + 1);
-    int removed = *ns && *key && state_store_get(ctx->state, ns, key) != NULL;
+    removed = *ns && *key && state_store_get(ctx->state, ns, key) != NULL;
     state_store_remove(ctx->state, ns, key);
     http_resp_appendf(resp, "{\"ok\":true,\"removed\":%s}", removed ? "true" : "false");
     return 0;
@@ -3104,13 +3607,16 @@ static int h_state_del(const http_request *req, http_response *resp, void *ud) {
 /* POST /v1/state/snapshot — full runtime state export to <state_root>/snapshot.json */
 static int h_state_snapshot(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    char *b;
+    cJSON *root;
+    char path[600];
+
     if (!authz_ok(ctx, req, resp))
         return 0;
-    char *b = body_str(req);
-    cJSON *root = b ? cJSON_Parse(b) : NULL;
+    b = body_str(req);
+    root = b ? cJSON_Parse(b) : NULL;
     free(b);
     const char *p = (root && cJSON_IsObject(root)) ? json_str(root, "path") : NULL;
-    char path[600];
     if (p && *p)
         snprintf(path, sizeof(path), "%s", p);
     else
@@ -3122,6 +3628,7 @@ static int h_state_snapshot(const http_request *req, http_response *resp, void *
         http_resp_json(resp, "{\"error\":\"export failed\"}");
         return 0;
     }
+
     http_resp_appendf(resp, "{\"ok\":true,\"path\":\"%s\"}", path);
     return 0;
 }
@@ -3129,13 +3636,16 @@ static int h_state_snapshot(const http_request *req, http_response *resp, void *
 /* POST /v1/state/restore — import <state_root>/snapshot.json back */
 static int h_state_restore(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    char *b;
+    cJSON *root;
+    char path[600];
+
     if (!authz_ok(ctx, req, resp))
         return 0;
-    char *b = body_str(req);
-    cJSON *root = b ? cJSON_Parse(b) : NULL;
+    b = body_str(req);
+    root = b ? cJSON_Parse(b) : NULL;
     free(b);
     const char *p = (root && cJSON_IsObject(root)) ? json_str(root, "path") : NULL;
-    char path[600];
     if (p && *p)
         snprintf(path, sizeof(path), "%s", p);
     else
@@ -3147,6 +3657,7 @@ static int h_state_restore(const http_request *req, http_response *resp, void *u
         http_resp_json(resp, "{\"error\":\"restore failed\"}");
         return 0;
     }
+
     http_resp_json(resp, "{\"ok\":true}");
     return 0;
 }
@@ -3154,9 +3665,10 @@ static int h_state_restore(const http_request *req, http_response *resp, void *u
 /* GET /v1/memory/service — Memory Service interface: backend + per-type stats */
 static int h_memory_service(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    char *s = NULL;
+
     if (!authz_ok(ctx, req, resp))
         return 0;
-    char *s = NULL;
     if (ctx->memsvc)
         memory_service_stats(ctx->memsvc, &s);
     http_resp_appendf(resp, "{\"ok\":true,\"backend\":\"%s\",\"types\":",
@@ -3175,6 +3687,7 @@ int api_attach(runtime_ctx *ctx) {
         if (!ctx->http)
             return -1;
     }
+
     http_server_route(ctx->http, "POST", "/v1/tasks", h_task_create, ctx);
     http_server_route(ctx->http, "GET", "/v1/tasks/", h_task_get, ctx);
     http_server_route(ctx->http, "GET", "/v1/tools", h_tools, ctx);

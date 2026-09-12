@@ -42,6 +42,7 @@ coro *coro_new(coro_fn fn, void *arg, size_t stack_size) {
         free(c);
         return NULL;
     }
+
     return c;
 }
 
@@ -61,6 +62,7 @@ void coro_resume(coro *c) {
         ConvertThreadToFiber(NULL);
         tls_main_fiber = GetCurrentFiber();
     }
+
     SwitchToFiber(c->fiber);
 }
 
@@ -109,14 +111,16 @@ static void coro_entry(void) {
 
 coro *coro_new(coro_fn fn, void *arg, size_t stack_size) {
     coro *c = (coro *)calloc(1, sizeof(*c));
+    size_t sz = stack_size ? stack_size : CORO_STACK_DEFAULT;
+
     if (!c)
         return NULL;
-    size_t sz = stack_size ? stack_size : CORO_STACK_DEFAULT;
     c->stack = (char *)malloc(sz);
     if (!c->stack) {
         free(c);
         return NULL;
     }
+
     c->fn = fn;
     c->arg = arg;
     if (getcontext(&c->ctx) != 0) {
@@ -124,6 +128,7 @@ coro *coro_new(coro_fn fn, void *arg, size_t stack_size) {
         free(c);
         return NULL;
     }
+
     c->ctx.uc_stack.ss_sp = c->stack;
     c->ctx.uc_stack.ss_size = sz;
     c->ctx.uc_link = NULL;

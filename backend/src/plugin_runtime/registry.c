@@ -80,6 +80,7 @@ int plugin_registry_register(plugin_registry *r, const plugin_meta *meta) {
             mutex_unlock(&r->mtx);
             return -1;
         }
+
     if (r->count == r->cap) {
         size_t ncap = r->cap ? r->cap * 2 : 8;
         plugin_meta *ni = (plugin_meta *)realloc(r->items, ncap * sizeof(plugin_meta));
@@ -90,16 +91,18 @@ int plugin_registry_register(plugin_registry *r, const plugin_meta *meta) {
         r->items = ni;
         r->cap = ncap;
     }
+
     r->items[r->count++] = meta_copy(meta);
     mutex_unlock(&r->mtx);
     return 0;
 }
 
 int plugin_registry_unregister(plugin_registry *r, const char *name) {
+    int found = 0;
+
     if (!r || !name)
         return -1;
     mutex_lock(&r->mtx);
-    int found = 0;
     for (size_t i = 0; i < r->count; i++) {
         if (strcmp(r->items[i].name, name) == 0) {
             meta_free(&r->items[i]);
@@ -110,15 +113,17 @@ int plugin_registry_unregister(plugin_registry *r, const char *name) {
             found = 1;
         }
     }
+
     mutex_unlock(&r->mtx);
     return found ? 0 : -1;
 }
 
 int plugin_registry_set_enabled(plugin_registry *r, const char *name, int enabled) {
+    int rc = -1;
+
     if (!r || !name)
         return -1;
     mutex_lock(&r->mtx);
-    int rc = -1;
     for (size_t i = r->count; i-- > 0;) {
         if (strcmp(r->items[i].name, name) == 0) { /* latest first */
             r->items[i].enabled = enabled ? 1 : 0;
@@ -126,44 +131,51 @@ int plugin_registry_set_enabled(plugin_registry *r, const char *name, int enable
             break;
         }
     }
+
     mutex_unlock(&r->mtx);
     return rc;
 }
 
 const plugin_meta *plugin_registry_find(plugin_registry *r, const char *name) {
+    const plugin_meta *m = NULL;
+
     if (!r || !name)
         return NULL;
     mutex_lock(&r->mtx);
-    const plugin_meta *m = NULL;
     for (size_t i = r->count; i-- > 0;)
         if (strcmp(r->items[i].name, name) == 0) {
             m = &r->items[i];
             break;
         }
+
     mutex_unlock(&r->mtx);
     return m;
 }
 
 int plugin_registry_count(plugin_registry *r) {
+    int n;
+
     if (!r)
         return 0;
     mutex_lock(&r->mtx);
-    int n = (int)r->count;
+    n = (int)r->count;
     mutex_unlock(&r->mtx);
     return n;
 }
 
 int plugin_registry_deps_met(plugin_registry *r, const char *name) {
+    const plugin_meta *m = NULL;
+    int ok = 1;
+
     if (!r || !name)
         return 0;
     mutex_lock(&r->mtx);
-    const plugin_meta *m = NULL;
     for (size_t i = r->count; i-- > 0;)
         if (strcmp(r->items[i].name, name) == 0) {
             m = &r->items[i];
             break;
         }
-    int ok = 1;
+
     if (m) {
         for (size_t d = 0; d < m->n_deps; d++) {
             int found = 0;
@@ -180,12 +192,16 @@ int plugin_registry_deps_met(plugin_registry *r, const char *name) {
     } else {
         ok = 0;
     }
+
     mutex_unlock(&r->mtx);
     return ok;
 }
 
 static void add_meta_json(cJSON *arr, const plugin_meta *m) {
     cJSON *o = cJSON_CreateObject();
+    cJSON *caps;
+    cJSON *deps;
+
     cJSON_AddStringToObject(o, "version", m->version);
     if (m->signature)
         cJSON_AddStringToObject(o, "signature", m->signature);
@@ -193,11 +209,11 @@ static void add_meta_json(cJSON *arr, const plugin_meta *m) {
         cJSON_AddStringToObject(o, "description", m->description);
     cJSON_AddBoolToObject(o, "enabled", m->enabled ? 1 : 0);
     cJSON_AddNumberToObject(o, "built_ms", (double)m->built_ms);
-    cJSON *caps = cJSON_CreateArray();
+    caps = cJSON_CreateArray();
     for (size_t i = 0; i < m->n_caps; i++)
         cJSON_AddItemToArray(caps, cJSON_CreateString(m->caps[i]));
     cJSON_AddItemToObject(o, "capabilities", caps);
-    cJSON *deps = cJSON_CreateArray();
+    deps = cJSON_CreateArray();
     for (size_t i = 0; i < m->n_deps; i++)
         cJSON_AddItemToArray(deps, cJSON_CreateString(m->deps[i]));
     cJSON_AddItemToObject(o, "dependencies", deps);
@@ -206,6 +222,8 @@ static void add_meta_json(cJSON *arr, const plugin_meta *m) {
 
 char *plugin_registry_json(plugin_registry *r) {
     cJSON *root = cJSON_CreateObject();
+    char *js;
+
     if (!r)
         return cJSON_PrintUnformatted(root);
     mutex_lock(&r->mtx);
@@ -223,29 +241,36 @@ char *plugin_registry_json(plugin_registry *r) {
         }
         add_meta_json(vers, m);
     }
+
     mutex_unlock(&r->mtx);
-    char *js = cJSON_PrintUnformatted(root);
+    js = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
     return js;
 }
 
 static char *slurp_file(const char *path) {
     FILE *f = fopen(path, "rb");
+    long n;
+    char *buf;
+    size_t rd;
+
     if (!f)
         return NULL;
     fseek(f, 0, SEEK_END);
-    long n = ftell(f);
+    n = ftell(f);
     if (n < 0) {
         fclose(f);
         return NULL;
     }
+
     fseek(f, 0, SEEK_SET);
-    char *buf = (char *)malloc((size_t)n + 1);
+    buf = (char *)malloc((size_t)n + 1);
     if (!buf) {
         fclose(f);
         return NULL;
     }
-    size_t rd = fread(buf, 1, (size_t)n, f);
+
+    rd = fread(buf, 1, (size_t)n, f);
     buf[rd] = '\0';
     fclose(f);
     return buf;
@@ -261,11 +286,15 @@ static int dump_file(const char *path, const char *text) {
 }
 
 int plugin_registry_persist(plugin_registry *r, const char *state_root) {
+    char path[1024];
+    cJSON *arr;
+    char *s;
+    int rc;
+
     if (!r || !state_root)
         return -1;
-    char path[1024];
     path_join(path, sizeof(path), state_root, "plugins.json");
-    cJSON *arr = cJSON_CreateArray();
+    arr = cJSON_CreateArray();
     mutex_lock(&r->mtx);
     for (size_t i = 0; i < r->count; i++) {
         plugin_meta *m = &r->items[i];
@@ -288,29 +317,34 @@ int plugin_registry_persist(plugin_registry *r, const char *state_root) {
         cJSON_AddItemToObject(o, "dependencies", deps);
         cJSON_AddItemToArray(arr, o);
     }
+
     mutex_unlock(&r->mtx);
-    char *s = cJSON_PrintUnformatted(arr);
+    s = cJSON_PrintUnformatted(arr);
     cJSON_Delete(arr);
-    int rc = dump_file(path, s ? s : "[]");
+    rc = dump_file(path, s ? s : "[]");
     free(s);
     return rc;
 }
 
 int plugin_registry_load(plugin_registry *r, const char *state_root) {
+    char path[1024];
+    char *txt;
+    cJSON *arr;
+
     if (!r || !state_root)
         return -1;
-    char path[1024];
     path_join(path, sizeof(path), state_root, "plugins.json");
-    char *txt = slurp_file(path);
+    txt = slurp_file(path);
     if (!txt)
         return 0;
-    cJSON *arr = cJSON_Parse(txt);
+    arr = cJSON_Parse(txt);
     free(txt);
     if (!arr || !cJSON_IsArray(arr)) {
         if (arr)
             cJSON_Delete(arr);
         return 0;
     }
+
     for (int i = 0; i < cJSON_GetArraySize(arr); i++) {
         cJSON *o = cJSON_GetArrayItem(arr, i);
         if (!cJSON_IsObject(o))
@@ -357,6 +391,7 @@ int plugin_registry_load(plugin_registry *r, const char *state_root) {
             free(m.deps[d]);
         free(m.deps);
     }
+
     cJSON_Delete(arr);
     return 0;
 }

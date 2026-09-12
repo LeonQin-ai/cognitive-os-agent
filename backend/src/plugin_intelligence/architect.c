@@ -23,6 +23,8 @@ static void add_interface(cJSON *arr, const char *from, const char *to, const ch
 
 char *architect_design(const char *goal) {
     cJSON *out = cJSON_CreateObject();
+    char *s;
+
     if (out) {
         cJSON_AddStringToObject(out, "goal", goal ? goal : "");
         cJSON *comps = cJSON_CreateArray();
@@ -41,7 +43,8 @@ char *architect_design(const char *goal) {
         cJSON_AddItemToObject(out, "components", comps);
         cJSON_AddItemToObject(out, "interfaces", ifaces);
     }
-    char *s = out ? cJSON_PrintUnformatted(out) : NULL;
+
+    s = out ? cJSON_PrintUnformatted(out) : NULL;
     if (out)
         cJSON_Delete(out);
     return s ? s : xstrdup("{}");

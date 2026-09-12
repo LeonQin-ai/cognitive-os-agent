@@ -59,6 +59,7 @@ static void sess_add_msg(im_sess *s, int64_t id, const char *role, const char *s
         s->msgs = nm;
         s->cap = cap;
     }
+
     s->msgs[s->count].id = id;
     s->msgs[s->count].role = xstrdup(role);
     s->msgs[s->count].sender = (sender && *sender) ? xstrdup(sender) : NULL;
@@ -73,6 +74,7 @@ static void sess_free(im_sess *s) {
         free(s->msgs[i].sender);
         free(s->msgs[i].content);
     }
+
     free(s->msgs);
     free(s->name);
     free(s->kind);
@@ -84,8 +86,11 @@ static void sess_free(im_sess *s) {
 
 static void im_persist(im *im) {
     cJSON *root = cJSON_CreateObject();
+    cJSON *arr;
+    char *js;
+
     cJSON_AddNumberToObject(root, "next_id", (double)im->next_id);
-    cJSON *arr = cJSON_AddArrayToObject(root, "sessions");
+    arr = cJSON_AddArrayToObject(root, "sessions");
     for (size_t i = 0; i < im->count; i++) {
         im_sess *s = &im->sessions[i];
         cJSON *o = cJSON_CreateObject();
@@ -111,7 +116,8 @@ static void im_persist(im *im) {
         }
         cJSON_AddItemToArray(arr, o);
     }
-    char *js = cJSON_PrintUnformatted(root);
+
+    js = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
     if (js) {
         fs_write_file(im->path, js, (size_t)strlen(js));
@@ -121,35 +127,48 @@ static void im_persist(im *im) {
 
 static void im_load(im *im) {
     char *js = fs_read_file(im->path);
+    cJSON *root;
+    cJSON *nid;
+    cJSON *arr;
+
     if (!js)
         return;
-    cJSON *root = cJSON_Parse(js);
+    root = cJSON_Parse(js);
     free(js);
     if (!root || !cJSON_IsObject(root)) {
         if (root)
             cJSON_Delete(root);
         return;
     }
-    cJSON *nid = cJSON_GetObjectItemCaseSensitive(root, "next_id");
+
+    nid = cJSON_GetObjectItemCaseSensitive(root, "next_id");
     if (nid && cJSON_IsNumber(nid))
         im->next_id = (int64_t)nid->valuedouble;
-    cJSON *arr = cJSON_GetObjectItemCaseSensitive(root, "sessions");
+    arr = cJSON_GetObjectItemCaseSensitive(root, "sessions");
     if (arr && cJSON_IsArray(arr)) {
         cJSON *it;
         cJSON_ArrayForEach(it, arr) {
+    cJSON *id;
+    cJSON *nm;
+    cJSON *kd;
+    cJSON *mem;
+    cJSON *cr;
+    cJSON *chn;
+    cJSON *ms;
+
             if (!cJSON_IsObject(it))
                 continue;
-            cJSON *id = cJSON_GetObjectItemCaseSensitive(it, "id");
+            id = cJSON_GetObjectItemCaseSensitive(it, "id");
             if (!id || !cJSON_IsNumber(id))
                 continue;
             im_sess s;
             memset(&s, 0, sizeof(s));
             s.id = (int64_t)id->valuedouble;
-            cJSON *nm = cJSON_GetObjectItemCaseSensitive(it, "name");
+            nm = cJSON_GetObjectItemCaseSensitive(it, "name");
             s.name = xstrdup(nm && cJSON_IsString(nm) ? nm->valuestring : "");
-            cJSON *kd = cJSON_GetObjectItemCaseSensitive(it, "kind");
+            kd = cJSON_GetObjectItemCaseSensitive(it, "kind");
             s.kind = xstrdup(kd && cJSON_IsString(kd) ? kd->valuestring : "direct");
-            cJSON *mem = cJSON_GetObjectItemCaseSensitive(it, "members");
+            mem = cJSON_GetObjectItemCaseSensitive(it, "members");
             if (mem && cJSON_IsArray(mem)) {
                 int mn = cJSON_GetArraySize(mem);
                 if (mn > 0) {
@@ -163,21 +182,28 @@ static void im_load(im *im) {
                     }
                 }
             }
-            cJSON *cr = cJSON_GetObjectItemCaseSensitive(it, "created_ms");
+
+            cr = cJSON_GetObjectItemCaseSensitive(it, "created_ms");
             s.created_ms = (cr && cJSON_IsNumber(cr)) ? (int64_t)cr->valuedouble : 0;
-            cJSON *chn = cJSON_GetObjectItemCaseSensitive(it, "channel");
+            chn = cJSON_GetObjectItemCaseSensitive(it, "channel");
             s.channel = (chn && cJSON_IsString(chn)) ? xstrdup(chn->valuestring) : NULL;
-            cJSON *ms = cJSON_GetObjectItemCaseSensitive(it, "messages");
+            ms = cJSON_GetObjectItemCaseSensitive(it, "messages");
             if (ms && cJSON_IsArray(ms)) {
                 cJSON *m;
                 cJSON_ArrayForEach(m, ms) {
+    cJSON *mid;
+    cJSON *role;
+    cJSON *sender;
+    cJSON *cont;
+    cJSON *ts;
+
                     if (!cJSON_IsObject(m))
                         continue;
-                    cJSON *mid = cJSON_GetObjectItemCaseSensitive(m, "id");
-                    cJSON *role = cJSON_GetObjectItemCaseSensitive(m, "role");
-                    cJSON *sender = cJSON_GetObjectItemCaseSensitive(m, "sender");
-                    cJSON *cont = cJSON_GetObjectItemCaseSensitive(m, "content");
-                    cJSON *ts = cJSON_GetObjectItemCaseSensitive(m, "ts_ms");
+                    mid = cJSON_GetObjectItemCaseSensitive(m, "id");
+                    role = cJSON_GetObjectItemCaseSensitive(m, "role");
+                    sender = cJSON_GetObjectItemCaseSensitive(m, "sender");
+                    cont = cJSON_GetObjectItemCaseSensitive(m, "content");
+                    ts = cJSON_GetObjectItemCaseSensitive(m, "ts_ms");
                     sess_add_msg(&s, (mid && cJSON_IsNumber(mid)) ? (int64_t)mid->valuedouble : 0,
                                  (role && cJSON_IsString(role)) ? role->valuestring : "",
                                  (sender && cJSON_IsString(sender)) ? sender->valuestring : NULL,
@@ -185,6 +211,7 @@ static void im_load(im *im) {
                                  (ts && cJSON_IsNumber(ts)) ? (int64_t)ts->valuedouble : 0);
                 }
             }
+
             if (im->count == im->cap) {
                 size_t cap = im->cap ? im->cap * 2 : 8;
                 im_sess *ns = realloc(im->sessions, cap * sizeof(im_sess));
@@ -195,9 +222,11 @@ static void im_load(im *im) {
                 im->sessions = ns;
                 im->cap = cap;
             }
+
             im->sessions[im->count++] = s;
         }
     }
+
     cJSON_Delete(root);
 }
 
@@ -218,6 +247,7 @@ im *im_new(const char *state_root) {
         snprintf(pbuf, sizeof(pbuf), "%s/im/sessions.json", im->path);
         snprintf(im->path, sizeof(im->path), "%s", pbuf);
     }
+
     mutex_init(&im->mtx);
     im->next_id = 1;
     im_load(im);
@@ -255,6 +285,7 @@ int64_t im_create_session_ex(im *im, const char *name, const char *kind, const c
         im->sessions = ns;
         im->cap = cap;
     }
+
     im_sess *s = &im->sessions[im->count];
     memset(s, 0, sizeof(*s));
     s->id = im->next_id++;
@@ -268,6 +299,7 @@ int64_t im_create_session_ex(im *im, const char *name, const char *kind, const c
                 s->members[i] = xstrdup(members[i] ? members[i] : "");
         }
     }
+
     s->created_ms = time_now_ms();
     im->count++;
     im_persist(im);
@@ -276,10 +308,11 @@ int64_t im_create_session_ex(im *im, const char *name, const char *kind, const c
 }
 
 int im_delete_session(im *im, int64_t id) {
+    int found = 0;
+
     if (!im)
         return 0;
     mutex_lock(&im->mtx);
-    int found = 0;
     for (size_t i = 0; i < im->count; i++) {
         if (im->sessions[i].id == id) {
             sess_free(&im->sessions[i]);
@@ -289,6 +322,7 @@ int im_delete_session(im *im, int64_t id) {
             break;
         }
     }
+
     if (found)
         im_persist(im);
     mutex_unlock(&im->mtx);
@@ -296,13 +330,15 @@ int im_delete_session(im *im, int64_t id) {
 }
 
 im_session *im_list_sessions(im *im, size_t *count) {
+    im_session *out = NULL;
+
     if (!im) {
         if (count)
             *count = 0;
         return NULL;
     }
+
     mutex_lock(&im->mtx);
-    im_session *out = NULL;
     if (im->count) {
         out = calloc(im->count, sizeof(im_session));
         if (out) {
@@ -323,6 +359,7 @@ im_session *im_list_sessions(im *im, size_t *count) {
             }
         }
     }
+
     if (count)
         *count = out ? im->count : 0;
     mutex_unlock(&im->mtx);
@@ -338,19 +375,22 @@ void im_sessions_free(im_session *s, size_t count) {
             free(s[i].members[j]);
         free(s[i].members);
     }
+
     free(s);
 }
 
 im_message *im_messages(im *im, int64_t session_id, size_t *count) {
+    im_message *out = NULL;
+    size_t n = 0;
+
     if (!im) {
         if (count)
             *count = 0;
         return NULL;
     }
+
     mutex_lock(&im->mtx);
     im_sess *s = find_sess(im, session_id);
-    im_message *out = NULL;
-    size_t n = 0;
     if (s && s->count) {
         out = calloc(s->count, sizeof(im_message));
         if (out) {
@@ -364,6 +404,7 @@ im_message *im_messages(im *im, int64_t session_id, size_t *count) {
             n = s->count;
         }
     }
+
     if (count)
         *count = n;
     mutex_unlock(&im->mtx);
@@ -376,6 +417,7 @@ void im_messages_free(im_message *m, size_t count) {
         free(m[i].sender);
         free(m[i].content);
     }
+
     free(m);
 }
 
@@ -384,6 +426,8 @@ int64_t im_send(im *im, int64_t session_id, const char *role, const char *conten
 }
 
 int64_t im_send_ex(im *im, int64_t session_id, const char *role, const char *content, const char *sender) {
+    int64_t id;
+
     if (!im || !content)
         return -1;
     mutex_lock(&im->mtx);
@@ -392,7 +436,8 @@ int64_t im_send_ex(im *im, int64_t session_id, const char *role, const char *con
         mutex_unlock(&im->mtx);
         return -1;
     }
-    int64_t id = im->next_id++;
+
+    id = im->next_id++;
     sess_add_msg(s, id, role ? role : "user", sender, content, time_now_ms());
     im_persist(im);
     mutex_unlock(&im->mtx);
@@ -400,10 +445,11 @@ int64_t im_send_ex(im *im, int64_t session_id, const char *role, const char *con
 }
 
 size_t im_total_messages(im *im) {
+    size_t total = 0;
+
     if (!im)
         return 0;
     mutex_lock(&im->mtx);
-    size_t total = 0;
     for (size_t i = 0; i < im->count; i++)
         total += im->sessions[i].count;
     mutex_unlock(&im->mtx);
@@ -411,12 +457,16 @@ size_t im_total_messages(im *im) {
 }
 
 char *im_sessions_json(im *im) {
+    cJSON *root;
+    cJSON *arr;
+    size_t total = 0;
+    char *js;
+
     if (!im)
         return xstrdup("{}");
     mutex_lock(&im->mtx);
-    cJSON *root = cJSON_CreateObject();
-    cJSON *arr = cJSON_AddArrayToObject(root, "sessions");
-    size_t total = 0;
+    root = cJSON_CreateObject();
+    arr = cJSON_AddArrayToObject(root, "sessions");
     for (size_t i = 0; i < im->count; i++) {
         im_sess *s = &im->sessions[i];
         total += s->count;
@@ -433,8 +483,9 @@ char *im_sessions_json(im *im) {
         cJSON_AddNumberToObject(o, "messages", (double)s->count);
         cJSON_AddItemToArray(arr, o);
     }
+
     cJSON_AddNumberToObject(root, "total_messages", (double)total);
-    char *js = cJSON_PrintUnformatted(root);
+    js = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
     mutex_unlock(&im->mtx);
     return js ? js : xstrdup("{}");
@@ -442,10 +493,13 @@ char *im_sessions_json(im *im) {
 
 /* case-insensitive substring match */
 static int ci_strstr(const char *hay, const char *needle) {
+    size_t nlen;
+    size_t hlen;
+
     if (!hay || !needle || !*needle)
         return 0;
-    size_t nlen = strlen(needle);
-    size_t hlen = strlen(hay);
+    nlen = strlen(needle);
+    hlen = strlen(hay);
     if (hlen < nlen)
         return 0;
     for (size_t i = 0; i + nlen <= hlen; i++) {
@@ -462,17 +516,21 @@ static int ci_strstr(const char *hay, const char *needle) {
         if (j == nlen)
             return 1;
     }
+
     return 0;
 }
 
 char *im_search(im *im, const char *query, int limit) {
+    cJSON *arr;
+    int count = 0;
+    char *js;
+
     if (!im)
         return xstrdup("[]");
     if (!query || !*query)
         return xstrdup("[]");
     mutex_lock(&im->mtx);
-    cJSON *arr = cJSON_CreateArray();
-    int count = 0;
+    arr = cJSON_CreateArray();
     for (size_t i = 0; i < im->count && (limit <= 0 || count < limit); i++) {
         im_sess *s = &im->sessions[i];
         for (size_t j = 0; j < s->count && (limit <= 0 || count < limit); j++) {
@@ -492,7 +550,8 @@ char *im_search(im *im, const char *query, int limit) {
             count++;
         }
     }
-    char *js = cJSON_PrintUnformatted(arr);
+
+    js = cJSON_PrintUnformatted(arr);
     cJSON_Delete(arr);
     mutex_unlock(&im->mtx);
     return js ? js : xstrdup("[]");
@@ -509,6 +568,8 @@ const char *im_session_channel(im *im, int64_t session_id) {
 }
 
 int im_session_set_channel(im *im, int64_t session_id, const char *channel) {
+    char *old;
+
     if (!im)
         return -1;
     mutex_lock(&im->mtx);
@@ -517,7 +578,8 @@ int im_session_set_channel(im *im, int64_t session_id, const char *channel) {
         mutex_unlock(&im->mtx);
         return -1;
     }
-    char *old = s->channel;
+
+    old = s->channel;
     s->channel = (channel && *channel) ? xstrdup(channel) : NULL;
     free(old);
     im_persist(im);
@@ -526,15 +588,17 @@ int im_session_set_channel(im *im, int64_t session_id, const char *channel) {
 }
 
 int64_t im_session_by_channel(im *im, const char *channel) {
+    int64_t found = -1;
+
     if (!im || !channel || !*channel)
         return -1;
     mutex_lock(&im->mtx);
-    int64_t found = -1;
     for (size_t i = 0; i < im->count; i++)
         if (im->sessions[i].channel && strcmp(im->sessions[i].channel, channel) == 0) {
             found = im->sessions[i].id;
             break;
         }
+
     mutex_unlock(&im->mtx);
     return found;
 }

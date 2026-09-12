@@ -19,21 +19,27 @@
 
 char *fs_read_file(const char *path) {
     FILE *f = fopen(path, "rb");
+    long n;
+    char *buf;
+    size_t rd;
+
     if (!f)
         return NULL;
     fseek(f, 0, SEEK_END);
-    long n = ftell(f);
+    n = ftell(f);
     fseek(f, 0, SEEK_SET);
     if (n < 0) {
         fclose(f);
         return NULL;
     }
-    char *buf = malloc((size_t)n + 1);
+
+    buf = malloc((size_t)n + 1);
     if (!buf) {
         fclose(f);
         return NULL;
     }
-    size_t rd = fread(buf, 1, (size_t)n, f);
+
+    rd = fread(buf, 1, (size_t)n, f);
     fclose(f);
     buf[rd] = '\0';
     return buf;
@@ -41,20 +47,26 @@ char *fs_read_file(const char *path) {
 
 int fs_write_file(const char *path, const void *data, size_t len) {
     FILE *f = fopen(path, "wb");
+    size_t w;
+    int ok;
+
     if (!f)
         return -1;
-    size_t w = fwrite(data, 1, len, f);
-    int ok = (w == len) ? 0 : -1;
+    w = fwrite(data, 1, len, f);
+    ok = (w == len) ? 0 : -1;
     fclose(f);
     return ok;
 }
 
 int fs_append_file(const char *path, const void *data, size_t len) {
     FILE *f = fopen(path, "ab");
+    size_t w;
+    int ok;
+
     if (!f)
         return -1;
-    size_t w = fwrite(data, 1, len, f);
-    int ok = (w == len) ? 0 : -1;
+    w = fwrite(data, 1, len, f);
+    ok = (w == len) ? 0 : -1;
     fclose(f);
     return ok;
 }
@@ -71,8 +83,10 @@ int fs_is_dir(const char *path) {
 
 int fs_mkdirs(const char *path) {
     char tmp[1024];
+    size_t len;
+
     snprintf(tmp, sizeof(tmp), "%s", path);
-    size_t len = strlen(tmp);
+    len = strlen(tmp);
     if (len == 0)
         return -1;
     for (size_t i = 0; i <= len; i++) {
@@ -91,10 +105,12 @@ int fs_mkdirs(const char *path) {
             tmp[i] = ch;
         }
     }
+
     if (!fs_is_dir(path)) {
         if (_mkdir(path) != 0 && !fs_exists(path))
             return -1;
     }
+
     return 0;
 }
 
@@ -103,8 +119,9 @@ int fs_remove(const char *path) {
 }
 
 int fs_list_dir(const char *path, dir_list *out) {
-    memset(out, 0, sizeof(*out));
     char pattern[1200];
+
+    memset(out, 0, sizeof(*out));
     snprintf(pattern, sizeof(pattern), "%s\\*", path);
     WIN32_FIND_DATAA fd;
     HANDLE h = FindFirstFileA(pattern, &fd);
@@ -136,21 +153,27 @@ int fs_list_dir(const char *path, dir_list *out) {
 
 char *fs_read_file(const char *path) {
     FILE *f = fopen(path, "rb");
+    long n;
+    char *buf;
+    size_t rd;
+
     if (!f)
         return NULL;
     fseek(f, 0, SEEK_END);
-    long n = ftell(f);
+    n = ftell(f);
     fseek(f, 0, SEEK_SET);
     if (n < 0) {
         fclose(f);
         return NULL;
     }
-    char *buf = malloc((size_t)n + 1);
+
+    buf = malloc((size_t)n + 1);
     if (!buf) {
         fclose(f);
         return NULL;
     }
-    size_t rd = fread(buf, 1, (size_t)n, f);
+
+    rd = fread(buf, 1, (size_t)n, f);
     fclose(f);
     buf[rd] = '\0';
     return buf;
@@ -158,20 +181,26 @@ char *fs_read_file(const char *path) {
 
 int fs_write_file(const char *path, const void *data, size_t len) {
     FILE *f = fopen(path, "wb");
+    size_t w;
+    int ok;
+
     if (!f)
         return -1;
-    size_t w = fwrite(data, 1, len, f);
-    int ok = (w == len) ? 0 : -1;
+    w = fwrite(data, 1, len, f);
+    ok = (w == len) ? 0 : -1;
     fclose(f);
     return ok;
 }
 
 int fs_append_file(const char *path, const void *data, size_t len) {
     FILE *f = fopen(path, "ab");
+    size_t w;
+    int ok;
+
     if (!f)
         return -1;
-    size_t w = fwrite(data, 1, len, f);
-    int ok = (w == len) ? 0 : -1;
+    w = fwrite(data, 1, len, f);
+    ok = (w == len) ? 0 : -1;
     fclose(f);
     return ok;
 }
@@ -188,8 +217,10 @@ int fs_is_dir(const char *path) {
 
 int fs_mkdirs(const char *path) {
     char tmp[1024];
+    size_t len;
+
     snprintf(tmp, sizeof(tmp), "%s", path);
-    size_t len = strlen(tmp);
+    len = strlen(tmp);
     if (len == 0)
         return -1;
     for (size_t i = 1; i < len; i++) {
@@ -202,6 +233,7 @@ int fs_mkdirs(const char *path) {
             tmp[i] = '/';
         }
     }
+
     if (mkdir(tmp, 0755) != 0 && errno != EEXIST)
         return -1;
     return 0;
@@ -212,11 +244,12 @@ int fs_remove(const char *path) {
 }
 
 int fs_list_dir(const char *path, dir_list *out) {
+    struct dirent *de;
+
     memset(out, 0, sizeof(*out));
     DIR *d = opendir(path);
     if (!d)
         return -1;
-    struct dirent *de;
     while ((de = readdir(d)) != NULL) {
         if (strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0)
             continue;
@@ -229,6 +262,7 @@ int fs_list_dir(const char *path, dir_list *out) {
         out->items[out->count].is_dir = (de->d_type == DT_DIR);
         out->count++;
     }
+
     closedir(d);
     return 0;
 }

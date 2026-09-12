@@ -16,16 +16,23 @@ static char *resolve_path(const tool_ctx *ctx, const char *path) {
 }
 
 static tool_result *file_read_exec(const tool *self, const tool_ctx *ctx, const char *args_json) {
+    cJSON *args;
+    cJSON *path_j;
+    char *rp;
+    char *content;
+    tool_result *r;
+
     (void)self;
-    cJSON *args = cJSON_Parse(args_json);
+    args = cJSON_Parse(args_json);
     if (!args)
         return tool_result_new(0, "file_read: invalid args JSON");
-    cJSON *path_j = cJSON_GetObjectItemCaseSensitive(args, "path");
+    path_j = cJSON_GetObjectItemCaseSensitive(args, "path");
     if (!path_j || !cJSON_IsString(path_j)) {
         cJSON_Delete(args);
         return tool_result_new(0, "file_read: missing string arg 'path'");
     }
-    char *rp = resolve_path(ctx, path_j->valuestring);
+
+    rp = resolve_path(ctx, path_j->valuestring);
     /* Reading a directory is common (the planner often probes a path before
      * reading a file). Instead of failing, return a listing so the agent can
      * continue — a single mis-targeted file_read must not fail the whole task. */
@@ -49,7 +56,8 @@ static tool_result *file_read_exec(const tool *self, const tool_ctx *ctx, const 
         }
         fs_list_free(&dl);
     }
-    char *content = fs_read_file(rp);
+
+    content = fs_read_file(rp);
     cJSON_Delete(args);
     if (!content) {
         char msg[1024];
@@ -57,28 +65,40 @@ static tool_result *file_read_exec(const tool *self, const tool_ctx *ctx, const 
         free(rp);
         return tool_result_new(0, msg);
     }
+
     free(rp);
-    tool_result *r = tool_result_new(1, content);
+    r = tool_result_new(1, content);
     free(content);
     return r;
 }
 
 static tool_result *file_write_exec(const tool *self, const tool_ctx *ctx, const char *args_json) {
+    cJSON *args;
+    cJSON *path_j;
+    cJSON *content_j;
+    char *rp;
+    /* ensure parent dir */
+    char *slash;
+    size_t content_len;
+    int w;
+    char out[1200];
+
     (void)self;
-    cJSON *args = cJSON_Parse(args_json);
+    args = cJSON_Parse(args_json);
     if (!args)
         return tool_result_new(0, "file_write: invalid args JSON");
-    cJSON *path_j = cJSON_GetObjectItemCaseSensitive(args, "path");
-    cJSON *content_j = cJSON_GetObjectItemCaseSensitive(args, "content");
+    path_j = cJSON_GetObjectItemCaseSensitive(args, "path");
+    content_j = cJSON_GetObjectItemCaseSensitive(args, "content");
     if (!path_j || !cJSON_IsString(path_j)) {
         cJSON_Delete(args);
         return tool_result_new(0, "file_write: missing string arg 'path'");
     }
+
     const char *content = (content_j && cJSON_IsString(content_j)) ? content_j->valuestring : "";
 
-    char *rp = resolve_path(ctx, path_j->valuestring);
+    rp = resolve_path(ctx, path_j->valuestring);
     /* ensure parent dir */
-    char *slash = strrchr(rp, '/');
+    slash = strrchr(rp, '/');
 #if defined(_WIN32)
     char *bslash = strrchr(rp, '\\');
     if (bslash && (!slash || bslash > slash))
@@ -93,8 +113,8 @@ static tool_result *file_write_exec(const tool *self, const tool_ctx *ctx, const
         }
     }
 
-    size_t content_len = strlen(content);
-    int w = fs_write_file(rp, content, content_len);
+    content_len = strlen(content);
+    w = fs_write_file(rp, content, content_len);
     cJSON_Delete(args);
     if (w != 0) {
         char msg[1024];
@@ -102,7 +122,7 @@ static tool_result *file_write_exec(const tool *self, const tool_ctx *ctx, const
         free(rp);
         return tool_result_new(0, msg);
     }
-    char out[1200];
+
     snprintf(out, sizeof(out), "wrote %zu bytes to %s", content_len, rp);
     free(rp);
     return tool_result_new(1, out);
@@ -114,38 +134,57 @@ static tool_result *file_write_exec(const tool *self, const tool_ctx *ctx, const
 static size_t count_occurrences(const char *hay, const char *needle) {
     size_t n = 0;
     size_t nl = strlen(needle);
+    const char *p = hay;
+
     if (nl == 0)
         return 0;
-    const char *p = hay;
     while ((p = strstr(p, needle)) != NULL) {
         n++;
         p += nl;
     }
+
     return n;
 }
 
 static tool_result *file_edit_exec(const tool *self, const tool_ctx *ctx, const char *args_json) {
+    cJSON *args;
+    cJSON *path_j;
+    cJSON *old_j;
+    cJSON *new_j;
+    int replace_all = 0;
+    cJSON *ra_j;
+    /* copy strings out before cJSON_Delete(args) frees the tree */
+    char *old_s;
+    char *new_s;
+    char *rp;
+    char *content;
+    size_t old_len;
+    size_t occ;
+    strbuf sb;
+    int w;
+    char out[1240];
+
     (void)self;
-    cJSON *args = cJSON_Parse(args_json);
+    args = cJSON_Parse(args_json);
     if (!args)
         return tool_result_new(0, "file_edit: invalid args JSON");
-    cJSON *path_j = cJSON_GetObjectItemCaseSensitive(args, "path");
-    cJSON *old_j = cJSON_GetObjectItemCaseSensitive(args, "old_string");
-    cJSON *new_j = cJSON_GetObjectItemCaseSensitive(args, "new_string");
+    path_j = cJSON_GetObjectItemCaseSensitive(args, "path");
+    old_j = cJSON_GetObjectItemCaseSensitive(args, "old_string");
+    new_j = cJSON_GetObjectItemCaseSensitive(args, "new_string");
     if (!path_j || !cJSON_IsString(path_j) || !old_j || !cJSON_IsString(old_j) || !new_j || !cJSON_IsString(new_j)) {
         cJSON_Delete(args);
         return tool_result_new(0, "file_edit: requires string args 'path', 'old_string', 'new_string'");
     }
-    int replace_all = 0;
-    cJSON *ra_j = cJSON_GetObjectItemCaseSensitive(args, "replace_all");
+
+    ra_j = cJSON_GetObjectItemCaseSensitive(args, "replace_all");
     if (ra_j && cJSON_IsTrue(ra_j))
         replace_all = 1;
 
     /* copy strings out before cJSON_Delete(args) frees the tree */
-    char *old_s = xstrdup(old_j->valuestring);
-    char *new_s = xstrdup(new_j->valuestring);
-    char *rp = resolve_path(ctx, path_j->valuestring);
-    char *content = fs_read_file(rp);
+    old_s = xstrdup(old_j->valuestring);
+    new_s = xstrdup(new_j->valuestring);
+    rp = resolve_path(ctx, path_j->valuestring);
+    content = fs_read_file(rp);
     cJSON_Delete(args);
     if (!content) {
         char msg[1200];
@@ -155,8 +194,9 @@ static tool_result *file_edit_exec(const tool *self, const tool_ctx *ctx, const 
         free(new_s);
         return tool_result_new(0, msg);
     }
-    size_t old_len = strlen(old_s);
-    size_t occ = count_occurrences(content, old_s);
+
+    old_len = strlen(old_s);
+    occ = count_occurrences(content, old_s);
     if (occ == 0) {
         char msg[1200];
         snprintf(msg, sizeof(msg),
@@ -169,6 +209,7 @@ static tool_result *file_edit_exec(const tool *self, const tool_ctx *ctx, const 
         free(new_s);
         return tool_result_new(0, msg);
     }
+
     if (occ > 1 && !replace_all) {
         char msg[1200];
         snprintf(msg, sizeof(msg),
@@ -181,7 +222,7 @@ static tool_result *file_edit_exec(const tool *self, const tool_ctx *ctx, const 
         free(new_s);
         return tool_result_new(0, msg);
     }
-    strbuf sb;
+
     strbuf_init(&sb);
     const char *p = content;
     while (*p) {
@@ -194,7 +235,8 @@ static tool_result *file_edit_exec(const tool *self, const tool_ctx *ctx, const 
         strbuf_append(&sb, new_s);
         p = hit + old_len;
     }
-    int w = fs_write_file(rp, sb.buf ? sb.buf : "", sb.len);
+
+    w = fs_write_file(rp, sb.buf ? sb.buf : "", sb.len);
     free(sb.buf);
     free(content);
     free(old_s);
@@ -205,7 +247,7 @@ static tool_result *file_edit_exec(const tool *self, const tool_ctx *ctx, const 
         free(rp);
         return tool_result_new(0, msg);
     }
-    char out[1240];
+
     snprintf(out, sizeof(out), "edited %s (%zu replacement%s)", rp, occ, occ == 1 ? "" : "s");
     free(rp);
     return tool_result_new(1, out);

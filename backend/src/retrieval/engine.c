@@ -37,6 +37,7 @@ void index_free(ret_index *idx) {
             free(idx->terms[i].occs[j].file);
         free(idx->terms[i].occs);
     }
+
     free(idx->terms);
     free(idx);
 }
@@ -46,6 +47,7 @@ static term *find_term(ret_index *idx, const char *word, size_t wlen) {
         if (strlen(idx->terms[i].word) == wlen && strncmp(idx->terms[i].word, word, wlen) == 0)
             return &idx->terms[i];
     }
+
     return NULL;
 }
 
@@ -58,6 +60,7 @@ static term *get_or_add(ret_index *idx, const char *word, size_t wlen) {
         idx->terms = realloc(idx->terms, cap * sizeof(term));
         idx->cap = cap;
     }
+
     t = &idx->terms[idx->count++];
     memset(t, 0, sizeof(*t));
     t->word = malloc(wlen + 1);
@@ -74,6 +77,7 @@ static void add_occ(term *t, const char *file, int line) {
         t->occs = realloc(t->occs, cap * sizeof(occ));
         t->cap = cap;
     }
+
     t->occs[t->count].file = xstrdup(file);
     t->occs[t->count].line = line;
     t->count++;
@@ -106,6 +110,7 @@ int index_add_file(ret_index *idx, const char *path, const char *content) {
             add_occ(t, path, line);
         }
     }
+
     return 0;
 }
 
@@ -114,6 +119,9 @@ char *index_search(ret_index *idx, const char *query, int limit) {
     const char *tokens[32];
     int ntok = 0;
     const char *p = query;
+    cJSON *arr;
+    char *out;
+
     while (*p && ntok < 32) {
         while (*p && !is_word_char((unsigned char)*p))
             p++;
@@ -126,7 +134,7 @@ char *index_search(ret_index *idx, const char *query, int limit) {
             tokens[ntok++] = s;
     }
 
-    cJSON *arr = cJSON_CreateArray();
+    arr = cJSON_CreateArray();
     for (int t = 0; t < ntok; t++) {
         size_t wlen = strlen(tokens[t]);
         term *tm = find_term(idx, tokens[t], wlen);
@@ -142,7 +150,8 @@ char *index_search(ret_index *idx, const char *query, int limit) {
             cJSON_AddItemToArray(arr, o);
         }
     }
-    char *out = cJSON_PrintUnformatted(arr);
+
+    out = cJSON_PrintUnformatted(arr);
     cJSON_Delete(arr);
     return out ? out : xstrdup("[]");
 }

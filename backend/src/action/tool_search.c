@@ -116,6 +116,7 @@ static int glob_match_segs(char *pat_rest, char *path_rest) {
         pat_rest = pslash + 1;
         path_rest = aslash + 1;
     }
+
     return *path_rest == '\0';
 }
 
@@ -138,6 +139,7 @@ static void found_push(found_list *fl, const char *rel, long long mt) {
         fl->items = ni;
         fl->cap = nc;
     }
+
     fl->items[fl->count].path = xstrdup(rel);
     fl->items[fl->count].mtime = mt;
     fl->count++;
@@ -153,8 +155,9 @@ static int cmp_mtime_desc(const void *a, const void *b) {
 
 static void walk_dir(const char *root, const char *rel, const char *pattern, found_list *fl) {
     char full[2048];
-    path_join(full, sizeof full, root, rel && *rel ? rel : "");
     dir_list dl;
+
+    path_join(full, sizeof full, root, rel && *rel ? rel : "");
     memset(&dl, 0, sizeof dl);
     if (fs_list_dir(full, &dl) != 0)
         return;
@@ -179,23 +182,36 @@ static void walk_dir(const char *root, const char *rel, const char *pattern, fou
             }
         }
     }
+
     fs_list_free(&dl);
 }
 
 static tool_result *glob_exec(const tool *self, const tool_ctx *ctx, const char *args_json) {
+    cJSON *args;
+    cJSON *pat_j;
+    cJSON *path_j;
+    char root[1024];
+    char *pat;
+    const size_t LIMIT = 100;
+    int truncated;
+    strbuf sb;
+    size_t shown;
+    char *out;
+    tool_result *r;
+
     (void)self;
-    cJSON *args = cJSON_Parse(args_json);
+    args = cJSON_Parse(args_json);
     if (!args)
         return tool_result_new(0, "glob: invalid args JSON");
-    cJSON *pat_j = cJSON_GetObjectItemCaseSensitive(args, "pattern");
+    pat_j = cJSON_GetObjectItemCaseSensitive(args, "pattern");
     if (!pat_j || !cJSON_IsString(pat_j)) {
         cJSON_Delete(args);
         return tool_result_new(0, "glob: missing string arg 'pattern'");
     }
-    cJSON *path_j = cJSON_GetObjectItemCaseSensitive(args, "path");
-    char root[1024];
+
+    path_j = cJSON_GetObjectItemCaseSensitive(args, "path");
     resolve_root(ctx, (path_j && cJSON_IsString(path_j)) ? path_j->valuestring : NULL, root, sizeof root);
-    char *pat = xstrdup(pat_j->valuestring);
+    pat = xstrdup(pat_j->valuestring);
     cJSON_Delete(args);
 
     /* normalize pattern separators to '/' */
@@ -211,13 +227,11 @@ static tool_result *glob_exec(const tool *self, const tool_ctx *ctx, const char 
     /* sort by modification time (newest first), like GlobTool */
     if (fl.count > 1)
         qsort(fl.items, fl.count, sizeof(found_entry), cmp_mtime_desc);
-    const size_t LIMIT = 100;
-    int truncated = fl.count > LIMIT;
-    strbuf sb;
+    truncated = fl.count > LIMIT;
     strbuf_init(&sb);
     if (fl.count == 0)
         strbuf_append(&sb, "No files found");
-    size_t shown = fl.count < LIMIT ? fl.count : LIMIT;
+    shown = fl.count < LIMIT ? fl.count : LIMIT;
     for (size_t i = 0; i < shown; i++)
         strbuf_appendf(&sb, "%s\n", fl.items[i].path);
     if (truncated)
@@ -226,8 +240,8 @@ static tool_result *glob_exec(const tool *self, const tool_ctx *ctx, const char 
     for (size_t i = 0; i < fl.count; i++)
         free(fl.items[i].path);
     free(fl.items);
-    char *out = strbuf_detach(&sb);
-    tool_result *r = tool_result_new(1, out ? out : "");
+    out = strbuf_detach(&sb);
+    r = tool_result_new(1, out ? out : "");
     free(out);
     return r;
 }
@@ -257,11 +271,14 @@ static int line_has_needle(const char *line, size_t len, const grep_state *g) {
         } else if (line[i] == g->needle[0] && memcmp(line + i, g->needle, g->needle_len) == 0)
             return 1;
     }
+
     return 0;
 }
 
 static void grep_file(const char *rel, const char *full, grep_state *g) {
     char *text = fs_read_file(full);
+    char *p;
+
     if (!text)
         return;
     /* skip binary-looking files */
@@ -269,8 +286,9 @@ static void grep_file(const char *rel, const char *full, grep_state *g) {
         free(text);
         return;
     }
+
     size_t hits = 0, lineno = 0;
-    char *p = text;
+    p = text;
     while (*p) {
         char *line = p;
         char *nl = strchr(p, '\n');
@@ -293,6 +311,7 @@ static void grep_file(const char *rel, const char *full, grep_state *g) {
         if (!nl)
             break;
     }
+
     if (hits > 0) {
         if (g->mode == 0) {
             if (g->out_n < g->head_limit) {
@@ -308,13 +327,15 @@ static void grep_file(const char *rel, const char *full, grep_state *g) {
                 g->truncated = 1;
         }
     }
+
     free(text);
 }
 
 static int name_glob_ok(const char *name, const char *glob_pat) {
+    char tmp[256];
+
     if (!glob_pat || !*glob_pat)
         return 1;
-    char tmp[256];
     snprintf(tmp, sizeof tmp, "%s", name);
     return glob_match_segs((char *)glob_pat, tmp);
 }
@@ -358,20 +379,32 @@ static void grep_walk(const char *root, const char *rel, grep_state *g) {
 }
 
 static tool_result *grep_exec(const tool *self, const tool_ctx *ctx, const char *args_json) {
+    cJSON *args;
+    cJSON *pat_j;
+    cJSON *path_j;
+    cJSON *glob_j;
+    cJSON *mode_j;
+    cJSON *ic_j;
+    cJSON *hl_j;
+    char root[1024];
+    char *out;
+    tool_result *r;
+
     (void)self;
-    cJSON *args = cJSON_Parse(args_json);
+    args = cJSON_Parse(args_json);
     if (!args)
         return tool_result_new(0, "grep: invalid args JSON");
-    cJSON *pat_j = cJSON_GetObjectItemCaseSensitive(args, "pattern");
+    pat_j = cJSON_GetObjectItemCaseSensitive(args, "pattern");
     if (!pat_j || !cJSON_IsString(pat_j)) {
         cJSON_Delete(args);
         return tool_result_new(0, "grep: missing string arg 'pattern'");
     }
-    cJSON *path_j = cJSON_GetObjectItemCaseSensitive(args, "path");
-    cJSON *glob_j = cJSON_GetObjectItemCaseSensitive(args, "glob");
-    cJSON *mode_j = cJSON_GetObjectItemCaseSensitive(args, "output_mode");
-    cJSON *ic_j = cJSON_GetObjectItemCaseSensitive(args, "ignore_case");
-    cJSON *hl_j = cJSON_GetObjectItemCaseSensitive(args, "head_limit");
+
+    path_j = cJSON_GetObjectItemCaseSensitive(args, "path");
+    glob_j = cJSON_GetObjectItemCaseSensitive(args, "glob");
+    mode_j = cJSON_GetObjectItemCaseSensitive(args, "output_mode");
+    ic_j = cJSON_GetObjectItemCaseSensitive(args, "ignore_case");
+    hl_j = cJSON_GetObjectItemCaseSensitive(args, "head_limit");
 
     grep_state g;
     memset(&g, 0, sizeof g);
@@ -387,9 +420,9 @@ static tool_result *grep_exec(const tool *self, const tool_ctx *ctx, const char 
         else if (strcmp(mode_j->valuestring, "count") == 0)
             g.mode = 2;
     }
+
     g.head_limit = (hl_j && cJSON_IsNumber(hl_j) && hl_j->valuedouble > 0) ? (size_t)hl_j->valuedouble : 250;
 
-    char root[1024];
     resolve_root(ctx, (path_j && cJSON_IsString(path_j)) ? path_j->valuestring : NULL, root, sizeof root);
     cJSON_Delete(args);
 
@@ -402,8 +435,8 @@ static tool_result *grep_exec(const tool *self, const tool_ctx *ctx, const char 
                            "(Results are truncated. Consider using a more specific path, pattern or head_limit.)\n");
     free((void *)g.needle);
     free((void *)g.file_glob);
-    char *out = strbuf_detach(&g.sb);
-    tool_result *r = tool_result_new(1, out ? out : "");
+    out = strbuf_detach(&g.sb);
+    r = tool_result_new(1, out ? out : "");
     free(out);
     return r;
 }

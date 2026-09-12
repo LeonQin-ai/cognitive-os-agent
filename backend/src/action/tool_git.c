@@ -19,14 +19,21 @@ static int has_shell_metachars(const char *s) {
 }
 
 static tool_result *git_exec(const tool *self, const tool_ctx *ctx, const char *args_json) {
+    cJSON *args;
+    cJSON *sub;
+    const char *dir = NULL;
+    cJSON *dir_j;
+    char cmd[4096];
+    proc_result *pr;
+    tool_result *r;
+
     (void)self;
-    cJSON *args = cJSON_Parse(args_json);
+    args = cJSON_Parse(args_json);
     if (!args)
         return tool_result_new(0, "git: invalid args JSON");
-    cJSON *sub = cJSON_GetObjectItemCaseSensitive(args, "args");
+    sub = cJSON_GetObjectItemCaseSensitive(args, "args");
     const char *subargs = (sub && cJSON_IsString(sub)) ? sub->valuestring : "";
-    const char *dir = NULL;
-    cJSON *dir_j = cJSON_GetObjectItemCaseSensitive(args, "dir");
+    dir_j = cJSON_GetObjectItemCaseSensitive(args, "dir");
     if (dir_j && cJSON_IsString(dir_j))
         dir = dir_j->valuestring;
 
@@ -35,7 +42,6 @@ static tool_result *git_exec(const tool *self, const tool_ctx *ctx, const char *
         return tool_result_new(0, "git: args contain forbidden characters (quote/backtick/$(/newline)");
     }
 
-    char cmd[4096];
     if (dir && *dir)
         snprintf(cmd, sizeof(cmd), "git -C \"%s\" %s", dir, subargs);
     else if (ctx && ctx->workspace && *ctx->workspace)
@@ -43,12 +49,12 @@ static tool_result *git_exec(const tool *self, const tool_ctx *ctx, const char *
     else
         snprintf(cmd, sizeof(cmd), "git %s", subargs);
 
-    proc_result *pr = proc_run(cmd, 15000);
+    pr = proc_run(cmd, 15000);
     cJSON_Delete(args);
     if (!pr)
         return tool_result_new(0, "git: failed to spawn git");
 
-    tool_result *r = tool_result_new(pr->exit_code == 0 && !pr->timed_out, pr->output ? pr->output : "");
+    r = tool_result_new(pr->exit_code == 0 && !pr->timed_out, pr->output ? pr->output : "");
     proc_result_free(pr);
     return r;
 }

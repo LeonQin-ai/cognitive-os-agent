@@ -30,6 +30,7 @@ void kvstore_free(kvstore *k) {
         free(k->items[i].key);
         free(k->items[i].val);
     }
+
     free(k->items);
     k->items = NULL;
     k->count = k->cap = 0;
@@ -58,10 +59,12 @@ void kvstore_set(kvstore *k, const char *key, const char *val) {
             return;
         }
     }
+
     if (!val) {
         mutex_unlock(&k->mtx);
         return;
     } /* deleting absent key: no-op */
+
     if (k->count == k->cap) {
         size_t cap = k->cap ? k->cap * 2 : 8;
         kv *nb = (kv *)realloc(k->items, cap * sizeof(kv));
@@ -72,6 +75,7 @@ void kvstore_set(kvstore *k, const char *key, const char *val) {
         k->items = nb;
         k->cap = cap;
     }
+
     k->items[k->count].key = xstrdup(key);
     k->items[k->count].val = xstrdup(val);
     k->count++;
@@ -79,24 +83,27 @@ void kvstore_set(kvstore *k, const char *key, const char *val) {
 }
 
 const char *kvstore_get(kvstore *k, const char *key) {
+    const char *v = NULL;
+
     if (!k || !key)
         return NULL;
     mutex_lock(&k->mtx);
-    const char *v = NULL;
     for (size_t i = 0; i < k->count; i++)
         if (strcmp(k->items[i].key, key) == 0) {
             v = k->items[i].val;
             break;
         }
+
     mutex_unlock(&k->mtx);
     return v;
 }
 
 int kvstore_remove(kvstore *k, const char *key) {
+    int found = 0;
+
     if (!k || !key)
         return 0;
     mutex_lock(&k->mtx);
-    int found = 0;
     for (size_t i = 0; i < k->count; i++) {
         if (strcmp(k->items[i].key, key) == 0) {
             free(k->items[i].key);
@@ -108,28 +115,34 @@ int kvstore_remove(kvstore *k, const char *key) {
             break;
         }
     }
+
     mutex_unlock(&k->mtx);
     return found;
 }
 
 int kvstore_count(kvstore *k) {
+    int n;
+
     if (!k)
         return 0;
     mutex_lock(&k->mtx);
-    int n = (int)k->count;
+    n = (int)k->count;
     mutex_unlock(&k->mtx);
     return n;
 }
 
 char *kvstore_snapshot_json(kvstore *k) {
+    cJSON *o;
+    char *s;
+
     if (!k)
         return xstrdup("{}");
     mutex_lock(&k->mtx);
-    cJSON *o = cJSON_CreateObject();
+    o = cJSON_CreateObject();
     if (o)
         for (size_t i = 0; i < k->count; i++)
             cJSON_AddStringToObject(o, k->items[i].key, k->items[i].val ? k->items[i].val : "");
-    char *s = o ? cJSON_PrintUnformatted(o) : NULL;
+    s = o ? cJSON_PrintUnformatted(o) : NULL;
     if (o)
         cJSON_Delete(o);
     mutex_unlock(&k->mtx);

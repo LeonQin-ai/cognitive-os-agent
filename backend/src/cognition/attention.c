@@ -38,20 +38,23 @@ static int ci_substr(const char *hay, const char *needle) {
         if (j == nlen)
             return 1;
     }
+
     return 0;
 }
 
 /* Iterate query words; for each word present in the candidate text/tags add a
  * weight proportional to word length so rare/specific terms dominate. */
 double attention_score(attention *a, const char *query, const attention_candidate *c) {
+    double score;
+    const char *p = query;
+
     (void)a;
     if (!c)
         return 0.0;
-    double score = c->boost;
+    score = c->boost;
     if (!query || !c->text)
         return score;
 
-    const char *p = query;
     while (*p) {
         while (*p && !isalnum((unsigned char)*p))
             p++;
@@ -75,6 +78,7 @@ double attention_score(attention *a, const char *query, const attention_candidat
         else if (c->tags && ci_substr(c->tags, word))
             score += 0.5 + (double)wlen * 0.25;
     }
+
     return score;
 }
 
@@ -93,19 +97,22 @@ static void sort_results(attention_result *r, int n) {
 
 int attention_select(attention *a, const char *query, const attention_candidate *cands, size_t n,
                          attention_result *out, size_t topk) {
+    attention_result *tmp;
+    size_t k = topk < n ? topk : n;
+
     if (!a || !cands || !out || n == 0 || topk == 0)
         return 0;
 
-    attention_result *tmp = (attention_result *)malloc(n * sizeof(*tmp));
+    tmp = (attention_result *)malloc(n * sizeof(*tmp));
     if (!tmp)
         return 0;
     for (size_t i = 0; i < n; i++) {
         tmp[i].index = (int)i;
         tmp[i].score = attention_score(a, query, &cands[i]);
     }
+
     sort_results(tmp, (int)n);
 
-    size_t k = topk < n ? topk : n;
     for (size_t i = 0; i < k; i++)
         out[i] = tmp[i];
     free(tmp);

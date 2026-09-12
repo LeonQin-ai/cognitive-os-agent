@@ -42,11 +42,13 @@ void graph_free(graph *g) {
         free(g->nodes[i].id);
         free(g->nodes[i].label);
     }
+
     for (size_t i = 0; i < g->n_edges; i++) {
         free(g->edges[i].from);
         free(g->edges[i].to);
         free(g->edges[i].relation);
     }
+
     free(g->nodes);
     free(g->edges);
     g->nodes = NULL;
@@ -72,6 +74,7 @@ int graph_add_node(graph *g, const char *id, const char *label) {
         mutex_unlock(&g->mtx);
         return -1;
     }
+
     if (g->n_nodes == g->cap_nodes) {
         size_t cap = g->cap_nodes ? g->cap_nodes * 2 : 8;
         gnode *nn = (gnode *)realloc(g->nodes, cap * sizeof(gnode));
@@ -82,6 +85,7 @@ int graph_add_node(graph *g, const char *id, const char *label) {
         g->nodes = nn;
         g->cap_nodes = cap;
     }
+
     g->nodes[g->n_nodes].id = xstrdup(id);
     g->nodes[g->n_nodes].label = xstrdup(label ? label : "");
     g->n_nodes++;
@@ -101,6 +105,7 @@ int graph_add_edge(graph *g, const char *from, const char *to, const char *relat
             return 0;
         }
     }
+
     if (g->n_edges == g->cap_edges) {
         size_t cap = g->cap_edges ? g->cap_edges * 2 : 8;
         gedge *ne = (gedge *)realloc(g->edges, cap * sizeof(gedge));
@@ -111,6 +116,7 @@ int graph_add_edge(graph *g, const char *from, const char *to, const char *relat
         g->edges = ne;
         g->cap_edges = cap;
     }
+
     g->edges[g->n_edges].from = xstrdup(from);
     g->edges[g->n_edges].to = xstrdup(to);
     g->edges[g->n_edges].relation = xstrdup(relation ? relation : "");
@@ -120,28 +126,35 @@ int graph_add_edge(graph *g, const char *from, const char *to, const char *relat
 }
 
 int graph_node_count(graph *g) {
+    int n;
+
     if (!g)
         return 0;
     mutex_lock(&g->mtx);
-    int n = (int)g->n_nodes;
+    n = (int)g->n_nodes;
     mutex_unlock(&g->mtx);
     return n;
 }
 
 int graph_edge_count(graph *g) {
+    int n;
+
     if (!g)
         return 0;
     mutex_lock(&g->mtx);
-    int n = (int)g->n_edges;
+    n = (int)g->n_edges;
     mutex_unlock(&g->mtx);
     return n;
 }
 
 char *graph_neighbors(graph *g, const char *id) {
+    cJSON *arr;
+    char *s;
+
     if (!g || !id)
         return xstrdup("[]");
     mutex_lock(&g->mtx);
-    cJSON *arr = cJSON_CreateArray();
+    arr = cJSON_CreateArray();
     if (arr) {
         for (size_t i = 0; i < g->n_edges; i++) {
             if (strcmp(g->edges[i].from, id) == 0) {
@@ -152,7 +165,8 @@ char *graph_neighbors(graph *g, const char *id) {
             }
         }
     }
-    char *s = arr ? cJSON_PrintUnformatted(arr) : NULL;
+
+    s = arr ? cJSON_PrintUnformatted(arr) : NULL;
     if (arr)
         cJSON_Delete(arr);
     mutex_unlock(&g->mtx);
@@ -160,12 +174,17 @@ char *graph_neighbors(graph *g, const char *id) {
 }
 
 char *graph_snapshot_json(graph *g) {
+    cJSON *root;
+    cJSON *nodes;
+    cJSON *edges;
+    char *s;
+
     if (!g)
         return xstrdup("{}");
     mutex_lock(&g->mtx);
-    cJSON *root = cJSON_CreateObject();
-    cJSON *nodes = cJSON_CreateArray();
-    cJSON *edges = cJSON_CreateArray();
+    root = cJSON_CreateObject();
+    nodes = cJSON_CreateArray();
+    edges = cJSON_CreateArray();
     if (root && nodes && edges) {
         cJSON_AddItemToObject(root, "nodes", nodes);
         cJSON_AddItemToObject(root, "edges", edges);
@@ -183,7 +202,8 @@ char *graph_snapshot_json(graph *g) {
             cJSON_AddItemToArray(edges, o);
         }
     }
-    char *s = root ? cJSON_PrintUnformatted(root) : NULL;
+
+    s = root ? cJSON_PrintUnformatted(root) : NULL;
     if (root)
         cJSON_Delete(root);
     mutex_unlock(&g->mtx);

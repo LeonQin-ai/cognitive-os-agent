@@ -37,6 +37,7 @@ agent_pool *agent_pool_new(void) {
         free(p);
         return NULL;
     }
+
     return p;
 }
 
@@ -50,6 +51,7 @@ void agent_pool_free(agent_pool *p) {
         free(p->agents[i].provider);
         free(p->agents[i].model);
     }
+
     free(p->agents);
     p->agents = NULL;
     p->count = p->cap = 0;
@@ -86,6 +88,8 @@ int agent_pool_add(agent_pool *p, const char *name, const char *role) {
 
 int agent_pool_add_model(agent_pool *p, const char *name, const char *role, const char *provider,
                              const char *model) {
+    int idx;
+
     if (!p || !name || !*name)
         return -1;
     mutex_lock(&p->mtx);
@@ -93,6 +97,7 @@ int agent_pool_add_model(agent_pool *p, const char *name, const char *role, cons
         mutex_unlock(&p->mtx);
         return -1; /* duplicate */
     }
+
     if (p->count == p->cap) {
         size_t cap = p->cap ? p->cap * 2 : 8;
         agent_entry *na = (agent_entry *)realloc(p->agents, cap * sizeof(agent_entry));
@@ -103,11 +108,12 @@ int agent_pool_add_model(agent_pool *p, const char *name, const char *role, cons
         p->agents = na;
         p->cap = cap;
     }
+
     p->agents[p->count].name = xstrdup(name);
     p->agents[p->count].role = role ? xstrdup(role) : xstrdup("");
     p->agents[p->count].provider = provider ? xstrdup(provider) : NULL;
     p->agents[p->count].model = model ? xstrdup(model) : NULL;
-    int idx = (int)p->count;
+    idx = (int)p->count;
     p->count++;
     mutex_unlock(&p->mtx);
     return idx;
@@ -116,14 +122,17 @@ int agent_pool_add_model(agent_pool *p, const char *name, const char *role, cons
 /* Remove a registered agent by name (frees its strings, shifts the tail).
  * Returns 0 on success, -1 when the pool or name is unknown. */
 int agent_pool_remove(agent_pool *p, const char *name) {
+    int idx;
+
     if (!p || !name || !*name)
         return -1;
     mutex_lock(&p->mtx);
-    int idx = find_agent(p, name);
+    idx = find_agent(p, name);
     if (idx < 0) {
         mutex_unlock(&p->mtx);
         return -1;
     }
+
     free(p->agents[idx].name);
     free(p->agents[idx].role);
     free(p->agents[idx].provider);
@@ -135,19 +144,23 @@ int agent_pool_remove(agent_pool *p, const char *name) {
 }
 
 int agent_pool_count(agent_pool *p) {
+    int n;
+
     if (!p)
         return 0;
     mutex_lock(&p->mtx);
-    int n = (int)p->count;
+    n = (int)p->count;
     mutex_unlock(&p->mtx);
     return n;
 }
 
 int agent_pool_find(agent_pool *p, const char *name) {
+    int idx;
+
     if (!p || !name)
         return -1;
     mutex_lock(&p->mtx);
-    int idx = find_agent(p, name);
+    idx = find_agent(p, name);
     mutex_unlock(&p->mtx);
     return idx;
 }
@@ -157,10 +170,12 @@ blackboard *agent_pool_blackboard(agent_pool *p) {
 }
 
 int agent_post(agent_pool *p, const char *agent, const char *key, const char *val) {
+    int ok;
+
     if (!p || !agent || !key || !val)
         return -1;
     mutex_lock(&p->mtx);
-    int ok = find_agent(p, agent) >= 0;
+    ok = find_agent(p, agent) >= 0;
     mutex_unlock(&p->mtx);
     if (!ok)
         return -1;
@@ -169,11 +184,16 @@ int agent_post(agent_pool *p, const char *agent, const char *key, const char *va
 }
 
 char *agent_pool_snapshot_json(agent_pool *p) {
+    cJSON *root;
+    cJSON *arr;
+    char *facts;
+    char *s;
+
     if (!p)
         return xstrdup("{}");
     mutex_lock(&p->mtx);
-    cJSON *root = cJSON_CreateObject();
-    cJSON *arr = cJSON_CreateArray();
+    root = cJSON_CreateObject();
+    arr = cJSON_CreateArray();
     if (root && arr) {
         cJSON_AddItemToObject(root, "agents", arr);
         for (size_t i = 0; i < p->count; i++) {
@@ -185,16 +205,18 @@ char *agent_pool_snapshot_json(agent_pool *p) {
             cJSON_AddItemToArray(arr, o);
         }
     }
+
     mutex_unlock(&p->mtx);
 
-    char *facts = blackboard_snapshot_json(p->bb);
+    facts = blackboard_snapshot_json(p->bb);
     if (root && facts) {
         cJSON *fj = cJSON_Parse(facts);
         cJSON_AddItemToObject(root, "facts", fj ? fj : cJSON_CreateObject());
     }
+
     free(facts);
 
-    char *s = root ? cJSON_PrintUnformatted(root) : NULL;
+    s = root ? cJSON_PrintUnformatted(root) : NULL;
     if (root)
         cJSON_Delete(root);
     return s ? s : xstrdup("{}");
@@ -203,12 +225,15 @@ char *agent_pool_snapshot_json(agent_pool *p) {
 /* ---------- roster persistence (<state_root>/agents.json) ---------- */
 
 int agent_pool_save(agent_pool *p, const char *dir) {
+    cJSON *root;
+    cJSON *arr;
+    int ok = 0;
+
     if (!p || !dir || !*dir)
         return -1;
     mutex_lock(&p->mtx);
-    cJSON *root = cJSON_CreateObject();
-    cJSON *arr = cJSON_CreateArray();
-    int ok = 0;
+    root = cJSON_CreateObject();
+    arr = cJSON_CreateArray();
     if (root && arr) {
         cJSON_AddItemToObject(root, "agents", arr);
         for (size_t i = 0; i < p->count; i++) {
@@ -233,6 +258,7 @@ int agent_pool_save(agent_pool *p, const char *dir) {
     } else if (arr) {
         cJSON_Delete(arr);
     }
+
     if (root)
         cJSON_Delete(root);
     mutex_unlock(&p->mtx);
@@ -240,35 +266,44 @@ int agent_pool_save(agent_pool *p, const char *dir) {
 }
 
 int agent_pool_load(agent_pool *p, const char *dir) {
+    char path[512];
+    char *s;
+    cJSON *root;
+    cJSON *arr;
+    int loaded = 0;
+
     if (!p || !dir || !*dir)
         return -1;
-    char path[512];
     if (snprintf(path, sizeof(path), "%s/agents.json", dir) >= (int)sizeof(path))
         return -1;
-    char *s = fs_read_file(path);
+    s = fs_read_file(path);
     if (!s)
         return -1;
-    cJSON *root = cJSON_Parse(s);
+    root = cJSON_Parse(s);
     free(s);
     if (!root)
         return -1;
-    cJSON *arr = cJSON_GetObjectItemCaseSensitive(root, "agents");
-    int loaded = 0;
+    arr = cJSON_GetObjectItemCaseSensitive(root, "agents");
     if (cJSON_IsArray(arr)) {
         cJSON *it;
         cJSON_ArrayForEach(it, arr) {
             cJSON *n = cJSON_GetObjectItemCaseSensitive(it, "name");
+    cJSON *r;
+    cJSON *prov;
+    cJSON *mod;
+
             if (!n || !cJSON_IsString(n) || !n->valuestring || !*n->valuestring)
                 continue;
-            cJSON *r = cJSON_GetObjectItemCaseSensitive(it, "role");
-            cJSON *prov = cJSON_GetObjectItemCaseSensitive(it, "provider");
-            cJSON *mod = cJSON_GetObjectItemCaseSensitive(it, "model");
+            r = cJSON_GetObjectItemCaseSensitive(it, "role");
+            prov = cJSON_GetObjectItemCaseSensitive(it, "provider");
+            mod = cJSON_GetObjectItemCaseSensitive(it, "model");
             if (agent_pool_add_model(p, n->valuestring, (r && cJSON_IsString(r)) ? r->valuestring : "",
                                          (prov && cJSON_IsString(prov)) ? prov->valuestring : NULL,
                                          (mod && cJSON_IsString(mod)) ? mod->valuestring : NULL) >= 0)
                 loaded++;
         }
     }
+
     cJSON_Delete(root);
     return loaded;
 }

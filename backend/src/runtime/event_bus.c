@@ -40,22 +40,25 @@ event_bus *event_bus_new(void) {
         free(b);
         return NULL;
     }
+
     mutex_init(&b->sub_mtx);
     atomic_init(&b->draining, 0);
     return b;
 }
 
 void event_bus_free(event_bus *b) {
-    if (!b)
-        return;
     /* drain and free any pending events */
     void *it;
+
+    if (!b)
+        return;
     while (ringbuf_pop(b->queue, &it) == 1) {
         event *ev = (event *)it;
         if (ev->payload)
             cJSON_Delete(ev->payload);
         free(ev);
     }
+
     ringbuf_free(b->queue);
     free(b->subs);
     mutex_destroy(&b->sub_mtx);
@@ -63,6 +66,8 @@ void event_bus_free(event_bus *b) {
 }
 
 int event_bus_subscribe(event_bus *b, int type, event_handler fn, void *ud) {
+    int id;
+
     if (!b || !fn)
         return -1;
     mutex_lock(&b->sub_mtx);
@@ -76,10 +81,11 @@ int event_bus_subscribe(event_bus *b, int type, event_handler fn, void *ud) {
         b->subs = ns;
         b->cap = cap;
     }
+
     b->subs[b->count].type = type;
     b->subs[b->count].fn = fn;
     b->subs[b->count].ud = ud;
-    int id = (int)b->count;
+    id = (int)b->count;
     b->count++;
     mutex_unlock(&b->sub_mtx);
     return id;
@@ -88,8 +94,9 @@ int event_bus_subscribe(event_bus *b, int type, event_handler fn, void *ud) {
 /* Dispatch one event to a snapshot of matching subscribers. The snapshot is
  * taken under the subscription lock; dispatch itself runs unlocked. */
 static void dispatch_one(event_bus *b, event *ev) {
-    subscription *snap = NULL;
     size_t n = 0;
+
+    subscription *snap = NULL;
     mutex_lock(&b->sub_mtx);
     n = b->count;
     if (n) {
@@ -99,6 +106,7 @@ static void dispatch_one(event_bus *b, event *ev) {
         else
             n = 0;
     }
+
     mutex_unlock(&b->sub_mtx);
     if (!snap)
         return;
@@ -106,6 +114,7 @@ static void dispatch_one(event_bus *b, event *ev) {
         if (snap[i].type == (int)ev->type || snap[i].type == -1)
             snap[i].fn(ev, snap[i].ud);
     }
+
     free(snap);
 }
 
@@ -137,17 +146,21 @@ static void drain(event_bus *b) {
 }
 
 void event_bus_publish(event_bus *b, event_type type, const char *source, cJSON *payload) {
+    event *ev;
+
     if (!b) {
         if (payload)
             cJSON_Delete(payload);
         return;
     }
-    event *ev = malloc(sizeof(event));
+
+    ev = malloc(sizeof(event));
     if (!ev) {
         if (payload)
             cJSON_Delete(payload);
         return;
     }
+
     ev->type = type;
     ev->source = source;
     ev->ts_ms = time_now_ms();
@@ -159,6 +172,7 @@ void event_bus_publish(event_bus *b, event_type type, const char *source, cJSON 
             cJSON_Delete(payload);
         return;
     }
+
     drain(b);
 }
 

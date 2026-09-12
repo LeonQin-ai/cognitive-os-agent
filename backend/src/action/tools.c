@@ -30,20 +30,23 @@ int tool_register(tool_registry *reg, const tool *tool) {
 }
 
 int tool_register_ex(tool_registry *reg, const tool *t, int replace) {
+    int i = -1;
+
     if (!reg || !t)
         return -1;
-    int i = -1;
     for (size_t k = 0; k < reg->count; k++)
         if (strcmp(reg->tools[k]->name, t->name) == 0) {
             i = (int)k;
             break;
         }
+
     if (i >= 0) {
         if (!replace)
             return -1; /* already registered */
         reg->tools[i] = t;
         return 0;
     }
+
     if (reg->count == reg->cap) {
         size_t cap = reg->cap ? reg->cap * 2 : 8;
         const tool **nt = realloc(reg->tools, cap * sizeof(tool *));
@@ -52,6 +55,7 @@ int tool_register_ex(tool_registry *reg, const tool *t, int replace) {
         reg->tools = nt;
         reg->cap = cap;
     }
+
     reg->tools[reg->count++] = t;
     return 0;
 }
@@ -63,6 +67,7 @@ const tool *tool_find(tool_registry *reg, const char *name) {
         if (strcmp(reg->tools[i]->name, name) == 0)
             return reg->tools[i];
     }
+
     return NULL;
 }
 
@@ -78,6 +83,7 @@ int tool_unregister(tool_registry *reg, const char *name) {
             return 1;
         }
     }
+
     return 0;
 }
 
@@ -140,24 +146,28 @@ static int json_type_matches(const cJSON *v, const char *type) {
 }
 
 int tool_validate_args(const tool *tool, const char *args_json, char **err_out) {
+    cJSON *schema;
+    int rc = 0;
+    cJSON *stype;
+    cJSON *args;
+
     if (err_out)
         *err_out = NULL;
     if (!tool || !tool->json_schema || !*tool->json_schema)
         return 0;
 
-    cJSON *schema = cJSON_Parse(tool->json_schema);
+    schema = cJSON_Parse(tool->json_schema);
     if (!schema)
         return 0; /* malformed schema: skip validation */
-    int rc = 0;
 
-    cJSON *stype = cJSON_GetObjectItemCaseSensitive(schema, "type");
+    stype = cJSON_GetObjectItemCaseSensitive(schema, "type");
     if (stype && cJSON_IsString(stype) && strcmp(stype->valuestring, "object") != 0) {
         /* only object roots are validated in this subset */
         cJSON_Delete(schema);
         return 0;
     }
 
-    cJSON *args = cJSON_Parse(args_json && *args_json ? args_json : "{}");
+    args = cJSON_Parse(args_json && *args_json ? args_json : "{}");
     if (!args || !cJSON_IsObject(args)) {
         if (err_out)
             *err_out = xstrdup("args is not a JSON object");
@@ -183,15 +193,18 @@ int tool_validate_args(const tool *tool, const char *args_json, char **err_out) 
             }
         }
     }
+
     if (rc == 0) {
         cJSON *props = cJSON_GetObjectItemCaseSensitive(schema, "properties");
         if (cJSON_IsObject(props)) {
             const cJSON *child = NULL;
             cJSON_ArrayForEach(child, args) {
                 cJSON *pspec = cJSON_GetObjectItemCaseSensitive(props, child->string);
+    cJSON *ptype;
+
                 if (!pspec)
                     continue; /* unspecified keys allowed */
-                cJSON *ptype = cJSON_GetObjectItemCaseSensitive(pspec, "type");
+                ptype = cJSON_GetObjectItemCaseSensitive(pspec, "type");
                 const char *tname = (ptype && cJSON_IsString(ptype)) ? ptype->valuestring : NULL;
                 if (!json_type_matches(child, tname)) {
                     strbuf b;
@@ -206,6 +219,7 @@ int tool_validate_args(const tool *tool, const char *args_json, char **err_out) 
             }
         }
     }
+
     if (args)
         cJSON_Delete(args);
     cJSON_Delete(schema);
@@ -216,14 +230,16 @@ int tool_validate_args(const tool *tool, const char *args_json, char **err_out) 
  * (mirrors Claude Code's maxResultSizeChars). */
 static char *truncate_output(const char *out, size_t limit) {
     size_t n = strlen(out);
+    char *msg;
+    char tail[96];
+
     if (n <= limit)
         return NULL;
-    char *msg = (char *)malloc(limit + 96);
+    msg = (char *)malloc(limit + 96);
     if (!msg)
         return NULL;
     memcpy(msg, out, limit);
     msg[limit] = '\0';
-    char tail[96];
     snprintf(tail, sizeof(tail), "\n...[truncated, 全长 %zu 字符]", n);
     strcat(msg, tail);
     return msg;
@@ -232,14 +248,16 @@ static char *truncate_output(const char *out, size_t limit) {
 tool_result *tool_execute(tool_registry *reg, const char *name, const char *args_json,
                                   const tool_ctx *ctx) {
     const tool *tool = tool_find(reg, name);
+    /* lightweight args schema validation (fail fast, before policy/execute) */
+    char *verr = NULL;
+    tool_result *r;
+
     if (!tool) {
         char msg[256];
         snprintf(msg, sizeof(msg), "unknown tool: %s", name);
         return tool_result_new(0, msg);
     }
 
-    /* lightweight args schema validation (fail fast, before policy/execute) */
-    char *verr = NULL;
     if (tool_validate_args(tool, args_json, &verr) != 0) {
         char msg[512];
         snprintf(msg, sizeof(msg), "args schema mismatch: %s", verr ? verr : "invalid");
@@ -260,7 +278,7 @@ tool_result *tool_execute(tool_registry *reg, const char *name, const char *args
         }
     }
 
-    tool_result *r = tool->execute(tool, ctx, args_json);
+    r = tool->execute(tool, ctx, args_json);
     if (!r)
         r = tool_result_new(0, "tool returned NULL");
 
@@ -279,6 +297,7 @@ tool_result *tool_execute(tool_registry *reg, const char *name, const char *args
         snprintf(mname, sizeof(mname), "tools.%s", name);
         metrics_inc(ctx->metrics, mname);
     }
+
     if (ctx && ctx->bus) {
         cJSON *ev = cJSON_CreateObject();
         cJSON_AddStringToObject(ev, "tool", name);
@@ -287,5 +306,6 @@ tool_result *tool_execute(tool_registry *reg, const char *name, const char *args
         cJSON_AddStringToObject(ev, "output", strlen(out) > 300 ? (out + strlen(out) - 300) : out);
         event_bus_publish(ctx->bus, EV_TOOL, "tools", ev);
     }
+
     return r;
 }

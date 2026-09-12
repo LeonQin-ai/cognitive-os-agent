@@ -66,6 +66,7 @@ static int ci_contains(const char *hay, const char *needle) {
         if (j == nlen)
             return 1;
     }
+
     return 0;
 }
 
@@ -79,28 +80,34 @@ int sandbox_forbidden(const char *cmd) {
 }
 
 sandbox_result *sandbox_run(sandbox *sb, const char *cmd) {
+    ft_snapshot *snap = NULL;
+    proc_result *pr;
+    sandbox_result *r;
+
     if (!cmd || sandbox_forbidden(cmd))
         return NULL;
     /* file tracking: capture the workspace state + command reads before the
      * run, diff after (see filetracker.h) */
-    ft_snapshot *snap = NULL;
     if (sb && sb->ft && sb->workspace) {
         filetracker_cmd_reads(sb->ft, cmd, sb->workspace);
         snap = filetracker_dir_snapshot(sb->workspace);
     }
-    proc_result *pr = proc_run(cmd, sb ? sb->timeout_ms : 0);
+
+    pr = proc_run(cmd, sb ? sb->timeout_ms : 0);
     if (!pr) {
         if (snap)
             filetracker_snapshot_free(snap);
         return NULL;
     }
-    sandbox_result *r = (sandbox_result *)calloc(1, sizeof(sandbox_result));
+
+    r = (sandbox_result *)calloc(1, sizeof(sandbox_result));
     if (!r) {
         if (snap)
             filetracker_snapshot_free(snap);
         proc_result_free(pr);
         return NULL;
     }
+
     r->exit_code = pr->exit_code;
     r->timed_out = pr->timed_out;
     r->ok = (pr->exit_code == 0 && !pr->timed_out) ? 1 : 0;
@@ -110,6 +117,7 @@ sandbox_result *sandbox_run(sandbox *sb, const char *cmd) {
         filetracker_dir_diff(sb->ft, snap, sb->workspace);
         r->files_json = filetracker_json(sb->ft);
     }
+
     if (snap)
         filetracker_snapshot_free(snap);
     return r;

@@ -45,6 +45,7 @@ static void sha1_block(uint32_t h[5], const unsigned char *p) {
         b = a;
         a = tmp;
     }
+
     h[0] += a;
     h[1] += b;
     h[2] += c;
@@ -87,13 +88,14 @@ static void sha1_update(sha1_ctx *s, const unsigned char *data, size_t len) {
 
 static void sha1_final(sha1_ctx *s, unsigned char out[20]) {
     uint64_t bitlen = s->total * 8;
+    int i;
+
     unsigned char pad = 0x80;
     unsigned char zero = 0;
     sha1_update(s, &pad, 1);
     while (s->block_len != 56)
         sha1_update(s, &zero, 1);
     unsigned char lenbuf[8];
-    int i;
     for (i = 0; i < 8; i++)
         lenbuf[i] = (unsigned char)(bitlen >> (56 - 8 * i));
     sha1_update(s, lenbuf, 8);
@@ -119,6 +121,8 @@ static const char b64_tab[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvw
 char *base64_encode(const unsigned char *data, size_t len) {
     size_t olen = ((len + 2) / 3) * 4;
     char *out = (char *)malloc(olen + 1);
+    size_t rem;
+
     if (!out)
         return NULL;
     size_t i = 0, o = 0;
@@ -130,7 +134,8 @@ char *base64_encode(const unsigned char *data, size_t len) {
         out[o++] = b64_tab[v & 63];
         i += 3;
     }
-    size_t rem = len - i;
+
+    rem = len - i;
     if (rem == 1) {
         uint32_t v = (uint32_t)data[i] << 16;
         out[o++] = b64_tab[(v >> 18) & 63];
@@ -144,6 +149,7 @@ char *base64_encode(const unsigned char *data, size_t len) {
         out[o++] = b64_tab[(v >> 6) & 63];
         out[o++] = '=';
     }
+
     out[o] = '\0';
     return out;
 }
@@ -187,6 +193,7 @@ int base64_decode(const char *in, unsigned char *out, size_t out_cap, size_t *ou
             out[olen++] = b;
         }
     }
+
     if (out_len)
         *out_len = olen;
     return 0;
@@ -198,16 +205,20 @@ static const char WS_GUID[] = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
 void ws_accept_key(const char *client_key, char out[29]) {
     char buf[256];
+    char *b64;
+
     unsigned char sha[20];
     snprintf(buf, sizeof(buf), "%s%s", client_key ? client_key : "", WS_GUID);
     sha1((const unsigned char *)buf, strlen(buf), sha);
-    char *b64 = base64_encode(sha, 20);
+    b64 = base64_encode(sha, 20);
     snprintf(out, 29, "%s", b64 ? b64 : "");
     free(b64);
 }
 
 char *ws_build_frame(int opcode, const unsigned char *payload, size_t len, int mask, size_t *out_len) {
     size_t header = 2;
+    size_t off;
+
     if (len >= 126)
         header += 2;
     if (len >= 65536)
@@ -221,7 +232,6 @@ char *ws_build_frame(int opcode, const unsigned char *payload, size_t len, int m
 
     buf[0] = (unsigned char)(0x80 | (opcode & 0x0F)); /* FIN=1 */
 
-    size_t off;
     if (len < 126) {
         buf[1] = (unsigned char)((mask ? 0x80 : 0) | len);
         off = 2;
@@ -263,13 +273,18 @@ char *ws_build_frame(int opcode, const unsigned char *payload, size_t len, int m
 
 int ws_parse_frame(const unsigned char *buf, size_t len, unsigned char *payload, size_t *payload_len, int *opcode,
                        int *fin) {
+    int f;
+    int op;
+    int masked;
+    size_t plen;
+    size_t off = 2;
+
     if (len < 2)
         return -1;
-    int f = (buf[0] >> 7) & 1;
-    int op = buf[0] & 0x0F;
-    int masked = (buf[1] >> 7) & 1;
-    size_t plen = buf[1] & 0x7F;
-    size_t off = 2;
+    f = (buf[0] >> 7) & 1;
+    op = buf[0] & 0x0F;
+    masked = (buf[1] >> 7) & 1;
+    plen = buf[1] & 0x7F;
 
     if (plen == 126) {
         if (len < off + 2)

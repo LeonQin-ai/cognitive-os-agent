@@ -15,6 +15,9 @@
  * invalid UTF-8). Returns a malloc'd string or NULL. */
 static char *oem_to_utf8(const char *in) {
     int wlen = MultiByteToWideChar(CP_OEMCP, 0, in, -1, NULL, 0);
+    int u8len;
+    char *u8;
+
     if (wlen <= 0)
         return NULL;
     wchar_t *w = (wchar_t *)malloc((size_t)wlen * sizeof(wchar_t));
@@ -24,41 +27,53 @@ static char *oem_to_utf8(const char *in) {
         free(w);
         return NULL;
     }
-    int u8len = WideCharToMultiByte(CP_UTF8, 0, w, -1, NULL, 0, NULL, NULL);
+
+    u8len = WideCharToMultiByte(CP_UTF8, 0, w, -1, NULL, 0, NULL, NULL);
     if (u8len <= 0) {
         free(w);
         return NULL;
     }
-    char *u8 = (char *)malloc((size_t)u8len);
+
+    u8 = (char *)malloc((size_t)u8len);
     if (!u8) {
         free(w);
         return NULL;
     }
+
     if (WideCharToMultiByte(CP_UTF8, 0, w, -1, u8, u8len, NULL, NULL) <= 0) {
         free(u8);
         u8 = NULL;
     }
+
     free(w);
     return u8;
 }
 #endif
 
 static tool_result *shell_exec(const tool *self, const tool_ctx *ctx, const char *args_json) {
+    cJSON *args;
+    cJSON *cmd_j;
+    int timeout_ms = 15000;
+    cJSON *t_j;
+    proc_result *pr;
+    char *converted = NULL;
+    tool_result *r;
+
     (void)self;
-    cJSON *args = cJSON_Parse(args_json);
+    args = cJSON_Parse(args_json);
     if (!args)
         return tool_result_new(0, "shell: invalid args JSON");
-    cJSON *cmd_j = cJSON_GetObjectItemCaseSensitive(args, "command");
+    cmd_j = cJSON_GetObjectItemCaseSensitive(args, "command");
     if (!cmd_j || !cJSON_IsString(cmd_j)) {
         cJSON_Delete(args);
         return tool_result_new(0, "shell: missing string arg 'command'");
     }
-    int timeout_ms = 15000;
-    cJSON *t_j = cJSON_GetObjectItemCaseSensitive(args, "timeout_ms");
+
+    t_j = cJSON_GetObjectItemCaseSensitive(args, "timeout_ms");
     if (t_j && cJSON_IsNumber(t_j))
         timeout_ms = (int)t_j->valuedouble;
 
-    proc_result *pr = proc_run_in(cmd_j->valuestring, timeout_ms, ctx ? ctx->workspace : NULL);
+    pr = proc_run_in(cmd_j->valuestring, timeout_ms, ctx ? ctx->workspace : NULL);
     cJSON_Delete(args);
     if (!pr)
         return tool_result_new(0, "shell: failed to spawn process");
@@ -66,7 +81,6 @@ static tool_result *shell_exec(const tool *self, const tool_ctx *ctx, const char
     /* Normalize output encoding: prefer the OEM->UTF-8 conversion on Windows
      * when the raw bytes are not valid UTF-8; last resort is lossy sanitize
      * so the context never carries invalid UTF-8. */
-    char *converted = NULL;
     const char *out_text = pr->output ? pr->output : "";
     if (*out_text && !str_utf8_valid_n(out_text, -1)) {
 #if defined(_WIN32)
@@ -83,7 +97,6 @@ static tool_result *shell_exec(const tool *self, const tool_ctx *ctx, const char
             out_text = converted;
     }
 
-    tool_result *r;
     if (pr->timed_out) {
         char msg[2048];
         snprintf(msg, sizeof(msg), "[timeout] %s\n%s", out_text, "command exceeded time limit");
@@ -95,6 +108,7 @@ static tool_result *shell_exec(const tool *self, const tool_ctx *ctx, const char
     } else {
         r = tool_result_new(1, out_text);
     }
+
     proc_result_free(pr);
     free(converted);
     return r;

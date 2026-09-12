@@ -32,6 +32,7 @@ void policy_engine_free(policy_engine *pe) {
         free(pe->rules[i].tool);
         free(pe->rules[i].reason);
     }
+
     free(pe->rules);
     free(pe);
 }
@@ -56,6 +57,7 @@ void policy_add_rule(policy_engine *pe, const char *tool_name, const char *actio
         pe->rules = realloc(pe->rules, cap * sizeof(rule));
         pe->cap = cap;
     }
+
     rule *r = &pe->rules[pe->count++];
     r->tool = xstrdup(tool_name);
     r->decision = parse_action(action);
@@ -73,6 +75,7 @@ policy_decision policy_check(policy_engine *pe, const char *tool_name, const cha
         else if (strcmp(pe->rules[i].tool, "*") == 0)
             wild = &pe->rules[i];
     }
+
     const rule *match = exact ? exact : wild;
     if (match) {
         if (reason)
@@ -86,6 +89,7 @@ policy_decision policy_check(policy_engine *pe, const char *tool_name, const cha
         }
         return (policy_decision)match->decision;
     }
+
     /* default: allow if no rules at all, else ask */
     if (reason)
         *reason = "no rule";
@@ -126,9 +130,13 @@ void policy_remove_rule(policy_engine *pe, size_t index) {
 }
 
 int policy_save_file(const policy_engine *pe, const char *path) {
+    cJSON *arr;
+    char *js;
+    int rc;
+
     if (!pe || !path)
         return -1;
-    cJSON *arr = cJSON_CreateArray();
+    arr = cJSON_CreateArray();
     if (!arr)
         return -1;
     for (size_t i = 0; i < pe->count; i++) {
@@ -138,41 +146,51 @@ int policy_save_file(const policy_engine *pe, const char *path) {
         cJSON_AddStringToObject(o, "reason", pe->rules[i].reason ? pe->rules[i].reason : "");
         cJSON_AddItemToArray(arr, o);
     }
-    char *js = cJSON_Print(arr); /* formatted: human-editable */
+
+    js = cJSON_Print(arr); /* formatted: human-editable */
     cJSON_Delete(arr);
     if (!js)
         return -1;
-    int rc = fs_write_file(path, js, strlen(js)) == 0 ? 0 : -1;
+    rc = fs_write_file(path, js, strlen(js)) == 0 ? 0 : -1;
     free(js);
     return rc;
 }
 
 int policy_load_file(policy_engine *pe, const char *path) {
+    char *txt;
+    cJSON *arr;
+    int n = 0;
+    cJSON *it;
+
     if (!pe || !path)
         return -1;
-    char *txt = fs_read_file(path);
+    txt = fs_read_file(path);
     if (!txt)
         return -1; /* no file yet: not an error for callers */
-    cJSON *arr = cJSON_Parse(txt);
+    arr = cJSON_Parse(txt);
     free(txt);
     if (!arr || !cJSON_IsArray(arr)) {
         cJSON_Delete(arr);
         return -1;
     }
-    int n = 0;
-    cJSON *it;
+
     cJSON_ArrayForEach(it, arr) {
+    cJSON *t;
+    cJSON *a;
+    cJSON *r;
+
         if (!cJSON_IsObject(it))
             continue;
-        cJSON *t = cJSON_GetObjectItemCaseSensitive(it, "tool");
-        cJSON *a = cJSON_GetObjectItemCaseSensitive(it, "action");
-        cJSON *r = cJSON_GetObjectItemCaseSensitive(it, "reason");
+        t = cJSON_GetObjectItemCaseSensitive(it, "tool");
+        a = cJSON_GetObjectItemCaseSensitive(it, "action");
+        r = cJSON_GetObjectItemCaseSensitive(it, "reason");
         if (!t || !cJSON_IsString(t) || !t->valuestring)
             continue;
         policy_add_rule(pe, t->valuestring, (a && cJSON_IsString(a)) ? a->valuestring : "deny",
                             (r && cJSON_IsString(r)) ? r->valuestring : NULL);
         n++;
     }
+
     cJSON_Delete(arr);
     return n;
 }
@@ -186,6 +204,7 @@ static int args_contain_dangerous(const char *args_json) {
         if (strstr(args_json, danger[i]))
             return 1;
     }
+
     return 0;
 }
 

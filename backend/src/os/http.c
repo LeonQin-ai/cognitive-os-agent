@@ -91,6 +91,7 @@ static void cu_load(void) {
         cu.loaded = -1;
         return;
     }
+
     cu.easy_init = (CURL * (*)(void)) dlsym(cu.lib, "curl_easy_init");
     cu.easy_cleanup = (void (*)(CURL *))dlsym(cu.lib, "curl_easy_cleanup");
     cu.easy_setopt = (CURLcode (*)(CURL *, int, ...))dlsym(cu.lib, "curl_easy_setopt");
@@ -104,6 +105,7 @@ static void cu_load(void) {
         cu.loaded = -1;
         return;
     }
+
     if (global_init)
         global_init(3L /* CURL_GLOBAL_ALL */);
     cu.loaded = 1;
@@ -121,26 +123,31 @@ typedef struct {
 } cu_sink;
 
 static size_t cu_write_cb(const char *ptr, size_t size, size_t nmemb, void *ud) {
-    cu_sink *s = (cu_sink *)ud;
     size_t n = size * nmemb;
+
+    cu_sink *s = (cu_sink *)ud;
     strbuf_append_n(&s->body, ptr, n);
     return n;
 }
 
 static size_t cu_header_cb(const char *ptr, size_t size, size_t nmemb, void *ud) {
+    size_t n = size * nmemb;
+    char *line;
+    char *nl;
+    char *colon;
+
     cu_sink *s = (cu_sink *)ud;
     if (!s->want_headers)
         return size * nmemb;
-    size_t n = size * nmemb;
-    char *line = (char *)malloc(n + 1);
+    line = (char *)malloc(n + 1);
     if (!line)
         return n;
     memcpy(line, ptr, n);
     line[n] = '\0';
-    char *nl = strpbrk(line, "\r\n");
+    nl = strpbrk(line, "\r\n");
     if (nl)
         *nl = '\0';
-    char *colon = strchr(line, ':');
+    colon = strchr(line, ':');
     if (colon && colon != line) {
         *colon = '\0';
         char *v = colon + 1;
@@ -148,6 +155,7 @@ static size_t cu_header_cb(const char *ptr, size_t size, size_t nmemb, void *ud)
             v++;
         strmap_set(&s->headers, line, v);
     }
+
     free(line);
     return n;
 }
@@ -157,6 +165,14 @@ static size_t cu_header_cb(const char *ptr, size_t size, size_t nmemb, void *ud)
 static http_stream *curl_open(const char *base_url, const char *method, const char *path, const char *body,
                                   const char *content_type, strmap *extra_headers, int timeout_ms,
                                   strmap *headers_out) {
+    char url[2048];
+    size_t bl;
+    char errbuf[256] = {0};
+    struct curl_slist *hdrs = NULL;
+    int is_post;
+    long status = 0;
+    http_stream *s;
+
     if (!cu_ok()) {
         static int warned = 0;
         if (!warned) {
@@ -167,8 +183,7 @@ static http_stream *curl_open(const char *base_url, const char *method, const ch
         return NULL;
     }
 
-    char url[2048];
-    size_t bl = strlen(base_url);
+    bl = strlen(base_url);
     while (bl > 0 && base_url[bl - 1] == '/')
         bl--;
     if (path && path[0] == '/')
@@ -183,14 +198,13 @@ static http_stream *curl_open(const char *base_url, const char *method, const ch
     memset(&sink, 0, sizeof(sink));
     strbuf_init(&sink.body);
     sink.want_headers = headers_out != NULL;
-    char errbuf[256] = {0};
 
-    struct curl_slist *hdrs = NULL;
     if (content_type && *content_type) {
         char ct[256];
         snprintf(ct, sizeof(ct), "Content-Type: %s", content_type);
         hdrs = cu.slist_append(hdrs, ct);
     }
+
     if (extra_headers) {
         for (size_t i = 0; i < extra_headers->count; i++) {
             char hv[512];
@@ -198,9 +212,10 @@ static http_stream *curl_open(const char *base_url, const char *method, const ch
             hdrs = cu.slist_append(hdrs, hv);
         }
     }
+
     /* always accept compressed responses; curl decompresses transparently */
 
-    int is_post = method && strcmp(method, "POST") == 0;
+    is_post = method && strcmp(method, "POST") == 0;
     cu.easy_setopt(h, (int)CURLOPT_URL, url);
     cu.easy_setopt(h, (int)CURLOPT_WRITEFUNCTION, &cu_write_cb);
     cu.easy_setopt(h, (int)CURLOPT_WRITEDATA, &sink);
@@ -216,16 +231,17 @@ static http_stream *curl_open(const char *base_url, const char *method, const ch
         long ct = timeout_ms < 30000 ? timeout_ms : 30000;
         cu.easy_setopt(h, (int)CURLOPT_CONNECTTIMEOUT_MS, ct);
     }
+
     if (is_post) {
         cu.easy_setopt(h, (int)CURLOPT_POST, 1L);
         cu.easy_setopt(h, (int)CURLOPT_POSTFIELDS, body ? body : "");
         cu.easy_setopt(h, (int)CURLOPT_POSTFIELDSIZE, (long)(body ? strlen(body) : 0));
     }
+
     if (hdrs)
         cu.easy_setopt(h, (int)CURLOPT_HTTPHEADER, hdrs);
 
     CURLcode rc = cu.easy_perform(h);
-    long status = 0;
     if (rc == 0)
         cu.easy_getinfo(h, (int)CURLINFO_RESPONSE_CODE, &status);
     if (hdrs)
@@ -238,12 +254,13 @@ static http_stream *curl_open(const char *base_url, const char *method, const ch
         return NULL;
     }
 
-    http_stream *s = (http_stream *)calloc(1, sizeof(http_stream));
+    s = (http_stream *)calloc(1, sizeof(http_stream));
     if (!s) {
         strbuf_free(&sink.body);
         strmap_free(&sink.headers);
         return NULL;
     }
+
     s->via_curl = 1;
     s->status = (int)status;
     s->c_body = strbuf_detach(&sink.body);
@@ -254,16 +271,19 @@ static http_stream *curl_open(const char *base_url, const char *method, const ch
     } else {
         strmap_free(&sink.headers);
     }
+
     return s;
 }
 
 /* ---------- raw buffered reads ---------- */
 static int http_fill(http_stream *h) {
+    int n;
+
     if (h->pos < h->len)
         return (int)(h->len - h->pos);
     h->pos = 0;
     h->len = 0;
-    int n = sock_recv(h->sock, h->buf, HTTP_BUF);
+    n = sock_recv(h->sock, h->buf, HTTP_BUF);
     if (n <= 0)
         return -1;
     h->len = (size_t)n;
@@ -289,6 +309,7 @@ static int http_raw_line(http_stream *h, char *out, size_t cap) {
         if (n + 1 < cap)
             out[n++] = (char)c;
     }
+
     out[n] = '\0';
     return (int)n;
 }
@@ -306,6 +327,7 @@ static int64_t parse_chunk_size(const char *line) {
         else
             break;
     }
+
     return v;
 }
 
@@ -315,6 +337,7 @@ static int decode_getc(http_stream *h) {
         h->pb_has = 0;
         return (unsigned char)h->pb;
     }
+
     if (h->chunked) {
         for (;;) {
             if (h->cstate == CHUNK_DONE)
@@ -367,6 +390,7 @@ static int decode_getc(http_stream *h) {
             h->cstate = CHUNK_DATA;
         }
     }
+
     if (h->content_remaining >= 0) {
         if (h->content_remaining == 0)
             return -1;
@@ -376,6 +400,7 @@ static int decode_getc(http_stream *h) {
         h->content_remaining--;
         return c;
     }
+
     return http_getc(h);
 }
 
@@ -397,6 +422,7 @@ int http_stream_read_line(http_stream *h, char *out, size_t cap) {
             return -1;
         return (int)n;
     }
+
     for (;;) {
         int c = decode_getc(h);
         if (c < 0) {
@@ -413,11 +439,14 @@ int http_stream_read_line(http_stream *h, char *out, size_t cap) {
         else
             break;
     }
+
     out[n] = '\0';
     return (int)n;
 }
 
 int http_stream_read(http_stream *h, char *out, size_t cap) {
+    size_t n = 0;
+
     if (h && h->via_curl) {
         size_t n = h->c_len - h->c_pos;
         if (n > cap)
@@ -426,13 +455,13 @@ int http_stream_read(http_stream *h, char *out, size_t cap) {
         h->c_pos += n;
         return (int)n;
     }
-    size_t n = 0;
     while (n < cap) {
         int c = decode_getc(h);
         if (c < 0)
             break;
         out[n++] = (char)c;
     }
+
     return (int)n;
 }
 
@@ -444,6 +473,10 @@ int http_stream_status(http_stream *h) {
 static int parse_response_head(http_stream *h) {
     char line[1024];
     int n = http_raw_line(h, line, sizeof(line));
+    int status = 0;
+    int chunked = 0;
+    int64_t content_len = -1;
+
     if (n < 0)
         return -1;
     if (strncmp(line, "HTTP/1.", 7) != 0)
@@ -454,15 +487,13 @@ static int parse_response_head(http_stream *h) {
         p++;
     while (*p == ' ')
         p++;
-    int status = 0;
     while (*p >= '0' && *p <= '9') {
         status = status * 10 + (*p - '0');
         p++;
     }
+
     h->status = status;
 
-    int chunked = 0;
-    int64_t content_len = -1;
     for (;;) {
         if (http_raw_line(h, line, sizeof(line)) < 0)
             return -1;
@@ -481,6 +512,7 @@ static int parse_response_head(http_stream *h) {
                 content_len = strtoll(v + 1, NULL, 10);
         }
     }
+
     h->chunked = chunked;
     h->content_remaining = content_len;
     h->cstate = chunked ? CHUNK_SIZE : CHUNK_DATA;
@@ -492,12 +524,13 @@ static int parse_response_head(http_stream *h) {
  * before this is ever reached) ---------- */
 static int parse_base_url(const char *base, char *host, size_t hostsz, uint16_t *port) {
     const char *p = base;
+    size_t i = 0;
+
     if (strncmp(p, "http://", 7) == 0)
         p += 7;
     else if (strncmp(p, "https://", 8) == 0)
         return -1;
     *port = 80;
-    size_t i = 0;
     while (*p && *p != ':' && *p != '/' && i + 1 < hostsz)
         host[i++] = *p++;
     host[i] = '\0';
@@ -509,6 +542,7 @@ static int parse_base_url(const char *base, char *host, size_t hostsz, uint16_t 
         if (prt > 0 && prt < 65536)
             *port = (uint16_t)prt;
     }
+
     return 0;
 }
 
@@ -517,16 +551,22 @@ static http_stream *http_open(const char *base_url, const char *method, const ch
                                   const char *content_type, strmap *extra_headers, int timeout_ms) {
     char host[256];
     uint16_t port;
+    sock *sock;
+    strbuf sb;
+    size_t blen;
+    int sent;
+    int ok;
+    http_stream *h;
+
     if (parse_base_url(base_url, host, sizeof(host), &port) != 0)
         return NULL;
 
-    sock *sock = sock_connect(host, port, timeout_ms > 0 ? timeout_ms : 10000);
+    sock = sock_connect(host, port, timeout_ms > 0 ? timeout_ms : 10000);
     if (!sock)
         return NULL;
 
-    strbuf sb;
     strbuf_init(&sb);
-    size_t blen = body ? strlen(body) : 0;
+    blen = body ? strlen(body) : 0;
     strbuf_appendf(&sb, "%s %s HTTP/1.1\r\n", method, path);
     strbuf_appendf(&sb, "Host: %s:%u\r\n", host, (unsigned)port);
     strbuf_append(&sb, "User-Agent: cognitive-os-agent/0.1\r\n");
@@ -539,29 +579,32 @@ static http_stream *http_open(const char *base_url, const char *method, const ch
         for (size_t i = 0; i < extra_headers->count; i++)
             strbuf_appendf(&sb, "%s: %s\r\n", extra_headers->items[i].key, extra_headers->items[i].val);
     }
+
     strbuf_append(&sb, "\r\n");
     if (blen)
         strbuf_append_n(&sb, body, blen);
 
-    int sent = sock_send(sock, sb.buf, sb.len);
-    int ok = (sent == (int)sb.len);
+    sent = sock_send(sock, sb.buf, sb.len);
+    ok = (sent == (int)sb.len);
     strbuf_free(&sb);
     if (!ok) {
         sock_close(sock);
         return NULL;
     }
 
-    http_stream *h = calloc(1, sizeof(http_stream));
+    h = calloc(1, sizeof(http_stream));
     if (!h) {
         sock_close(sock);
         return NULL;
     }
+
     h->sock = sock;
     h->content_remaining = -1;
     if (parse_response_head(h) != 0) {
         http_stream_close(h);
         return NULL;
     }
+
     return h;
 }
 
@@ -573,6 +616,7 @@ void http_stream_close(http_stream *h) {
         free(h);
         return;
     }
+
     if (h->sock)
         sock_close(h->sock);
     free(h);
@@ -581,6 +625,12 @@ void http_stream_close(http_stream *h) {
 /* ---------- full responses ---------- */
 static http_response *http_full(const char *base_url, const char *method, const char *path, const char *body,
                                     const char *content_type, strmap *extra_headers, int timeout_ms) {
+    http_stream *h;
+    http_response *r;
+    strbuf sb;
+    char tmp[8192];
+    int n;
+
     if (strncmp(base_url, "https://", 8) == 0) {
         /* TLS path: libcurl buffers the whole response, then we expose it
          * through the same response shape as the plain backend */
@@ -603,26 +653,26 @@ static http_response *http_full(const char *base_url, const char *method, const 
         http_stream_close(h);
         return r;
     }
-    http_stream *h = http_open(base_url, method, path, body, content_type, extra_headers, timeout_ms);
+
+    h = http_open(base_url, method, path, body, content_type, extra_headers, timeout_ms);
     if (!h)
         return NULL;
 
-    http_response *r = calloc(1, sizeof(http_response));
+    r = calloc(1, sizeof(http_response));
     if (!r) {
         http_stream_close(h);
         return NULL;
     }
+
     r->status = h->status;
 
-    strbuf sb;
     strbuf_init(&sb);
-    char tmp[8192];
-    int n;
     while ((n = http_stream_read(h, tmp, sizeof(tmp))) > 0) {
         strbuf_append_n(&sb, tmp, (size_t)n);
         if (sb.len > 64u * 1024u * 1024u)
             break;
     }
+
     r->body = strbuf_detach(&sb);
     r->body_len = strlen(r->body);
     http_stream_close(h);

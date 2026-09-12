@@ -49,6 +49,7 @@ void usage_add(usage *u, const char *model, long prompt_tokens, long completion_
             e = &u->models[i];
             break;
         }
+
     if (!e) {
         if (u->count == u->cap) {
             size_t ncap = u->cap ? u->cap * 2 : 8;
@@ -64,6 +65,7 @@ void usage_add(usage *u, const char *model, long prompt_tokens, long completion_
         memset(e, 0, sizeof(*e));
         e->model = xstrdup(model);
     }
+
     e->prompt += prompt_tokens;
     e->completion += completion_tokens;
     e->calls++;
@@ -73,19 +75,23 @@ void usage_add(usage *u, const char *model, long prompt_tokens, long completion_
 }
 
 long usage_prompt_total(usage *u) {
+    long v;
+
     if (!u)
         return 0;
     mutex_lock(&u->mtx);
-    long v = u->prompt_total;
+    v = u->prompt_total;
     mutex_unlock(&u->mtx);
     return v;
 }
 
 long usage_completion_total(usage *u) {
+    long v;
+
     if (!u)
         return 0;
     mutex_lock(&u->mtx);
-    long v = u->completion_total;
+    v = u->completion_total;
     mutex_unlock(&u->mtx);
     return v;
 }
@@ -93,6 +99,8 @@ long usage_completion_total(usage *u) {
 char *usage_json(usage *u) {
     cJSON *root = cJSON_CreateObject();
     cJSON *models = cJSON_CreateObject();
+    char *js;
+
     if (u) {
         mutex_lock(&u->mtx);
         for (size_t i = 0; i < u->count; i++) {
@@ -114,8 +122,9 @@ char *usage_json(usage *u) {
         cJSON_AddNumberToObject(tot, "completion", 0);
         cJSON_AddItemToObject(root, "total", tot);
     }
+
     cJSON_AddItemToObject(root, "models", models);
-    char *js = cJSON_PrintUnformatted(root);
+    js = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
     return js;
 }

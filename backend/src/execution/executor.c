@@ -20,9 +20,11 @@ void executor_result_free(executor_result *r) {
 }
 
 executor *executor_new(const executor_ops *ops, void *impl) {
+    executor *e;
+
     if (!ops || !ops->execute || !impl)
         return NULL;
-    executor *e = calloc(1, sizeof(*e));
+    e = calloc(1, sizeof(*e));
     if (!e)
         return NULL;
     e->ops = ops;
@@ -90,20 +92,25 @@ static int local_stop(void *impl) {
 }
 
 static int local_execute(void *impl, const char *tool, const char *args_json, executor_result **result) {
+    tool_result *tr;
+    executor_result *er;
+    char *safe;
+
     local_impl *li = impl;
     if (!result)
         return -1;
     *result = NULL;
-    tool_result *tr = tool_execute(li->reg, tool, args_json, li->tctx);
+    tr = tool_execute(li->reg, tool, args_json, li->tctx);
     if (!tr)
         return -1; /* unknown tool / registry failure */
-    executor_result *er = calloc(1, sizeof(*er));
+    er = calloc(1, sizeof(*er));
     if (!er) {
         tool_result_free(tr);
         return -1;
     }
+
     er->ok = tr->ok;
-    char *safe = str_utf8_sanitize(tr->output ? tr->output : "");
+    safe = str_utf8_sanitize(tr->output ? tr->output : "");
     er->output = safe ? safe : xstrdup(tr->output ? tr->output : "");
     tool_result_free(tr);
     *result = er;
@@ -140,6 +147,8 @@ static const executor_ops local_ops = {
 };
 
 executor *executor_new_local(tool_registry *reg, tool_ctx *tctx, void *snap) {
+    executor *e;
+
     if (!reg || !tctx)
         return NULL;
     local_impl *li = calloc(1, sizeof(*li));
@@ -148,7 +157,7 @@ executor *executor_new_local(tool_registry *reg, tool_ctx *tctx, void *snap) {
     li->reg = reg;
     li->tctx = tctx;
     li->snap = (snapshot *)snap;
-    executor *e = executor_new(&local_ops, li);
+    e = executor_new(&local_ops, li);
     if (!e)
         free(li);
     return e;
@@ -158,13 +167,16 @@ executor *executor_new_local(tool_registry *reg, tool_ctx *tctx, void *snap) {
 
 /* POSIX single-quote a string for `bash -c '...'`. Malloc'd, caller frees. */
 static char *sh_quote(const char *s) {
+    char *out;
+    char *w;
+
     if (!s)
         s = "";
     size_t n = strlen(s), cap = n * 4 + 3;
-    char *out = (char *)malloc(cap);
+    out = (char *)malloc(cap);
     if (!out)
         return NULL;
-    char *w = out;
+    w = out;
     *w++ = '\'';
     for (size_t i = 0; i < n; i++) {
         if (s[i] == '\'') {
@@ -173,6 +185,7 @@ static char *sh_quote(const char *s) {
         } else
             *w++ = s[i];
     }
+
     *w++ = '\'';
     *w = '\0';
     return out;
@@ -186,6 +199,15 @@ typedef struct route_impl {
 
 /* Forward one action to inner; for shell, wrap cmd into the target env. */
 static int route_execute(void *impl, const char *tool, const char *args_json, executor_result **result) {
+    /* extract cmd */
+    cJSON *root;
+    cJSON *cmdj;
+    char *q;
+    char wrapped[4096];
+    cJSON *n;
+    char *nargs;
+    int rc;
+
     route_impl *ri = impl;
     if (!result)
         return -1;
@@ -194,15 +216,15 @@ static int route_execute(void *impl, const char *tool, const char *args_json, ex
         return executor_execute(ri->inner, tool, args_json, result);
 
     /* extract cmd */
-    cJSON *root = args_json ? cJSON_Parse(args_json) : NULL;
-    cJSON *cmdj = root ? cJSON_GetObjectItemCaseSensitive(root, "cmd") : NULL;
+    root = args_json ? cJSON_Parse(args_json) : NULL;
+    cmdj = root ? cJSON_GetObjectItemCaseSensitive(root, "cmd") : NULL;
     if (!cmdj || !cJSON_IsString(cmdj)) {
         if (root)
             cJSON_Delete(root);
         return executor_execute(ri->inner, tool, args_json, result);
     }
-    char *q = sh_quote(cmdj->valuestring);
-    char wrapped[4096];
+
+    q = sh_quote(cmdj->valuestring);
     if (ri->is_wsl) {
         if (ri->target && *ri->target)
             snprintf(wrapped, sizeof(wrapped), "wsl.exe -d %s -e bash -c %s", ri->target, q);
@@ -211,10 +233,11 @@ static int route_execute(void *impl, const char *tool, const char *args_json, ex
     } else {
         snprintf(wrapped, sizeof(wrapped), "ssh -o ConnectTimeout=5 %s bash -c %s", ri->target ? ri->target : "", q);
     }
+
     free(q);
     cJSON_Delete(root);
 
-    cJSON *n = cJSON_CreateObject();
+    n = cJSON_CreateObject();
     if (!n)
         return -1;
     cJSON_AddStringToObject(n, "cmd", wrapped);
@@ -227,11 +250,12 @@ static int route_execute(void *impl, const char *tool, const char *args_json, ex
         if (t)
             cJSON_Delete(t);
     }
-    char *nargs = cJSON_PrintUnformatted(n);
+
+    nargs = cJSON_PrintUnformatted(n);
     cJSON_Delete(n);
     if (!nargs)
         return -1;
-    int rc = executor_execute(ri->inner, tool, nargs, result);
+    rc = executor_execute(ri->inner, tool, nargs, result);
     free(nargs);
     return rc;
 }
@@ -268,6 +292,8 @@ static const executor_ops remote_ops = {
 };
 
 static executor *executor_new_route(executor *inner, const char *target, int is_wsl) {
+    executor *e;
+
     if (!inner)
         return NULL;
     route_impl *ri = calloc(1, sizeof(*ri));
@@ -279,12 +305,14 @@ static executor *executor_new_route(executor *inner, const char *target, int is_
         free(ri);
         return NULL;
     }
+
     ri->is_wsl = is_wsl;
-    executor *e = executor_new(is_wsl ? &wsl_ops : &remote_ops, ri);
+    e = executor_new(is_wsl ? &wsl_ops : &remote_ops, ri);
     if (!e) {
         free(ri->target);
         free(ri);
     }
+
     return e;
 }
 

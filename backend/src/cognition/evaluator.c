@@ -28,18 +28,21 @@ int evaluator_verify(evaluator *e, int all_actions_ok, int n_actions, int ok_act
 }
 
 double evaluator_score(evaluator *e, int n_actions, int ok_actions, int all_actions_ok, const char *answer) {
+    double s = 0.0;
+    size_t len;
+
     (void)e;
     if (answer) {
         if (strstr(answer, "FAILED") || strstr(answer, "denied") || strstr(answer, "rollback") ||
             strstr(answer, "error"))
             return 0.0;
     }
-    double s = 0.0;
+
     if (all_actions_ok)
         s += 0.4;
     if (n_actions > 0 && ok_actions == n_actions)
         s += 0.3;
-    size_t len = answer ? strlen(answer) : 0;
+    len = answer ? strlen(answer) : 0;
     if (len > 0)
         s += 0.1;
     if (len > 80)

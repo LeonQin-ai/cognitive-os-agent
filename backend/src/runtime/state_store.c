@@ -40,6 +40,7 @@ void state_store_free(state_store *s) {
         free(s->items[i].key);
         free(s->items[i].val);
     }
+
     free(s->items);
     free(s->path);
     mutex_unlock(&s->mtx);
@@ -75,6 +76,7 @@ static int ss_put(state_store *s, const char *ns, const char *key, const char *v
         s->items[i].val = nv;
         return 1;
     }
+
     if (!val)
         return 0;
     if (s->count == s->cap) {
@@ -85,6 +87,7 @@ static int ss_put(state_store *s, const char *ns, const char *key, const char *v
         s->items = ni;
         s->cap = cap;
     }
+
     ss_entry *e = &s->items[s->count++];
     memset(e, 0, sizeof(*e));
     e->ns = xstrdup(ns);
@@ -97,6 +100,7 @@ static int ss_put(state_store *s, const char *ns, const char *key, const char *v
         s->count--;
         return 0;
     }
+
     return 1;
 }
 
@@ -104,6 +108,8 @@ static int ss_put(state_store *s, const char *ns, const char *key, const char *v
  * under the lock; state_store_json would deadlock). */
 static char *ss_json_unlocked(state_store *s) {
     cJSON *root = cJSON_CreateObject();
+    char *out;
+
     if (root) {
         for (size_t i = 0; i < s->count; i++) {
             cJSON *nsobj = cJSON_GetObjectItemCaseSensitive(root, s->items[i].ns);
@@ -115,16 +121,19 @@ static char *ss_json_unlocked(state_store *s) {
                 cJSON_AddStringToObject(nsobj, s->items[i].key, s->items[i].val);
         }
     }
-    char *out = root ? cJSON_PrintUnformatted(root) : NULL;
+
+    out = root ? cJSON_PrintUnformatted(root) : NULL;
     if (root)
         cJSON_Delete(root);
     return out ? out : xstrdup("{}");
 }
 
 static void ss_flush(state_store *s) {
+    char *js;
+
     if (!s->path)
         return;
-    char *js = ss_json_unlocked(s);
+    js = ss_json_unlocked(s);
     if (!js)
         return;
     if (fs_write_file(s->path, js, strlen(js)) != 0)
@@ -133,10 +142,12 @@ static void ss_flush(state_store *s) {
 }
 
 int state_store_set(state_store *s, const char *ns, const char *key, const char *val) {
+    int mutated;
+
     if (!s || !ns || !*ns || !key || !*key)
         return -1;
     mutex_lock(&s->mtx);
-    int mutated = ss_put(s, ns, key, val);
+    mutated = ss_put(s, ns, key, val);
     if (mutated > 0)
         ss_flush(s);
     mutex_unlock(&s->mtx);
@@ -144,20 +155,24 @@ int state_store_set(state_store *s, const char *ns, const char *key, const char 
 }
 
 const char *state_store_get(state_store *s, const char *ns, const char *key) {
+    long i;
+
     if (!s || !ns || !key)
         return NULL;
     mutex_lock(&s->mtx);
-    long i = ss_find(s, ns, key);
+    i = ss_find(s, ns, key);
     const char *v = i >= 0 ? s->items[i].val : NULL;
     mutex_unlock(&s->mtx);
     return v;
 }
 
 int state_store_remove(state_store *s, const char *ns, const char *key) {
+    int mutated;
+
     if (!s || !ns || !key)
         return -1;
     mutex_lock(&s->mtx);
-    int mutated = ss_put(s, ns, key, NULL);
+    mutated = ss_put(s, ns, key, NULL);
     if (mutated > 0)
         ss_flush(s);
     mutex_unlock(&s->mtx);
@@ -165,19 +180,22 @@ int state_store_remove(state_store *s, const char *ns, const char *key) {
 }
 
 int state_store_count(state_store *s) {
+    int n;
+
     if (!s)
         return 0;
     mutex_lock(&s->mtx);
-    int n = (int)s->count;
+    n = (int)s->count;
     mutex_unlock(&s->mtx);
     return n;
 }
 
 int state_store_count_ns(state_store *s, const char *ns) {
+    int n = 0;
+
     if (!s || !ns)
         return 0;
     mutex_lock(&s->mtx);
-    int n = 0;
     for (size_t i = 0; i < s->count; i++)
         if (strcmp(s->items[i].ns, ns) == 0)
             n++;
@@ -195,38 +213,45 @@ int state_store_task_set(state_store *s, long long id, const char *status, const
 }
 
 int state_store_agent_set(state_store *s, const char *name, const char *role, const char *status) {
+    char val[512];
+
     if (!s || !name || !*name)
         return -1;
-    char val[512];
     snprintf(val, sizeof(val), "%s|%s", role ? role : "", status ? status : "idle");
     return state_store_set(s, "agent", name, val);
 }
 
 char *state_store_json(state_store *s) {
+    char *out;
+
     if (!s)
         return xstrdup("{}");
     mutex_lock(&s->mtx);
-    char *out = ss_json_unlocked(s);
+    out = ss_json_unlocked(s);
     mutex_unlock(&s->mtx);
     return out;
 }
 
 int state_store_load_json(state_store *s, const char *json) {
+    cJSON *root;
+    int applied = 0;
+    cJSON *nsobj;
+
     if (!s || !json)
         return -1;
-    cJSON *root = cJSON_Parse(json);
+    root = cJSON_Parse(json);
     if (!root || !cJSON_IsObject(root)) {
         if (root)
             cJSON_Delete(root);
         return -1;
     }
-    int applied = 0;
+
     mutex_lock(&s->mtx);
-    cJSON *nsobj;
     cJSON_ArrayForEach(nsobj, root) {
+    cJSON *it;
+
         if (!cJSON_IsObject(nsobj) || !nsobj->string)
             continue;
-        cJSON *it;
         cJSON_ArrayForEach(it, nsobj) {
             if (it->string && cJSON_IsString(it)) {
                 if (ss_put(s, nsobj->string, it->string, it->valuestring) > 0)
@@ -234,18 +259,22 @@ int state_store_load_json(state_store *s, const char *json) {
             }
         }
     }
+
     mutex_unlock(&s->mtx);
     cJSON_Delete(root);
     return applied;
 }
 
 int state_store_save(state_store *s, const char *path) {
+    char *js;
+    int rc;
+
     if (!s || !path || !*path)
         return -1;
-    char *js = state_store_json(s); /* takes mtx itself — no outer lock */
+    js = state_store_json(s); /* takes mtx itself — no outer lock */
     if (!js)
         return -1;
-    int rc = fs_write_file(path, js, strlen(js));
+    rc = fs_write_file(path, js, strlen(js));
     free(js);
     if (rc != 0)
         return -1;
@@ -257,12 +286,15 @@ int state_store_save(state_store *s, const char *path) {
 }
 
 int state_store_load(state_store *s, const char *path) {
+    char *js;
+    int applied;
+
     if (!s || !path || !*path)
         return -1;
-    char *js = fs_read_file(path);
+    js = fs_read_file(path);
     if (!js)
         return -1;
-    int applied = state_store_load_json(s, js);
+    applied = state_store_load_json(s, js);
     free(js);
     if (applied < 0)
         return -1;

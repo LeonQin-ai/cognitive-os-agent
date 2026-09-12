@@ -13,6 +13,8 @@ char *testing_plan(const char *spec_json) {
     const char *n = name && cJSON_IsString(name) ? name->valuestring : "plugin";
 
     cJSON *out = cJSON_CreateObject();
+    char *s;
+
     if (out) {
         cJSON_AddStringToObject(out, "name", n);
         cJSON *cases = cJSON_CreateArray();
@@ -26,9 +28,10 @@ char *testing_plan(const char *spec_json) {
         cJSON_AddItemToArray(cases, c2);
         cJSON_AddItemToObject(out, "cases", cases);
     }
+
     if (root)
         cJSON_Delete(root);
-    char *s = out ? cJSON_PrintUnformatted(out) : NULL;
+    s = out ? cJSON_PrintUnformatted(out) : NULL;
     if (out)
         cJSON_Delete(out);
     return s ? s : xstrdup("{}");
@@ -37,11 +40,15 @@ char *testing_plan(const char *spec_json) {
 char *testing_run(const char *cmd, int timeout_ms) {
     sandbox *sb = sandbox_new(timeout_ms);
     /* track file accesses of the tested command (cwd scan + cmd reads) */
+    sandbox_result *r;
+    cJSON *out;
+    char *s;
+
     sandbox_set_workspace(sb, ".");
-    sandbox_result *r = sandbox_run(sb, cmd);
+    r = sandbox_run(sb, cmd);
     sandbox_free(sb);
 
-    cJSON *out = cJSON_CreateObject();
+    out = cJSON_CreateObject();
     if (out) {
         if (r) {
             cJSON_AddBoolToObject(out, "ok", r->ok);
@@ -62,9 +69,10 @@ char *testing_run(const char *cmd, int timeout_ms) {
             cJSON_AddStringToObject(out, "output", "(forbidden or spawn failed)");
         }
     }
+
     if (r)
         sandbox_result_free(r);
-    char *s = out ? cJSON_PrintUnformatted(out) : NULL;
+    s = out ? cJSON_PrintUnformatted(out) : NULL;
     if (out)
         cJSON_Delete(out);
     return s ? s : xstrdup("{}");

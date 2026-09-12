@@ -31,6 +31,7 @@ int mem_type_parse(const char *s, mem_type *out) {
             *out = (mem_type)i;
             return 0;
         }
+
     return -1;
 }
 
@@ -42,9 +43,11 @@ struct memory_service {
 };
 
 memory_service *memory_service_new(const memory_service_ops *ops, void *impl) {
+    memory_service *ms;
+
     if (!ops || !ops->name || !impl)
         return NULL;
-    memory_service *ms = (memory_service *)calloc(1, sizeof(*ms));
+    ms = (memory_service *)calloc(1, sizeof(*ms));
     if (!ms)
         return NULL;
     ms->ops = ops;
@@ -151,6 +154,7 @@ static int def_forget(void *impl, mem_type t, const char *key) {
         memory_remember(d->m, kbuf, NULL);
         return 0;
     }
+
     (void)d;
     return -1; /* working ring / episodes are lifecycle-managed, not key-forgotten */
 }
@@ -171,6 +175,7 @@ static int def_recall_key(void *impl, mem_type t, const char *key, char **text) 
         *text = xstrdup(v);
         return *text ? 0 : -1;
     }
+
     if (t == MEM_WORKING) {
         int n = memory_working_count(d->m);
         for (int i = 0; i < n; i++) {
@@ -182,10 +187,13 @@ static int def_recall_key(void *impl, mem_type t, const char *key, char **text) 
         }
         return -1;
     }
+
     return -1;
 }
 
 static int def_recall_query(void *impl, mem_type t, const char *query, int k, char **json) {
+    char *arr;
+
     def_impl *d = impl;
     if (!query)
         return -1;
@@ -193,7 +201,7 @@ static int def_recall_query(void *impl, mem_type t, const char *query, int k, ch
         k = 5;
     /* the facade's keyword search covers working + episodes; semantic/procedural
      * facts come back through the same {kind,text,score} shape */
-    char *arr = memory_search(d->m, query, k);
+    arr = memory_search(d->m, query, k);
     if (!arr)
         return -1;
     if (t == MEM_WORKING || t == MEM_EPISODIC) {
@@ -222,6 +230,7 @@ static int def_recall_query(void *impl, mem_type t, const char *query, int k, ch
             cJSON_Delete(out);
         return *json ? 0 : -1;
     }
+
     /* semantic / procedural: keyword search has no fact kind — fall back to
      * the whole long-term store (small, bounded) */
     free(arr);
@@ -230,8 +239,10 @@ static int def_recall_query(void *impl, mem_type t, const char *query, int k, ch
 }
 
 static int def_stats(void *impl, char **json) {
+    cJSON *arr;
+
     def_impl *d = impl;
-    cJSON *arr = cJSON_CreateArray();
+    arr = cJSON_CreateArray();
     if (!arr)
         return -1;
     for (int ty = 0; ty < MEM_TYPE_COUNT; ty++) {
@@ -260,6 +271,7 @@ static int def_stats(void *impl, char **json) {
         cJSON_AddNumberToObject(o, "count", n);
         cJSON_AddItemToArray(arr, o);
     }
+
     *json = cJSON_PrintUnformatted(arr);
     cJSON_Delete(arr);
     return *json ? 0 : -1;
@@ -274,13 +286,15 @@ static const memory_service_ops def_ops = {
 };
 
 memory_service *memory_service_new_default(memory *m) {
+    memory_service *ms;
+
     if (!m)
         return NULL;
     def_impl *d = (def_impl *)calloc(1, sizeof(*d));
     if (!d)
         return NULL;
     d->m = m;
-    memory_service *ms = memory_service_new(&def_ops, d);
+    ms = memory_service_new(&def_ops, d);
     if (!ms)
         free(d);
     return ms;

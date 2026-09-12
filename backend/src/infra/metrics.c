@@ -46,6 +46,7 @@ static metric *find_or_add(metrics *m, const char *name, metric_kind kind) {
         if (strcmp(m->items[i].name, name) == 0)
             return &m->items[i];
     }
+
     if (m->count == m->cap) {
         size_t cap = m->cap ? m->cap * 2 : 16;
         m->items = realloc(m->items, cap * sizeof(metric));
@@ -53,6 +54,7 @@ static metric *find_or_add(metrics *m, const char *name, metric_kind kind) {
             return NULL;
         m->cap = cap;
     }
+
     metric *mt = &m->items[m->count++];
     memset(mt, 0, sizeof(*mt));
     mt->name = xstrdup(name);
@@ -106,6 +108,7 @@ char *metrics_render(metrics *m) {
             strbuf_appendf(&sb, "coa_%s_sum %g\n", mt->name, mt->sum);
         }
     }
+
     mutex_unlock(&m->mtx);
     return strbuf_detach(&sb);
 }

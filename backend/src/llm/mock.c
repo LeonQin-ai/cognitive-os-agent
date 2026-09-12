@@ -85,6 +85,7 @@ static char *find_path(const char *msg) {
             dir_e = e;
         }
     }
+
     return NULL;
 }
 
@@ -92,18 +93,24 @@ static char *find_path(const char *msg) {
 static char *extract_content(const char *msg) {
     static const char *markers[] = {"写入内容为", "写入内容", "内容为", "内容:", "写入", "write: "};
     const char *best = NULL;
+    char *out;
+    /* stop at a task connector so multi-step prompts don't pollute the content */
+    char *cut;
+    size_t n;
+
     for (size_t i = 0; i < sizeof(markers) / sizeof(char *); i++) {
         const char *hit = strstr(msg, markers[i]);
         if (hit && (!best || hit > best))
             best = hit + strlen(markers[i]);
     }
+
     if (!best)
         return NULL;
     while (*best == ' ' || *best == '\t' || *best == '\n' || *best == '\r' || *best == '"' || *best == '\'')
         best++;
-    char *out = xstrdup(best);
+    out = xstrdup(best);
     /* stop at a task connector so multi-step prompts don't pollute the content */
-    char *cut = strstr(out, "，");
+    cut = strstr(out, "，");
     if (!cut)
         cut = strstr(out, "然后");
     if (!cut)
@@ -112,7 +119,7 @@ static char *extract_content(const char *msg) {
         cut = strchr(out, ',');
     if (cut)
         *cut = '\0';
-    size_t n = strlen(out);
+    n = strlen(out);
     while (n > 0 && (out[n - 1] == ' ' || out[n - 1] == '\t' || out[n - 1] == '\n' || out[n - 1] == '\r' ||
                      out[n - 1] == '"' || out[n - 1] == '\'' || out[n - 1] == '.'))
         out[--n] = '\0';
@@ -124,9 +131,12 @@ static char *extract_content(const char *msg) {
  * a generic marker like "shell" must not win just because it appears later
  * in the text (e.g. inside "echo scen-shell-ok"). */
 static char *extract_command(const char *msg) {
+    const char *best = NULL;
+    char *out;
+    size_t n;
+
     static const char *markers[] = {"执行命令", "运行命令", "执行 ",   "运行 ", "命令",
                                     "搜索",     "查找文件", "command", "shell"};
-    const char *best = NULL;
     for (size_t i = 0; i < sizeof(markers) / sizeof(char *); i++) {
         const char *hit = strstr(msg, markers[i]);
         if (hit) {
@@ -134,12 +144,13 @@ static char *extract_command(const char *msg) {
             break;
         }
     }
+
     if (!best)
         return NULL;
     while (*best == ' ' || *best == '\t')
         best++;
-    char *out = xstrdup(best);
-    size_t n = strlen(out);
+    out = xstrdup(best);
+    n = strlen(out);
     while (n > 0 && (out[n - 1] == ' ' || out[n - 1] == '\t' || out[n - 1] == '\n' || out[n - 1] == '\r'))
         out[--n] = '\0';
     return out;
@@ -147,6 +158,12 @@ static char *extract_command(const char *msg) {
 
 /* Build the mock response for a user message. */
 static char *mock_respond(const char *msg) {
+    int in_loop;
+    const char *full = msg;
+    int want_shell;
+    int explicit_cmd;
+    strbuf b;
+
     if (!msg)
         return xstrdup("[]");
 
@@ -156,6 +173,7 @@ static char *mock_respond(const char *msg) {
         return xstrdup("[{\"agent\":\"alpha\","
                           "\"task\":\"创建 orch.txt 写入内容为 orch-ok\"}]");
     }
+
     if (has_substr(msg, "各 agent 结果"))
         return xstrdup("综合完成：子任务已由各 agent 协作处理完毕。");
 
@@ -169,8 +187,8 @@ static char *mock_respond(const char *msg) {
      * plain-text answer (task complete) so single-action requests do not
      * repeat their actions; a "修复" request that has not yet been fixed gets
      * one file_edit round before finishing. */
-    int in_loop = strstr(msg, "## 之前轮次的动作结果") != NULL;
-    const char *full = msg; /* full augmented prompt (results live here) */
+    in_loop = strstr(msg, "## 之前轮次的动作结果") != NULL;
+     /* full augmented prompt (results live here) */
     const char *cur = strstr(msg, "## Current request\n");
     if (cur)
         msg = cur + strlen("## Current request\n");
@@ -226,10 +244,10 @@ static char *mock_respond(const char *msg) {
                      has_substr(msg, "创建") || has_substr(msg, "生成");
     int want_read = has_substr(msg, "读取") || has_substr(msg, "读 ") || has_substr(msg, "cat ") ||
                     has_substr(msg, "read ") || has_substr(msg, "查看文件");
-    int want_shell = has_substr(msg, "命令") || has_substr(msg, "command") || has_substr(msg, "shell");
+    want_shell = has_substr(msg, "命令") || has_substr(msg, "command") || has_substr(msg, "shell");
     /* an explicit "execute this command" request wins over generic keywords
      * (e.g. "fsutil file createnew" contains "file" but is not a file op) */
-    int explicit_cmd = has_substr(msg, "执行命令") || has_substr(msg, "运行命令");
+    explicit_cmd = has_substr(msg, "执行命令") || has_substr(msg, "运行命令");
 
     /* analyze-first: an 分析 request starts the loop with a read so the fix
      * is applied on a later round with the observation in context */
@@ -356,7 +374,6 @@ static char *mock_respond(const char *msg) {
         return out ? out : xstrdup("[]");
     }
 
-    strbuf b;
     strbuf_init(&b);
     strbuf_appendf(&b, "已收到请求：%s（mock 离线模式，未调用工具）", msg);
     return strbuf_detach(&b);
@@ -372,9 +389,11 @@ static int mock_chat(llm *llm, const llm_request *req, llm_response *resp) {
 static int mock_stream(llm *llm, const llm_request *req, llm_stream_cb cb, void *ud) {
     const char *last = req->num_messages ? req->messages[req->num_messages - 1].content : "";
     char *text = mock_respond(last);
+    size_t len;
+
     if (!text)
         return -1;
-    size_t len = strlen(text);
+    len = strlen(text);
     for (size_t i = 0; i < len; i += 16) {
         if (llm->cancel) {
             free(text);
@@ -382,6 +401,7 @@ static int mock_stream(llm *llm, const llm_request *req, llm_stream_cb cb, void 
         }
         cb(text + i, ud);
     }
+
     free(text);
     return 0;
 }
@@ -394,6 +414,7 @@ llm *mock_create(const char *model) {
         free(im);
         return NULL;
     }
+
     static const llm_vtable vt = {mock_destroy, mock_chat, mock_stream};
     llm->vt = &vt;
     llm->provider = xstrdup("mock");

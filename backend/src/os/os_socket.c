@@ -77,6 +77,7 @@ static int wsa_start(void) {
         }
         wsa_started = 1;
     }
+
     return 0;
 }
 #endif
@@ -112,6 +113,15 @@ static void set_nonblock(int fd, int nb) {
 }
 
 sock *sock_connect(const char *host, uint16_t port, int timeout_ms) {
+    char portstr[16];
+    struct addrinfo *res = NULL;
+    int fd = -1;
+    int err = 0;
+    int naddrs = 0;
+    struct addrinfo *cnt;
+    struct addrinfo *ai;
+    sock *s;
+
 #if defined(_WIN32)
     if (wsa_start() != 0)
         return NULL;
@@ -120,23 +130,17 @@ sock *sock_connect(const char *host, uint16_t port, int timeout_ms) {
     memset(&hints, 0, sizeof(hints));
     hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
-    char portstr[16];
     snprintf(portstr, sizeof(portstr), "%u", (unsigned)port);
-    struct addrinfo *res = NULL;
     if (getaddrinfo(host, portstr, &hints, &res) != 0 || !res) {
         set_err("getaddrinfo failed");
         return NULL;
     }
-    int fd = -1;
-    int err = 0;
+
     /* count candidate addresses so we can split the connect budget: a single
      * unreachable address (e.g. an IPv6 ::1 attempt when the server only listens
      * on IPv4) must not be able to consume the whole timeout before we fall back. */
-    int naddrs = 0;
-    struct addrinfo *cnt;
     for (cnt = res; cnt; cnt = cnt->ai_next)
         naddrs++;
-    struct addrinfo *ai;
     for (ai = res; ai; ai = ai->ai_next) {
         fd = (int)socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
         if (fd < 0)
@@ -202,26 +206,31 @@ sock *sock_connect(const char *host, uint16_t port, int timeout_ms) {
         err = 0;
         break;
     }
+
     freeaddrinfo(res);
     if (fd < 0) {
         set_err("no usable address");
         return NULL;
     }
+
     if (err) {
         set_err(sock_strerror(err));
         CLOSEFD(fd);
         return NULL;
     }
+
     set_nonblock(fd, 0);
     {
         int one = 1;
         setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, (const char *)&one, sizeof(one));
     }
-    sock *s = malloc(sizeof(sock));
+
+    s = malloc(sizeof(sock));
     if (!s) {
         CLOSEFD(fd);
         return NULL;
     }
+
     s->fd = fd;
     g_err[0] = '\0';
     return s;
@@ -241,6 +250,7 @@ int sock_send(sock *s, const void *data, size_t len) {
         }
         off += (size_t)n;
     }
+
     return (int)off;
 }
 
@@ -255,10 +265,13 @@ int sock_recv(sock *s, void *buf, size_t cap) {
 #endif
         return -1;
     }
+
     return n;
 }
 
 int sock_wait_readable(sock *s, int timeout_ms) {
+    int r;
+
     if (!s || s->fd < 0)
         return -1;
     fd_set rset;
@@ -273,7 +286,7 @@ int sock_wait_readable(sock *s, int timeout_ms) {
         timeout_ms = 0;
     tv.tv_sec = timeout_ms / 1000;
     tv.tv_usec = (timeout_ms % 1000) * 1000;
-    int r = select(s->fd + 1, &rset, NULL, NULL, &tv);
+    r = select(s->fd + 1, &rset, NULL, NULL, &tv);
     if (r < 0)
         return -1;
     if (r == 0)
@@ -289,6 +302,9 @@ int sock_wait_readable(sock *s, int timeout_ms) {
 }
 
 listener *listen_addr(const char *host, uint16_t port) {
+    int one = 1;
+    listener *l;
+
 #if defined(_WIN32)
     if (wsa_start() != 0)
         return NULL;
@@ -298,7 +314,6 @@ listener *listen_addr(const char *host, uint16_t port) {
         set_err("socket() failed");
         return NULL;
     }
-    int one = 1;
 #if defined(_WIN32)
     /* Windows: SO_REUSEADDR permits a SECOND process to bind the same
      * address while the first is actively listening (double-bind). Two
@@ -323,28 +338,36 @@ listener *listen_addr(const char *host, uint16_t port) {
     } else {
         addr.sin_addr.s_addr = INADDR_ANY;
     }
+
     addr.sin_port = htons(port);
     if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
         set_err("bind failed");
         CLOSEFD(fd);
         return NULL;
     }
+
     if (listen(fd, 16) < 0) {
         set_err("listen failed");
         CLOSEFD(fd);
         return NULL;
     }
-    listener *l = malloc(sizeof(listener));
+
+    l = malloc(sizeof(listener));
     if (!l) {
         CLOSEFD(fd);
         return NULL;
     }
+
     l->fd = fd;
     g_err[0] = '\0';
     return l;
 }
 
 sock *sock_accept(listener *l, int timeout_ms) {
+    struct sockaddr_in peer;
+    int fd;
+    sock *s;
+
     if (l->fd < 0)
         return NULL;
     /* Wait for an inbound connection with a real timeout. SO_RCVTIMEO does
@@ -367,18 +390,20 @@ sock *sock_accept(listener *l, int timeout_ms) {
         if (r <= 0)
             return NULL; /* timeout or error */
     }
-    struct sockaddr_in peer;
+
     socklen_t plen = sizeof(peer);
-    int fd = (int)accept(l->fd, (struct sockaddr *)&peer, &plen);
+    fd = (int)accept(l->fd, (struct sockaddr *)&peer, &plen);
     if (fd < 0) {
         set_err("accept failed");
         return NULL;
     }
-    sock *s = malloc(sizeof(sock));
+
+    s = malloc(sizeof(sock));
     if (!s) {
         CLOSEFD(fd);
         return NULL;
     }
+
     s->fd = fd;
     /* SO_RCVTIMEO so a half-open connection (connected but never sends a
      * complete request) cannot wedge the single-threaded HTTP server: recv()

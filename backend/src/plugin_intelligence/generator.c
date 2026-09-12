@@ -51,21 +51,30 @@ static void sanitize_name(const char *in, char *out, size_t cap) {
         snprintf(out, cap, "cap");
         return;
     }
+
     out[o] = '\0';
 }
 
 /* Deterministic mock design used when provider == mock (offline testing). */
 static char *mock_design(const char *description) {
     char name[64];
+    /* capability derivation mirrors analyzer.c keyword heuristics */
+    cJSON *caps;
+    const char *d = description ? description : "";
+    char *caps_s;
+    cJSON *root;
+    char script[1024];
+    char *js;
+
     sanitize_name(description, name, sizeof(name));
 
     /* capability derivation mirrors analyzer.c keyword heuristics */
-    cJSON *caps = cJSON_CreateArray();
-    const char *d = description ? description : "";
+    caps = cJSON_CreateArray();
     if (strstr(d, "file") || strstr(d, "read") || strstr(d, "write")) {
         cJSON_AddItemToArray(caps, cJSON_CreateString("fs.read"));
         cJSON_AddItemToArray(caps, cJSON_CreateString("fs.write"));
     }
+
     if (strstr(d, "git") || strstr(d, "repo") || strstr(d, "commit"))
         cJSON_AddItemToArray(caps, cJSON_CreateString("git"));
     if (strstr(d, "http") || strstr(d, "network") || strstr(d, "api"))
@@ -73,19 +82,18 @@ static char *mock_design(const char *description) {
     if (cJSON_GetArraySize(caps) == 0)
         cJSON_AddItemToArray(caps, cJSON_CreateString("fs.read"));
 
-    char *caps_s = cJSON_PrintUnformatted(caps);
+    caps_s = cJSON_PrintUnformatted(caps);
     cJSON_Delete(caps);
 
-    cJSON *root = cJSON_CreateObject();
+    root = cJSON_CreateObject();
     cJSON_AddStringToObject(root, "name", name);
     cJSON_AddStringToObject(root, "description", description ? description : "");
     cJSON_AddStringToObject(root, "capabilities", caps_s ? caps_s : "[]");
     free(caps_s);
-    char script[1024];
     snprintf(script, sizeof(script), "echo \"plugin:%s ok: performed capability (%s)\"", name,
              description ? description : "");
     cJSON_AddStringToObject(root, "script", script);
-    char *js = cJSON_PrintUnformatted(root);
+    js = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
     return js;
 }
@@ -102,9 +110,10 @@ static char *local_strndup(const char *s, size_t n) {
 }
 
 static cJSON *parse_design(const char *text) {
+    const char *s = text;
+
     if (!text)
         return NULL;
-    const char *s = text;
     const char *fb = strstr(text, "```");
     if (fb) {
         const char *e = strstr(fb + 3, "```");
@@ -118,14 +127,18 @@ static cJSON *parse_design(const char *text) {
             return r;
         }
     }
+
     return cJSON_Parse(s);
 }
 
 static int design_ok(const cJSON *root, char *name_out, size_t name_cap, char *script_out, size_t script_cap) {
+    cJSON *n;
+    cJSON *sc;
+
     if (!root || !cJSON_IsObject(root))
         return 0;
-    cJSON *n = cJSON_GetObjectItemCaseSensitive(root, "name");
-    cJSON *sc = cJSON_GetObjectItemCaseSensitive(root, "script");
+    n = cJSON_GetObjectItemCaseSensitive(root, "name");
+    sc = cJSON_GetObjectItemCaseSensitive(root, "script");
     if (!n || !cJSON_IsString(n) || !sc || !cJSON_IsString(sc))
         return 0;
     const char *raw_name = n->valuestring;
@@ -137,17 +150,21 @@ static int design_ok(const cJSON *root, char *name_out, size_t name_cap, char *s
 /* 1 if the script passes the security review (no high-severity findings and
  * not on the sandbox forbidden list). */
 static int security_ok(const char *script) {
+    char *audit;
+    cJSON *root;
+    cJSON *findings;
+    int ok = 1;
+
     if (!script || sandbox_forbidden(script))
         return 0;
-    char *audit = security_audit(script);
+    audit = security_audit(script);
     if (!audit)
         return 0;
-    cJSON *root = cJSON_Parse(audit);
+    root = cJSON_Parse(audit);
     free(audit);
     if (!root)
         return 0;
-    cJSON *findings = cJSON_GetObjectItemCaseSensitive(root, "findings");
-    int ok = 1;
+    findings = cJSON_GetObjectItemCaseSensitive(root, "findings");
     if (findings && cJSON_IsArray(findings)) {
         cJSON *it;
         cJSON_ArrayForEach(it, findings) {
@@ -158,6 +175,7 @@ static int security_ok(const char *script) {
             }
         }
     }
+
     cJSON_Delete(root);
     return ok;
 }
@@ -169,11 +187,12 @@ static cJSON *stage_obj(const char *json_text) {
 
 /* Join a JSON array of strings into a comma-separated csv (caller frees). */
 static char *caps_csv_from(cJSON *arr) {
+    strbuf sb;
+    cJSON *it;
+
     if (!arr || !cJSON_IsArray(arr))
         return NULL;
-    strbuf sb;
     strbuf_init(&sb);
-    cJSON *it;
     cJSON_ArrayForEach(it, arr) {
         if (!cJSON_IsString(it) || !it->valuestring || !*it->valuestring)
             continue;
@@ -181,10 +200,12 @@ static char *caps_csv_from(cJSON *arr) {
             strbuf_append(&sb, ",");
         strbuf_append(&sb, it->valuestring);
     }
+
     if (sb.len == 0) {
         strbuf_free(&sb);
         return NULL;
     }
+
     return strbuf_detach(&sb);
 }
 
@@ -192,18 +213,23 @@ static char *caps_csv_from(cJSON *arr) {
  * Returns 1 pass, 0 fail (only when the script actually ran and failed). */
 static int smoke_test(const char *path, char **report_out) {
     char cmd[1200];
+    char *report;
+    cJSON *r;
+    cJSON *ec;
+    cJSON *to;
+    int pass = 1;
+
     snprintf(cmd, sizeof(cmd), "sh \"%s\"", path);
-    char *report = testing_run(cmd, 5000);
+    report = testing_run(cmd, 5000);
     if (report_out)
         *report_out = report;
     else
         free(report);
-    cJSON *r = cJSON_Parse(report ? report : "{}");
+    r = cJSON_Parse(report ? report : "{}");
     if (!r)
         return 1; /* cannot judge -> do not gate */
-    cJSON *ec = cJSON_GetObjectItemCaseSensitive(r, "exit_code");
-    cJSON *to = cJSON_GetObjectItemCaseSensitive(r, "timed_out");
-    int pass = 1;
+    ec = cJSON_GetObjectItemCaseSensitive(r, "exit_code");
+    to = cJSON_GetObjectItemCaseSensitive(r, "timed_out");
     /* exit_code == -1 means spawn failed (e.g. no sh on the host): don't gate */
     if (ec && cJSON_IsNumber(ec) && (int)ec->valuedouble > 0)
         pass = 0;
@@ -214,6 +240,32 @@ static int smoke_test(const char *path, char **report_out) {
 }
 
 char *plugin_generate_deps(const plugin_gen_deps *deps, const char *description) {
+    /* --- stage 3: code design via LLM (or deterministic mock template) --- */
+    strbuf pb;
+    cJSON *design = NULL;
+    cJSON *desc_j;
+    cJSON *caps_j;
+    /* --- content signature --- */
+    uint64_t h;
+    char signature[32];
+    /* --- register as a versioned plugin --- */
+    char **caps = NULL;
+    size_t n_caps = 0;
+    int reg_ok = 0;
+    char version[32];
+    /* --- register as a runnable skill carrying the granted caps --- */
+    int skill_ok = 0;
+    char *caps_csv;
+    /* --- stage 5: automated smoke test through the sandbox --- */
+    char *test_report = NULL;
+    int test_ok;
+    /* --- native C skeleton for the .so/.dll loader path --- */
+    char *c_skeleton;
+    cJSON *out;
+    cJSON *pj;
+    cJSON *ca;
+    char *js;
+
     if (!deps || !description || !*description)
         return xstrdup("{\"ok\":false,\"error\":\"missing description\"}");
 
@@ -240,8 +292,6 @@ char *plugin_generate_deps(const plugin_gen_deps *deps, const char *description)
     arch_s = architect_design(description);
     arch = stage_obj(arch_s);
 
-    /* --- stage 3: code design via LLM (or deterministic mock template) --- */
-    strbuf pb;
     strbuf_init(&pb);
     strbuf_append(&pb, ARCH_PROMPT);
     if (analysis_s && *analysis_s && strcmp(analysis_s, "{}") != 0)
@@ -249,12 +299,12 @@ char *plugin_generate_deps(const plugin_gen_deps *deps, const char *description)
     if (arch_s && *arch_s && strcmp(arch_s, "{}") != 0)
         strbuf_appendf(&pb, "\n\nArchitecture plan: %s", arch_s);
 
-    cJSON *design = NULL;
     if (real && deps->llm) {
         char *resp = llm_chat_simple(deps->llm, pb.buf ? pb.buf : ARCH_PROMPT, description);
         design = parse_design(resp);
         free(resp);
     }
+
     strbuf_free(&pb);
     if (!design) {
         /* fallback: mock template (also used when the LLM returns garbage) */
@@ -284,9 +334,9 @@ char *plugin_generate_deps(const plugin_gen_deps *deps, const char *description)
         return xstrdup("{\"ok\":false,\"error\":\"LLM design invalid (missing name/script)\"}");
     }
 
-    cJSON *desc_j = cJSON_GetObjectItemCaseSensitive(design, "description");
+    desc_j = cJSON_GetObjectItemCaseSensitive(design, "description");
     const char *desc = desc_j && cJSON_IsString(desc_j) ? desc_j->valuestring : description;
-    cJSON *caps_j = cJSON_GetObjectItemCaseSensitive(design, "capabilities");
+    caps_j = cJSON_GetObjectItemCaseSensitive(design, "capabilities");
 
     /* --- stage 4: security review gate --- */
     if (!security_ok(script)) {
@@ -301,13 +351,9 @@ char *plugin_generate_deps(const plugin_gen_deps *deps, const char *description)
     }
 
     /* --- content signature --- */
-    uint64_t h = hash64(script, strlen(script));
-    char signature[32];
+    h = hash64(script, strlen(script));
     hash_hex(signature, h);
 
-    /* --- register as a versioned plugin --- */
-    char **caps = NULL;
-    size_t n_caps = 0;
     if (caps_j && cJSON_IsArray(caps_j)) {
         int caps_len = cJSON_GetArraySize(caps_j);
         n_caps = (size_t)caps_len;
@@ -322,10 +368,9 @@ char *plugin_generate_deps(const plugin_gen_deps *deps, const char *description)
                 n_caps = 0;
         }
     }
-    int reg_ok = 0;
+
     /* the registry rejects exact name+version duplicates, so a regenerated
      * plugin gets its patch version bumped (1.0.0 -> 1.0.1 -> ...) */
-    char version[32];
     snprintf(version, sizeof(version), "%s", PLUGIN_VERSION);
     if (deps->registry) {
         const plugin_meta *prev = plugin_registry_find(deps->registry, name);
@@ -347,9 +392,7 @@ char *plugin_generate_deps(const plugin_gen_deps *deps, const char *description)
         reg_ok = plugin_registry_register(deps->registry, &meta) == 0;
     }
 
-    /* --- register as a runnable skill carrying the granted caps --- */
-    int skill_ok = 0;
-    char *caps_csv = caps_csv_from(caps_j);
+    caps_csv = caps_csv_from(caps_j);
     if (deps->skills) {
         const skill sk = {name, desc, "shell", script, caps_csv};
         skill_ok = skill_register_ex(deps->skills, &sk, 1) == 0;
@@ -369,27 +412,26 @@ char *plugin_generate_deps(const plugin_gen_deps *deps, const char *description)
     snprintf(path, sizeof(path), "%s/plugins/%s.sh", dir, name);
     fs_write_file(path, script, (size_t)strlen(script));
 
-    /* --- stage 5: automated smoke test through the sandbox --- */
-    char *test_report = NULL;
-    int test_ok = smoke_test(path, &test_report);
+    test_ok = smoke_test(path, &test_report);
     if (!test_ok)
         log_warn("plugin %s failed its smoke test", name);
 
     /* --- native C skeleton for the .so/.dll loader path --- */
-    char *c_skeleton = codegen_plugin(name, desc);
+    c_skeleton = codegen_plugin(name, desc);
 
-    cJSON *out = cJSON_CreateObject();
+    out = cJSON_CreateObject();
     cJSON_AddBoolToObject(out, "ok", 1);
-    cJSON *pj = cJSON_CreateObject();
+    pj = cJSON_CreateObject();
     cJSON_AddStringToObject(pj, "name", name);
     cJSON_AddStringToObject(pj, "version", version);
     cJSON_AddStringToObject(pj, "description", desc);
-    cJSON *ca = cJSON_AddArrayToObject(pj, "caps");
+    ca = cJSON_AddArrayToObject(pj, "caps");
     if (caps_j && cJSON_IsArray(caps_j)) {
         cJSON *it;
         cJSON_ArrayForEach(it, caps_j) if (cJSON_IsString(it))
             cJSON_AddItemToArray(ca, cJSON_CreateString(it->valuestring));
     }
+
     cJSON_AddStringToObject(pj, "signature", signature);
     cJSON_AddItemToObject(out, "plugin", pj);
     cJSON_AddStringToObject(out, "script", script);
@@ -402,10 +444,12 @@ char *plugin_generate_deps(const plugin_gen_deps *deps, const char *description)
             cJSON_AddItemToObject(out, "test", tr);
         free(test_report);
     }
+
     if (c_skeleton) {
         cJSON_AddStringToObject(out, "c_skeleton", c_skeleton);
         free(c_skeleton);
     }
+
     if (analysis)
         cJSON_AddItemToObject(out, "analysis", analysis);
     if (arch)
@@ -414,7 +458,7 @@ char *plugin_generate_deps(const plugin_gen_deps *deps, const char *description)
     free(analysis_s);
     free(arch_s);
     free(caps_csv);
-    char *js = cJSON_PrintUnformatted(out);
+    js = cJSON_PrintUnformatted(out);
     cJSON_Delete(out);
 
     log_info("plugin generated name=%s real=%d registered=%d skill=%d test_ok=%d", name, real, reg_ok, skill_ok,
