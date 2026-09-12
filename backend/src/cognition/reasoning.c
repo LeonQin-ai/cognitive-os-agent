@@ -208,31 +208,76 @@ static void clear_actions(reasoning *r) {
 #define AGENT_LOOP_MAX_ROUNDS                                                                                          \
     32                      /* default rounds when config does not set it;                                             \
                                config "reasoning.max_rounds" < 0 = unlimited */
-#define ROUND_LOG_CAP 16384 /* tail-keep cap for accumulated round results */
+/* Tail-keep cap for accumulated round results. 16K was too small for long
+ * agent runs: one file_read of a source file easily produces 5-15K, so a
+ * multi-round SWE-style task overflowed within 2-3 reads and the halving
+ * eviction silently discarded the code read earlier — the model then
+ * re-read files or planned against half-missing observations. */
+#define ROUND_LOG_CAP 65536
+/* Per-entry cap: an action result larger than this is truncated head+tail
+ * (middle elided) BEFORE appending, so one huge output cannot evict many
+ * earlier observations — more distinct results survive the same budget. */
+#define ROUND_LOG_ENTRY_CAP 6144
+#define ROUND_LOG_HEAD_KEEP 4096
+#define ROUND_LOG_TAIL_KEEP 1536
 
 /* Append text to the round log, tail-keeping: once past ROUND_LOG_CAP the
  * oldest half is dropped so recent action results always stay available. */
 static void round_log_append(reasoning *r, const char *text) {
     if (!text || !*text)
         return;
-    size_t add = strlen(text);
-    size_t need = r->round_log_len + add + 1;
+    const char *add = text;
+    char *elided = NULL;
+    size_t len = strlen(text);
+    if (len > ROUND_LOG_ENTRY_CAP) {
+        /* head+tail keep with an explicit elision marker: the model sees
+         * the beginning and end of the output, not a silent hole */
+        size_t mid = len - ROUND_LOG_HEAD_KEEP - ROUND_LOG_TAIL_KEEP;
+        char marker[80];
+        int mlen = snprintf(marker, sizeof(marker),
+                            "\n...[%zu bytes of output elided]...\n", mid);
+        elided = (char *)malloc(ROUND_LOG_HEAD_KEEP + (size_t)mlen +
+                                ROUND_LOG_TAIL_KEEP + 1);
+        if (elided) {
+            memcpy(elided, text, ROUND_LOG_HEAD_KEEP);
+            memcpy(elided + ROUND_LOG_HEAD_KEEP, marker, (size_t)mlen);
+            memcpy(elided + ROUND_LOG_HEAD_KEEP + mlen,
+                   text + len - ROUND_LOG_TAIL_KEEP, ROUND_LOG_TAIL_KEEP);
+            elided[ROUND_LOG_HEAD_KEEP + (size_t)mlen + ROUND_LOG_TAIL_KEEP] = '\0';
+            add = elided;
+            len = strlen(elided);
+        }
+    }
+    size_t need = r->round_log_len + len + 1;
     if (need > r->round_log_cap) {
         size_t ncap = r->round_log_cap ? r->round_log_cap * 2 : 2048;
         while (ncap < need)
             ncap *= 2;
         char *nb = (char *)realloc(r->round_log, ncap);
-        if (!nb)
+        if (!nb) {
+            free(elided);
             return;
+        }
         r->round_log = nb;
         r->round_log_cap = ncap;
     }
-    memcpy(r->round_log + r->round_log_len, text, add + 1);
-    r->round_log_len += add;
+    memcpy(r->round_log + r->round_log_len, add, len + 1);
+    r->round_log_len += len;
+    free(elided);
     if (r->round_log_len > ROUND_LOG_CAP) {
         size_t half = r->round_log_len / 2;
         memmove(r->round_log, r->round_log + half, r->round_log_len - half + 1);
         r->round_log_len -= half;
+        /* tell the model the log was folded, so it knows earlier results
+         * may be gone and can re-read if truly needed */
+        static const char fold_note[] =
+            "(earlier action results were folded away to fit the budget)\n";
+        size_t nlen = strlen(fold_note);
+        if (r->round_log_cap > nlen + r->round_log_len + 1) {
+            memmove(r->round_log + nlen, r->round_log, r->round_log_len + 1);
+            memcpy(r->round_log, fold_note, nlen);
+            r->round_log_len += nlen;
+        }
     }
 }
 
