@@ -7,7 +7,7 @@
 [![Language](https://img.shields.io/badge/language-C11-blue.svg)](https://en.wikipedia.org/wiki/C11_(C_standard_revision))
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey.svg)](#快速开始)
 [![Dependencies](https://img.shields.io/badge/external%20deps-0-green.svg)](#项目结构)
-[![Tests](https://img.shields.io/badge/tests-1236%20passing-brightgreen.svg)](#测试与验证)
+[![Tests](https://img.shields.io/badge/tests-1391%20passing-brightgreen.svg)](#测试与验证)
 [![CI](https://github.com/LeonQin-ai/cognitive-os-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/LeonQin-ai/cognitive-os-agent/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
 
@@ -65,6 +65,21 @@ Cognitive OS 把这些职责**从提示词里搬进运行时**：
 | 产物 | node_modules + 运行时 | **单个静态 C 二进制，内嵌 Web 控制台** |
 
 目标不是再造一个提示词框架，而是打造**自主智能体之下的运行时基座**。
+
+## 基准评测
+
+全部数字为真实完整 agent 循环运行结果。纯净分数表：[`backend/docs/BENCHMARK_RESULTS.md`](backend/docs/BENCHMARK_RESULTS.md) · 方法论与失败归因详录：[`backend/docs/benchmark-report-2026-08-31.md`](backend/docs/benchmark-report-2026-08-31.md)。
+
+| 评测 | 分数 | 模型 |
+|---|---|---|
+| GAIA 2023 validation（官方 165 题） | **78.79%**（L1 84.91 / L2 81.40 / L3 57.69） | GLM-5.3-flash |
+| SWE-bench_Verified mini（11 题，官方 resolved 标准） | **8/11 = 72.7%** | GLM-5.3-flash |
+| BFCL 风格函数调用（22 例，AST 严格判分） | **~94%**（20-22/22） | deepseek-chat |
+| GAIA 风格 mini（17 题） | **17/17 = 100%** + 视觉 1/1 | GLM-5.3-flash |
+| WebArena 风格浏览器任务（6 题） | **6/6 = 100%** | GLM-5.3-flash |
+| 策略遵循（违规请求） | **裸 LLM 0/4 → 运行时策略引擎 4/4** | deepseek-chat |
+
+值得注意：同一套运行时用中端模型 GLM-5.3-flash 即可达到 **GAIA 78.79%**、**SWE-bench mini 72.7%**；把规则从提示词移进运行时策略引擎后，策略遵循从 **0/4 变 4/4**。LLM 是加速器，运行时提供保证。
 
 ## 架构
 
@@ -374,7 +389,7 @@ curl localhost:8080/metrics       # 指标：context.bytes_*、memory.*、tx.*
 质量门槛：**每次改动都在 Windows（zig cc）与 Linux（gcc 12）双平台验证，包含 AddressSanitizer 无报错运行。**
 
 ```
-unit:      1236 passed, 0 failed   （43 个模块，0 外部依赖）
+unit:      1391 passed, 0 failed   （43 个模块，0 外部依赖；Linux/gcc 1366）
 scenario:  85 checks, 0 failed     （HTTP 服务器、插件、MCP stdio、Flow）
 e2e:       E2E PASS                （真实 HTTP，双协议）
 adapters:  ADAPTER PASS            （chat + SSE 流式，openai + anthropic）
@@ -391,7 +406,7 @@ ASAN:      0 内存错误
 ```bash
 cd backend
 make                # 构建全部测试二进制（或 make test / make scenario 构建并运行单项）
-make test           # 单元测试            → "1236 passed, 0 failed"
+make test           # 单元测试            → "1391 passed, 0 failed"
 make scenario       # 场景检查            → "SCENARIO PASS"
 ./build/test-adapters            # 适配器检查          → "ADAPTER PASS"
 ./build/cognitive-os-agent-bench --mock   # 基准 sanity（离线 mock）
@@ -423,7 +438,7 @@ cd backend
 
 **CI** 在每次 push 和 pull request 时运行同样的套件——Linux（gcc）、Linux（AddressSanitizer）、Windows（zig cc）。见 [`.github/workflows/ci.yml`](.github/workflows/ci.yml)。
 
-基准评测方法与真实 LLM 结果：[`backend/docs/benchmark-report-2026-08-31.md`](backend/docs/benchmark-report-2026-08-31.md)。
+基准评测纯净分数表：[`backend/docs/BENCHMARK_RESULTS.md`](backend/docs/BENCHMARK_RESULTS.md) · 方法论与真实 LLM 结果：[`backend/docs/benchmark-report-2026-08-31.md`](backend/docs/benchmark-report-2026-08-31.md)。
 
 ## 文档
 
@@ -431,7 +446,8 @@ cd backend
 |---|---|
 | [`backend/docs/architecture-v1.0.md`](backend/docs/architecture-v1.0.md) | 架构基线：总体图、认知闭环、Memory OS、Context MMU、Hook、时序图、模块映射 |
 | [`backend/docs/architecture-design-v2.md`](backend/docs/architecture-design-v2.md) | 控制面/数据面分离、企业级路线（多租户、集群、部署） |
-| [`backend/docs/benchmark-report-2026-08-31.md`](backend/docs/benchmark-report-2026-08-31.md) | Agent 基准评测方法与真实 LLM 结果 |
+| [`backend/docs/BENCHMARK_RESULTS.md`](backend/docs/BENCHMARK_RESULTS.md) | 纯净基准分数表（GAIA / SWE-bench / BFCL / 策略遵循） |
+| [`backend/docs/benchmark-report-2026-08-31.md`](backend/docs/benchmark-report-2026-08-31.md) | Agent 基准评测方法与真实 LLM 结果（分数表背后的详细记录） |
 | [`backend/README.md`](backend/README.md) | 开发者文档：构建、并发模型、API、配置、市场、本地模型 |
 
 ## 路线图
@@ -466,6 +482,28 @@ Flow DAG 编排 · Agent 并行执行 · 逐 Agent 隔离
 不是因为"C 更快"，而是因为运行时**贴近操作系统**。C 对内存、线程、协程、调度、套接字、进程、文件系统、IPC、信号、资源所有权与 ABI 边界提供直接控制。一个 Agent 运行时越来越像 **OS + 数据库 + 调度器 + 沙箱 + AI 运行时** 的合体；模型本身不需要用 C 实现，运行时需要。
 
 ## 我们有何不同？
+
+### 对比 Claude Code / Codex CLI / DeepSeek harness
+
+Claude Code 与 Codex 是前沿模型驱动、打磨成熟的终端 Agent 产品；DeepSeek harness（deepseek-chat + 函数调用）是有力但赤裸的提示词循环。Cognitive OS 不在产品打磨上竞争——它是**下面的运行时层**，这改变了保证所在的层：
+
+| | Claude Code | Codex CLI | DeepSeek harness | **Cognitive OS** |
+|---|---|---|---|---|
+| 定位 | Agent CLI 产品 | Agent CLI 产品 | 模型 + 工具调用循环 | **开放的 Agent 运行时基座** |
+| 技术栈 | Node / TypeScript | Rust | Python / API | **纯 C11 · 0 外部依赖 · 单个静态二进制** |
+| 控制流 | 模型驱动循环 | 模型驱动循环 | 模型驱动循环 | **运行时状态机 + 规则引擎，LLM 只在决策点介入** |
+| 安全 | 权限提示 / 模式 | 沙箱 + 审批 | 无内置 | **策略引擎动作前硬拦截（ALLOW/DENY/ASK）+ Hook + 能力系统 + 审计——实测裸 LLM 0/4 → 运行时 4/4** |
+| 副作用 | 尽力而为，git 检查点 | 沙箱内执行，无回滚 | 无 | **事务化：快照→执行→验证→提交 / 回滚** |
+| 记忆 | Markdown 笔记 | 会话状态 | 聊天记录 | **Memory OS 生命周期（工作/情景/语义/程序）+ Context MMU 三层预算与淘汰** |
+| 并发 | 顺序工具循环 + 子 Agent | 顺序工具循环 | 顺序工具循环 | **M:N 协程调度器，DAG 分层并行** |
+| 多智能体 | 子 Agent 工具 | — | — | **Flow DAG 编译器，每 Agent 独立记忆/上下文/工具/策略** |
+| 扩展 | MCP + 插件 | MCP | 函数调用 | **MCP + 自蒸馏技能（成功动作序列沉淀复用）+ 原生 / WASM 沙箱插件** |
+| 模型绑定 | Anthropic | OpenAI | DeepSeek | **任意 OpenAI 兼容 / Anthropic / 本地（Ollama）/ 离线 mock** |
+| 离线可验证 | 需 API 访问 | 需 API 访问 | 需 API 访问 | **1391 单元 + 85 场景 + e2e/适配器测试免密钥对 mock 运行，ASAN 干净** |
+
+对比的重点不是"产品更好"，而是：**策略强制、事务、记忆生命周期、调度与隔离在这里是运行时服务，不是提示词约定或产品功能**。正因如此，同一套运行时用中端模型就能达到 GAIA 78.79%，并把策略遵循做成 4/4。
+
+### 架构边界
 
 Cognitive OS 不在提示词抽象上与其他 Agent 框架竞争——它的架构边界不同：
 

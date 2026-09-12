@@ -7,7 +7,7 @@
 [![Language](https://img.shields.io/badge/language-C11-blue.svg)](https://en.wikipedia.org/wiki/C11_(C_standard_revision))
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey.svg)](#quick-start)
 [![Dependencies](https://img.shields.io/badge/external%20deps-0-green.svg)](#project-structure)
-[![Tests](https://img.shields.io/badge/tests-1236%20passing-brightgreen.svg)](#testing)
+[![Tests](https://img.shields.io/badge/tests-1391%20passing-brightgreen.svg)](#testing)
 [![CI](https://github.com/LeonQin-ai/cognitive-os-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/LeonQin-ai/cognitive-os-agent/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
 
@@ -65,6 +65,21 @@ Cognitive OS moves these responsibilities **out of the prompt and into the runti
 | Binary | node_modules + runtime | **A single static C binary with an embedded web console** |
 
 The goal is not another prompt framework — it is the **runtime substrate underneath autonomous agents**.
+
+## Benchmarks
+
+All numbers are real full-agent-loop runs. Clean scorecard: [`backend/docs/BENCHMARK_RESULTS.md`](backend/docs/BENCHMARK_RESULTS.md) · methodology & failure attribution: [`backend/docs/benchmark-report-2026-08-31.md`](backend/docs/benchmark-report-2026-08-31.md).
+
+| Benchmark | Score | Model |
+|---|---|---|
+| GAIA 2023 validation (official 165 tasks) | **78.79%** (L1 84.91 / L2 81.40 / L3 57.69) | GLM-5.3-flash |
+| SWE-bench_Verified mini (11 tasks, official resolved standard) | **8/11 = 72.7%** | GLM-5.3-flash |
+| BFCL-style function calling (22 cases, AST-strict) | **~94%** (20–22/22) | deepseek-chat |
+| GAIA-style mini (17 tasks) | **17/17 = 100%** + vision 1/1 | GLM-5.3-flash |
+| WebArena-style browser tasks (6 tasks) | **6/6 = 100%** | GLM-5.3-flash |
+| Policy compliance (violating requests) | **bare LLM 0/4 → runtime policy engine 4/4** | deepseek-chat |
+
+Notable: the same runtime reaches **78.79% on GAIA** and **72.7% on SWE-bench mini** with a mid-tier GLM-5.3-flash — and policy compliance goes **0/4 → 4/4** when rules move from the prompt into the runtime policy engine. The LLM is the accelerator; the runtime provides the guarantees.
 
 ## Architecture
 
@@ -374,7 +389,7 @@ Point it at a real LLM (or run fully offline with the mock provider):
 Quality gate: **every change is verified on both Windows (zig cc) and Linux (gcc 12), including an AddressSanitizer-clean run.**
 
 ```
-unit:      1236 passed, 0 failed   (43 modules, 0 external deps)
+unit:      1391 passed, 0 failed   (43 modules, 0 external deps; 1366 on Linux/gcc)
 scenario:  85 checks, 0 failed     (HTTP server, plugins, MCP stdio, flows)
 e2e:       E2E PASS                (real HTTP, both protocols)
 adapters:  ADAPTER PASS            (chat + SSE stream, openai + anthropic)
@@ -391,7 +406,7 @@ All suites are self-contained and need **no API key, no network, no external ser
 ```bash
 cd backend
 make                # builds all test binaries (or: make test/scenario to build+run one)
-make test           # unit tests          → "1236 passed, 0 failed"
+make test           # unit tests          → "1391 passed, 0 failed"
 make scenario       # scenario checks     → "SCENARIO PASS"
 ./build/test-adapters            # adapter checks      → "ADAPTER PASS"
 ./build/cognitive-os-agent-bench --mock   # benchmark sanity (offline mock)
@@ -423,15 +438,16 @@ cd backend
 
 **CI** runs the same suites on every push and pull request — Linux (gcc), Linux (AddressSanitizer) and Windows (zig cc). See [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
 
-Benchmark methodology and real-LLM results: [`backend/docs/benchmark-report-2026-08-31.md`](backend/docs/benchmark-report-2026-08-31.md).
+Benchmark scorecard: [`backend/docs/BENCHMARK_RESULTS.md`](backend/docs/BENCHMARK_RESULTS.md) · methodology and real-LLM results: [`backend/docs/benchmark-report-2026-08-31.md`](backend/docs/benchmark-report-2026-08-31.md).
 
 ## Documentation
 
 | Doc | Content |
 |---|---|
+| [`backend/docs/BENCHMARK_RESULTS.md`](backend/docs/BENCHMARK_RESULTS.md) | Clean benchmark scorecard (GAIA / SWE-bench / BFCL / policy compliance) |
 | [`backend/docs/architecture-v1.0.md`](backend/docs/architecture-v1.0.md) | Architecture baseline: diagrams, cognitive loop, Memory OS, Context MMU, hooks, sequence diagrams, module mapping |
 | [`backend/docs/architecture-design-v2.md`](backend/docs/architecture-design-v2.md) | Control plane / data plane split, enterprise roadmap (multi-tenant, cluster, deployment) |
-| [`backend/docs/benchmark-report-2026-08-31.md`](backend/docs/benchmark-report-2026-08-31.md) | Agent benchmark methodology and real-LLM results |
+| [`backend/docs/benchmark-report-2026-08-31.md`](backend/docs/benchmark-report-2026-08-31.md) | Agent benchmark methodology and real-LLM results (detailed record behind the scorecard) |
 | [`backend/README.md`](backend/README.md) | Developer docs: build, concurrency model, API, configuration, marketplace, local models |
 
 ## Roadmap
@@ -466,6 +482,28 @@ The same runtime supports two deployment modes: **personal** (local-first, singl
 Not because "C is faster" — because the runtime sits **close to the operating system**. C gives direct control over memory, threads, coroutines, scheduling, sockets, processes, filesystem, IPC, signals, resource ownership and ABI boundaries. An agent runtime increasingly resembles **OS + database + scheduler + sandbox + AI runtime**; the model itself does not need to be implemented in C, the runtime does.
 
 ## What Makes This Different?
+
+### vs. Claude Code / Codex CLI / a DeepSeek harness
+
+Claude Code and Codex are polished end-user agent products driven by frontier models; a DeepSeek harness (deepseek-chat + function calling) is a capable but bare prompt loop. Cognitive OS is not competing on product polish — it is the **runtime layer underneath**, and that changes where the guarantees live:
+
+| | Claude Code | Codex CLI | DeepSeek harness | **Cognitive OS** |
+|---|---|---|---|---|
+| What it is | agent CLI product | agent CLI product | model + tool-calling loop | **open agent runtime substrate** |
+| Stack | Node / TypeScript | Rust | Python / API | **pure C11 · zero external deps · one static binary** |
+| Control flow | model-driven loop | model-driven loop | model-driven loop | **runtime state machine + rule engine; LLM at decision points** |
+| Safety | permission prompts / modes | sandbox + approvals | none built in | **policy engine hard-intercepts (ALLOW/DENY/ASK) + hooks + capabilities + audit trail — measured bare LLM 0/4 → runtime 4/4** |
+| Side effects | best-effort, git checkpoints | sandboxed, no rollback | none | **transactional: snapshot → execute → verify → commit / rollback** |
+| Memory | markdown notes | session state | chat log | **Memory OS lifecycle (working/episodic/semantic/procedural) + Context MMU hot/warm/cold tiers with budget & eviction** |
+| Concurrency | sequential tool loop + subagents | sequential tool loop | sequential tool loop | **M:N coroutine scheduler, parallel DAG layers** |
+| Multi-agent | subagent tool | — | — | **Flow DAG compiler, per-agent isolation (own memory / context / tools / policy)** |
+| Extensions | MCP + plugins | MCP | function calling | **MCP + self-distilling skills (successful sequences become reusable) + native / WASM sandboxed plugins** |
+| Model lock-in | Anthropic | OpenAI | DeepSeek | **any OpenAI-compatible / Anthropic / local (Ollama) / offline mock** |
+| Verifiable offline | needs API access | needs API access | needs API access | **1391 unit + 85 scenario + e2e/adapter suites run keyless against the mock provider, ASAN-clean** |
+
+The point of the comparison is not "better product" — it is that **policy enforcement, transactions, memory lifecycle, scheduling and isolation are runtime services here, not prompt conventions or product features**. That is what lets the same runtime score 78.79% on GAIA and enforce policy 4/4 with a mid-tier model.
+
+### Architectural boundary
 
 Cognitive OS is not competing with agent frameworks on prompt abstractions — its architectural boundary is different:
 
