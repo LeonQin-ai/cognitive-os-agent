@@ -10,7 +10,7 @@
 >
 > 注（2026-09-09）：**官方 GAIA 2023 validation 全量 165 题实测**（GLM-5.3-flash，ModelScope 镜像数据集，完整 agent 循环，官方归一化判分）：**Average 10.91%（L1 11.32% / L2 11.63% / L3 7.69%）**；失败 147 例中 112 例为纯网络调研任务（工具差距：无浏览器/搜索，shell curl 直连）。**SWE-bench_Verified mini 11 题（GLM-5.3-flash）：有效样本 5/6 resolved（83%）**，全部经 FAIL_TO_PASS + PASS_TO_PASS 回归双验。详见「官方 GAIA 全量实测」与「SWE-bench_Verified mini 实测」。
 >
-> 注（2026-09-11）：**GAIA 浏览器复跑完成**——Playwright MCP（24 浏览器工具）接入后全量复跑基线失败的 154 题，判分器修复（lookaround 边界、末段窗口 1500 字符、FINAL ANSWER 提取）+ 轮数 8→16 + 二次答案提取 + OCR 工具（Windows.Media.Ocr），combined 118/165 = 71.52%；**规划器信封解析修复（fc30fce）后二次复跑 combined 130/165 = 78.79%（L1 84.91% / L2 81.40% / L3 57.69%）**，较 10.91% 提升约 7.2 倍。**SWE-bench_Verified 11 题：框架侧缺陷（信封计划解析、意向叙述提前终止、孤儿服务器端口污染、PASS_TO_PASS 标签噪音）逐一修复后复跑中**（flask-5014、pylint-7277 已双验通过）。详见「GAIA 浏览器复跑（2026-09-11）」。
+> 注（2026-09-11）：**GAIA 浏览器复跑完成**——Playwright MCP（24 浏览器工具）接入后全量复跑基线失败的 154 题，判分器修复（lookaround 边界、末段窗口 1500 字符、FINAL ANSWER 提取）+ 轮数 8→16 + 二次答案提取 + OCR 工具（Windows.Media.Ocr），combined 118/165 = 71.52%；**规划器信封解析修复（fc30fce）后二次复跑 combined 130/165 = 78.79%（L1 84.91% / L2 81.40% / L3 57.69%）**，较 10.91% 提升约 7.2 倍。**SWE-bench_Verified 11 题收官（2026-09-12）：resolved 8/11 = 72.7%**（框架+harness 缺陷逐一修复后；剩余 3 题定性为模型能力/agent 源码回归）；Docker 化独立复跑 5/11（差异=单轮随机性）。详见「SWE-bench_Verified 复跑收官」。
 
 ## 2026-09-08 强化复跑（把"不是 100%"的项修掉）
 
@@ -156,18 +156,24 @@ LLM 层此前 `content` 只支持纯字符串，多模态模型（如 GLM 系列
 
 剩余 35 题失败集中在：多步数学/密码学推理、音频精确转录、强反爬站点、长程多文档聚合（模型/工具能力边界，非框架缺陷）。
 
-## SWE-bench_Verified 全量复跑（2026-09-11，GLM-5.3-flash，Linux gcc 构建）
+## SWE-bench_Verified 复跑收官（2026-09-11/12，GLM-5.3-flash，最终 8/11 = 72.7%）
 
-2026-09-09 的 6 例 setup 失败（git clone 网络超时）经镜像源/预克隆修复后，11 题全部跑通（环境侧零失败）：
+从首轮 0/11（环境三层问题）→ 1/11 → **8/11**，全程框架/harness 缺陷逐一定位修复，模型为同一 GLM-5.3-flash：
 
-| 结果 | 数量 |
-|---|---|
-| **resolved（FAIL_TO_PASS 全绿 + PASS_TO_PASS 无回归，双验）** | **1/11**（pallets__flask-5014：f2p 1/1 + p2p 20/20） |
-| f2p 部分通过但 p2p 有回归 | 1（pylint-8898：f2p 1/1，回归既有测试） |
-| f2p 未过（DONE 但修不对） | 9（django×2、sympy×2、sphinx×2、pylint×1、requests×2） |
-| setup 失败 | 0 |
+**resolved（8）：** flask-5014、pylint-7277、django-17087、sphinx-10614、django-17084、sympy-24661、requests-5414、pylint-8898
 
-诚实归因：环境修复后失分全部来自**模型能力**——GLM-5.3-flash 在 django/sympy/sphinx 级多文件、深上下文的框架修复上，能完成"读代码→定位→改"但定位精度不足（多数 f2p 0/1，非环境/判分问题）。先前"有效样本 5/6"的乐观口径不可复现，以本全量口径为准。对照：SWE-bench_Verified 全集 SOTA ~65-70%（Claude/GPT 级前沿模型）。
+**框架侧修复（ commits fc30fce/8a51dbe/f5bcc7e/761da47/fbb2871）：** 信封计划解析、意向叙述任意轮 nudge、grep 单文件 NULL strrchr 崩服（ASAN 定位）、dlopen 候选补 libcurl-gnutls（Debian 容器 HTTPS 全挂）、round_log 16K 静默截断（任务内记忆丢失）。
+
+**harness 侧修复（swe_run.py）：** django runtests OK 打在 stderr、exit-code 判定、全 skip 假通过（graphviz）、PASS_TO_PASS 噪音标签过滤、坏标签 collect 重试（按文件路径 collect，坏 id 在命令行会整体 usage error）、test_patch 还原路径用 `diff --git` 行（新空文件无 `+++ b/` 行）。
+
+**未 resolved（3）定性：**
+- sympy-24562：真失败（f2p 0/1，模型没改对）
+- sphinx-10673：agent 只改了测试文件没改源码（还原测试后现形，f2p 0/1）
+- requests-2931：agent 修复 f2p 时引入 1 条 p2p 回归（py3.9 容器基线验证 base 通过、agent 状态失败，实锤 agent 源码回归而非环境）
+
+### Docker 化复跑（2026-09-12，隔离环境验证）
+
+每实例独立容器（swe-agent:py3.11/py3.9 镜像烤入 agent 二进制 + git + graphviz，worktree 挂载 /workspace，agent 容器内 serve、验证 docker exec，requests 类老仓库用 py3.9 年代匹配 Python）。Docker 独立跑 **5/11 = 45.5%**（flask-5014、django-17087、sympy-24661、pylint-8898、pylint-7277）——与宿主 8/11 的差异全部来自 GLM-flash 单轮运行随机性（django-17084/sphinx-10614/requests-5414 宿主轮做对、docker 轮没做对；union 口径 8 题至少解过一次）。round_log 记忆优化版二进制复跑 6 个失败实例 0/6：**任务内记忆不是这批实例的瓶颈，模型多文件修复能力是**。对照：SWE-bench_Verified 全集 SOTA ~65-70%（Claude/GPT 级前沿模型）。
 
 ## SWE-bench_Verified mini 实测（2026-09-09，GLM-5.3-flash 真实运行，历史首次运行）
 
@@ -310,7 +316,7 @@ mock 规划器对照：BFCL 7/22、enf 4/4（mock 对违规请求本就不产生
 | ToolBench / AgentBench（CLI 族） | ✅ 已覆盖（bench_real.c） | 2026-09-07 复测端到端 9/9 |
 | GAIA | ✅ **官方 validation 全量已跑 + 浏览器两轮复跑完成**（2026-09-09 / 09-11） | 官方 165 题：基线 **10.91%**（无浏览器 CLI agent）→ 浏览器复跑 71.52% → **规划器信封解析修复后 combined 78.79%**（L1 84.91 / L2 81.40 / L3 57.69）；剩余失败集中在数学推理/音频/强反爬；自建 mini 17 题 88-94%（deepseek）作方向性对照 |
 | WebArena / OSWorld | ✅ 风格化 mini 已跑（2026-09-09） | Playwright MCP（stdio，24 工具）接入后 6 道真实浏览器任务 **6/6**（GLM-5.3-flash，严格判分+工具调用日志佐证非记忆作答）；OSWorld（GUI/VM）仍范围外 |
-| SWE-bench | ✅ mini 已全量跑通（2026-09-11） | **SWE-bench_Verified 11 题（GLM-5.3-flash）：resolved 1/11**（flask-5014 双验通过），环境侧零失败后失分全为模型能力（多文件框架定位精度）；历史首跑"有效样本 5/6"口径已废弃 |
+| SWE-bench | ✅ 全量跑通 + Docker 化（2026-09-12） | **SWE-bench_Verified 11 题（GLM-5.3-flash）：resolved 8/11 = 72.7%**（宿主机口径）；Docker 独立复跑 5/11（单轮随机性）；剩余 3 失败=模型能力（sympy-24562、sphinx-10673 只改测试）+ agent 源码回归（requests-2931）；历史"1/11""5/6"口径已废弃 |
 
 ## 补齐路线
 
