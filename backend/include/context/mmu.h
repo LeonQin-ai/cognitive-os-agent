@@ -21,7 +21,7 @@
 #pragma once
 #include <stddef.h>
 #include <stdint.h>
-#include "cognitive-os-agent/memory/record.h"
+#include "memory/record.h"
 
 #ifdef __cplusplus
 extern "C" {

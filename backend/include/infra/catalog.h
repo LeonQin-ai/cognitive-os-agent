@@ -3,7 +3,7 @@
  * marketplace" one-click wiring without hardcoding data in the UI. */
 #pragma once
 
-#include "cognitive-os-agent/action/skill.h"
+#include "action/skill.h"
 
 #ifdef __cplusplus
 extern "C" {

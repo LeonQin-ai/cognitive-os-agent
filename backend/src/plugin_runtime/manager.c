@@ -1,4 +1,4 @@
-#include "cognitive-os-agent/plugin_runtime/manager.h"
+#include "plugin_runtime/manager.h"
 
 #include <stdio.h>
 #include <stdlib.h>

@@ -3,10 +3,10 @@
  * can invoke named Shell/Python skills (list_dir, sys_info, ...) it sees in
  * its plan prompt. Unknown names return the available list so the model can
  * self-correct on the next turn. */
-#include "cognitive-os-agent/action/tools.h"
-#include "cognitive-os-agent/action/skill.h"
-#include "cognitive-os-agent/infra/util.h"
-#include "cognitive-os-agent/os/os_fs.h"
+#include "action/tools.h"
+#include "action/skill.h"
+#include "infra/util.h"
+#include "os/os_fs.h"
 
 #include <stdlib.h>
 #include <string.h>

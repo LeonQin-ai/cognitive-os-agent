@@ -1,6 +1,6 @@
-#include "cognitive-os-agent/runtime/state_machine.h"
-#include "cognitive-os-agent/runtime/hook.h"
-#include "cognitive-os-agent/infra/util.h"
+#include "runtime/state_machine.h"
+#include "runtime/hook.h"
+#include "infra/util.h"
 
 #include <stdlib.h>
 #include <string.h>

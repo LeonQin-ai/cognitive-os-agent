@@ -1,9 +1,9 @@
 /* filetracker.c — sandbox file-access tracking: path->ops registry plus
  * before/after workspace scanning and command-token read detection. */
-#include "cognitive-os-agent/plugin_runtime/filetracker.h"
-#include "cognitive-os-agent/os/os_fs.h"
-#include "cognitive-os-agent/os/os_thread.h"
-#include "cognitive-os-agent/infra/util.h"
+#include "plugin_runtime/filetracker.h"
+#include "os/os_fs.h"
+#include "os/os_thread.h"
+#include "infra/util.h"
 
 #include <stdlib.h>
 #include <string.h>

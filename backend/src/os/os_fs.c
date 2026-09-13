@@ -1,8 +1,8 @@
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
-#include "cognitive-os-agent/os/os_fs.h"
-#include "cognitive-os-agent/infra/util.h"
+#include "os/os_fs.h"
+#include "infra/util.h"
 
 #include <stdio.h>
 #include <stdlib.h>

@@ -2,9 +2,9 @@
  * Produces a deterministic plan (JSON array of tool actions) for simple file
  * tasks so the full pipeline runs end-to-end without a model server. For any
  * other request it answers in plain text. Useful for demos and tests. */
-#include "cognitive-os-agent/llm/llm.h"
-#include "cognitive-os-agent/infra/util.h"
-#include "cognitive-os-agent/infra/logging.h"
+#include "llm/llm.h"
+#include "infra/util.h"
+#include "infra/logging.h"
 
 #include <stdlib.h>
 #include <string.h>

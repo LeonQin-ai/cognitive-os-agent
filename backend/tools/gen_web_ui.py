@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regenerate include/cognitive-os-agent/api/web_ui.h from apps/web/index.html.
+"""Regenerate include/api/web_ui.h from apps/web/index.html.
 
 Usage: python3 tools/gen_web_ui.py
 Keeps the embedded web UI string in sync with the canonical HTML file.

@@ -1,5 +1,5 @@
 /* test_stream.c — verify SSE streaming via the openai adapter. */
-#include "cognitive-os-agent/llm/llm.h"
+#include "llm/llm.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>

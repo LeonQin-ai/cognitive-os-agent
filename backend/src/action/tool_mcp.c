@@ -5,9 +5,9 @@
  * {"server","tool","args"} for servers that were added after tool sync.
  * If unreachable, the tool returns an informative error rather than failing
  * the whole task. */
-#include "cognitive-os-agent/action/tools.h"
-#include "cognitive-os-agent/action/mcp_conn.h"
-#include "cognitive-os-agent/infra/util.h"
+#include "action/tools.h"
+#include "action/mcp_conn.h"
+#include "infra/util.h"
 
 #include <stdlib.h>
 #include <string.h>

@@ -2,7 +2,7 @@
  * A agent_pool registers named agents (with roles) that publish partial
  * results onto a shared blackboard and read each other's contributions. */
 #pragma once
-#include "cognitive-os-agent/cognition/blackboard.h"
+#include "cognition/blackboard.h"
 
 #ifdef __cplusplus
 extern "C" {

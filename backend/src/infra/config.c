@@ -1,14 +1,14 @@
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
-#include "cognitive-os-agent/infra/config.h"
+#include "infra/config.h"
 
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
 #include <stdio.h>
-#include "cognitive-os-agent/infra/util.h"
-#include "cognitive-os-agent/os/os_fs.h"
+#include "infra/util.h"
+#include "os/os_fs.h"
 #include "cJSON.h"
 
 #if defined(_WIN32)

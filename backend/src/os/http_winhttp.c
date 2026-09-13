@@ -4,8 +4,8 @@
  * we implement the same API over WinHTTP, which handles TLS via the system
  * crypto stack. This file is compiled only on Windows (_WIN32); on other
  * platforms os/http.c provides these symbols instead. */
-#include "cognitive-os-agent/os/http.h"
-#include "cognitive-os-agent/infra/util.h"
+#include "os/http.h"
+#include "infra/util.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -116,7 +116,7 @@ static http_response *do_request(const char *method, const char *base_url, const
         return NULL;
     }
 
-    HINTERNET hSess = WinHttpOpen(L"cognitive-os-agent/0.1", WINHTTP_ACCESS_TYPE_NO_PROXY, WINHTTP_NO_PROXY_NAME,
+    HINTERNET hSess = WinHttpOpen(L"0.1", WINHTTP_ACCESS_TYPE_NO_PROXY, WINHTTP_NO_PROXY_NAME,
                                   WINHTTP_NO_PROXY_BYPASS, 0);
     if (!hSess) {
         free(whost);

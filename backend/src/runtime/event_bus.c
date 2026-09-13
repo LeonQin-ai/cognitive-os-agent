@@ -6,10 +6,10 @@
  * only mutated on subscribe/free (rare), so it keeps a small mutex.
  * Events: SYSTEM, TASK, MEMORY, TOOL, MODEL. Payloads are cJSON objects;
  * ownership transfers to the bus and is released after dispatch. */
-#include "cognitive-os-agent/runtime/event_bus.h"
-#include "cognitive-os-agent/infra/ringbuf.h"
-#include "cognitive-os-agent/os/os_thread.h"
-#include "cognitive-os-agent/os/os_time.h"
+#include "runtime/event_bus.h"
+#include "infra/ringbuf.h"
+#include "os/os_thread.h"
+#include "os/os_time.h"
 
 #include <stdlib.h>
 #include <string.h>

@@ -1,8 +1,8 @@
 /* vector.c — in-memory vector store with cosine nearest-neighbor recall. */
-#include "cognitive-os-agent/memory/vector.h"
-#include "cognitive-os-agent/retrieval/embedding.h"
-#include "cognitive-os-agent/os/os_thread.h"
-#include "cognitive-os-agent/infra/util.h"
+#include "memory/vector.h"
+#include "retrieval/embedding.h"
+#include "os/os_thread.h"
+#include "infra/util.h"
 
 #include <stdlib.h>
 #include <string.h>

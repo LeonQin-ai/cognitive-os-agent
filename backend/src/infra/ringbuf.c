@@ -3,7 +3,7 @@
  * write a slot when seq == enqueue_pos; consumers only read when
  * seq == dequeue_pos + 1. Sequence numbers grow monotonically, which makes
  * the full/empty distinction unambiguous and the algorithm ABA-safe. */
-#include "cognitive-os-agent/infra/ringbuf.h"
+#include "infra/ringbuf.h"
 
 #include <stdlib.h>
 #include <string.h>

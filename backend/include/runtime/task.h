@@ -4,7 +4,7 @@
  * task management can be reasoned about independently of the worker pool. */
 #pragma once
 #include <stdint.h>
-#include "cognitive-os-agent/runtime/scheduler.h"
+#include "runtime/scheduler.h"
 
 #ifdef __cplusplus
 extern "C" {

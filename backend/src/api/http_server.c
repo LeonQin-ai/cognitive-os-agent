@@ -1,9 +1,9 @@
 /* http_server.c — minimal HTTP/1.1 server implementation. */
-#include "cognitive-os-agent/api/http_server.h"
-#include "cognitive-os-agent/api/ws_server.h"
-#include "cognitive-os-agent/os/os_socket.h"
-#include "cognitive-os-agent/os/os_thread.h"
-#include "cognitive-os-agent/infra/logging.h"
+#include "api/http_server.h"
+#include "api/ws_server.h"
+#include "os/os_socket.h"
+#include "os/os_thread.h"
+#include "infra/logging.h"
 
 #include <stdlib.h>
 #include <string.h>

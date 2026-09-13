@@ -5,16 +5,16 @@
  *  - episodes:        episodic (memory/episode.h)
  *  - vector-lite:     vectorstore (memory/vector.h), mirroring working + episodes
  * Long-term facts are persisted as JSON under the state root. */
-#include "cognitive-os-agent/memory/memory.h"
-#include "cognitive-os-agent/memory/kv.h"
-#include "cognitive-os-agent/memory/episode.h"
-#include "cognitive-os-agent/memory/vector.h"
-#include "cognitive-os-agent/memory/graph.h"
-#include "cognitive-os-agent/retrieval/embedding.h"
-#include "cognitive-os-agent/infra/util.h"
-#include "cognitive-os-agent/os/os_fs.h"
-#include "cognitive-os-agent/os/os_thread.h"
-#include "cognitive-os-agent/os/os_time.h"
+#include "memory/memory.h"
+#include "memory/kv.h"
+#include "memory/episode.h"
+#include "memory/vector.h"
+#include "memory/graph.h"
+#include "retrieval/embedding.h"
+#include "infra/util.h"
+#include "os/os_fs.h"
+#include "os/os_thread.h"
+#include "os/os_time.h"
 
 #include <stdlib.h>
 #include <string.h>

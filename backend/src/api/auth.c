@@ -1,6 +1,6 @@
 /* auth.c — API key / bearer-token authentication (constant-time compare). */
-#include "cognitive-os-agent/api/auth.h"
-#include "cognitive-os-agent/infra/util.h"
+#include "api/auth.h"
+#include "infra/util.h"
 
 #include <stdlib.h>
 #include <string.h>

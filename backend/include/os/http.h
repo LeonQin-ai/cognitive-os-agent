@@ -3,7 +3,7 @@
 #pragma once
 #include <stdint.h>
 #include <stddef.h>
-#include "cognitive-os-agent/infra/util.h"
+#include "infra/util.h"
 
 #ifdef __cplusplus
 extern "C" {

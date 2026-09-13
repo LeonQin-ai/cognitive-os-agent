@@ -1,5 +1,5 @@
-#include "cognitive-os-agent/llm/llm.h"
-#include "cognitive-os-agent/infra/logging.h"
+#include "llm/llm.h"
+#include "infra/logging.h"
 
 #include <stdlib.h>
 #include <string.h>

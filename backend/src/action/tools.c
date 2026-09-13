@@ -1,8 +1,8 @@
-#include "cognitive-os-agent/action/tools.h"
-#include "cognitive-os-agent/runtime/policy_engine.h"
-#include "cognitive-os-agent/runtime/event_bus.h"
-#include "cognitive-os-agent/infra/metrics.h"
-#include "cognitive-os-agent/infra/util.h"
+#include "action/tools.h"
+#include "runtime/policy_engine.h"
+#include "runtime/event_bus.h"
+#include "infra/metrics.h"
+#include "infra/util.h"
 
 #include <stdlib.h>
 #include <string.h>

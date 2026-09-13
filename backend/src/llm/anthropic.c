@@ -1,9 +1,9 @@
 /* anthropic.c — Claude Messages API adapter (streaming + non-streaming). */
-#include "cognitive-os-agent/llm/llm.h"
-#include "cognitive-os-agent/llm/sse.h"
-#include "cognitive-os-agent/os/http.h"
-#include "cognitive-os-agent/infra/util.h"
-#include "cognitive-os-agent/infra/logging.h"
+#include "llm/llm.h"
+#include "llm/sse.h"
+#include "os/http.h"
+#include "infra/util.h"
+#include "infra/logging.h"
 
 #include <stdlib.h>
 #include <string.h>

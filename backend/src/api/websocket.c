@@ -1,6 +1,6 @@
 /* websocket.c — RFC6455 handshake + framing primitives. */
-#include "cognitive-os-agent/api/websocket.h"
-#include "cognitive-os-agent/os/os_time.h"
+#include "api/websocket.h"
+#include "os/os_time.h"
 
 #include <stdlib.h>
 #include <string.h>

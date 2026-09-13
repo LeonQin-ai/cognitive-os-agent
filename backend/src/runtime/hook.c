@@ -1,10 +1,10 @@
 /* hook.c — horizontal hook system: named-event callback registry with
  * before/after semantics (see hook.h). Thread-safe: hooks may be registered
  * from the REST layer while the scheduler dispatches from worker threads. */
-#include "cognitive-os-agent/runtime/hook.h"
-#include "cognitive-os-agent/infra/util.h"
-#include "cognitive-os-agent/os/os_thread.h"
-#include "cognitive-os-agent/os/os_time.h"
+#include "runtime/hook.h"
+#include "infra/util.h"
+#include "os/os_thread.h"
+#include "os/os_time.h"
 #include "cJSON.h"
 
 #include <stdlib.h>

@@ -2,10 +2,10 @@
  * Everything that enters the LLM prompt passes through here, so sizes are
  * capped per item and for the whole section, and stored episodes carry an
  * age annotation (stale memories are flagged, not asserted as fact). */
-#include "cognitive-os-agent/retrieval/context_builder.h"
-#include "cognitive-os-agent/memory/memory.h"
-#include "cognitive-os-agent/infra/util.h"
-#include "cognitive-os-agent/os/os_time.h"
+#include "retrieval/context_builder.h"
+#include "memory/memory.h"
+#include "infra/util.h"
+#include "os/os_time.h"
 
 #include <stdlib.h>
 #include <string.h>

@@ -1,19 +1,19 @@
 /* cognitive-os-agent.c — runtime context assembly: wires config, bus, metrics, policy,
  * memory, snapshot, tools, LLM, transactions, reasoning, scheduler and the
  * HTTP API into a single runtime_ctx. */
-#include "cognitive-os-agent/cognitive-os-agent.h"
-#include "cognitive-os-agent/api/api_rest.h"
-#include "cognitive-os-agent/runtime/event_bus.h"
-#include "cognitive-os-agent/runtime/flow.h"
-#include "cognitive-os-agent/os/os_socket.h"
-#include "cognitive-os-agent/os/os_fs.h"
-#include "cognitive-os-agent/os/os_time.h"
-#include "cognitive-os-agent/infra/util.h"
-#include "cognitive-os-agent/infra/logging.h"
-#include "cognitive-os-agent/retrieval/embedding.h"
-#include "cognitive-os-agent/retrieval/engine.h"
-#include "cognitive-os-agent/im/im.h"
-#include "cognitive-os-agent/plugin_runtime/wasm_runner.h"
+#include "cognitive-os-agent.h"
+#include "api/api_rest.h"
+#include "runtime/event_bus.h"
+#include "runtime/flow.h"
+#include "os/os_socket.h"
+#include "os/os_fs.h"
+#include "os/os_time.h"
+#include "infra/util.h"
+#include "infra/logging.h"
+#include "retrieval/embedding.h"
+#include "retrieval/engine.h"
+#include "im/im.h"
+#include "plugin_runtime/wasm_runner.h"
 
 #include <stdlib.h>
 #include <string.h>

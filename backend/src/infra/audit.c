@@ -1,7 +1,7 @@
-#include "cognitive-os-agent/infra/audit.h"
-#include "cognitive-os-agent/infra/util.h"
-#include "cognitive-os-agent/os/os_time.h"
-#include "cognitive-os-agent/os/os_thread.h"
+#include "infra/audit.h"
+#include "infra/util.h"
+#include "os/os_time.h"
+#include "os/os_thread.h"
 
 #include <stdio.h>
 #include <stdlib.h>

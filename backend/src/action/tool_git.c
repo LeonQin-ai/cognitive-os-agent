@@ -1,7 +1,7 @@
 /* tool_git.c — git wrapper tool (invokes the git CLI). */
-#include "cognitive-os-agent/action/tools.h"
-#include "cognitive-os-agent/os/os_proc.h"
-#include "cognitive-os-agent/infra/util.h"
+#include "action/tools.h"
+#include "os/os_proc.h"
+#include "infra/util.h"
 
 #include <stdlib.h>
 #include <string.h>

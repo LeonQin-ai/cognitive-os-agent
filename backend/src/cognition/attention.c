@@ -1,5 +1,5 @@
 /* attention.c — salience scoring and top-k selection. */
-#include "cognitive-os-agent/cognition/attention.h"
+#include "cognition/attention.h"
 
 #include <stdlib.h>
 #include <string.h>

@@ -1,5 +1,5 @@
-#include "cognitive-os-agent/os/http.h"
-#include "cognitive-os-agent/os/os_socket.h"
+#include "os/http.h"
+#include "os/os_socket.h"
 
 /* On Windows the HTTPS-capable backend lives in http_winhttp.c; this plaintext
  * implementation is only used on non-Windows platforms. HTTPS on POSIX goes

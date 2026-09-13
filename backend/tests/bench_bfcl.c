@@ -24,12 +24,12 @@
  *   --mock  offline deterministic planner (expected to score low — sanity
  *           check that the harness actually detects wrong behavior)
  */
-#include "cognitive-os-agent/cognitive-os-agent.h"
-#include "cognitive-os-agent/cognition/planner.h"
-#include "cognitive-os-agent/runtime/policy_engine.h"
-#include "cognitive-os-agent/llm/llm.h"
-#include "cognitive-os-agent/os/os_time.h"
-#include "cognitive-os-agent/infra/util.h"
+#include "cognitive-os-agent.h"
+#include "cognition/planner.h"
+#include "runtime/policy_engine.h"
+#include "llm/llm.h"
+#include "os/os_time.h"
+#include "infra/util.h"
 
 #include <stdio.h>
 #include <stdlib.h>

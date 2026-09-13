@@ -2,7 +2,7 @@
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
-#include "cognitive-os-agent/os/os_coro.h"
+#include "os/os_coro.h"
 
 #include <stdlib.h>
 

@@ -1,10 +1,10 @@
 /* skill.c — static Shell/Python skill registry. */
-#include "cognitive-os-agent/action/skill.h"
-#include "cognitive-os-agent/os/os_thread.h"
-#include "cognitive-os-agent/os/os_proc.h"
-#include "cognitive-os-agent/os/os_fs.h"
-#include "cognitive-os-agent/plugin_runtime/sandbox.h"
-#include "cognitive-os-agent/infra/util.h"
+#include "action/skill.h"
+#include "os/os_thread.h"
+#include "os/os_proc.h"
+#include "os/os_fs.h"
+#include "plugin_runtime/sandbox.h"
+#include "infra/util.h"
 
 #include <stdlib.h>
 #include <string.h>

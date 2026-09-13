@@ -3,10 +3,10 @@
  * See mmu.h for the design. This file owns the page table, the
  * deterministic L0/L1/L2 derivators, the §7.7 factorized scorer, the
  * §9.4 recall/promotion flow and the §9.5 keep-score eviction. */
-#include "cognitive-os-agent/context/mmu.h"
-#include "cognitive-os-agent/memory/vector.h"
-#include "cognitive-os-agent/infra/util.h"
-#include "cognitive-os-agent/os/os_time.h"
+#include "context/mmu.h"
+#include "memory/vector.h"
+#include "infra/util.h"
+#include "os/os_time.h"
 
 #include <stdlib.h>
 #include <string.h>

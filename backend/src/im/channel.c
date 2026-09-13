@@ -2,11 +2,11 @@
  * Sends IM content out to mainstream chat platforms and, for Telegram, polls
  * inbound messages back into linked IM sessions. Channels persist to
  * <state_root>/im/channels.json. */
-#include "cognitive-os-agent/im/channel.h"
-#include "cognitive-os-agent/os/os_thread.h"
-#include "cognitive-os-agent/os/http.h"
-#include "cognitive-os-agent/os/os_fs.h"
-#include "cognitive-os-agent/infra/util.h"
+#include "im/channel.h"
+#include "os/os_thread.h"
+#include "os/http.h"
+#include "os/os_fs.h"
+#include "infra/util.h"
 
 #include <stdlib.h>
 #include <string.h>

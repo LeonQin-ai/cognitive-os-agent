@@ -1,6 +1,6 @@
 /* codegen.c — plugin code generation. */
-#include "cognitive-os-agent/plugin_intelligence/codegen.h"
-#include "cognitive-os-agent/infra/util.h"
+#include "plugin_intelligence/codegen.h"
+#include "infra/util.h"
 
 #include <stdlib.h>
 #include <string.h>

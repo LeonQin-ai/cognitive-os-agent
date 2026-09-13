@@ -1,6 +1,6 @@
-#include "cognitive-os-agent/snapshot/cow.h"
-#include "cognitive-os-agent/infra/util.h"
-#include "cognitive-os-agent/os/os_fs.h"
+#include "snapshot/cow.h"
+#include "infra/util.h"
+#include "os/os_fs.h"
 
 #include <stdlib.h>
 #include <string.h>

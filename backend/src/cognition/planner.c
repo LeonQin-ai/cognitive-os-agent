@@ -1,11 +1,11 @@
 /* planner.c — LLM plan generation. */
-#include "cognitive-os-agent/cognition/planner.h"
-#include "cognitive-os-agent/llm/llm.h"
-#include "cognitive-os-agent/action/tools.h"
-#include "cognitive-os-agent/action/skill.h"
-#include "cognitive-os-agent/runtime/policy_engine.h"
-#include "cognitive-os-agent/infra/util.h"
-#include "cognitive-os-agent/infra/logging.h"
+#include "cognition/planner.h"
+#include "llm/llm.h"
+#include "action/tools.h"
+#include "action/skill.h"
+#include "runtime/policy_engine.h"
+#include "infra/util.h"
+#include "infra/logging.h"
 
 #include <stdlib.h>
 #include <string.h>

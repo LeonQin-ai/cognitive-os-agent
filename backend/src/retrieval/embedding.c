@@ -3,9 +3,9 @@
  * EMBED_DIM vector, L2-normalized (works fully offline).
  * Remote provider: OpenAI-compatible POST {base}/embeddings.
  * A simple token-overlap rerank scorer is provided for context reordering. */
-#include "cognitive-os-agent/retrieval/embedding.h"
-#include "cognitive-os-agent/os/http.h"
-#include "cognitive-os-agent/infra/util.h"
+#include "retrieval/embedding.h"
+#include "os/http.h"
+#include "infra/util.h"
 
 #include <string.h>
 #include <stdio.h>

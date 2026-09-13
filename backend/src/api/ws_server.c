@@ -5,12 +5,12 @@
  * go to the registered handler; pings are answered with pongs; close frames and
  * socket errors terminate the thread, which then removes itself from the
  * server's client list and frees its own state. */
-#include "cognitive-os-agent/api/ws_server.h"
-#include "cognitive-os-agent/api/websocket.h"
-#include "cognitive-os-agent/os/os_socket.h"
-#include "cognitive-os-agent/os/os_thread.h"
-#include "cognitive-os-agent/os/os_time.h"
-#include "cognitive-os-agent/infra/util.h"
+#include "api/ws_server.h"
+#include "api/websocket.h"
+#include "os/os_socket.h"
+#include "os/os_thread.h"
+#include "os/os_time.h"
+#include "infra/util.h"
 
 #include <stdlib.h>
 #include <string.h>

@@ -18,12 +18,12 @@
  *     third_party/wasm3/wasm3_all.c tests/probe_memory_long.c -lws2_32 -lwinhttp -lm
  * Run: ./build/probe-memory-long   (exit 0 = all pass)
  */
-#include "cognitive-os-agent/memory/memory.h"
-#include "cognitive-os-agent/cognition/reasoning.h"
-#include "cognitive-os-agent/llm/llm.h"
-#include "cognitive-os-agent/action/tools.h"
-#include "cognitive-os-agent/os/os_fs.h"
-#include "cognitive-os-agent/os/os_time.h"
+#include "memory/memory.h"
+#include "cognition/reasoning.h"
+#include "llm/llm.h"
+#include "action/tools.h"
+#include "os/os_fs.h"
+#include "os/os_time.h"
 
 #include <stdio.h>
 #include <stdlib.h>

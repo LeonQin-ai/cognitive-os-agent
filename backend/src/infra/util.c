@@ -1,4 +1,4 @@
-#include "cognitive-os-agent/infra/util.h"
+#include "infra/util.h"
 
 #include <stdio.h>
 #include <stdlib.h>

@@ -2,10 +2,10 @@
  * LocalExecutor delegates action execution to the tool registry (a pure move
  * of the previous inline path — semantics unchanged). Sandbox/VM executors
  * plug in behind the same vtable later. */
-#include "cognitive-os-agent/execution/executor.h"
-#include "cognitive-os-agent/action/tools.h"
-#include "cognitive-os-agent/snapshot/snapshot.h"
-#include "cognitive-os-agent/infra/util.h"
+#include "execution/executor.h"
+#include "action/tools.h"
+#include "snapshot/snapshot.h"
+#include "infra/util.h"
 
 #include <stdlib.h>
 #include <string.h>

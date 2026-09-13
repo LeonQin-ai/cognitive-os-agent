@@ -1,8 +1,8 @@
 /* trace.c — bounded, thread-safe span ring. */
-#include "cognitive-os-agent/infra/trace.h"
-#include "cognitive-os-agent/os/os_thread.h"
-#include "cognitive-os-agent/os/os_time.h"
-#include "cognitive-os-agent/infra/util.h"
+#include "infra/trace.h"
+#include "os/os_thread.h"
+#include "os/os_time.h"
+#include "infra/util.h"
 
 #include <stdlib.h>
 #include <string.h>

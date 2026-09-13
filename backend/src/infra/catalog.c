@@ -2,9 +2,9 @@
  * Free/cheap model presets (all OpenAI-compatible except noted) and an MCP
  * server marketplace. Entries that need a local process or a provider key are
  * flagged so the UI can guide the user. */
-#include "cognitive-os-agent/infra/catalog.h"
-#include "cognitive-os-agent/infra/util.h"
-#include "cognitive-os-agent/os/http.h"
+#include "infra/catalog.h"
+#include "infra/util.h"
+#include "os/http.h"
 #include "cJSON.h"
 
 #include <stdio.h>

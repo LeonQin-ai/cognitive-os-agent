@@ -7,15 +7,15 @@
 #ifndef _POSIX_C_SOURCE
 #define _POSIX_C_SOURCE 200809L /* strtok_r */
 #endif
-#include "cognitive-os-agent/action/mcp_conn.h"
-#include "cognitive-os-agent/action/tools.h"
-#include "cognitive-os-agent/os/os_thread.h"
-#include "cognitive-os-agent/os/os_proc.h"
-#include "cognitive-os-agent/os/http.h"
-#include "cognitive-os-agent/os/os_fs.h"
-#include "cognitive-os-agent/os/os_time.h"
-#include "cognitive-os-agent/infra/logging.h"
-#include "cognitive-os-agent/infra/util.h"
+#include "action/mcp_conn.h"
+#include "action/tools.h"
+#include "os/os_thread.h"
+#include "os/os_proc.h"
+#include "os/http.h"
+#include "os/os_fs.h"
+#include "os/os_time.h"
+#include "infra/logging.h"
+#include "infra/util.h"
 
 #include <stdlib.h>
 #include <string.h>

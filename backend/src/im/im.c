@@ -3,11 +3,11 @@
  *   {"next_id":5,"sessions":[{"id":1,"name":"...","created_ms":...,"messages":[
  *     {"id":1,"role":"user","content":"...","ts_ms":...}]}]}
  * The store is guarded by a mutex; every mutation persists to disk. */
-#include "cognitive-os-agent/im/im.h"
-#include "cognitive-os-agent/os/os_thread.h"
-#include "cognitive-os-agent/os/os_time.h"
-#include "cognitive-os-agent/os/os_fs.h"
-#include "cognitive-os-agent/infra/util.h"
+#include "im/im.h"
+#include "os/os_thread.h"
+#include "os/os_time.h"
+#include "os/os_fs.h"
+#include "infra/util.h"
 
 #include <stdlib.h>
 #include <string.h>

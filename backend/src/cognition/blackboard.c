@@ -1,7 +1,7 @@
 /* blackboard.c — thread-safe shared state space for multi-agent coordination. */
-#include "cognitive-os-agent/cognition/blackboard.h"
-#include "cognitive-os-agent/os/os_thread.h"
-#include "cognitive-os-agent/infra/util.h"
+#include "cognition/blackboard.h"
+#include "os/os_thread.h"
+#include "infra/util.h"
 
 #include <stdlib.h>
 #include <string.h>

@@ -1,6 +1,6 @@
 /* test_adapters.c — verify the OpenAI and Anthropic adapters (chat + SSE stream)
  * against the bundled mock-llm-server. Requires mock-llm-server on :9000. */
-#include "cognitive-os-agent/llm/llm.h"
+#include "llm/llm.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>

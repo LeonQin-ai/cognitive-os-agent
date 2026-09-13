@@ -1,8 +1,8 @@
 /* agent.c — multi-agent coordinator sharing a blackboard. */
-#include "cognitive-os-agent/runtime/agent.h"
-#include "cognitive-os-agent/os/os_fs.h"
-#include "cognitive-os-agent/os/os_thread.h"
-#include "cognitive-os-agent/infra/util.h"
+#include "runtime/agent.h"
+#include "os/os_fs.h"
+#include "os/os_thread.h"
+#include "infra/util.h"
 
 #include <stdlib.h>
 #include <string.h>

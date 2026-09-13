@@ -1,7 +1,7 @@
 /* task.c — standalone task lifecycle helpers. */
-#include "cognitive-os-agent/runtime/task.h"
-#include "cognitive-os-agent/os/os_time.h"
-#include "cognitive-os-agent/infra/util.h"
+#include "runtime/task.h"
+#include "os/os_time.h"
+#include "infra/util.h"
 
 #include <stdlib.h>
 #include <string.h>

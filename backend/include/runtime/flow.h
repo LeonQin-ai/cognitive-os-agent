@@ -16,7 +16,7 @@
 extern "C" {
 #endif
 
-#include "cognitive-os-agent/cognitive-os-agent.h"
+#include "cognitive-os-agent.h"
 
 /* Validate a DAG JSON document. On failure returns -1 and (if err != NULL)
  * sets *err to a malloc'd human-readable message. Returns 0 on success. */

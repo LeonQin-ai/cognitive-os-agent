@@ -4,11 +4,11 @@
  * topological layer runs in parallel via threads, mirroring the orchestrator's
  * per-agent isolation (independent history/session notes, shared locked
  * infra, no shared code index / snapshot). */
-#include "cognitive-os-agent/runtime/flow.h"
+#include "runtime/flow.h"
 
-#include "cognitive-os-agent/infra/util.h"
-#include "cognitive-os-agent/infra/logging.h"
-#include "cognitive-os-agent/os/os_thread.h"
+#include "infra/util.h"
+#include "infra/logging.h"
+#include "os/os_thread.h"
 
 #include <stdlib.h>
 #include <string.h>

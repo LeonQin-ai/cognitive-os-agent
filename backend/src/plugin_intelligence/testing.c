@@ -1,7 +1,7 @@
 /* testing.c — plugin test planning + smoke execution. */
-#include "cognitive-os-agent/plugin_intelligence/testing.h"
-#include "cognitive-os-agent/plugin_runtime/sandbox.h"
-#include "cognitive-os-agent/infra/util.h"
+#include "plugin_intelligence/testing.h"
+#include "plugin_runtime/sandbox.h"
+#include "infra/util.h"
 
 #include <stdlib.h>
 #include <string.h>

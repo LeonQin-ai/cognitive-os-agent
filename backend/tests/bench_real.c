@@ -22,11 +22,11 @@
  * Reports per-family accuracy, end-to-end success, side-effect correctness,
  * per-task latency, and a one-line JSON summary.
  */
-#include "cognitive-os-agent/cognitive-os-agent.h"
-#include "cognitive-os-agent/llm/llm.h"
-#include "cognitive-os-agent/os/os_fs.h"
-#include "cognitive-os-agent/os/os_time.h"
-#include "cognitive-os-agent/infra/util.h"
+#include "cognitive-os-agent.h"
+#include "llm/llm.h"
+#include "os/os_fs.h"
+#include "os/os_time.h"
+#include "infra/util.h"
 
 #include <stdio.h>
 #include <stdlib.h>

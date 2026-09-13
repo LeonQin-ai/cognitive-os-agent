@@ -7,8 +7,8 @@
  * Build:    zig cc -Iinclude -Ithird_party/cJSON $(find src third_party -name '*.c') \
  *               tests/test_e2e.c -o build/cognitive-os-agent-e2e
  */
-#include "cognitive-os-agent/cognitive-os-agent.h"
-#include "cognitive-os-agent/os/os_fs.h"
+#include "cognitive-os-agent.h"
+#include "os/os_fs.h"
 
 #include <stdio.h>
 #include <stdlib.h>

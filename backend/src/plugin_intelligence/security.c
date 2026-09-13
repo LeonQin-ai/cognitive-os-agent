@@ -1,6 +1,6 @@
 /* security.c — static security audit. */
-#include "cognitive-os-agent/plugin_intelligence/security.h"
-#include "cognitive-os-agent/infra/util.h"
+#include "plugin_intelligence/security.h"
+#include "infra/util.h"
 
 #include <stdlib.h>
 #include <string.h>

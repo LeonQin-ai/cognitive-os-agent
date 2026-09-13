@@ -1,6 +1,6 @@
 /* analyzer.c — plugin spec analysis. */
-#include "cognitive-os-agent/plugin_intelligence/analyzer.h"
-#include "cognitive-os-agent/infra/util.h"
+#include "plugin_intelligence/analyzer.h"
+#include "infra/util.h"
 
 #include <stdlib.h>
 #include <string.h>

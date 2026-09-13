@@ -1,8 +1,8 @@
 /* sandbox.c — process execution sandbox with file-access tracking. */
-#include "cognitive-os-agent/plugin_runtime/sandbox.h"
-#include "cognitive-os-agent/plugin_runtime/filetracker.h"
-#include "cognitive-os-agent/os/os_proc.h"
-#include "cognitive-os-agent/infra/util.h"
+#include "plugin_runtime/sandbox.h"
+#include "plugin_runtime/filetracker.h"
+#include "os/os_proc.h"
+#include "infra/util.h"
 
 #include <stdlib.h>
 #include <string.h>

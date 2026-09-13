@@ -6,10 +6,10 @@
  * deliberately deterministic and cheap: no LLM call, pure attribute scoring
  * plus evidence verification. Consolidation (decay, archiving) stays in the
  * memory facade; this file only guards entry into the long-term store. */
-#include "cognitive-os-agent/memory/promotion.h"
-#include "cognitive-os-agent/memory/vector.h"
-#include "cognitive-os-agent/infra/util.h"
-#include "cognitive-os-agent/os/os_time.h"
+#include "memory/promotion.h"
+#include "memory/vector.h"
+#include "infra/util.h"
+#include "os/os_time.h"
 
 #include <stdlib.h>
 #include <string.h>

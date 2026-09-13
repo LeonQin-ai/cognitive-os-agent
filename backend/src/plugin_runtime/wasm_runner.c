@@ -4,8 +4,8 @@
  * result as JSON. This is the "Wasm runner" the sandbox seam was designed for
  * (see sandbox.h); until this is registered, Wasm execution reports
  * "unsupported". */
-#include "cognitive-os-agent/plugin_runtime/wasm_runner.h"
-#include "cognitive-os-agent/infra/util.h"
+#include "plugin_runtime/wasm_runner.h"
+#include "infra/util.h"
 
 #include <stdio.h>
 #include <stdlib.h>

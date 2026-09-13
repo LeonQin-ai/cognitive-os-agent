@@ -1,7 +1,7 @@
 /* capability.c — capability tokens. */
-#include "cognitive-os-agent/plugin_runtime/capability.h"
-#include "cognitive-os-agent/os/os_thread.h"
-#include "cognitive-os-agent/infra/util.h"
+#include "plugin_runtime/capability.h"
+#include "os/os_thread.h"
+#include "infra/util.h"
 
 #include <stdlib.h>
 #include <string.h>

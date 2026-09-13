@@ -1,5 +1,5 @@
-#include "cognitive-os-agent/llm/sse.h"
-#include "cognitive-os-agent/os/http.h"
+#include "llm/sse.h"
+#include "os/http.h"
 
 #include <stdlib.h>
 #include <string.h>

@@ -1,6 +1,6 @@
-#include "cognitive-os-agent/runtime/policy_engine.h"
-#include "cognitive-os-agent/infra/util.h"
-#include "cognitive-os-agent/os/os_fs.h"
+#include "runtime/policy_engine.h"
+#include "infra/util.h"
+#include "os/os_fs.h"
 
 #include <stdlib.h>
 #include <string.h>

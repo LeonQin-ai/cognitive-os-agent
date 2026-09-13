@@ -1,8 +1,8 @@
-#include "cognitive-os-agent/tx/tx.h"
-#include "cognitive-os-agent/action/tools.h"
-#include "cognitive-os-agent/snapshot/snapshot.h"
-#include "cognitive-os-agent/infra/util.h"
-#include "cognitive-os-agent/os/os_fs.h"
+#include "tx/tx.h"
+#include "action/tools.h"
+#include "snapshot/snapshot.h"
+#include "infra/util.h"
+#include "os/os_fs.h"
 
 #include <stdlib.h>
 #include <string.h>

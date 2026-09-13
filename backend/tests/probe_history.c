@@ -7,8 +7,8 @@
  * Build: see command in docs. Uses the user's LLM config from state/cognitive-os-agent.json
  * (api_key is never printed). Temp state root: state-probe.
  */
-#include "cognitive-os-agent/cognitive-os-agent.h"
-#include "cognitive-os-agent/os/os_fs.h"
+#include "cognitive-os-agent.h"
+#include "os/os_fs.h"
 
 #include <stdio.h>
 #include <stdlib.h>

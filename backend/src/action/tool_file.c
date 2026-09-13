@@ -1,7 +1,7 @@
 /* tool_file.c — file_read and file_write tools. */
-#include "cognitive-os-agent/action/tools.h"
-#include "cognitive-os-agent/os/os_fs.h"
-#include "cognitive-os-agent/infra/util.h"
+#include "action/tools.h"
+#include "os/os_fs.h"
+#include "infra/util.h"
 
 #include <stdlib.h>
 #include <string.h>

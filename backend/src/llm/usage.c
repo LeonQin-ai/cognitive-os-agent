@@ -1,7 +1,7 @@
 /* usage.c — per-model token accounting. */
-#include "cognitive-os-agent/llm/usage.h"
-#include "cognitive-os-agent/os/os_thread.h"
-#include "cognitive-os-agent/infra/util.h"
+#include "llm/usage.h"
+#include "os/os_thread.h"
+#include "infra/util.h"
 
 #include <stdlib.h>
 #include <string.h>

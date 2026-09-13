@@ -1,7 +1,7 @@
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
-#include "cognitive-os-agent/os/os_socket.h"
+#include "os/os_socket.h"
 
 #include <stdlib.h>
 #include <string.h>

@@ -1,6 +1,6 @@
 /* architect.c — plugin architecture design. */
-#include "cognitive-os-agent/plugin_intelligence/architect.h"
-#include "cognitive-os-agent/infra/util.h"
+#include "plugin_intelligence/architect.h"
+#include "infra/util.h"
 
 #include <stdlib.h>
 #include <string.h>

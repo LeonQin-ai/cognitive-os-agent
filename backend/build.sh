@@ -29,9 +29,9 @@ esac
 SRCS="$(find src third_party/cJSON -name '*.c' | sort) third_party/wasm3/wasm3_all.c"
 mkdir -p build
 
-# Regenerate the embedded web UI (include/cognitive-os-agent/api/web_ui.h) from
+# Regenerate the embedded web UI (include/api/web_ui.h) from
 # apps/web/index.html whenever the page or the generator script is newer.
-if [ -f apps/web/index.html ] && { [ apps/web/index.html -nt include/cognitive-os-agent/api/web_ui.h ] || [ tools/gen_web_ui.py -nt include/cognitive-os-agent/api/web_ui.h ]; }; then
+if [ -f apps/web/index.html ] && { [ apps/web/index.html -nt include/api/web_ui.h ] || [ tools/gen_web_ui.py -nt include/api/web_ui.h ]; }; then
   python tools/gen_web_ui.py
 fi
 

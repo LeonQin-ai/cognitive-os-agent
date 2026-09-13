@@ -1,8 +1,8 @@
 /* market_remote.c — networked marketplace client over the platform HTTP stack.
  * Windows: os/http_winhttp.c (WinHTTP). Linux: os/http.c (raw sockets). */
-#include "cognitive-os-agent/api/market.h"
-#include "cognitive-os-agent/os/http.h"
-#include "cognitive-os-agent/infra/util.h"
+#include "api/market.h"
+#include "os/http.h"
+#include "infra/util.h"
 
 #include <stdlib.h>
 #include <string.h>

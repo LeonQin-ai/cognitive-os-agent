@@ -1,7 +1,7 @@
 /* sse.h — Server-Sent-Events reader over the HTTP stream client. */
 #pragma once
 #include <stddef.h>
-#include "cognitive-os-agent/infra/util.h"
+#include "infra/util.h"
 
 #ifdef __cplusplus
 extern "C" {

@@ -1,6 +1,6 @@
-#include "cognitive-os-agent/infra/metrics.h"
-#include "cognitive-os-agent/infra/util.h"
-#include "cognitive-os-agent/os/os_thread.h"
+#include "infra/metrics.h"
+#include "infra/util.h"
+#include "os/os_thread.h"
 
 #include <stdlib.h>
 #include <string.h>

@@ -1,7 +1,7 @@
 /* graph.c — lightweight knowledge graph store. */
-#include "cognitive-os-agent/memory/graph.h"
-#include "cognitive-os-agent/os/os_thread.h"
-#include "cognitive-os-agent/infra/util.h"
+#include "memory/graph.h"
+#include "os/os_thread.h"
+#include "infra/util.h"
 
 #include <stdlib.h>
 #include <string.h>

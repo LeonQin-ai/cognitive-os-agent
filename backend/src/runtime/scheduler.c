@@ -1,8 +1,8 @@
-#include "cognitive-os-agent/runtime/scheduler.h"
-#include "cognitive-os-agent/os/os_thread.h"
-#include "cognitive-os-agent/os/os_time.h"
-#include "cognitive-os-agent/os/os_coro.h"
-#include "cognitive-os-agent/infra/util.h"
+#include "runtime/scheduler.h"
+#include "os/os_thread.h"
+#include "os/os_time.h"
+#include "os/os_coro.h"
+#include "infra/util.h"
 
 #include <stdlib.h>
 #include <string.h>

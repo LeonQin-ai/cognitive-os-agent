@@ -1,9 +1,9 @@
 /* episode.c — episodic memory store with strength-based lifecycle
  * (reinforce on re-experience, decay with age, drop below a threshold). */
-#include "cognitive-os-agent/memory/episode.h"
-#include "cognitive-os-agent/os/os_thread.h"
-#include "cognitive-os-agent/os/os_time.h"
-#include "cognitive-os-agent/infra/util.h"
+#include "memory/episode.h"
+#include "os/os_thread.h"
+#include "os/os_time.h"
+#include "infra/util.h"
 
 #include <stdlib.h>
 #include <string.h>

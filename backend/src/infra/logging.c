@@ -1,6 +1,6 @@
-#include "cognitive-os-agent/infra/logging.h"
-#include "cognitive-os-agent/os/os_thread.h"
-#include "cognitive-os-agent/os/os_time.h"
+#include "infra/logging.h"
+#include "os/os_thread.h"
+#include "os/os_time.h"
 
 #include <stdio.h>
 #include <stdlib.h>

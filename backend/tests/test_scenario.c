@@ -19,13 +19,13 @@
  *
  * Build:  ./build.sh scenario   (or: ./build.sh all)
  */
-#include "cognitive-os-agent/cognitive-os-agent.h"
-#include "cognitive-os-agent/plugin_runtime/manager.h"
-#include "cognitive-os-agent/os/os_fs.h"
-#include "cognitive-os-agent/os/os_proc.h"
-#include "cognitive-os-agent/os/os_socket.h"
-#include "cognitive-os-agent/os/os_thread.h"
-#include "cognitive-os-agent/os/os_time.h"
+#include "cognitive-os-agent.h"
+#include "plugin_runtime/manager.h"
+#include "os/os_fs.h"
+#include "os/os_proc.h"
+#include "os/os_socket.h"
+#include "os/os_thread.h"
+#include "os/os_time.h"
 
 #include <stdio.h>
 #include <stdlib.h>

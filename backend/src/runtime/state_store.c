@@ -1,9 +1,9 @@
 /* state_store.c — Context layer: unified KV / Task / Agent state store. */
-#include "cognitive-os-agent/runtime/state_store.h"
-#include "cognitive-os-agent/os/os_thread.h"
-#include "cognitive-os-agent/infra/util.h"
-#include "cognitive-os-agent/infra/logging.h"
-#include "cognitive-os-agent/os/os_fs.h"
+#include "runtime/state_store.h"
+#include "os/os_thread.h"
+#include "infra/util.h"
+#include "infra/logging.h"
+#include "os/os_fs.h"
 
 #include <stdlib.h>
 #include <string.h>

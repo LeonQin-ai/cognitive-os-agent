@@ -1,8 +1,8 @@
 /* router.c — multi-provider model routing with pluggable selection policy
  * (round_robin / cost / latency / capability:<tag>). */
-#include "cognitive-os-agent/llm/router.h"
-#include "cognitive-os-agent/os/os_thread.h"
-#include "cognitive-os-agent/infra/util.h"
+#include "llm/router.h"
+#include "os/os_thread.h"
+#include "infra/util.h"
 
 #include <stdlib.h>
 #include <string.h>

@@ -1,9 +1,9 @@
 /* service.c — Memory Service: type<->backend decoupling layer.
  * Generic vtable plumbing plus the default backend that maps the four memory
  * types onto the existing memory facade. */
-#include "cognitive-os-agent/memory/service.h"
-#include "cognitive-os-agent/memory/memory.h"
-#include "cognitive-os-agent/infra/util.h"
+#include "memory/service.h"
+#include "memory/memory.h"
+#include "infra/util.h"
 
 #include <stdlib.h>
 #include <string.h>

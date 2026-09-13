@@ -1,5 +1,5 @@
 /* evaluator.c — result verification + heuristic quality scoring. */
-#include "cognitive-os-agent/cognition/evaluator.h"
+#include "cognition/evaluator.h"
 
 #include <stdlib.h>
 #include <string.h>

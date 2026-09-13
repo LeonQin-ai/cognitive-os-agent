@@ -14,11 +14,11 @@
  * The frontmatter is a deliberately tiny YAML subset: flat "key: value"
  * lines plus one nested "emotion:" / "source:" block. Both the writer and
  * the parser live here, so the subset stays under control. */
-#include "cognitive-os-agent/memory/record.h"
-#include "cognitive-os-agent/memory/vector.h"
-#include "cognitive-os-agent/infra/util.h"
-#include "cognitive-os-agent/os/os_fs.h"
-#include "cognitive-os-agent/os/os_thread.h"
+#include "memory/record.h"
+#include "memory/vector.h"
+#include "infra/util.h"
+#include "os/os_fs.h"
+#include "os/os_thread.h"
 
 #include <stdlib.h>
 #include <string.h>
