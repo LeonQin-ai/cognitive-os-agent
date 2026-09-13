@@ -29,6 +29,9 @@
 #include "cognitive-os-agent/memory/episode.h"
 #include "cognitive-os-agent/memory/vector.h"
 #include "cognitive-os-agent/memory/graph.h"
+#include "cognitive-os-agent/memory/record.h"
+#include "cognitive-os-agent/memory/promotion.h"
+#include "cognitive-os-agent/context/mmu.h"
 #include "cognitive-os-agent/retrieval/context_builder.h"
 #include "cognitive-os-agent/cognition/planner.h"
 #include "cognitive-os-agent/cognition/evaluator.h"
@@ -512,7 +515,7 @@ static void test_llm_caps_cancel(void) {
 static void test_retrieval_upgrade(void) {
     section("retrieval_upgrade");
 
-    /* rerank: token overlap + bigram jaccard — near doc beats unrelated doc */
+    /* rerank: token overlap + bigram jaccard — near_json doc beats unrelated doc */
     const char *docs[] = {"deploy the backend service to the cluster",
                           "recipe for homemade pasta dough"};
     float rs[2] = {0, 0};
@@ -3127,6 +3130,345 @@ static void test_memory_lifecycle(void) {
     }
 }
 
+/* ---------- V3.1 memory records: Markdown round-trip + store ---------- */
+static void test_record_v3(void) {
+    section("v3 records");
+    char *md = NULL;
+    mem_record *p = NULL;
+    mem_records *rs = NULL, *rs2 = NULL;
+    vectorstore *vs = NULL;
+    const mem_record *f = NULL;
+    char *near_json = NULL, *js = NULL;
+    int mirrored = 0;
+
+    mem_record r;
+    memset(&r, 0, sizeof r);
+    snprintf(r.id, sizeof r.id, "mem_deadbeefcafe");
+    r.type = MEMR_PROCEDURAL;
+    snprintf(r.title, sizeof r.title, "zig cc syntax check");
+    snprintf(r.scope, sizeof r.scope, "agent/status");
+    r.status = MEM_STATUS_TRUSTED;
+    r.importance = 0.8;
+    r.confidence = 0.9;
+    r.utility = 0.5;
+    r.valence = -0.4;
+    r.arousal = 0.7;
+    r.salience = 0.9;
+    snprintf(r.source, sizeof r.source, "experience");
+    snprintf(r.origin_id, sizeof r.origin_id, "sig_1234");
+    r.outcome = MEM_OUTCOME_FAILURE;
+    snprintf(r.evidence, sizeof r.evidence, "exit code 1");
+    r.version = 3;
+    r.created_ms = 1000;
+    r.updated_ms = 2000;
+    r.last_access_ms = 3000;
+    r.access_count = 7;
+    r.content = "use zig cc -c -o tmp.o, not -fsyntax-only\n";
+
+    /* Markdown round-trip */
+    md = mem_record_to_md(&r);
+    CHECK(md != NULL);
+    if (md)
+        p = mem_record_from_md(md);
+    CHECK(p != NULL);
+    if (p) {
+        CHECK_STR(p->id, r.id);
+        CHECK(p->type == MEMR_PROCEDURAL);
+        CHECK_STR(p->title, r.title);
+        CHECK_STR(p->scope, r.scope);
+        CHECK(p->status == MEM_STATUS_TRUSTED);
+        CHECK(p->importance == r.importance);
+        CHECK(p->confidence == r.confidence);
+        CHECK(p->utility == r.utility);
+        CHECK(p->valence == r.valence);
+        CHECK(p->arousal == r.arousal);
+        CHECK(p->salience == r.salience);
+        CHECK_STR(p->source, r.source);
+        CHECK_STR(p->origin_id, r.origin_id);
+        CHECK(p->outcome == MEM_OUTCOME_FAILURE);
+        CHECK_STR(p->evidence, r.evidence);
+        CHECK(p->version == 3);
+        CHECK(p->created_ms == 1000);
+        CHECK(p->updated_ms == 2000);
+        CHECK(p->last_access_ms == 3000);
+        CHECK(p->access_count == 7);
+        CHECK_STR(p->content, r.content);
+        mem_record_free(p);
+        p = NULL;
+    }
+    free(md);
+    md = NULL;
+
+    /* malformed input rejected */
+    CHECK(mem_record_from_md("no frontmatter") == NULL);
+    CHECK(mem_record_from_md("---\nnoid: x\n---\nbody") == NULL);
+
+    /* store: put / find / find_origin / touch / remove */
+    rs = mem_records_new("state-test/v3rec");
+    CHECK(rs != NULL);
+    if (!rs)
+        goto done;
+    CHECK(mem_records_put(rs, &r) == 0);
+    f = mem_records_find(rs, "mem_deadbeefcafe");
+    CHECK(f && f->type == MEMR_PROCEDURAL && f->version == 3);
+    CHECK(mem_records_find_origin(rs, "sig_1234") != NULL);
+    CHECK(mem_records_find_origin(rs, "sig_none") == NULL);
+    mem_records_touch(rs, "mem_deadbeefcafe", 9999);
+    f = mem_records_find(rs, "mem_deadbeefcafe");
+    CHECK(f && f->access_count == 8 && f->last_access_ms == 9999);
+    CHECK(mem_records_count(rs) >= 1);
+
+    /* derived vector mirror */
+    vs = vectorstore_new();
+    CHECK(vs != NULL);
+    if (!vs)
+        goto done;
+    mirrored = mem_records_rebuild_index(rs, vs);
+    CHECK(mirrored == 1);  /* trusted is indexable */
+    CHECK(vectorstore_count(vs) == 1);
+    near_json = vectorstore_nearest(vs, "zig cc", 1);
+    CHECK(near_json && strstr(near_json, "r:mem_deadbeefcafe") != NULL);
+    free(near_json);
+    near_json = NULL;
+
+    /* json summary renders */
+    js = mem_records_json(rs);
+    CHECK(js && strstr(js, "mem_deadbeefcafe") != NULL);
+    free(js);
+    js = NULL;
+
+    /* persistence: a fresh store sees the same record */
+    rs2 = mem_records_new("state-test/v3rec");
+    CHECK(rs2 && mem_records_find(rs2, "mem_deadbeefcafe") != NULL);
+    mem_records_free(rs2);
+    rs2 = NULL;
+
+    CHECK(mem_records_remove(rs, "mem_deadbeefcafe") == 1);
+    CHECK(mem_records_find(rs, "mem_deadbeefcafe") == NULL);
+
+done:
+    free(near_json);
+    free(js);
+    vectorstore_free(vs);
+    mem_records_free(rs);
+}
+
+/* ---------- V3.1 promotion gate: score + lifecycle maturation ---------- */
+static void test_promotion_v3(void) {
+    section("v3 promotion gate");
+    mem_gate_config cfg;
+    mem_gate_result res;
+    mem_candidate c, weak;
+    mem_records *rs = NULL;
+    const mem_record *r = NULL;
+    char id[MEM_ID_MAX];
+
+    id[0] = '\0';
+    mem_gate_config_default(&cfg);
+    cfg.now_ms = 5000;
+
+    rs = mem_records_new("state-test/v3gate");
+    CHECK(rs != NULL);
+    if (!rs)
+        return;
+    /* clean leftovers from previous runs so count assertions hold */
+    for (int i = mem_records_count(rs) - 1; i >= 0; i--) {
+        const mem_record *old = mem_records_at(rs, i);
+        if (old)
+            mem_records_remove(rs, old->id);
+    }
+    CHECK(mem_records_count(rs) == 0);
+
+    mem_candidate_init(&c);
+    c.type = MEMR_PROCEDURAL;
+    snprintf(c.scope, sizeof c.scope, "agent/status");
+    snprintf(c.origin_id, sizeof c.origin_id, "sig_pipefail");
+    c.content = xstrdup("always run pipefail when piping make output");
+    c.importance = 0.8;
+    c.confidence = 0.8;
+    c.salience = 0.7;
+
+    /* 1. no evidence: score capped below promote -> REJECT */
+    CHECK(mem_gate_apply(rs, NULL, &cfg, &c, &res) == MEM_GATE_REJECT);
+    CHECK(res.id[0] == '\0');
+
+    /* 2. evidence collected: PROMOTE, enters as PROVISIONAL */
+    snprintf(c.evidence, sizeof c.evidence, "make exit 0 after fix");
+    c.outcome = MEM_OUTCOME_SUCCESS;
+    CHECK(mem_gate_apply(rs, NULL, &cfg, &c, &res) == MEM_GATE_PROMOTE);
+    CHECK(res.id[0] != '\0' && res.version == 1);
+    snprintf(id, sizeof id, "%s", res.id);
+    r = mem_records_find(rs, id);
+    CHECK(r && r->status == MEM_STATUS_PROVISIONAL);
+
+    /* 3. same origin again (evidenced merge): MERGE -> TRUSTED */
+    c.confidence = 0.85;
+    CHECK(mem_gate_apply(rs, NULL, &cfg, &c, &res) == MEM_GATE_MERGE);
+    CHECK_STR(res.id, id);
+    CHECK(res.version == 2);
+    r = mem_records_find(rs, id);
+    CHECK(r && r->status == MEM_STATUS_TRUSTED);
+    CHECK(r && r->confidence > 0.85);
+
+    /* 4. strong evidence class merges: TRUSTED -> VERIFIED */
+    c.outcome = MEM_OUTCOME_FAILURE;
+    snprintf(c.evidence, sizeof c.evidence, "make exit 1 without pipefail");
+    CHECK(mem_gate_apply(rs, NULL, &cfg, &c, &res) == MEM_GATE_MERGE);
+    CHECK(res.version == 3);
+    r = mem_records_find(rs, id);
+    CHECK(r && r->status == MEM_STATUS_VERIFIED);
+    CHECK(r && r->outcome == MEM_OUTCOME_FAILURE);
+    CHECK(mem_records_count(rs) == 1);  /* no duplicate created */
+
+    /* 5. below the merge bar entirely -> REJECT */
+    mem_candidate_init(&weak);
+    weak.content = xstrdup("meh");
+    CHECK(mem_gate_apply(rs, NULL, &cfg, &weak, &res) == MEM_GATE_REJECT);
+
+    /* 6. archived origin no longer blocks a fresh promotion */
+    r = mem_records_find(rs, id);
+    CHECK(r != NULL);
+    if (r) {
+        mem_record arc = *r;
+        arc.status = MEM_STATUS_ARCHIVED;
+        CHECK(mem_records_put(rs, &arc) == 0);
+    }
+    CHECK(mem_gate_apply(rs, NULL, &cfg, &c, &res) == MEM_GATE_PROMOTE);
+    CHECK_STR(res.id, id);  /* deterministic id from same origin+content */
+
+    mem_candidate_free(&c);
+    mem_candidate_free(&weak);
+    mem_records_free(rs);
+}
+
+/* ---------- V3.1 Context MMU: L0/L1/L2 + residency + eviction ---------- */
+static void test_mmu_v3(void) {
+    section("v3 context mmu");
+    long long now = 1000000;
+    const char *bodies[3] = {
+        "Postgres vector index needs periodic VACUUM. Run weekly.",
+        "The zig toolchain rejects -fsyntax-only. Compile to a temp object instead.",
+        "User prefers concise answers in Chinese.",
+    };
+    char *json = NULL, *st = NULL;
+    cJSON *arr = NULL, *a2 = NULL, *so = NULL;
+    mem_records *rs = mem_records_new("state-test/v3mmu");
+    vectorstore *vs = vectorstore_new();
+    ctx_mmu *mmu = NULL;
+
+    CHECK(rs != NULL && vs != NULL);
+    if (!rs || !vs)
+        goto done;
+
+    for (int i = 0; i < 3; i++) {
+        mem_record r;
+        memset(&r, 0, sizeof r);
+        snprintf(r.id, sizeof r.id, "mem_v3mmu%d", i);
+        r.type = MEMR_SEMANTIC;
+        snprintf(r.scope, sizeof r.scope, i == 2 ? "user/global" : "agent/status");
+        r.status = MEM_STATUS_PROVISIONAL;
+        r.importance = 0.4 + 0.2 * i;
+        r.confidence = 0.8;
+        r.created_ms = now;
+        r.updated_ms = now;
+        r.last_access_ms = now;
+        r.content = (char *)bodies[i];
+        CHECK(mem_records_put(rs, &r) == 0);
+    }
+    CHECK(mem_records_rebuild_index(rs, vs) == 3);
+
+    mmu = ctx_mmu_new();
+    CHECK(mmu != NULL);
+    if (!mmu)
+        goto done;
+
+    ctx_mmu_config cfg;
+    ctx_mmu_config_default(&cfg);
+    cfg.token_budget = 2048;
+    cfg.candidate_k = 8;
+    cfg.l2_top_k = 2;
+    cfg.now_ms = now + 1000;
+
+    /* first recall: zig query surfaces the zig record */
+    json = ctx_mmu_recall(mmu, rs, vs, "zig syntax check", &cfg);
+    CHECK(json != NULL && json[0] == '[');
+    if (json)
+        arr = cJSON_Parse(json);
+    CHECK(arr != NULL && cJSON_IsArray(arr));
+    if (arr && cJSON_IsArray(arr)) {
+        int n = cJSON_GetArraySize(arr);
+        int found = 0;
+        CHECK(n >= 1 && n <= 3);
+        cJSON *it = cJSON_GetArrayItem(arr, 0);
+        CHECK(cJSON_GetObjectItemCaseSensitive(it, "factors") != NULL);
+        CHECK(cJSON_GetObjectItemCaseSensitive(it, "text") != NULL);
+        cJSON *lvl = cJSON_GetObjectItemCaseSensitive(it, "level");
+        const char *lv = cJSON_GetStringValue(lvl);
+        CHECK(lv && (strcmp(lv, "L2") == 0 || strcmp(lv, "L1") == 0));
+        /* the zig record must appear somewhere in the ranked context */
+        for (int q = 0; q < n; q++) {
+            cJSON *j2 = cJSON_GetArrayItem(arr, q);
+            cJSON *jid2 = cJSON_GetObjectItemCaseSensitive(j2, "id");
+            const char *iv = jid2 ? cJSON_GetStringValue(jid2) : NULL;
+            if (iv && strcmp(iv, "mem_v3mmu1") == 0)
+                found = 1;
+        }
+        CHECK(found == 1);
+    }
+    cJSON_Delete(arr);
+    arr = NULL;
+
+    /* budget respected */
+    st = ctx_mmu_stats_json(mmu);
+    CHECK(st && strstr(st, "\"token_budget\":2048") != NULL);
+    so = st ? cJSON_Parse(st) : NULL;
+    if (so) {
+        cJSON *tu = cJSON_GetObjectItemCaseSensitive(so, "token_used");
+        CHECK(tu && cJSON_IsNumber(tu) && tu->valuedouble <= 2048);
+    }
+    cJSON_Delete(so);
+    so = NULL;
+    free(st);
+    st = NULL;
+
+    /* pin + second recall stays within budget and is re-runnable */
+    CHECK(ctx_mmu_pin(mmu, "mem_v3mmu1", 1) == 0);
+    CHECK(ctx_mmu_pin(mmu, "mem_missing", 1) == -1);
+    free(json);
+    json = ctx_mmu_recall(mmu, rs, vs, "postgres vacuum", &cfg);
+    CHECK(json != NULL);
+    free(json);
+    json = NULL;
+
+    /* record removed -> page dropped on next sync */
+    CHECK(mem_records_remove(rs, "mem_v3mmu0") == 1);
+    json = ctx_mmu_recall(mmu, rs, vs, "anything", &cfg);
+    CHECK(json != NULL);
+    if (json)
+        a2 = cJSON_Parse(json);
+    if (a2 && cJSON_IsArray(a2)) {
+        int n = cJSON_GetArraySize(a2);
+        for (int i = 0; i < n; i++) {
+            cJSON *it = cJSON_GetArrayItem(a2, i);
+            cJSON *jid = cJSON_GetObjectItemCaseSensitive(it, "id");
+            const char *idv = jid ? cJSON_GetStringValue(jid) : NULL;
+            CHECK(idv && strcmp(idv, "mem_v3mmu0") != 0);
+        }
+    }
+    cJSON_Delete(a2);
+    a2 = NULL;
+
+done:
+    free(json);
+    free(st);
+    cJSON_Delete(arr);
+    cJSON_Delete(a2);
+    cJSON_Delete(so);
+    ctx_mmu_free(mmu);
+    vectorstore_free(vs);
+    mem_records_free(rs);
+}
+
 /* ---------- context MMU: explicit budgets with auto-degradation ---------- */
 static void test_context_budget(void) {
     section("context budget");
@@ -4361,6 +4703,9 @@ int main(void) {
     test_router_policy();
     test_consolidation();
     test_memory_lifecycle();
+    test_record_v3();
+    test_promotion_v3();
+    test_mmu_v3();
     test_context_budget();
     test_attention();
     test_sandbox_wasm();
