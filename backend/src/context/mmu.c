@@ -438,11 +438,13 @@ static int sync_pages(ctx_mmu *mmu, mem_records *rs) {
 /* --- recall (§9.4) -------------------------------------------------------- */
 
 typedef struct recall_hit {
-    const char *id;    /* borrowed from cJSON (valid during recall) */
+    char id[64];       /* record id copied out of the cJSON tree (owned) */
     double relevance;  /* vector hybrid score */
 } recall_hit;
 
-/* Collect vector hits into recall_hit[]. Returns hit count, -1 error. */
+/* Collect vector hits into recall_hit[]. Returns hit count, -1 error.
+ * Ids are copied: the cJSON tree is deleted before returning, so borrowed
+ * pointers would dangle (caught by ASan in CI). */
 static int parse_vector_hits(const char *json, recall_hit *hits, int max) {
     cJSON *arr = cJSON_Parse(json);
     int i, n, out = 0;
@@ -461,7 +463,7 @@ static int parse_vector_hits(const char *json, recall_hit *hits, int max) {
             continue;
         if (out >= max)
             break;
-        hits[out].id = id + 2;
+        snprintf(hits[out].id, sizeof hits[out].id, "%s", id + 2);
         hits[out].relevance = jsc && cJSON_IsNumber(jsc) ? jsc->valuedouble : 0.0;
         out++;
     }

@@ -445,12 +445,17 @@ int mem_records_remove(mem_records *rs, const char *id) {
         return -1;
     for (size_t i = 0; i < rs->count; i++) {
         if (strcmp(rs->items[i]->id, id) == 0) {
+            /* copy the id before freeing the record: callers commonly pass a
+             * pointer into the record itself (rs->items[i]->id), which would
+             * dangle for the records_path() call below */
+            char idbuf[MEM_ID_MAX];
+            snprintf(idbuf, sizeof idbuf, "%s", id);
             mem_record_free(rs->items[i]);
             memmove(&rs->items[i], &rs->items[i + 1],
                     (rs->count - i - 1) * sizeof(mem_record *));
             rs->count--;
             char p[1024];
-            records_path(rs, p, sizeof p, id);
+            records_path(rs, p, sizeof p, idbuf);
             fs_remove(p);
             return 1;
         }

@@ -3498,7 +3498,8 @@ static void test_security(void) {
     char *stats = NULL;
 
     /* high-confidence: Bearer token */
-    n = secret_scan_text("auth: Bearer abcdef1234567890abcdef123456", 37, &ms);
+    n = secret_scan_text("auth: Bearer abcdef1234567890abcdef123456",
+                         strlen("auth: Bearer abcdef1234567890abcdef123456"), &ms);
     CHECK(n == 1);
     if (n == 1) {
         CHECK(ms[0].severity == SECRET_SEV_HIGH);
@@ -3508,7 +3509,8 @@ static void test_security(void) {
     ms = NULL;
 
     /* high-confidence: PEM private key */
-    n = secret_scan_text("-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXk=\n", 68, &ms);
+    n = secret_scan_text("-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXk=\n",
+                         strlen("-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXk=\n"), &ms);
     CHECK(n >= 1);
     if (n >= 1) {
         CHECK(ms[0].severity == SECRET_SEV_HIGH);
@@ -3518,7 +3520,7 @@ static void test_security(void) {
     ms = NULL;
 
     /* high-confidence: AWS access key id */
-    n = secret_scan_text("key AKIAIOSFODNN7EXAMPLE in text", 32, &ms);
+    n = secret_scan_text("key AKIAIOSFODNN7EXAMPLE in text", strlen("key AKIAIOSFODNN7EXAMPLE in text"), &ms);
     CHECK(n >= 1);
     if (n >= 1)
         CHECK_STR(ms[0].kind, "aws_key");
@@ -3526,7 +3528,7 @@ static void test_security(void) {
     ms = NULL;
 
     /* high-confidence: password= assignment */
-    n = secret_scan_text("db: password=Tr0ub4dor&3 extra", 30, &ms);
+    n = secret_scan_text("db: password=Tr0ub4dor&3 extra", strlen("db: password=Tr0ub4dor&3 extra"), &ms);
     CHECK(n >= 1);
     if (n >= 1) {
         CHECK(ms[0].severity == SECRET_SEV_HIGH);
@@ -3536,21 +3538,22 @@ static void test_security(void) {
     ms = NULL;
 
     /* false positives (§7.3): placeholders, short ids, docs */
-    n = secret_scan_text("password=${DB_PASSWORD} in config", 33, &ms);
+    n = secret_scan_text("password=${DB_PASSWORD} in config", strlen("password=${DB_PASSWORD} in config"), &ms);
     CHECK(n == 0);
     secret_matches_free(ms);
     ms = NULL;
-    n = secret_scan_text("see the documentation for password=changeme examples", 52, &ms);
+    n = secret_scan_text("see the documentation for password=changeme examples", strlen("see the documentation for password=changeme examples"), &ms);
     CHECK(n == 0);
     secret_matches_free(ms);
     ms = NULL;
-    n = secret_scan_text("user id 12345 logged in", 23, &ms);
+    n = secret_scan_text("user id 12345 logged in", strlen("user id 12345 logged in"), &ms);
     CHECK(n == 0);
     secret_matches_free(ms);
     ms = NULL;
 
     /* redaction correctness (§8.1) */
-    red = secret_redact_text("Authorization: Bearer abcdef1234567890abcdef123456 ok", 53,
+    red = secret_redact_text("Authorization: Bearer abcdef1234567890abcdef123456 ok",
+                             strlen("Authorization: Bearer abcdef1234567890abcdef123456 ok"),
                              "[REDACTED:secret]");
     CHECK(red != NULL);
     if (red) {
@@ -3562,7 +3565,7 @@ static void test_security(void) {
     red = NULL;
 
     /* clean text passes through unchanged */
-    red = secret_redact_text("no secrets here", 15, NULL);
+    red = secret_redact_text("no secrets here", strlen("no secrets here"), NULL);
     CHECK(red != NULL);
     if (red)
         CHECK_STR(red, "no secrets here");
