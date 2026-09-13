@@ -10,6 +10,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#endif
 #include "cognitive-os-agent.h"
 #include "action/tools.h"
 #include "memory/memory.h"
@@ -23,11 +27,64 @@ static void print_usage(void) {
     printf("usage:\n");
     printf("  cognitive-os-agent run \"<prompt>\"         run one prompt through the cognitive pipeline\n");
     printf("  cognitive-os-agent serve [port]            serve HTTP API + web console (default 8080)\n");
+    printf("  cognitive-os-agent install [dir]           copy self to install dir (default %%ProgramFiles%%\\cognitive-os-agent)\n");
     printf("  cognitive-os-agent tools                   list available tools\n");
     printf("  cognitive-os-agent memory                  show working + long-term memory\n");
     printf("  cognitive-os-agent snapshot list|rollback  list snapshots / rollback to latest\n");
     printf("  cognitive-os-agent config                  show effective config\n");
     printf("  cognitive-os-agent                         interactive shell\n");
+}
+
+/* Self-install: copy the running exe to <dir> (default %ProgramFiles%\
+ * cognitive-os-agent). Used by the setup wrapper; avoids the fragile
+ * "launch a .bat from a temp dir" step that breaks on some systems. */
+static int cmd_install(const char *dir_arg) {
+    char src[MAX_PATH], dst_dir[MAX_PATH], dst[MAX_PATH];
+    const char *pf;
+    HMODULE me;
+    DWORD n;
+    char *p;
+    BOOL ok;
+
+    me = GetModuleHandleA(NULL);
+    n = GetModuleFileNameA(me, src, MAX_PATH);
+    if (n == 0 || n >= MAX_PATH) {
+        printf("error: cannot locate own executable path\n");
+        return 1;
+    }
+    pf = getenv("ProgramFiles");
+    if (!pf || !*pf)
+        pf = "C:\\Program Files";
+    if (dir_arg && *dir_arg)
+        snprintf(dst_dir, sizeof dst_dir, "%s", dir_arg);
+    else
+        snprintf(dst_dir, sizeof dst_dir, "%s\\cognitive-os-agent", pf);
+    snprintf(dst, sizeof dst, "%s\\cognitive-os-agent.exe", dst_dir);
+
+    /* create the target dir plus any missing parents */
+    for (p = dst_dir; *p; p++) {
+        if (*p == '\\' && p != dst_dir) {
+            *p = '\0';
+            CreateDirectoryA(dst_dir, NULL);
+            *p = '\\';
+        }
+    }
+    if (!CreateDirectoryA(dst_dir, NULL) && GetLastError() != ERROR_ALREADY_EXISTS) {
+        printf("error: cannot create %s (run as administrator)\n", dst_dir);
+        return 1;
+    }
+    ok = CopyFileA(src, dst, FALSE);
+    if (!ok) {
+        printf("error: cannot copy to %s (error %lu; run as administrator)\n",
+               dst, (unsigned long)GetLastError());
+        return 1;
+    }
+    printf("cognitive-os-agent %s installed:\n", version());
+    printf("  %s\n", dst);
+    printf("Start the server:\n");
+    printf("  \"%s\" serve 8080\n", dst);
+    printf("then open http://localhost:8080\n");
+    return 0;
 }
 
 static int cmd_tools(void) {
@@ -96,6 +153,10 @@ int main(int argc, char **argv) {
     }
 
     if (argc > 1 && strcmp(argv[1], "tools") == 0) return cmd_tools();
+#ifdef _WIN32
+    if (argc > 1 && strcmp(argv[1], "install") == 0)
+        return cmd_install(argc > 2 ? argv[2] : NULL);
+#endif
     if (argc > 1 && strcmp(argv[1], "snapshot") == 0)
         return cmd_snapshot(argc > 2 ? argv[2] : "list");
     if (argc > 1 && strcmp(argv[1], "run") == 0) {
