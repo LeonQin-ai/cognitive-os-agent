@@ -8,7 +8,7 @@ import os
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC = os.path.join(ROOT, "apps", "web", "index.html")
-DST = os.path.join(ROOT, "include", "cognitive-os-agent", "api", "web_ui.h")
+DST = os.path.join(ROOT, "include", "api", "web_ui.h")
 
 with open(SRC, "r", encoding="utf-8") as f:
     text = f.read()

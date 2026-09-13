@@ -521,12 +521,13 @@ panels.chat = `
 panels.agents = `
   <div class="card">
     <h2>Create agent</h2>
-    <div class="hint">多智能体协调器：注册命名 agent（带角色描述），通过共享黑板协同工作、可发布事实。可指定该 agent 使用的模型，留空则使用当前激活模型。</div>
+    <div class="hint">多智能体协调器：注册命名 agent（带角色描述），通过共享黑板协同工作、可发布事实。模型从路由（Model routes）下拉选择，默认使用当前激活模型。</div>
     <div class="row">
       <input id="agent-name" type="text" placeholder="name (如 writer)" style="flex:1;min-width:140px">
       <input id="agent-role" type="text" placeholder="role (如 负责写作)" style="flex:2;min-width:200px">
-      <input id="agent-provider" type="text" placeholder="provider (openai/anthropic/mock)" style="flex:1;min-width:140px">
-      <input id="agent-model" type="text" placeholder="model (留空=当前)" style="flex:1;min-width:140px">
+      <select id="agent-model" style="flex:2;min-width:220px">
+        <option value="">（当前激活模型）</option>
+      </select>
       <button onclick="agentAdd()">Add</button>
       <span id="agent-stat" class="muted"></span>
     </div>
@@ -973,6 +974,24 @@ async function saveSnapshotCfg(){
 
 let AGENTS = [];
 
+/* Fill the agent-creation model dropdown from the registered routes
+ * (GET /v1/routes). Preserves the current selection when possible. */
+async function fillAgentModelSelect(){
+  const sel = $('agent-model'); if(!sel) return;
+  const keep = sel.value;
+  const r = await call('GET', '/v1/routes');
+  const routes = Array.isArray(r.obj) ? r.obj : [];
+  let html = '<option value="">（当前激活模型）</option>';
+  routes.forEach(x => {
+    const val = (x.provider || '') + '|' + (x.model || '');
+    const label = (x.name || x.model || 'route') + '（' + (x.provider || '?') + ' / ' + (x.model || '?') + '）';
+    html += '<option value="' + esc(val) + '">' + esc(label) + '</option>';
+  });
+  sel.innerHTML = html;
+  const has = Array.from(sel.options).some(o => o.value === keep);
+  sel.value = has ? keep : '';
+}
+
 async function loadAgents(){
   const r = await call('GET', '/v1/agents');
   const box = $('agents-out2');
@@ -989,21 +1008,27 @@ async function loadAgents(){
   html += '</tbody></table></div>';
   html += '<div class="hint" style="margin-top:8px">共享黑板 facts:</div><pre>' + esc(JSON.stringify(obj.facts || {}, null, 2)) + '</pre>';
   box.innerHTML = html;
+  fillAgentModelSelect();
 }
 
 function agentAdd(){
   const name = $('agent-name').value.trim();
   const role = $('agent-role').value.trim();
-  const provider = $('agent-provider').value.trim();
-  const model = $('agent-model').value.trim();
   const st = $('agent-stat');
   if(!name){ if(st) st.textContent = '需要 name'; return; }
   const body = {name, role};
-  if(provider) body.provider = provider;
-  if(model) body.model = model;
+  /* dropdown value is "provider|model" ("" = current active model) */
+  const pick = $('agent-model').value;
+  if(pick){
+    const sep = pick.indexOf('|');
+    const provider = sep >= 0 ? pick.slice(0, sep) : pick;
+    const model = sep >= 0 ? pick.slice(sep + 1) : '';
+    if(provider) body.provider = provider;
+    if(model) body.model = model;
+  }
   call('POST', '/v1/agents', body).then(r => {
     if(st) st.textContent = (r.status < 300) ? '✔ 已创建' : ((r.obj && r.obj.error) ? 'error: ' + r.obj.error : 'error ' + r.status);
-    if(r.status < 300){ $('agent-name').value = ''; $('agent-role').value = ''; $('agent-provider').value = ''; $('agent-model').value = ''; loadAgents(); }
+    if(r.status < 300){ $('agent-name').value = ''; $('agent-role').value = ''; $('agent-model').value = ''; loadAgents(); }
   });
 }
 
