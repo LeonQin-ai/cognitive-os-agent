@@ -8,6 +8,14 @@ if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release)
 endif()
 
+# per-OS platform backends register as hooks (see include/os/platform.h):
+# compile exactly one platform directory
+if(WIN32)
+  file(GLOB PLATFORM_SRCS ${CMAKE_CURRENT_SOURCE_DIR}/src/os/windows/*.c)
+else()
+  file(GLOB PLATFORM_SRCS ${CMAKE_CURRENT_SOURCE_DIR}/src/os/linux/*.c)
+endif()
+
 set(CAGENT_SOURCES
   src/cognitive-os-agent.c
   src/runtime/event_bus.c
@@ -64,8 +72,8 @@ set(CAGENT_SOURCES
   src/os/os_fs.c
   src/os/os_proc.c
   src/os/os_time.c
-  src/os/http.c
-  src/os/http_winhttp.c
+  ${PLATFORM_SRCS}
+  src/os/http_dispatch.c
   src/infra/logging.c
   src/infra/config.c
   src/infra/util.c

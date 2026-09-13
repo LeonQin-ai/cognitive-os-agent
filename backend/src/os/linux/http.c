@@ -1,10 +1,5 @@
-#include "os/http.h"
+#include "os/platform.h"
 #include "os/os_socket.h"
-
-/* On Windows the HTTPS-capable backend lives in http_winhttp.c; this plaintext
- * implementation is only used on non-Windows platforms. HTTPS on POSIX goes
- * through a libcurl backend loaded lazily via dlopen (no build-time dep). */
-#ifndef _WIN32
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -404,7 +399,7 @@ static int decode_getc(http_stream *h) {
     return http_getc(h);
 }
 
-int http_stream_read_line(http_stream *h, char *out, size_t cap) {
+static int http_stream_read_line_impl(http_stream *h, char *out, size_t cap) {
     size_t n = 0;
     if (h && h->via_curl) {
         /* replay from the buffered curl response, dropping \r like the
@@ -444,7 +439,7 @@ int http_stream_read_line(http_stream *h, char *out, size_t cap) {
     return (int)n;
 }
 
-int http_stream_read(http_stream *h, char *out, size_t cap) {
+static int http_stream_read_impl(http_stream *h, char *out, size_t cap) {
     size_t n = 0;
 
     if (h && h->via_curl) {
@@ -465,7 +460,7 @@ int http_stream_read(http_stream *h, char *out, size_t cap) {
     return (int)n;
 }
 
-int http_stream_status(http_stream *h) {
+static int http_stream_status_impl(http_stream *h) {
     return h ? h->status : 0;
 }
 
@@ -608,7 +603,7 @@ static http_stream *http_open(const char *base_url, const char *method, const ch
     return h;
 }
 
-void http_stream_close(http_stream *h) {
+static void http_stream_close_impl(http_stream *h) {
     if (!h)
         return;
     if (h->via_curl) {
@@ -679,23 +674,23 @@ static http_response *http_full(const char *base_url, const char *method, const 
     return r;
 }
 
-http_response *http_post(const char *base_url, const char *path, const char *body, const char *content_type,
+static http_response *http_post_impl(const char *base_url, const char *path, const char *body, const char *content_type,
                                  strmap *extra_headers, int timeout_ms) {
     return http_full(base_url, "POST", path, body, content_type, extra_headers, timeout_ms);
 }
 
-http_response *http_get(const char *base_url, const char *path, strmap *extra_headers, int timeout_ms) {
+static http_response *http_get_impl(const char *base_url, const char *path, strmap *extra_headers, int timeout_ms) {
     return http_full(base_url, "GET", path, NULL, NULL, extra_headers, timeout_ms);
 }
 
-http_stream *http_stream_open(const char *base_url, const char *method, const char *path, const char *body,
+static http_stream *http_stream_open_impl(const char *base_url, const char *method, const char *path, const char *body,
                                       const char *content_type, strmap *extra_headers, int timeout_ms) {
     if (strncmp(base_url, "https://", 8) == 0)
         return curl_open(base_url, method, path, body, content_type, extra_headers, timeout_ms, NULL);
     return http_open(base_url, method, path, body, content_type, extra_headers, timeout_ms);
 }
 
-void http_response_free(http_response *r) {
+static void http_response_free_impl(http_response *r) {
     if (!r)
         return;
     free(r->body);
@@ -703,4 +698,21 @@ void http_response_free(http_response *r) {
     free(r);
 }
 
-#endif /* _WIN32 */
+
+/* --- platform hook registration ------------------------------------------ */
+
+static const os_http_hooks g_posix_http_hooks = {
+    "posix+lazy-curl",
+    http_post_impl,
+    http_get_impl,
+    http_response_free_impl,
+    http_stream_open_impl,
+    http_stream_status_impl,
+    http_stream_read_line_impl,
+    http_stream_read_impl,
+    http_stream_close_impl,
+};
+
+const os_http_hooks *os_http_platform_hooks(void) {
+    return &g_posix_http_hooks;
+}

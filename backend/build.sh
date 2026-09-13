@@ -22,11 +22,13 @@ CFLAGS="-std=c11 -Wall -Wextra -O1 -g -Iinclude -Ithird_party/cJSON -Ithird_part
 LIBS=""
 EXE=""
 case "$OS" in
-  MINGW*|MSYS*|CYGWIN*) LIBS="-lws2_32 -lwinhttp -lm"; EXE=".exe" ;;
-  *)                    LIBS="-lpthread -ldl -lm" ;;
+  MINGW*|MSYS*|CYGWIN*) LIBS="-lws2_32 -lwinhttp -lm"; EXE=".exe"; PLAT="src/os/windows" ;;
+  *)                    LIBS="-lpthread -ldl -lm"; EXE=""; PLAT="src/os/linux" ;;
 esac
 
-SRCS="$(find src third_party/cJSON -name '*.c' | sort) third_party/wasm3/wasm3_all.c"
+# platform backends live in per-OS dirs and register as hooks (see
+# include/os/platform.h): compile exactly one, exclude the others
+SRCS="$(find src third_party/cJSON -name '*.c' | grep -v -E '^src/os/(linux|windows)/' | sort) $(find "$PLAT" -name '*.c') third_party/wasm3/wasm3_all.c"
 mkdir -p build
 
 # Regenerate the embedded web UI (include/api/web_ui.h) from

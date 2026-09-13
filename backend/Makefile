@@ -3,8 +3,10 @@
 CC      ?= cc
 CFLAGS  ?= -std=c11 -Wall -Wextra -O1 -g -Iinclude -Ithird_party/cJSON -Ithird_party/wasm3
 LDLIBS  := $(shell uname | grep -qi 'mingw\|msys\|cygwin' && echo '-lws2_32 -lwinhttp -lm' || echo '-lpthread -ldl -lm')
+PLAT    := $(shell uname | grep -qi 'mingw\|msys\|cygwin' && echo 'src/os/windows' || echo 'src/os/linux')
 
-SRCS := $(shell find src third_party/cJSON -name '*.c' | sort) third_party/wasm3/wasm3_all.c
+# per-OS platform backends register as hooks (see include/os/platform.h)
+SRCS := $(shell find src third_party/cJSON -name '*.c' | grep -v -E '^src/os/(linux|windows)/' | sort) $(wildcard $(PLAT)/*.c) third_party/wasm3/wasm3_all.c
 
 all: build/cognitive-os-agent build/cognitive-os-agent-test build/cognitive-os-agent-scenario build/mock-llm-server build/test-adapters build/cognitive-os-agent-e2e build/cognitive-os-agent-bench
 

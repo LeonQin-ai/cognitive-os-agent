@@ -2,16 +2,15 @@
  * The default os/http.c only speaks plaintext http:// (and refuses https://).
  * Real LLM providers (OpenAI/DeepSeek/Anthropic) are HTTPS-only, so on Windows
  * we implement the same API over WinHTTP, which handles TLS via the system
- * crypto stack. This file is compiled only on Windows (_WIN32); on other
- * platforms os/http.c provides these symbols instead. */
-#include "os/http.h"
+ * crypto stack. This is the Windows platform backend (src/os/windows/),
+ * registered as an os_http_hooks table; the dispatcher in
+ * src/os/http_dispatch.c binds it at first use. */
+#include "os/platform.h"
 #include "infra/util.h"
 
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
-
-#ifdef _WIN32
 
 #include <windows.h>
 #include <winhttp.h>
@@ -230,12 +229,12 @@ static http_response *do_request(const char *method, const char *base_url, const
     return r;
 }
 
-http_response *http_post(const char *base_url, const char *path, const char *body, const char *content_type,
+static http_response *http_post_impl(const char *base_url, const char *path, const char *body, const char *content_type,
                                  strmap *extra_headers, int timeout_ms) {
     return do_request("POST", base_url, path, body, content_type, extra_headers, timeout_ms);
 }
 
-void http_response_free(http_response *r) {
+static void http_response_free_impl(http_response *r) {
     if (!r)
         return;
     free(r->body);
@@ -243,11 +242,11 @@ void http_response_free(http_response *r) {
     free(r);
 }
 
-http_response *http_get(const char *base_url, const char *path, strmap *extra_headers, int timeout_ms) {
+static http_response *http_get_impl(const char *base_url, const char *path, strmap *extra_headers, int timeout_ms) {
     return do_request("GET", base_url, path, NULL, NULL, extra_headers, timeout_ms);
 }
 
-http_stream *http_stream_open(const char *base_url, const char *method, const char *path, const char *body,
+static http_stream *http_stream_open_impl(const char *base_url, const char *method, const char *path, const char *body,
                                       const char *content_type, strmap *extra_headers, int timeout_ms) {
     http_response *r = do_request(method, base_url, path, body, content_type, extra_headers, timeout_ms);
     http_stream *h;
@@ -263,11 +262,11 @@ http_stream *http_stream_open(const char *base_url, const char *method, const ch
     return h;
 }
 
-int http_stream_status(http_stream *h) {
+static int http_stream_status_impl(http_stream *h) {
     return h ? h->status : 0;
 }
 
-int http_stream_read(http_stream *h, char *out, size_t cap) {
+static int http_stream_read_impl(http_stream *h, char *out, size_t cap) {
     size_t avail;
     size_t n;
 
@@ -282,7 +281,7 @@ int http_stream_read(http_stream *h, char *out, size_t cap) {
     return (int)n;
 }
 
-int http_stream_read_line(http_stream *h, char *out, size_t cap) {
+static int http_stream_read_line_impl(http_stream *h, char *out, size_t cap) {
     size_t n = 0;
 
     if (!h)
@@ -300,11 +299,28 @@ int http_stream_read_line(http_stream *h, char *out, size_t cap) {
     return (int)n;
 }
 
-void http_stream_close(http_stream *h) {
+static void http_stream_close_impl(http_stream *h) {
     if (!h)
         return;
     free(h->body);
     free(h);
 }
 
-#endif /* _WIN32 */
+
+/* --- platform hook registration ------------------------------------------ */
+
+static const os_http_hooks g_winhttp_hooks = {
+    "winhttp",
+    http_post_impl,
+    http_get_impl,
+    http_response_free_impl,
+    http_stream_open_impl,
+    http_stream_status_impl,
+    http_stream_read_line_impl,
+    http_stream_read_impl,
+    http_stream_close_impl,
+};
+
+const os_http_hooks *os_http_platform_hooks(void) {
+    return &g_winhttp_hooks;
+}
