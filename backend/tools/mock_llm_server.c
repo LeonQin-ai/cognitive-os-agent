@@ -8,9 +8,9 @@
  * Then run:  cognitive-os-agent run "创建 test/a.txt 写入内容为 hello"  with provider=openai
  *            base_url=http://localhost:9000
  */
-#include "cognitive-os-agent/api/http_server.h"
-#include "cognitive-os-agent/os/os_socket.h"
-#include "cognitive-os-agent/infra/util.h"
+#include "api/http_server.h"
+#include "os/os_socket.h"
+#include "infra/util.h"
 
 #include <stdlib.h>
 #include <string.h>

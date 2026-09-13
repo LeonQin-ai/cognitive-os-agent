@@ -10,11 +10,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "cognitive-os-agent/cognitive-os-agent.h"
-#include "cognitive-os-agent/action/tools.h"
-#include "cognitive-os-agent/memory/memory.h"
-#include "cognitive-os-agent/snapshot/snapshot.h"
-#include "cognitive-os-agent/infra/config.h"
+#include "cognitive-os-agent.h"
+#include "action/tools.h"
+#include "memory/memory.h"
+#include "snapshot/snapshot.h"
+#include "infra/config.h"
 
 #define STATE_ROOT "state"
 
