@@ -1,5 +1,7 @@
 #include "llm/llm.h"
 #include "infra/logging.h"
+#include "infra/util.h"
+#include "security/secret.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -44,18 +46,63 @@ int llm_timeout_ms(void) {
     return 300000;
 }
 
+/* Secret Security Plane ingress check (§13): scan every message content.
+ * Passthrough mode only audits; strict mode blocks HIGH-confidence secrets
+ * before the request leaves the trust boundary. */
+static int llm_guard_input(const llm_request *req) {
+    const char **contents;
+    size_t i;
+    int rc;
+
+    if (!req || req->num_messages == 0)
+        return 0;
+    contents = (const char **)calloc(req->num_messages, sizeof(char *));
+    if (!contents)
+        return 0; /* fail open on OOM */
+    for (i = 0; i < req->num_messages; i++)
+        contents[i] = req->messages[i].content;
+    rc = secret_guard_llm_input(contents, req->num_messages);
+    free(contents);
+    return rc;
+}
+
 int llm_chat(llm *llm, const llm_request *req, llm_response *resp) {
     if (!llm || !llm->vt || !llm->vt->chat)
         return -1;
-    return llm->vt->chat(llm, req, resp);
+    if (llm_guard_input(req) != 0) {
+        if (resp) {
+            resp->error = xstrdup("blocked: strict secret-security policy detected a "
+                                  "high-confidence secret in the request");
+            resp->content = NULL;
+        }
+        return -1;
+    }
+    {
+        int rc = llm->vt->chat(llm, req, resp);
+        if (rc == 0 && resp)
+            secret_guard_llm_output(&resp->content); /* egress redaction (§8.2) */
+        return rc;
+    }
 }
 
 int llm_stream(llm *llm, const llm_request *req, llm_stream_cb cb, void *ud) {
     int rc;
+    void *guard;
 
     if (!llm || !llm->vt || !llm->vt->stream)
         return -1;
-    rc = llm->vt->stream(llm, req, cb, ud);
+    if (llm_guard_input(req) != 0) {
+        llm->cancel = 0;
+        return -1;
+    }
+    /* egress filter: deltas pass through the streaming secret guard */
+    guard = secret_stream_guard_new(cb, ud);
+    if (guard)
+        rc = llm->vt->stream(llm, req, secret_stream_guard_cb, guard);
+    else
+        rc = llm->vt->stream(llm, req, cb, ud); /* fail open on OOM */
+    if (guard)
+        secret_stream_guard_free(guard); /* flushes the held tail */
     llm->cancel = 0; /* consumed: the next stream starts uncancelled */
     return rc;
 }

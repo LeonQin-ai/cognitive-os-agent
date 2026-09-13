@@ -11,6 +11,7 @@
 #include "infra/metrics.h"
 #include "infra/util.h"
 #include "infra/config.h"
+#include "security/secret.h"
 #include "infra/catalog.h"
 #include "infra/logging.h"
 #include "llm/llm.h"
@@ -1359,6 +1360,53 @@ static int h_config_llm(const http_request *req, http_response *resp, void *ud) 
 
 /* Snapshot capture size limit (bytes; 0 = unlimited). UI-configurable
  * override of the built-in 64MB default / SNAPSHOT_MAX_FILE env. */
+/* GET /v1/security/stats — Secret Security Plane counters (§22). */
+static int h_security_stats(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
+    char *s;
+
+    if (!authz_ok(ctx, req, resp))
+        return 0;
+    s = secret_stats_json();
+    http_resp_json(resp, s ? s : "{}");
+    free(s);
+    return 0;
+}
+
+/* POST /v1/config/security {"mode":"passthrough|strict"} — switch the Secret
+ * Security Plane compatibility mode at runtime and persist it (§5). */
+static int h_config_security(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
+    char *b;
+    cJSON *root;
+    cJSON *m;
+    const char *mode;
+
+    if (!authz_ok(ctx, req, resp))
+        return 0;
+    b = body_str(req);
+    root = b ? cJSON_Parse(b) : NULL;
+    free(b);
+    m = root ? cJSON_GetObjectItemCaseSensitive(root, "mode") : NULL;
+    mode = (m && cJSON_IsString(m)) ? m->valuestring : NULL;
+    if (!mode || secret_set_mode(mode) != 0) {
+        if (root)
+            cJSON_Delete(root);
+        resp->status = 400;
+        http_resp_json(resp, "{\"error\":\"need 'mode' = passthrough|strict\"}");
+        return 0;
+    }
+    cJSON_Delete(root);
+    config_set_str(ctx->config, "security.mode", secret_mode());
+    if (ctx->state_root) {
+        char cfgfile[600];
+        path_join(cfgfile, sizeof(cfgfile), ctx->state_root, "cognitive-os-agent.json");
+        config_save_file(ctx->config, cfgfile);
+    }
+    http_resp_appendf(resp, "{\"ok\":true,\"mode\":\"%s\"}", secret_mode());
+    return 0;
+}
+
 static int h_config_snapshot_get(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
     cJSON *o;
@@ -1376,8 +1424,7 @@ static int h_config_snapshot_get(const http_request *req, http_response *resp, v
     return 0;
 }
 
-static int h_config_snapshot(const http_request *req, http_response *resp, void *ud) {
-    runtime_ctx *ctx = (runtime_ctx *)ud;
+static int h_config_snapshot(const http_request *req, http_response *resp, void *ud) {    runtime_ctx *ctx = (runtime_ctx *)ud;
     char *b;
     cJSON *root;
     cJSON *mf;
@@ -3713,6 +3760,8 @@ int api_attach(runtime_ctx *ctx) {
     http_server_route(ctx->http, "POST", "/v1/config/llm/test", h_config_llm_test, ctx);
     http_server_route(ctx->http, "GET", "/v1/config/snapshot", h_config_snapshot_get, ctx);
     http_server_route(ctx->http, "POST", "/v1/config/snapshot", h_config_snapshot, ctx);
+    http_server_route(ctx->http, "GET", "/v1/security/stats", h_security_stats, ctx);
+    http_server_route(ctx->http, "POST", "/v1/config/security", h_config_security, ctx);
     http_server_route(ctx->http, "POST", "/v1/chat", h_chat, ctx);
     http_server_route(ctx->http, "GET", "/v1/chat/history", h_chat_history, ctx);
     http_server_route(ctx->http, "GET", "/v1/chat/sessions", h_chat_sessions, ctx);

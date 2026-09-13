@@ -31,6 +31,7 @@
 #include "memory/graph.h"
 #include "memory/record.h"
 #include "memory/promotion.h"
+#include "security/secret.h"
 #include "context/mmu.h"
 #include "retrieval/context_builder.h"
 #include "cognition/planner.h"
@@ -3469,6 +3470,181 @@ done:
     mem_records_free(rs);
 }
 
+/* ---------- secret security: detection, redaction, modes, boundaries ------ */
+
+/* stream guard sink: append deltas into a fixed char buffer */
+static void stream_sink_append(const char *delta, void *ud) {
+    char *acc = (char *)ud;
+    size_t len, dlen;
+    if (!delta || !acc)
+        return;
+    len = strlen(acc);
+    dlen = strlen(delta);
+    strncat(acc, delta, 511 - len);
+    (void)dlen;
+}
+
+static void test_security(void) {
+    section("secret security");
+    secret_match *ms = NULL;
+    int n = 0;
+    char *red = NULL;
+    const char *const blocked_input[1] = {
+        "use this credential: Authorization: Bearer "
+        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0."
+        "doafpcEw2qG0vKJtXdpJc3PmZmB0fCbctCJfVLpLxvY to authenticate"
+    };
+    const char *const clean_input[1] = {"hello world, nothing secret here"};
+    char *stats = NULL;
+
+    /* high-confidence: Bearer token */
+    n = secret_scan_text("auth: Bearer abcdef1234567890abcdef123456", 37, &ms);
+    CHECK(n == 1);
+    if (n == 1) {
+        CHECK(ms[0].severity == SECRET_SEV_HIGH);
+        CHECK_STR(ms[0].kind, "bearer");
+    }
+    secret_matches_free(ms);
+    ms = NULL;
+
+    /* high-confidence: PEM private key */
+    n = secret_scan_text("-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXk=\n", 68, &ms);
+    CHECK(n >= 1);
+    if (n >= 1) {
+        CHECK(ms[0].severity == SECRET_SEV_HIGH);
+        CHECK_STR(ms[0].kind, "pem_key");
+    }
+    secret_matches_free(ms);
+    ms = NULL;
+
+    /* high-confidence: AWS access key id */
+    n = secret_scan_text("key AKIAIOSFODNN7EXAMPLE in text", 32, &ms);
+    CHECK(n >= 1);
+    if (n >= 1)
+        CHECK_STR(ms[0].kind, "aws_key");
+    secret_matches_free(ms);
+    ms = NULL;
+
+    /* high-confidence: password= assignment */
+    n = secret_scan_text("db: password=Tr0ub4dor&3 extra", 30, &ms);
+    CHECK(n >= 1);
+    if (n >= 1) {
+        CHECK(ms[0].severity == SECRET_SEV_HIGH);
+        CHECK_STR(ms[0].kind, "kv_credential");
+    }
+    secret_matches_free(ms);
+    ms = NULL;
+
+    /* false positives (§7.3): placeholders, short ids, docs */
+    n = secret_scan_text("password=${DB_PASSWORD} in config", 33, &ms);
+    CHECK(n == 0);
+    secret_matches_free(ms);
+    ms = NULL;
+    n = secret_scan_text("see the documentation for password=changeme examples", 52, &ms);
+    CHECK(n == 0);
+    secret_matches_free(ms);
+    ms = NULL;
+    n = secret_scan_text("user id 12345 logged in", 23, &ms);
+    CHECK(n == 0);
+    secret_matches_free(ms);
+    ms = NULL;
+
+    /* redaction correctness (§8.1) */
+    red = secret_redact_text("Authorization: Bearer abcdef1234567890abcdef123456 ok", 53,
+                             "[REDACTED:secret]");
+    CHECK(red != NULL);
+    if (red) {
+        CHECK(strstr(red, "abcdef1234567890") == NULL);
+        CHECK(strstr(red, "[REDACTED:secret]") != NULL);
+        CHECK(strstr(red, "Authorization") != NULL);
+    }
+    free(red);
+    red = NULL;
+
+    /* clean text passes through unchanged */
+    red = secret_redact_text("no secrets here", 15, NULL);
+    CHECK(red != NULL);
+    if (red)
+        CHECK_STR(red, "no secrets here");
+    free(red);
+    red = NULL;
+
+    /* passthrough mode: input never blocked */
+    secret_set_mode("passthrough");
+    CHECK_STR(secret_mode(), "passthrough");
+    CHECK(secret_guard_llm_input(blocked_input, 1) == 0);
+    CHECK(secret_guard_llm_input(clean_input, 1) == 0);
+
+    /* passthrough mode: egress redacted in place */
+    {
+        char *out = xstrdup("token ghp_" "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN done");
+        secret_guard_llm_output(&out);
+        CHECK(out != NULL && strstr(out, "ghp_abcdefghijklmnop") == NULL);
+        CHECK(out != NULL && strstr(out, "[REDACTED:secret]") != NULL);
+        free(out);
+    }
+
+    /* strict mode: HIGH-confidence input blocked, clean passes */
+    CHECK(secret_set_mode("strict") == 0);
+    CHECK_STR(secret_mode(), "strict");
+    CHECK(secret_guard_llm_input(blocked_input, 1) == -1);
+    CHECK(secret_guard_llm_input(clean_input, 1) == 0);
+    CHECK(secret_set_mode("passthrough") == 0);
+    CHECK(secret_set_mode("bogus") == -1);
+
+    /* streaming guard: redacts matches spanning delta boundaries */
+    {
+        char acc[512];
+        void *g = secret_stream_guard_new(stream_sink_append, &acc);
+        size_t off = 0;
+        const char *full = "Authorization: Bearer abcdef1234567890abcdef123456 end";
+        size_t flen = strlen(full);
+        memset(acc, 0, sizeof acc);
+        /* feed in 7-byte deltas — the bearer token spans many boundaries */
+        while (off < flen) {
+            size_t chunk = (flen - off < 7) ? (flen - off) : 7;
+            char piece[8];
+            memcpy(piece, full + off, chunk);
+            piece[chunk] = '\0';
+            secret_stream_guard_cb(piece, g);
+            off += chunk;
+        }
+        secret_stream_guard_free(g); /* flushes the held tail */
+        CHECK(strstr(acc, "abcdef1234567890") == NULL);
+        CHECK(strstr(acc, "[REDACTED:secret]") != NULL);
+        CHECK(strstr(acc, "end") != NULL);
+    }
+
+    /* memory write redaction (§12): store a record with a secret, read it back */
+    {
+        mem_records *rs = mem_records_new("test_v3sec");
+        mem_record r;
+        const mem_record *got;
+        size_t i;
+        if (rs) {
+            for (i = (size_t)mem_records_count(rs); i > 0; i--)
+                mem_records_remove(rs, mem_records_at(rs, (int)(i - 1))->id);
+        }
+        memset(&r, 0, sizeof r);
+        snprintf(r.id, sizeof r.id, "mem_secrettest01");
+        r.content = xstrdup("note: password=Tr0ub4dor&3 leaked into memory");
+        CHECK(mem_records_put(rs, &r) == 0);
+        got = mem_records_find(rs, "mem_secrettest01");
+        CHECK(got != NULL);
+        if (got)
+            CHECK(strstr(got->content, "Tr0ub4dor") == NULL);
+        mem_records_remove(rs, "mem_secrettest01");
+        mem_records_free(rs);
+        free((void *)r.content);
+    }
+
+    /* stats shape */
+    stats = secret_stats_json();
+    CHECK(stats != NULL && strstr(stats, "\"scans\"") != NULL &&
+          strstr(stats, "\"mode\":\"passthrough\"") != NULL);
+    free(stats);
+}
+
 /* ---------- context MMU: explicit budgets with auto-degradation ---------- */
 static void test_context_budget(void) {
     section("context budget");
@@ -4706,6 +4882,7 @@ int main(void) {
     test_record_v3();
     test_promotion_v3();
     test_mmu_v3();
+    test_security();
     test_context_budget();
     test_attention();
     test_sandbox_wasm();

@@ -17,6 +17,7 @@
 #include "memory/record.h"
 #include "memory/vector.h"
 #include "infra/util.h"
+#include "security/secret.h"
 #include "os/os_fs.h"
 #include "os/os_thread.h"
 
@@ -336,7 +337,30 @@ void mem_records_free(mem_records *rs) {
     free(rs);
 }
 
-int mem_records_put(mem_records *rs, const mem_record *r) {
+static int mem_records_put_impl(mem_records *rs, const mem_record *r);
+
+int mem_records_put(mem_records *rs, const mem_record *rin) {
+    mem_record tmp;
+    char *clean;
+    int rc;
+    const mem_record *r = rin;
+
+    if (!rs || !rin || !rin->id[0] || !rin->content)
+        return -1;
+    /* Secret Security Plane (§12): the canonical memory store never holds
+     * plaintext secrets — redact MEDIUM/HIGH matches before storage. */
+    clean = secret_redact_text(rin->content, strlen(rin->content), NULL);
+    if (clean) {
+        tmp = *rin;
+        tmp.content = clean;
+        r = &tmp;
+    }
+    rc = mem_records_put_impl(rs, r);
+    free(clean);
+    return rc;
+}
+
+static int mem_records_put_impl(mem_records *rs, const mem_record *r) {
     if (!rs || !r || !r->id[0] || !r->content)
         return -1;
 

@@ -10,6 +10,7 @@
 #include "os/os_time.h"
 #include "infra/util.h"
 #include "infra/logging.h"
+#include "security/secret.h"
 #include "retrieval/embedding.h"
 #include "retrieval/engine.h"
 #include "im/im.h"
@@ -333,6 +334,16 @@ int init(runtime_ctx *ctx, const config *cfg) {
     if ((cfg && cfg->market_url && *cfg->market_url))
         ctx->market_url = xstrdup(cfg->market_url);
 
+    /* Secret Security Plane: compatibility mode + audit sink
+     * (<state_root>/security_audit.jsonl, one JSONL line per detection) */
+    secret_set_mode(config_get_str(ctx->config, "security.mode", "passthrough"));
+    {
+        char sec_path[600];
+        path_join(sec_path, sizeof sec_path, ctx->state_root, "security_audit.jsonl");
+        secret_audit_open(sec_path);
+    }
+    secret_metrics_bind(ctx->metrics);
+
     /* embedding provider: embedding.provider = local (default) | remote */
     {
         const char *emb_provider = config_get_str(ctx->config, "embedding.provider", "local");
@@ -621,6 +632,7 @@ void runtime_shutdown(runtime_ctx *ctx) {
         http_server_free(ctx->http);
         ctx->http = NULL;
     }
+    secret_audit_close();
 
     if (ctx->scheduler) {
         scheduler_shutdown(ctx->scheduler, 3000);

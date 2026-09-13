@@ -48,6 +48,41 @@
 | §9.6 Prefetch | 未实现 | 需任务 DAG 依赖暴露，后置 |
 | §20.3 SQLite metadata 索引 | 向量镜像 + 内存页表 | 10^4 规模内无需 SQLite |
 
+## 安全平面（SECRET_SECURITY_DDD_V1.0）核心切片已落地
+
+### 5. Secret Security Plane（安全 DDD §5/§7/§8/§12/§13/§22）
+- `include/security/secret.h` + `src/security/secret_detector.c` / `secret_boundary.c`
+- **确定性检测管道**（§7.2，零 LLM 调用）：模式检测（PEM 私钥 / Bearer / Basic / JWT / AWS AKIA / sk-、ghp_、xox、AIza 固定前缀 / password=、api_key= 等 kv 赋值）→ 熵分类器（≥28 字节且 ≥4.5 bits/byte → MEDIUM）→ 置信分级 LOW/MEDIUM/HIGH
+- **误报控制**（§7.3）：placeholder 词表（changeme/${...}/<...>/example/your- 等）+ 长度 + 熵下限；重叠匹配取最强
+- **脱敏**（§8.1）：MEDIUM/HIGH → `[REDACTED:secret]`，LOW 放行
+- **LLM 边界**（§13）：`llm_chat`/`llm_stream` 入口统一拦截——输入扫描（审计），输出整段脱敏，流式输出用 hold-back 窗口（保留 95 字节防跨 delta 泄漏，free 时冲刷）
+- **内存写入防护**（§12）：`mem_records_put` 持久化前脱敏（Markdown 权威存储永不落明文密钥）
+- **兼容模式**（§5）：`passthrough`（默认，只审计+脱敏不阻断）/ `strict`（HIGH 置信输入直接拒绝）；`security.mode` 配置持久化，运行时 `POST /v1/config/security` 切换
+- **审计与观测**（§22）：检测命中逐条写 `<state_root>/security_audit.jsonl`；累计计数器暴露 `GET /v1/security/stats`，可挂 metrics 计数器
+- 单测 `test_security`（+38 断言）：检测命中/误报/脱敏正确性/passthrough 不阻断/strict 阻断/流式跨 delta 泄漏防护/内存写入脱敏/stats 形状
+
+### 已知偏差（安全平面）
+| DDD 条目 | 现状 | 理由 |
+|---|---|---|
+| §27 完整目录（broker/injector/session/provider/lifecycle） | 检测+脱敏+边界+模式+审计 | Phase 0/1 先行（observe → tokenize）；broker/注入/会话代理随 managed 凭据功能后置 |
+| 流式跨 delta 检测 | 95 字节 hold-back | JWT 最长 2048 字节超出窗口时可能漏检前缀；整段（非流式）路径无此限制 |
+| §16 信封加密 / §24 全日志防护 | 审计 JSONL 为明文元数据（不含密钥内容） | 密钥本体从不入审计；加密存储随 Secret Broker 后置 |
+
+## 后续（本任务范围外）
+- 记忆门禁接入 memory facade 的 consolidation 管道（reflection 产出 → mem_candidate）
+- Context MMU 接入 reasoning context 组装路径（替换 HOT/WARM/COLD 旧预算代码）
+- §8.6 Experience → Skill → Plugin 的生成门（build+test+security check）
+- Secret Broker / managed 凭据 / Secure Injection / Session Broker（安全 DDD §9/§10/§11）
+- 检测边界扩展到 Tool args/results、MCP request/response、日志/trace 序列化点（安全 DDD §7.1 剩余清单）
+
+| DDD 条目 | 现状 | 理由 |
+|---|---|---|
+| §7.3 `memory/{user,agent,project,global}/` 目录分域 | 扁平 `records/*.md` + scope 字段 | 单进程个人版扁平存储足够；scope 已是 frontmatter 属性，目录分域可后置 |
+| §7.2 `uri/title/source_uri/supersedes_uri` | id 即 uri；title 已加；supersedes 暂缺 | 冲突消解（supersedes）属于 CONTRADICTED 流程，待后续 |
+| §7.3 JSONL journal 前置层 | 事件仍走 episodic 环 + 巩固管道 | episodic 已承担 append-oriented 层职责 |
+| §9.6 Prefetch | 未实现 | 需任务 DAG 依赖暴露，后置 |
+| §20.3 SQLite metadata 索引 | 向量镜像 + 内存页表 | 10^4 规模内无需 SQLite |
+
 ## 后续（本任务范围外）
 - 记忆门禁接入 memory facade 的 consolidation 管道（reflection 产出 → mem_candidate）
 - Context MMU 接入 reasoning context 组装路径（替换 HOT/WARM/COLD 旧预算代码）

@@ -55,6 +55,8 @@ set(CAGENT_SOURCES
   src/llm/sse.c
   src/llm/router.c
   src/llm/usage.c
+  src/security/secret_detector.c
+  src/security/secret_boundary.c
   src/action/tools.c
   src/action/tool_file.c
   src/action/tool_shell.c
