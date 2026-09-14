@@ -1811,11 +1811,10 @@ function renderChatTabs(list){
   if(list.length) CHAT_TABS_CACHE = list;
   else if(CHAT_TABS_CACHE.length) list = CHAT_TABS_CACHE;
   const ids = list.map(s => s.id || 'default');
-  if(CHAT_NEW_SESSION && !ids.includes(CHAT_SESSION)) ids.push(CHAT_SESSION);
-  /* 只在有真实列表时才纠正激活会话：refresh 中途传空列表（chatSwitchSession/
-   * chatSend 里的 renderChatTabs([])）不应把刚选中的会话重置回 default，
-   * 否则点任何标签都只会显示默认会话，切换永远失效 */
-  if(list.length && !ids.includes(CHAT_SESSION)) CHAT_SESSION = ids[0] || 'default';
+  /* 当前会话的标签必须无条件可见：新建会话在后端注册前、发送首条消息后
+   * 的刷新空档，服务端列表都还不含它——缺失即补上，否则标签会被列表
+   * 重绘"覆盖"掉（新会话闪现后消失，或旧标签全被清空只剩新的）。 */
+  if(!ids.includes(CHAT_SESSION)) ids.push(CHAT_SESSION);
   ids.forEach(id => {
     const info = list.find(s => (s.id || 'default') === id);
     const tab = document.createElement('span');
