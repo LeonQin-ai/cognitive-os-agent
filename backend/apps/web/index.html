@@ -1805,7 +1805,10 @@ function renderChatTabs(list){
   bar.innerHTML = '';
   const ids = list.map(s => s.id || 'default');
   if(CHAT_NEW_SESSION && !ids.includes(CHAT_SESSION)) ids.push(CHAT_SESSION);
-  if(!ids.includes(CHAT_SESSION)) CHAT_SESSION = ids[0] || 'default';
+  /* 只在有真实列表时才纠正激活会话：refresh 中途传空列表（chatSwitchSession/
+   * chatSend 里的 renderChatTabs([])）不应把刚选中的会话重置回 default，
+   * 否则点任何标签都只会显示默认会话，切换永远失效 */
+  if(list.length && !ids.includes(CHAT_SESSION)) CHAT_SESSION = ids[0] || 'default';
   ids.forEach(id => {
     const info = list.find(s => (s.id || 'default') === id);
     const tab = document.createElement('span');
