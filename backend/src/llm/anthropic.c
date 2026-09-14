@@ -89,6 +89,20 @@ static void set_error(llm_response *resp, const char *msg) {
     resp->error = xstrdup(msg);
 }
 
+/* Accumulate an Anthropic usage object {input_tokens, output_tokens}. */
+static void accumulate_usage_obj(llm *llm, cJSON *u) {
+    cJSON *in, *out;
+
+    if (!llm || !u || !cJSON_IsObject(u))
+        return;
+    in = cJSON_GetObjectItemCaseSensitive(u, "input_tokens");
+    out = cJSON_GetObjectItemCaseSensitive(u, "output_tokens");
+    if (in && cJSON_IsNumber(in))
+        llm->usage_in += (long long)in->valuedouble;
+    if (out && cJSON_IsNumber(out))
+        llm->usage_out += (long long)out->valuedouble;
+}
+
 static strmap *anthropic_headers(llm *llm) {
     strmap *hdrs;
 
@@ -146,6 +160,7 @@ static int anthropic_chat(llm *llm, const llm_request *req, llm_response *resp) 
     }
 
     strbuf_init(&sb);
+    accumulate_usage_obj(llm, cJSON_GetObjectItemCaseSensitive(root, "usage"));
     content = cJSON_GetObjectItemCaseSensitive(root, "content");
     if (content && cJSON_IsArray(content)) {
         cJSON *it;
@@ -203,6 +218,16 @@ static int anthropic_stream(llm *llm, const llm_request *req, llm_stream_cb cb, 
         cJSON *root = cJSON_Parse(line);
         if (!root)
             continue;
+        /* usage arrives in message_start (input tokens, inside "message")
+         * and message_delta (cumulative output tokens, at top level) */
+        cJSON *type = cJSON_GetObjectItemCaseSensitive(root, "type");
+        if (type && cJSON_IsString(type)) {
+            if (strcmp(type->valuestring, "message_start") == 0)
+                accumulate_usage_obj(llm, cJSON_GetObjectItemCaseSensitive(
+                                               cJSON_GetObjectItemCaseSensitive(root, "message"), "usage"));
+            else if (strcmp(type->valuestring, "message_delta") == 0)
+                accumulate_usage_obj(llm, cJSON_GetObjectItemCaseSensitive(root, "usage"));
+        }
         /* content_block_delta -> delta.text */
         cJSON *delta = cJSON_GetObjectItemCaseSensitive(root, "delta");
         cJSON *text = delta ? cJSON_GetObjectItemCaseSensitive(delta, "text") : NULL;

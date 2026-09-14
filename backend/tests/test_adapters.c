@@ -29,6 +29,13 @@ static void check_chat(const char *provider) {
     if (resp.error) { printf("    error: %s\n", resp.error); }
     CHECK(resp.content != NULL);
     if (resp.content) CHECK(strstr(resp.content, "file_write") != NULL);
+    /* the mock server reports usage {prompt:42, completion:7} (input/output
+     * tokens for anthropic) — the adapter must accumulate it on the instance */
+    long long tin = 0, tout = 0;
+    llm_usage_totals(llm, &tin, &tout);
+    printf("    usage(provider=%s) in=%lld out=%lld\n", provider, tin, tout);
+    CHECK(tin == 42);
+    CHECK(tout == 7);
     free(resp.content);
     free(resp.error);
     llm_destroy(llm);
@@ -85,10 +92,16 @@ static void check_stream(const char *provider) {
     req.max_tokens = 1024;
     int n = 0;
     int rc = llm_stream(llm, &req, on_delta, &n);
+    /* streaming usage: final SSE chunk (openai) / message_start+message_delta
+     * (anthropic) report usage; totals must be accumulated */
+    long long tin = 0, tout = 0;
+    llm_usage_totals(llm, &tin, &tout);
     llm_destroy(llm);
-    printf("    stream(provider=%s) rc=%d deltas=%d\n", provider, rc, n);
+    printf("    stream(provider=%s) rc=%d deltas=%d usage in=%lld out=%lld\n", provider, rc, n, tin, tout);
     CHECK(rc == 0);
     CHECK(n >= 1);
+    CHECK(tin == 42);
+    CHECK(tout == 7);
 }
 
 int main(void) {

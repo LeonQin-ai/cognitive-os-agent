@@ -2246,6 +2246,18 @@ static void test_agent_loop(void) {
         CHECK(ans && strstr(ans, "[file_read]") != NULL);   /* round 1 observed */
         CHECK(ans && strstr(ans, "[file_edit]") != NULL);   /* round 2 applied */
         CHECK(ans && strstr(ans, "任务完成") != NULL);       /* final text */
+        /* live-progress accessor: after a multi-round run the counters must
+         * reflect the executed tool calls and rounds (tokens stay 0 — the
+         * mock provider never reports usage) */
+        long long el = -1, tin = -1, tout = -1;
+        int rnd = 0, tc = 0;
+        const char *cur_tool = NULL;
+        reasoning_progress(ctx.reasoning, &el, &rnd, &tc, &cur_tool, &tin, &tout);
+        CHECK(el >= 0);
+        CHECK(rnd >= 2);
+        CHECK(tc >= 2);
+        CHECK(cur_tool != NULL);
+        CHECK(tin == 0 && tout == 0);
         free(ans);
         /* the fix really landed on disk */
         char *content = fs_read_file(f);

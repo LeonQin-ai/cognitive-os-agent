@@ -156,6 +156,22 @@ static int h_task_get(const http_request *req, http_response *resp, void *ud) {
         cJSON_AddStringToObject(o, "input", t->input);
     if (t->output)
         cJSON_AddStringToObject(o, "output", t->output);
+    /* live progress of the running agent loop (runs are serialized, so the
+     * reasoning engine's progress IS this task's progress). Polled without
+     * a lock — display-grade accuracy. */
+    if (t->status == TS_RUNNING && ctx->reasoning) {
+        long long elapsed_ms = 0, tin = 0, tout = 0;
+        int round = 0, tool_calls = 0;
+        const char *cur_tool = "";
+        reasoning_progress(ctx->reasoning, &elapsed_ms, &round, &tool_calls, &cur_tool, &tin, &tout);
+        cJSON_AddNumberToObject(o, "elapsed_ms", (double)elapsed_ms);
+        cJSON_AddNumberToObject(o, "round", (double)round);
+        cJSON_AddNumberToObject(o, "tool_calls", (double)tool_calls);
+        if (cur_tool && *cur_tool)
+            cJSON_AddStringToObject(o, "cur_tool", cur_tool);
+        cJSON_AddNumberToObject(o, "tokens_in", (double)tin);
+        cJSON_AddNumberToObject(o, "tokens_out", (double)tout);
+    }
     s = cJSON_PrintUnformatted(o);
     cJSON_Delete(o);
     if (s) {

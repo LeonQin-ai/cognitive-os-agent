@@ -137,6 +137,13 @@ const llm_caps *llm_capabilities(llm *llm) {
     return &unknown_caps;
 }
 
+void llm_usage_totals(const llm *l, long long *tokens_in, long long *tokens_out) {
+    if (tokens_in)
+        *tokens_in = l ? l->usage_in : 0;
+    if (tokens_out)
+        *tokens_out = l ? l->usage_out : 0;
+}
+
 char *llm_chat_simple(llm *llm, const char *system_prompt, const char *user_prompt) {
     return llm_chat_simple_ex(llm, system_prompt, user_prompt, 1024);
 }

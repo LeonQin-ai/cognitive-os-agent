@@ -53,6 +53,9 @@ struct llm {
     char *model;
     void *impl;
     volatile int cancel; /* set by llm_cancel(); checked between stream deltas */
+    /* cumulative token usage from provider "usage" objects (polled without a
+     * lock; drift under concurrent runs is acceptable for a status display) */
+    volatile long long usage_in, usage_out;
 };
 
 /* Provider capability summary (bridge-level; agents pick models by capability
@@ -91,6 +94,11 @@ void llm_cancel(llm *llm);
 
 /* Borrowed capability record for this provider (static, do not free). */
 const llm_caps *llm_capabilities(llm *llm);
+
+/* Cumulative token usage observed from provider "usage" objects across all
+ * chats/streams on this instance (0 if the provider never reported usage).
+ * Values are polled without a lock — a status display may lag slightly. */
+void llm_usage_totals(const llm *llm, long long *tokens_in, long long *tokens_out);
 
 /* Convenience one-shot chat. Returns malloc'd string (NULL on error). */
 char *llm_chat_simple(llm *llm, const char *system_prompt, const char *user_prompt);

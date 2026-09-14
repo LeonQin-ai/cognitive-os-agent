@@ -486,6 +486,14 @@ panels.dashboard = `
     <div class="stat"><div class="num">…</div><div class="lbl">Working memory</div></div>
     <div class="stat"><div class="num">…</div><div class="lbl">Plugins</div></div>
     <div class="stat"><div class="num">…</div><div class="lbl">IM messages</div></div>
+    <div class="stat"><div class="num">…</div><div class="lbl">Tokens in / out</div></div>
+  </div>
+  <div class="card">
+    <div class="card-head">
+      <h2>Token 用量（按模型）</h2>
+      <button class="sec sm" onclick="loadDashboard()">Refresh</button>
+    </div>
+    <div id="dash-tokens">加载中…</div>
   </div>
   <div class="card">
     <div class="card-head">
@@ -1185,11 +1193,13 @@ function mcpDelete(i){
 }
 
 async function loadDashboard(){
-  const [ag, mem, plg, im] = await Promise.all([
+  const [ag, mem, plg, im, llm, usg] = await Promise.all([
     call('GET', '/v1/agents'),
     call('GET', '/v1/memory'),
     call('GET', '/v1/plugins'),
     call('GET', '/v1/im/sessions'),
+    call('GET', '/v1/config/llm'),
+    call('GET', '/v1/usage'),
   ]);
   const st = $('dashStats');
   if(st){
@@ -1198,15 +1208,33 @@ async function loadDashboard(){
     const plugins = (plg.obj && plg.obj.plugins && Array.isArray(plg.obj.plugins)) ? plg.obj.plugins.length
                   : (Array.isArray(plg.obj) ? plg.obj.length : 0);
     const ims     = (im.obj && im.obj.total_messages) ? im.obj.total_messages : 0;
+    const provider = (llm.obj && llm.obj.provider) ? llm.obj.provider : '?';
+    const tot = usg.obj && usg.obj.total ? usg.obj.total : {prompt:0, completion:0};
     const cells = st.querySelectorAll('.stat .num');
-    if(cells.length >= 6){
+    if(cells.length >= 7){
       cells[0].textContent = '0.3.0';
-      cells[1].textContent = 'mock';
+      cells[1].textContent = provider;
       cells[2].textContent = agents;
       cells[3].textContent = wmem;
       cells[4].textContent = plugins;
       cells[5].textContent = ims;
+      cells[6].textContent = (tot.prompt + tot.completion).toLocaleString();
+      cells[6].title = '输入 ' + (tot.prompt || 0).toLocaleString() + ' / 输出 ' + (tot.completion || 0).toLocaleString();
     }
+  }
+  /* 按模型的 token 用量明细（/v1/usage：reasoning 每轮把增量记入账本） */
+  const tk = $('dash-tokens');
+  if(tk){
+    const models = (usg.obj && usg.obj.models) ? usg.obj.models : {};
+    const keys = Object.keys(models);
+    tk.innerHTML = keys.length
+      ? keys.map(k => {
+          const m = models[k];
+          return '<div class="item"><b>' + esc(k) + '</b>' +
+            '<div class="hint">输入 ' + (m.prompt || 0).toLocaleString() + ' · 输出 ' + (m.completion || 0).toLocaleString() +
+            ' · 调用 ' + (m.calls || 0) + ' 次</div></div>';
+        }).join('')
+      : '<span class="muted">（尚无用量记录 — 完成一次对话后显示）</span>';
   }
   const el = $('dash-out');
   if(el){
@@ -1879,6 +1907,22 @@ function chatScroll(){
 let CHAT_BUSY = false;
 let CHAT_ROUND = 0;
 
+/* 任务实时进度行：耗时 / 轮次 / 工具调用 / token —— 数据来自
+ * /v1/tasks/<id> 的 live 进度字段（RUNNING 时返回） */
+function taskProgressText(t){
+  if(!t) return '';
+  const bits = [];
+  if(t.elapsed_ms !== undefined){
+    const sec = Math.floor((t.elapsed_ms || 0) / 1000);
+    bits.push(Math.floor(sec / 60) + ':' + String(sec % 60).padStart(2, '0'));
+  }
+  if(t.round) bits.push('第' + t.round + '轮');
+  if(t.tool_calls !== undefined) bits.push('工具×' + (t.tool_calls || 0) + (t.cur_tool ? '（' + t.cur_tool + '）' : ''));
+  if(t.tokens_in || t.tokens_out)
+    bits.push('tokens ' + (t.tokens_in + t.tokens_out) + '（↑' + t.tokens_in + ' ↓' + t.tokens_out + '）');
+  return bits.join(' · ');
+}
+
 async function chatSend(){
   if(CHAT_BUSY) return;
   const input = $('chat-input');
@@ -1910,7 +1954,8 @@ async function chatSend(){
   for(let i = 0; i < 600; i++){
     const r = await call('GET', '/v1/tasks/' + id);
     const t = r.obj;
-    if(st && st.isConnected) st.textContent = (t && t.status && t.status !== 'DONE') ? ('状态: ' + t.status) : '';
+    if(st && st.isConnected) st.textContent = (t && t.status && t.status !== 'DONE')
+      ? ('状态: ' + t.status + (taskProgressText(t) ? ' · ' + taskProgressText(t) : '')) : '';
     if(t && (t.status === 'DONE' || t.status === 'FAILED' || t.status === 'CANCELLED' || t.status === 'TIMEOUT')){
       setBot((t.output && t.output.trim()) ? t.output : ('(' + t.status + '，无输出)'));
       if(st && st.isConnected) st.textContent = '';
@@ -1968,6 +2013,25 @@ document.addEventListener('keydown', (e) => {
 
 let FLOW_BUSY = false;
 
+/* Flow 面板状态镜像：switchPanel 用 innerHTML 重建面板，DOM 里的任务输入、
+ * DAG 编辑器和执行输出在切换后全部丢失。镜像保存在 JS 变量里，切回面板
+ * 时恢复；后台轮询完成时同步更新镜像，即使人不在 Flow 页也不丢结果。 */
+let FLOW_MIRROR = {task:'', json:'', out:''};
+
+function flowSaveState(){
+  const t = $('flow-task'), j = $('flow-json'), o = $('flow-out');
+  if(t) FLOW_MIRROR.task = t.value;
+  if(j) FLOW_MIRROR.json = j.value;
+  if(o && o.textContent) FLOW_MIRROR.out = o.textContent;
+}
+
+function flowRestoreState(){
+  const t = $('flow-task'), j = $('flow-json'), o = $('flow-out');
+  if(t && FLOW_MIRROR.task) t.value = FLOW_MIRROR.task;
+  if(j && FLOW_MIRROR.json) j.value = FLOW_MIRROR.json;
+  if(o && FLOW_MIRROR.out) o.textContent = FLOW_MIRROR.out;
+}
+
 /* 生成 DAG：LLM 分解总任务 → 填入下方编辑器（不执行，可修改） */
 async function flowGen(){
   const input = $('flow-task'), st = $('flow-gen-status'), ta = $('flow-json');
@@ -1993,6 +2057,7 @@ async function flowAuto(){
   if(!task){ if(st) st.textContent = '请先输入总任务'; return; }
   FLOW_BUSY = true;
   if(st) st.textContent = '已提交（分解→执行→综合）…';
+  FLOW_MIRROR.out = '';
   if(out) out.textContent = '';
   const c = await call('POST', '/v1/orchestrate', {task});
   const id = c.obj && c.obj.id;
@@ -2004,10 +2069,12 @@ async function flowAuto(){
   for(let i = 0; i < 600; i++){
     const r = await call('GET', '/v1/tasks/' + id);
     const t = r.obj;
-    if(st && t && t.status && t.status !== 'DONE') st.textContent = '状态: ' + t.status;
+    if(st && t && t.status && t.status !== 'DONE')
+      st.textContent = '状态: ' + t.status + (taskProgressText(t) ? ' · ' + taskProgressText(t) : '');
     if(t && (t.status === 'DONE' || t.status === 'FAILED' || t.status === 'CANCELLED' || t.status === 'TIMEOUT')){
       FLOW_LAST_OUTPUT = t.output || '';
-      if(out) out.textContent = FLOW_LAST_OUTPUT ? ('—— 综合答案 ——\n' + FLOW_LAST_OUTPUT) : '(无输出)';
+      FLOW_MIRROR.out = FLOW_LAST_OUTPUT ? ('—— 综合答案 ——\n' + FLOW_LAST_OUTPUT) : '(无输出)';
+      if(out) out.textContent = FLOW_MIRROR.out;
       if(st) st.textContent = '';
       FLOW_BUSY = false;
       loadFlow();
@@ -2123,9 +2190,11 @@ async function flowChat(promptPrefix, statusEl){
   for(let i = 0; i < 600; i++){
     const r = await call('GET', '/v1/tasks/' + id);
     const t = r.obj;
-    if(st && t && t.status && t.status !== 'DONE') st.textContent = '状态: ' + t.status;
+    if(st && t && t.status && t.status !== 'DONE')
+      st.textContent = '状态: ' + t.status + (taskProgressText(t) ? ' · ' + taskProgressText(t) : '');
     if(t && (t.status === 'DONE' || t.status === 'FAILED' || t.status === 'CANCELLED' || t.status === 'TIMEOUT')){
-      if(out) out.textContent = (out.textContent ? out.textContent + '\n\n' : '') + '—— LLM 回答 ——\n' + (t.output || '(无输出)');
+      FLOW_MIRROR.out = (FLOW_MIRROR.out ? FLOW_MIRROR.out + '\n\n' : '') + '—— LLM 回答 ——\n' + (t.output || '(无输出)');
+      if(out) out.textContent = FLOW_MIRROR.out;
       if(st) st.textContent = '';
       if(inp) inp.value = '';
       FLOW_BUSY = false;
@@ -2157,6 +2226,7 @@ async function flowRun(){
   if(!dag.nodes){ if(st) st.textContent = '缺少 nodes 数组'; return; }
   FLOW_BUSY = true;
   if(st) st.textContent = '提交中…';
+  FLOW_MIRROR.out = '';
   if(out) out.textContent = '';
   const c = await call('POST', '/v1/flows', dag);
   const id = c.obj && c.obj.id;
@@ -2168,10 +2238,12 @@ async function flowRun(){
   for(let i = 0; i < 600; i++){
     const r = await call('GET', '/v1/tasks/' + id);
     const t = r.obj;
-    if(st) st.textContent = (t && t.status && t.status !== 'DONE') ? ('状态: ' + t.status) : '';
+    if(st) st.textContent = (t && t.status && t.status !== 'DONE')
+      ? ('状态: ' + t.status + (taskProgressText(t) ? ' · ' + taskProgressText(t) : '')) : '';
     if(t && (t.status === 'DONE' || t.status === 'FAILED' || t.status === 'CANCELLED' || t.status === 'TIMEOUT')){
       FLOW_LAST_OUTPUT = t.output || '';
-      if(out) out.textContent = FLOW_LAST_OUTPUT ? ('—— Flow 输出 ——\n' + FLOW_LAST_OUTPUT) : '(无输出)';
+      FLOW_MIRROR.out = FLOW_LAST_OUTPUT ? ('—— Flow 输出 ——\n' + FLOW_LAST_OUTPUT) : '(无输出)';
+      if(out) out.textContent = FLOW_MIRROR.out;
       if(st) st.textContent = '';
       FLOW_BUSY = false;
       loadFlow();
@@ -2410,6 +2482,7 @@ const TITLES = {dashboard:'Dashboard', chat:'对话', agents:'Agents', policy:'�
 let current = 'dashboard';
 
 function switchPanel(p){
+  if(current === 'flow' && p !== 'flow') flowSaveState();
   current = p;
   document.querySelectorAll('#nav button').forEach(b => {
     const on = b.dataset.p === p;
@@ -2419,6 +2492,7 @@ function switchPanel(p){
   const t = $('pageTitle'); if(t) t.textContent = TITLES[p] || p;
   $('content').innerHTML = panels[p];
   load(p);
+  if(p === 'flow') flowRestoreState();
   if(window.innerWidth < 900) toggleSidebar(false);
 }
 

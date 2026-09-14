@@ -89,6 +89,25 @@ static void set_error(llm_response *resp, const char *msg) {
     resp->error = xstrdup(msg);
 }
 
+/* Accumulate usage from an OpenAI-style usage object
+ * {prompt_tokens, completion_tokens}. Present in non-stream responses and
+ * in stream chunks from providers that report usage (often the final one). */
+static void accumulate_usage(llm *llm, cJSON *root) {
+    cJSON *u, *pi, *co;
+
+    if (!llm || !root)
+        return;
+    u = cJSON_GetObjectItemCaseSensitive(root, "usage");
+    if (!u || !cJSON_IsObject(u))
+        return;
+    pi = cJSON_GetObjectItemCaseSensitive(u, "prompt_tokens");
+    co = cJSON_GetObjectItemCaseSensitive(u, "completion_tokens");
+    if (pi && cJSON_IsNumber(pi))
+        llm->usage_in += (long long)pi->valuedouble;
+    if (co && cJSON_IsNumber(co))
+        llm->usage_out += (long long)co->valuedouble;
+}
+
 static char *normalize_base(const char *base, const char **path_out) {
     size_t n;
 
@@ -165,6 +184,7 @@ static int openai_chat(llm *llm, const llm_request *req, llm_response *resp) {
         set_error(resp, "openai: invalid JSON response");
         return -1;
     }
+    accumulate_usage(llm, root);
 
     choices = cJSON_GetObjectItemCaseSensitive(root, "choices");
     msg = choices && choices->child ? cJSON_GetObjectItemCaseSensitive(choices->child, "message") : NULL;
@@ -236,6 +256,7 @@ static int openai_stream(llm *llm, const llm_request *req, llm_stream_cb cb, voi
         cJSON *root = cJSON_Parse(line);
         if (!root)
             continue;
+        accumulate_usage(llm, root);
         cJSON *choices = cJSON_GetObjectItemCaseSensitive(root, "choices");
         cJSON *ch = choices && choices->child ? choices->child : NULL;
         cJSON *delta = ch ? cJSON_GetObjectItemCaseSensitive(ch, "delta") : NULL;

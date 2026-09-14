@@ -613,6 +613,7 @@ int init(runtime_ctx *ctx, const config *cfg) {
          * execution.backend + execution.remote_host */
         rc.exec_backend = config_get_str(ctx->config, "execution.backend", "local");
         rc.exec_host = config_get_str(ctx->config, "execution.remote_host", NULL);
+        rc.usage_acc = ctx->usage;
         ctx->reasoning = reasoning_new(&rc);
         /* wire the multi-provider router into the reasoning loop */
         if (ctx->reasoning && ctx->router)

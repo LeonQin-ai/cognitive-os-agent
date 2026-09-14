@@ -6,6 +6,7 @@
 #pragma once
 #include <stddef.h>
 #include "llm/router.h"
+#include "llm/usage.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -57,6 +58,7 @@ typedef struct reasoning_config {
      * `wsl.exe` / `ssh <exec_host>`; other tools run unchanged on the host. */
     const char *exec_backend; /* NULL = local */
     const char *exec_host;    /* ssh target for "remote" (user@host) */
+    usage *usage_acc;         /* per-model token ledger (may be NULL = no accounting) */
 } reasoning_config;
 
 /* HyDE (Hypothetical Document Embeddings) primitive: ask the LLM for a short
@@ -89,6 +91,14 @@ void reasoning_set_router(reasoning *r, router *router);
 /* Session-memory snapshot as JSON: session notes (task/state/files/errors/
  * worklog), the rolling compaction summary and history size. Caller frees. */
 char *reasoning_session_json(reasoning *r);
+
+/* Live progress snapshot of the current (or most recently finished) run:
+ * elapsed milliseconds, 1-based agent-loop round, executed tool-call count,
+ * the tool currently running ("" between runs) and cumulative LLM token
+ * usage (0 when the provider never reported usage). Fields are polled
+ * without a lock — display-grade accuracy, not exact accounting. */
+void reasoning_progress(reasoning *r, long long *elapsed_ms, int *round, int *tool_calls,
+                        const char **cur_tool, long long *tokens_in, long long *tokens_out);
 
 /* Recent conversation turns as a JSON array of {"q","a"} objects, oldest
  * first (the newest max_turns turns; <=0 = default 20). Thread-safe against

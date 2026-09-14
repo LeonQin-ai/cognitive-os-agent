@@ -221,12 +221,14 @@ static int h_chat(const http_request *req, http_response *resp, void *ud) {
     }
 
     if (stream) {
-        /* SSE stream: one complete delta frame + done terminator */
+        /* SSE stream: one complete delta frame + a usage-bearing final chunk
+         * (real providers report usage on the last chunk) + done terminator */
         strbuf body;
         strbuf_init(&body);
         char buf[8192];
         snprintf(buf, sizeof(buf),
                  "data: {\"choices\":[{\"delta\":{\"content\":%s}}]}\n\n"
+                 "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":42,\"completion_tokens\":7}}\n\n"
                  "data: [DONE]\n\n",
                  escaped ? escaped : "\"\"");
         strbuf_append(&body, buf);
@@ -236,7 +238,8 @@ static int h_chat(const http_request *req, http_response *resp, void *ud) {
         strbuf_free(&body);
     } else {
         http_resp_appendf(resp,
-            "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":%s}}]}",
+            "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":%s}}],"
+            "\"usage\":{\"prompt_tokens\":42,\"completion_tokens\":7}}",
             escaped ? escaped : "\"[]\"");
     }
     free(escaped);
@@ -290,8 +293,12 @@ static int h_messages(const http_request *req, http_response *resp, void *ud) {
         strbuf_init(&body);
         char buf[8192];
         snprintf(buf, sizeof(buf),
+                 "event: message_start\n"
+                 "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":42}}}\n\n"
                  "event: content_block_delta\n"
                  "data: {\"delta\":{\"type\":\"text_delta\",\"text\":%s}}\n\n"
+                 "event: message_delta\n"
+                 "data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":7}}\n\n"
                  "data: [DONE]\n\n",
                  escaped ? escaped : "\"\"");
         strbuf_append(&body, buf);
@@ -300,7 +307,9 @@ static int h_messages(const http_request *req, http_response *resp, void *ud) {
         strbuf_free(&body);
     } else {
         http_resp_appendf(resp,
-            "{\"content\":[{\"type\":\"text\",\"text\":%s}]}", escaped ? escaped : "\"[]\"");
+            "{\"content\":[{\"type\":\"text\",\"text\":%s}],"
+            "\"usage\":{\"input_tokens\":42,\"output_tokens\":7}}",
+            escaped ? escaped : "\"[]\"");
     }
     free(escaped);
     free(plan);

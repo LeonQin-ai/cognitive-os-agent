@@ -155,6 +155,19 @@ struct reasoning {
     char *prev_plan;     /* previous round's raw plan (stall detection) */
     char *round_log;     /* accumulated action results of previous rounds */
     size_t round_log_len, round_log_cap;
+
+    /* live run progress for status display (polled via reasoning_progress):
+     * run start time, executed tool-call count, tool currently running.
+     * Polled from the HTTP thread without a lock — display-grade accuracy. */
+    long long prog_started_ms;
+    int prog_tool_calls;
+    char prog_tool[64];
+
+    /* per-model token ledger (borrowed; may be NULL). Deltas are computed
+     * against the run-start snapshot of llm usage counters so per-round
+     * usage is attributed correctly even across llm swaps. */
+    usage *usage_acc;
+    long long usage_base_in, usage_base_out;
 };
 
 static struct session *session_get(reasoning *r, const char *id) {
@@ -704,6 +717,7 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
 
     for (int i = 0; i < r->n_actions; i++) {
         scheduler_yield(); /* cooperative checkpoint between tool actions */
+        snprintf(r->prog_tool, sizeof(r->prog_tool), "%s", r->actions[i].tool);
         /* policy hard-block: a denied action is intentionally NOT executed.
          * Record the refusal and keep going — a policy refusal is a legitimate
          * outcome, not an infrastructure failure, so it must not fail the
@@ -783,6 +797,7 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
             }
             free(hp);
         }
+        r->prog_tool_calls++;
         int rc;
         if (tx) {
             rc = tx_run(tx, r->actions[i].tool, r->actions[i].args_json);
@@ -993,6 +1008,7 @@ reasoning *reasoning_new(const reasoning_config *cfg) {
     if (r->max_rounds < 0)
         r->max_rounds = 1000000;
     r->hooks = cfg->hooks;
+    r->usage_acc = cfg->usage_acc; /* borrowed per-model token ledger */
     if (r->hooks)
         state_machine_set_hooks(r->sm, r->hooks);
     r->txm = tx_manager_new();
@@ -1344,6 +1360,15 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
         }
     }
 
+    /* run-start snapshot of the active llm's usage counters: per-round
+     * deltas are attributed to this run's model in the ledger */
+    if (r->llm)
+        llm_usage_totals(r->llm, &r->usage_base_in, &r->usage_base_out);
+    else {
+        r->usage_base_in = 0;
+        r->usage_base_out = 0;
+    }
+
     free(r->last_prompt);
     r->last_prompt = xstrdup(prompt);
     r->gen_attempted = 0; /* one auto-generation attempt per run */
@@ -1383,6 +1408,9 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     r->prev_plan = NULL;
     r->stall_nudged = 0;
     r->intent_nudged = 0;
+    r->prog_started_ms = (long long)time_now_ms();
+    r->prog_tool_calls = 0;
+    r->prog_tool[0] = '\0';
 
      /* LLM's plain-text answer (had_plan == 0) */
          /* per-round pipeline output */
@@ -1391,6 +1419,18 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
         free(result);
         result = NULL;
         st = state_machine_run(r->sm, prompt, &result);
+        /* per-round token accounting into the global per-model ledger
+         * (deltas vs the previous snapshot; a mid-run llm swap would produce
+         * a bogus negative delta, hence the guard) */
+        if (r->usage_acc && r->llm) {
+            long long ti = 0, to = 0;
+            llm_usage_totals(r->llm, &ti, &to);
+            if (ti > r->usage_base_in || to > r->usage_base_out)
+                usage_add(r->usage_acc, r->llm->model ? r->llm->model : "?",
+                          (long)(ti - r->usage_base_in), (long)(to - r->usage_base_out));
+            r->usage_base_in = ti;
+            r->usage_base_out = to;
+        }
         if (st != ST_DONE) {
             /* Stage failure (planner LLM error, VERIFY gate, …): the failed
              * stage's diagnostic is an observation the agent must see, not a
@@ -1577,6 +1617,29 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
 }
 
 /* Session-memory snapshot: fixed-section notes + compaction state (JSON). */
+/* Live progress snapshot of the current (or most recently finished) run.
+ * Fields are read without a lock — display-grade accuracy only. tokens are
+ * cumulative LLM usage on the active provider instance. */
+void reasoning_progress(reasoning *r, long long *elapsed_ms, int *round, int *tool_calls,
+                        const char **cur_tool, long long *tokens_in, long long *tokens_out) {
+    long long tin = 0, tout = 0;
+
+    if (elapsed_ms)
+        *elapsed_ms = (r && r->prog_started_ms) ? (long long)time_now_ms() - r->prog_started_ms : 0;
+    if (round)
+        *round = r ? r->round_idx : 0;
+    if (tool_calls)
+        *tool_calls = r ? r->prog_tool_calls : 0;
+    if (cur_tool)
+        *cur_tool = (r && r->prog_tool[0]) ? r->prog_tool : "";
+    if (r && r->llm)
+        llm_usage_totals(r->llm, &tin, &tout);
+    if (tokens_in)
+        *tokens_in = tin;
+    if (tokens_out)
+        *tokens_out = tout;
+}
+
 char *reasoning_session_json(reasoning *r) {
     cJSON *o;
     char *s;
