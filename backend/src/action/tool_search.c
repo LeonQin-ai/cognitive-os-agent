@@ -13,6 +13,9 @@
 #include <string.h>
 #include <stdio.h>
 #include <sys/stat.h>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 #include "cJSON.h"
 
 /* ---------- shared path helpers ---------- */
@@ -28,9 +31,20 @@ static void resolve_root(const tool_ctx *ctx, const char *maybe_rel, char *out, 
 
 static long long file_mtime(const char *path) {
 #ifdef _WIN32
+    /* paths are UTF-8; _stat interprets them as ANSI (GBK) — convert first */
+    int n = MultiByteToWideChar(CP_UTF8, 0, path, -1, NULL, 0);
     struct _stat st;
-    if (_stat(path, &st) != 0)
+    wchar_t *w;
+    if (n <= 0)
         return 0;
+    w = malloc((size_t)n * sizeof(wchar_t));
+    if (!w)
+        return 0;
+    if (MultiByteToWideChar(CP_UTF8, 0, path, -1, w, n) != n || _wstat(w, &st) != 0) {
+        free(w);
+        return 0;
+    }
+    free(w);
     return (long long)st.st_mtime;
 #else
     struct stat st;

@@ -337,6 +337,35 @@ static void test_policy(void) {
 }
 
 /* ---------- service: memory ---------- */
+/* Non-ASCII (UTF-8) paths must work end to end: LLM args carry UTF-8, and
+ * Windows ANSI APIs would mangle them as GBK. Covers write/read/list/mkdirs. */
+static void test_utf8_paths(void) {
+    section("utf8 paths");
+    const char *dir = "state-test/utf8-\xe4\xb8\xad\xe6\x96\x87\xef\xbc\x88\xe7\x9b\xae\xe5\xbd\x95\xef\xbc\x89";
+    const char *file = "state-test/utf8-\xe4\xb8\xad\xe6\x96\x87\xef\xbc\x88\xe7\x9b\xae\xe5\xbd\x95\xef\xbc\x89/"
+                       "\xe8\xae\xbe\xe8\xae\xa1\xe6\x96\x87\xe6\xa1\xa3\xef\xbc\x88\xe5\xa2\x9e\xe5\xbc\xba\xe7\x89\x88\xef\xbc\x89.md";
+    CHECK(fs_mkdirs(dir) == 0);
+    CHECK(fs_is_dir(dir) == 1);
+    CHECK(fs_write_file(file, "zh content", 10) == 0);
+    CHECK(fs_exists(file) == 1);
+    char *data = fs_read_file(file);
+    CHECK(data != NULL);
+    CHECK_STR(data, "zh content");
+    free(data);
+    CHECK(fs_file_size(file) == 10);
+    /* listing returns the UTF-8 name intact */
+    dir_list dl;
+    memset(&dl, 0, sizeof(dl));
+    CHECK(fs_list_dir("state-test", &dl) == 0);
+    int found = 0;
+    for (size_t i = 0; i < dl.count; i++)
+        if (strstr(dl.items[i].name, "\xe4\xb8\xad\xe6\x96\x87") != NULL)
+            found = 1;
+    CHECK(found == 1);
+    fs_list_free(&dl);
+    CHECK(fs_remove(file) == 0);
+}
+
 static void test_memory(void) {
     section("memory");
     const char *root = "state-test/memory";
@@ -4830,6 +4859,7 @@ int main(void) {
     test_scheduler_mn();
     test_state_machine();
     test_policy();
+    test_utf8_paths();
     test_memory();
     test_snapshot_tx();
     test_llm_mock();
