@@ -1747,6 +1747,17 @@ function wsConnect(){
 
 let CHAT_SESSION = 'default';   // 当前激活会话 id（"default" = 共享默认会话）
 let CHAT_NEW_SESSION = false;   // 新会话尚未发出首条消息（后端还没有该 id）
+let CHAT_MSGS = [];             // 当前会话气泡的本地镜像 [{role,text,pending,el}]
+// switchPanel 用 innerHTML 重绘面板，气泡若只活在 DOM 里，切页即丢；
+// 轮询循环持有的节点也会脱离文档导致任务结果更新到空中。所有渲染都从
+// CHAT_MSGS 恢复，进行中的回复以 pending 标记，切回面板后继续显示。
+
+function chatRedraw(){
+  const box = $('chat-box'); if(!box) return;
+  box.innerHTML = '';
+  CHAT_MSGS.forEach(m => { m.el = chatAddBubble(m.role, m.text, false); });
+  chatScroll();
+}
 
 async function loadChat(){
   const box = $('chat-box'); if(!box) return;
@@ -1798,17 +1809,21 @@ function renderChatTabs(list){
 
 async function chatLoadHistory(){
   const box = $('chat-box'); if(!box) return;
+  // 有进行中的回复时不要用服务端历史覆盖本地视图（本轮 q/a 还没入库）
+  if(CHAT_MSGS.some(m => m.pending)){ chatRedraw(); return; }
   const r = await call('GET', '/v1/chat/history?session=' + encodeURIComponent(CHAT_SESSION));
   const turns = (r.obj && Array.isArray(r.obj.turns)) ? r.obj.turns : [];
-  box.innerHTML = '';
-  turns.forEach(t => { if(t.q) chatAddBubble('user', t.q); if(t.a) chatAddBubble('bot', t.a); });
-  chatScroll();
+  CHAT_MSGS = [];
+  turns.forEach(t => { if(t.q) CHAT_MSGS.push({role:'user', text:t.q, pending:false, el:null});
+                       if(t.a) CHAT_MSGS.push({role:'bot',  text:t.a, pending:false, el:null}); });
+  chatRedraw();
 }
 
 async function chatSwitchSession(id){
   if(CHAT_BUSY || id === CHAT_SESSION) return;
   CHAT_SESSION = id;
   CHAT_NEW_SESSION = false;
+  CHAT_MSGS = [];
   renderChatTabs([]);
   await chatLoadHistory();
   loadChatSessions();
@@ -1818,6 +1833,7 @@ function chatNewSession(){
   if(CHAT_BUSY) return;
   CHAT_SESSION = 's-' + Date.now();
   CHAT_NEW_SESSION = true;
+  CHAT_MSGS = [];
   renderChatTabs([]);
   const box = $('chat-box'); if(box) box.innerHTML = '';
   const st = $('chat-status'); if(st) st.textContent = '新会话 ' + CHAT_SESSION + '：发送第一条消息后生效';
@@ -1827,6 +1843,7 @@ async function chatClearSession(id){
   if(CHAT_BUSY) return;
   await call('DELETE', '/v1/chat/sessions/' + encodeURIComponent(id));
   if(id === CHAT_SESSION){
+    CHAT_MSGS = [];
     const box = $('chat-box'); if(box) box.innerHTML = '';
   }
   CHAT_NEW_SESSION = false;
@@ -1834,8 +1851,8 @@ async function chatClearSession(id){
   toast(id === 'default' ? '默认会话已清空' : ('会话 ' + id + ' 已清空'));
 }
 
-function chatAddBubble(role, text){
-  const box = $('chat-box'); if(!box) return;
+function chatAddBubble(role, text, push = true){
+  const box = $('chat-box'); if(!box) return null;
   const wrap = document.createElement('div');
   wrap.style.cssText = role === 'user'
     ? 'align-self:flex-end;max-width:85%;background:var(--accent,#3b82f6);color:#fff;border-radius:12px 12px 2px 12px;padding:8px 12px;white-space:pre-wrap;word-break:break-word'
@@ -1849,6 +1866,7 @@ function chatAddBubble(role, text){
     wrap.textContent = text;
   }
   box.appendChild(wrap);
+  if(push) CHAT_MSGS.push({role, text, pending:false, el:wrap});
   chatScroll();
   return wrap;
 }
@@ -1872,10 +1890,19 @@ async function chatSend(){
   input.value = '';
   chatAddBubble('user', msg);
   const bot = chatAddBubble('bot', '…');
+  // 镜像中的待回复条目：切面板导致 DOM 重建后仍可恢复
+  const entry = CHAT_MSGS[CHAT_MSGS.length - 1];
+  if(entry) entry.pending = true;
+  const live = () => (entry && entry.el && entry.el.isConnected) ? entry.el : (bot && bot.isConnected ? bot : null);
+  const setBot = (text) => {
+    if(entry){ entry.text = text; entry.pending = false; }
+    const el = live();
+    if(el){ const pre = el.querySelector('pre'); if(pre) pre.textContent = text; }
+  };
   const c = await call('POST', '/v1/chat', {message: msg, session: CHAT_SESSION});
   const id = c.obj && c.obj.id;
   if(id === undefined){
-    bot.querySelector('pre').textContent = '提交失败: ' + (c.text || ('HTTP ' + c.status));
+    setBot('提交失败: ' + (c.text || ('HTTP ' + c.status)));
     CHAT_BUSY = false;
     return;
   }
@@ -1883,10 +1910,10 @@ async function chatSend(){
   for(let i = 0; i < 600; i++){
     const r = await call('GET', '/v1/tasks/' + id);
     const t = r.obj;
-    if(st) st.textContent = (t && t.status && t.status !== 'DONE') ? ('状态: ' + t.status) : '';
+    if(st && st.isConnected) st.textContent = (t && t.status && t.status !== 'DONE') ? ('状态: ' + t.status) : '';
     if(t && (t.status === 'DONE' || t.status === 'FAILED' || t.status === 'CANCELLED' || t.status === 'TIMEOUT')){
-      bot.querySelector('pre').textContent = (t.output && t.output.trim()) ? t.output : ('(' + t.status + '，无输出)');
-      if(st) st.textContent = '';
+      setBot((t.output && t.output.trim()) ? t.output : ('(' + t.status + '，无输出)'));
+      if(st && st.isConnected) st.textContent = '';
       CHAT_BUSY = false;
       chatScroll();
       loadChatSessions();
@@ -1894,7 +1921,7 @@ async function chatSend(){
     }
     await new Promise(res => setTimeout(res, 300));
   }
-  bot.querySelector('pre').textContent = '(等待超时，任务仍在后台执行；可在 Tasks 页查看)';
+  setBot('(等待超时，任务仍在后台执行；可在 Tasks 页查看)');
   CHAT_BUSY = false;
 }
 

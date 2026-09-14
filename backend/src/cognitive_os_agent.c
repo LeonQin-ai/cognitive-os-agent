@@ -283,6 +283,7 @@ static void bus_to_ws(const event *ev, void *ud) {
 }
 
 int init(runtime_ctx *ctx, const config *cfg) {
+    int have_cfg_file;
     if (!ctx)
         return -1;
     memset(ctx, 0, sizeof(*ctx));
@@ -305,7 +306,8 @@ int init(runtime_ctx *ctx, const config *cfg) {
     {
         char cfgfile[600];
         path_join(cfgfile, sizeof(cfgfile), ctx->state_root, "cognitive-os-agent.json");
-        if (config_load_file(ctx->config, cfgfile) != 0)
+        have_cfg_file = (config_load_file(ctx->config, cfgfile) == 0);
+        if (!have_cfg_file)
             log_debug("no config file at %s (using defaults + env)", cfgfile);
     }
 
@@ -502,10 +504,41 @@ int init(runtime_ctx *ctx, const config *cfg) {
         path_join(rpath, sizeof(rpath), ctx->state_root, "routes.json");
         router_load_file(ctx->router, rpath);
         /* if no persisted routes existed, seed with the configured provider */
-        if (router_count(ctx->router) == 0)
+        if (router_count(ctx->router) == 0) {
             router_add(ctx->router, provider, provider, base_url, api_key, model, 1.0);
-        else
+        } else {
             router_save_file(ctx->router, rpath); /* normalise/ensure file exists */
+            /* Fresh state dir (no cognitive-os-agent.json) but routes were
+             * configured in a previous session: adopt the top route as the
+             * active LLM instead of falling back to the offline mock default,
+             * and persist it so the next boot starts identically. */
+            if (!have_cfg_file && strcmp(provider, "mock") == 0) {
+                const route *best = router_pick(ctx->router);
+                if (best && best->provider && *best->provider) {
+                    llm *nl = llm_create(best->provider, best->base_url, best->api_key, best->model);
+                    if (nl) {
+                        char cfgfile[600];
+                        llm_destroy(ctx->llm);
+                        ctx->llm = nl;
+                        free(ctx->provider);
+                        ctx->provider = xstrdup(best->provider);
+                        provider = best->provider;
+                        model = best->model;
+                        base_url = best->base_url;
+                        api_key = best->api_key;
+                        config_set_str(ctx->config, "llm.provider", best->provider);
+                        config_set_str(ctx->config, "llm.model", best->model ? best->model : "");
+                        config_set_str(ctx->config, "llm.base_url", best->base_url ? best->base_url : "");
+                        config_set_str(ctx->config, "llm.api_key", best->api_key ? best->api_key : "");
+                        path_join(cfgfile, sizeof(cfgfile), ctx->state_root, "cognitive-os-agent.json");
+                        if (config_save_file(ctx->config, cfgfile) != 0)
+                            log_warn("init: could not persist adopted llm config to %s", cfgfile);
+                        log_info("init: no config file; adopted route as active LLM (provider=%s model=%s)",
+                                 best->provider, best->model ? best->model : "(default)");
+                    }
+                }
+            }
+        }
         /* routing policy: cost / latency / capability:<tag> / round_robin */
         const char *pol = config_get_str(ctx->config, "llm.route_policy", "");
         if (pol && *pol)

@@ -208,7 +208,9 @@ static void clear_actions(reasoning *r) {
 
 /* Copy at most `cap` bytes of s, cutting back to a UTF-8 boundary and adding
  * an ellipsis when truncated. Caller frees. NULL only on OOM. */
-#define HIST_TURN_CAP 500        /* per-turn chars kept in history */
+#define HIST_TURN_CAP 4000       /* per-turn chars kept in history (chat UI
+                                  * serves this store verbatim — 500 made
+                                  * reloaded answers visibly truncated) */
 #define HIST_BUDGET 8192         /* total chars of history injected per run */
 #define LEARN_RESULT_CAP 300     /* chars of a result kept as a memory episode */
 #define COMPACT_SUMMARY_CAP 2000 /* rolling compaction summary cap */
@@ -1145,6 +1147,36 @@ static int looks_like_intent(const char *text) {
     return 0;
 }
 
+/* The model sometimes echoes the injected "[system] …" nudge text at the
+ * start of its reply. Strip that echo (up to the end of a known nudge
+ * sentence) so it never lands in the round log / answer, and so the
+ * same-answer repetition check below compares clean texts. Returns a
+ * pointer into `text` (no allocation). */
+static const char *strip_nudge_echo(const char *text) {
+    static const char *const tails[] = {
+        "\xe8\xaf\xb7\xe7\x9b\xb4\xe6\x8e\xa5\xe7\xbb\x99\xe5\x87\xba\xe6\x9c\x80\xe7\xbb\x88\xe7\xad\x94\xe6\xa1\x88\xe6\x96\x87\xe6\x9c\xac\xe3\x80\x82", /* 请直接给出最终答案文本。 */
+        "\xe5\x90\xa6\xe5\x88\x99\xe7\xbb\x99\xe5\x87\xba\xe4\xb8\x8e\xe4\xb9\x8b\xe5\x89\x8d\xe4\xb8\x8d\xe5\x90\x8c\xe7\x9a\x84\xe4\xb8\x8b\xe4\xb8\x80\xe6\xad\xa5\xe5\x8a\xa8\xe4\xbd\x9c\xe3\x80\x82" /* 否则给出与之前不同的下一步动作。 */
+    };
+    const char *p = text;
+    size_t i;
+    if (!text)
+        return text;
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')
+        p++;
+    if (strncmp(p, "[system]", 8) != 0)
+        return text;
+    for (i = 0; i < sizeof(tails) / sizeof(tails[0]); i++) {
+        const char *mark = strstr(p, tails[i]);
+        if (mark && (size_t)(mark - p) < 1024) {
+            p = mark + strlen(tails[i]);
+            while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')
+                p++;
+            return p;
+        }
+    }
+    return text;
+}
+
 static void record_turn(reasoning *r, const char *q, const char *a) {
     if (!r || !q || !a)
         return;
@@ -1279,6 +1311,7 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     llm *saved = NULL;
     char *final_text = NULL;
     char *result = NULL;
+    char *last_narration = NULL; /* previous narration text (repetition break) */
     int stalled = 0;
     /* compose the answer: everything that happened + the final reply */
     strbuf out;
@@ -1381,10 +1414,22 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
              * aloud, while the model stuck narrating 4 rounds in a row will
              * not recover. After the bound, the text is accepted as the
              * final answer. */
+            const char *txt = strip_nudge_echo(result);
             if (r->max_rounds > 1 && r->intent_nudged < 4 &&
-                r->round_idx < r->max_rounds && looks_like_intent(result)) {
+                r->round_idx < r->max_rounds && looks_like_intent(txt)) {
+                /* the model re-emitted the same narration after the nudge:
+                 * it has now "answered" twice with nothing new to add — the
+                 * text IS the final answer (meta questions with no tool work
+                 * used to bounce here until the round budget ran out,
+                 * concatenating the same answer once per round) */
+                if (last_narration && txt && strcmp(txt, last_narration) == 0) {
+                    final_text = xstrdup(txt);
+                    break;
+                }
                 r->intent_nudged++;
-                round_log_append(r, result && *result ? result : "");
+                free(last_narration);
+                last_narration = xstrdup(txt ? txt : "");
+                round_log_append(r, txt && *txt ? txt : "");
                 round_log_append(r, "[system] 上一轮只输出了意向说明，没有执行任何工具动作。"
                                     "如果任务还需要操作（读写文件、执行命令、生成文件等），"
                                     "请输出 JSON 动作数组并实际执行；"
@@ -1392,7 +1437,7 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
                                     "请直接给出最终答案文本。");
                 continue;
             }
-            final_text = xstrdup(result ? result : "");
+            final_text = xstrdup(txt ? txt : "");
             break;
         }
         /* executed a planned round: keep the observation for the next round */
@@ -1472,6 +1517,7 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
 
     free(final_text);
     free(result);
+    free(last_narration);
     free(r->last_plan_raw);
     r->last_plan_raw = NULL;
     free(r->prev_plan);
