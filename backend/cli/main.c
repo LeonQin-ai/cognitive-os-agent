@@ -37,7 +37,9 @@ static void print_usage(void) {
 
 /* Self-install: copy the running exe to <dir> (default %ProgramFiles%\
  * cognitive-os-agent). Used by the setup wrapper; avoids the fragile
- * "launch a .bat from a temp dir" step that breaks on some systems. */
+ * "launch a .bat from a temp dir" step that breaks on some systems.
+ * Windows-only (self-locate + CopyFile); the dispatch site is guarded too. */
+#ifdef _WIN32
 static int cmd_install(const char *dir_arg) {
     char src[MAX_PATH], dst_dir[MAX_PATH], dst[MAX_PATH];
     const char *pf;
@@ -86,6 +88,7 @@ static int cmd_install(const char *dir_arg) {
     printf("then open http://localhost:8080\n");
     return 0;
 }
+#endif /* _WIN32 */
 
 static int cmd_tools(void) {
     tool_registry *reg = tool_registry_new();

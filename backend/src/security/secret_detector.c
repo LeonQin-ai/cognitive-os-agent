@@ -9,6 +9,9 @@
 #include <stdio.h>
 #include <ctype.h>
 #include <math.h>
+#if !defined(_WIN32)
+#include <strings.h> /* strcasecmp (POSIX) */
+#endif
 
 /* --- helpers -------------------------------------------------------------- */
 
