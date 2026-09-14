@@ -572,11 +572,6 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
     /* UI message loop */
     MSG msg;
     while (GetMessageA(&msg, nullptr, 0, 0) > 0) {
-        /* Forward keyboard accelerators (Ctrl+C/V/X/A/Z, F5, ...) to the
-         * WebView2 controller. Without this the hosted browser never sees
-         * them, so e.g. paste into the page's inputs silently does nothing. */
-        if (g_ctrl && g_ctrl->TranslateAccelerator(&msg) == S_OK)
-            continue;
         TranslateMessage(&msg);
         DispatchMessageA(&msg);
     }
