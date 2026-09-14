@@ -1800,9 +1800,16 @@ async function loadChatSessions(){
   renderChatTabs(list);
 }
 
+/* 最近一次从服务端拿到的会话列表。chatNewSession / chatSwitchSession 刷新
+ * 中途用空列表重绘（避免闪烁/清空），此时用缓存渲染，否则点「＋ 新会话」
+ * 会把所有已有标签覆盖掉，只剩新的待发送会话 */
+let CHAT_TABS_CACHE = [];
+
 function renderChatTabs(list){
   const bar = $('chat-tabs'); if(!bar) return;
   bar.innerHTML = '';
+  if(list.length) CHAT_TABS_CACHE = list;
+  else if(CHAT_TABS_CACHE.length) list = CHAT_TABS_CACHE;
   const ids = list.map(s => s.id || 'default');
   if(CHAT_NEW_SESSION && !ids.includes(CHAT_SESSION)) ids.push(CHAT_SESSION);
   /* 只在有真实列表时才纠正激活会话：refresh 中途传空列表（chatSwitchSession/
