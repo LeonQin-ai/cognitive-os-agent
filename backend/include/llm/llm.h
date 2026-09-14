@@ -28,7 +28,8 @@ typedef struct llm_request {
     size_t num_messages;
     double temperature;
     int max_tokens;
-    int stream; /* set by the streaming entry points */
+    int stream;      /* set by the streaming entry points */
+    long timeout_ms; /* HTTP timeout override; 0 = llm_timeout_ms() default */
 } llm_request;
 
 typedef struct llm_response {
@@ -72,6 +73,10 @@ void llm_destroy(llm *llm);
  * LLM_TIMEOUT_MS / the "llm.timeout_ms" config key). Reasoning models
  * routinely think longer than a minute before the first byte. */
 int llm_timeout_ms(void);
+
+/* Effective timeout for one request: req->timeout_ms when set (>0),
+ * else the global llm_timeout_ms(). */
+int llm_req_timeout_ms(const llm_request *req);
 
 /* Non-streaming chat. resp->content is filled; caller frees. Returns 0 ok, -1 error. */
 int llm_chat(llm *llm, const llm_request *req, llm_response *resp);

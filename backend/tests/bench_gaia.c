@@ -210,7 +210,7 @@ static int vision_task(llm *llm, char **answer_out) {
     free(png);
     if (!b64) return -1;
     llm_message msgs[1] = {
-        {"user", "What is the 4-digit access code shown in the image? Answer with the digits only.", b64, "image/png"},
+        {.role = "user", .content = "What is the 4-digit access code shown in the image? Answer with the digits only.", .image_b64 = b64, .image_mime = "image/png"},
     };
     llm_request req;
     memset(&req, 0, sizeof(req));

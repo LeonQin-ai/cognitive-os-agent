@@ -138,7 +138,7 @@ static int openai_chat(llm *llm, const llm_request *req, llm_response *resp) {
         strmap_set(hdrs, "Authorization", auth);
     }
 
-    r = http_post(base, path, body, "application/json", hdrs, llm_timeout_ms());
+    r = http_post(base, path, body, "application/json", hdrs, llm_req_timeout_ms(req));
     free(body);
     free(base);
     if (hdrs) {
@@ -212,7 +212,7 @@ static int openai_stream(llm *llm, const llm_request *req, llm_stream_cb cb, voi
         strmap_set(hdrs, "Authorization", auth);
     }
 
-    s = sse_start(base, path, body, "application/json", hdrs, llm_timeout_ms());
+    s = sse_start(base, path, body, "application/json", hdrs, llm_req_timeout_ms(req));
     free(body);
     free(base);
     if (hdrs) {

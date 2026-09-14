@@ -15,7 +15,7 @@ static void check_chat(const char *provider) {
     snprintf(url, sizeof(url), "http://localhost:9000");
     llm *llm = llm_create(provider, url, provider[0] == 'a' ? "test-key" : NULL, "test-model");
     if (!llm) { printf("  FAIL create %s\n", provider); g_fail++; return; }
-    llm_message msgs[2] = {{"system", "plan"}, {"user", "创建 adapter.txt 写入内容为 hi"}};
+    llm_message msgs[2] = {{.role = "system", .content = "plan"}, {.role = "user", .content = "创建 adapter.txt 写入内容为 hi"}};
     llm_request req;
     memset(&req, 0, sizeof(req));
     req.messages = msgs;
@@ -42,8 +42,8 @@ static void check_image(const char *provider) {
     llm *llm = llm_create(provider, url, provider[0] == 'a' ? "test-key" : NULL, "test-model");
     if (!llm) { printf("  FAIL create %s\n", provider); g_fail++; return; }
     llm_message msgs[2] = {
-        {"system", "plan", NULL, NULL},
-        {"user", "describe this image", "aGVsbG8td29ybGQ=", "image/png"},
+        {.role = "system", .content = "plan", .image_b64 = NULL, .image_mime = NULL},
+        {.role = "user", .content = "describe this image", .image_b64 = "aGVsbG8td29ybGQ=", .image_mime = "image/png"},
     };
     llm_request req;
     memset(&req, 0, sizeof(req));
@@ -76,7 +76,7 @@ static void check_stream(const char *provider) {
     snprintf(url, sizeof(url), "http://localhost:9000");
     llm *llm = llm_create(provider, url, provider[0] == 'a' ? "test-key" : NULL, "test-model");
     if (!llm) { printf("  FAIL create %s\n", provider); g_fail++; return; }
-    llm_message msgs[2] = {{"system", "plan"}, {"user", "创建 adapter.txt 写入内容为 hi"}};
+    llm_message msgs[2] = {{.role = "system", .content = "plan"}, {.role = "user", .content = "创建 adapter.txt 写入内容为 hi"}};
     llm_request req;
     memset(&req, 0, sizeof(req));
     req.messages = msgs;

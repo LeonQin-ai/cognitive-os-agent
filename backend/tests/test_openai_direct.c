@@ -7,7 +7,7 @@
 int main(void) {
     llm *llm = llm_create("openai", "http://localhost:9000", NULL, "m");
     if (!llm) { printf("create failed\n"); return 1; }
-    llm_message msgs[2] = {{"system", "plan"}, {"user", "创建 note.txt 写入内容为 hello-e2e"}};
+    llm_message msgs[2] = {{.role = "system", .content = "plan"}, {.role = "user", .content = "创建 note.txt 写入内容为 hello-e2e"}};
     llm_request req;
     memset(&req, 0, sizeof(req));
     req.messages = msgs;

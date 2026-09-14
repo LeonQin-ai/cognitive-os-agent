@@ -773,9 +773,12 @@ static void mcp_server_slug(const char *server, char *out, size_t cap) {
 /* Eager discovery budget: bounds boot and the POST /v1/mcp add request even
  * when npx must cold-download. Servers that miss it register their tools on
  * a later sync / agent call and can be re-checked from the UI test button. */
-#define MCP_BOOTSTRAP_TIMEOUT_MS 15000
-/* Total budget across ALL servers during boot sync — see sync_tools. */
-#define MCP_BOOTSTRAP_TOTAL_BUDGET_MS 20000
+#define MCP_BOOTSTRAP_TIMEOUT_MS 4000
+/* Total budget across ALL servers during boot sync — see sync_tools.
+ * Kept well under the desktop shell's connect wait: the boot listener must
+ * come up in seconds so the web console paints immediately; slow servers
+ * (cold npx, hung stdio) register lazily on a later sync / first use. */
+#define MCP_BOOTSTRAP_TOTAL_BUDGET_MS 8000
 
 /* Discover and register tools for ONE connection. Caller holds m->mtx.
  * Returns the number of tools registered. */
@@ -895,10 +898,10 @@ int mcp_manager_sync_tools(mcp_manager *m, struct tool_registry *reg) {
     if (!m || !reg)
         return -1;
     mutex_lock(&m->mtx);
-    /* Global boot budget: N dead servers at 15s each used to stall startup
-     * for N*15s before the HTTP listener came up (3 broken entries = 44s,
-     * longer than the desktop shell's connect timeout). Once the budget is
-     * spent, remaining servers are skipped — their tools register lazily on
+    /* Global boot budget: N dead servers at 4s each used to stall startup
+     * for N*15s before the HTTP listener came up (3 broken entries once cost
+     * 44s, longer than the desktop shell's connect timeout). Once the budget
+     * is spent, remaining servers are skipped — their tools register lazily on
      * first use, exactly like a cold npx that misses bootstrap. */
     for (size_t i = 0; i < m->count; i++) {
         int tmo = budget_left < MCP_BOOTSTRAP_TIMEOUT_MS ? (int)budget_left : MCP_BOOTSTRAP_TIMEOUT_MS;

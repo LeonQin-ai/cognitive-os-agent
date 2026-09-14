@@ -443,8 +443,8 @@ static void test_llm_mock(void) {
     CHECK(llm != NULL);
     if (!llm) return;
     llm_message msgs[] = {
-        {"system", "you are a planner"},
-        {"user", "创建 test/note.txt 写入内容为 hello"},
+        {.role = "system", .content = "you are a planner"},
+        {.role = "user", .content = "创建 test/note.txt 写入内容为 hello"},
     };
     llm_request req;
     memset(&req, 0, sizeof(req));
@@ -484,7 +484,7 @@ static void test_llm_caps_cancel(void) {
         const llm_caps *c = llm_capabilities(mock);
         CHECK(c && c->stream == 1 && c->tools == 0 && c->max_ctx == 8192);
         /* cancel set before the stream aborts it between deltas */
-        llm_message msgs[] = {{"user", "hello"}};
+        llm_message msgs[] = {{.role = "user", .content = "hello"}};
         llm_request req;
         memset(&req, 0, sizeof(req));
         req.messages = msgs;
@@ -4311,7 +4311,7 @@ static void test_llm_adapters_http(void) {
     thread_t *ts = thread_create(th_serve_http, sse_srv);
     time_sleep_ms(300);
 
-    const llm_message msgs[1] = { { "user", "hi" } };
+    const llm_message msgs[1] = { {.role = "user", .content = "hi"} };
     llm_request q;
     memset(&q, 0, sizeof q);
     q.messages = msgs; q.num_messages = 1; q.max_tokens = 32;

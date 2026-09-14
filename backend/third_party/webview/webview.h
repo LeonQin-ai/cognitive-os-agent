@@ -1142,6 +1142,11 @@ using browser_engine = detail::cocoa_wkwebview_engine;
 #endif
 
 namespace webview {
+
+// Global environment options pointer for WebView2. Set before creating a webview
+// to pass additional browser arguments (e.g. --disable-features=...).
+extern ICoreWebView2EnvironmentOptions *g_webview2_env_options;
+
 namespace detail {
 
 using msg_cb_t = std::function<void(const std::string)>;
@@ -2370,7 +2375,7 @@ private:
 
     m_com_handler->set_attempt_handler([&] {
       return m_webview2_loader.create_environment_with_options(
-          nullptr, userDataFolder, nullptr, m_com_handler);
+          nullptr, userDataFolder, webview::g_webview2_env_options, m_com_handler);
     });
     m_com_handler->try_create_environment();
 
@@ -2466,6 +2471,9 @@ private:
 } // namespace detail
 
 using browser_engine = detail::win32_edge_engine;
+
+// Definition of the global environment options pointer.
+ICoreWebView2EnvironmentOptions *g_webview2_env_options = nullptr;
 
 } // namespace webview
 

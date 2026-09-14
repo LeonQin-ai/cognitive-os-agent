@@ -118,7 +118,7 @@ static int anthropic_chat(llm *llm, const llm_request *req, llm_response *resp) 
     hdrs = anthropic_headers(llm);
 
     r =
-        http_post(impl_of(llm)->base_url, ANTHROPIC_PATH, body, "application/json", hdrs, llm_timeout_ms());
+        http_post(impl_of(llm)->base_url, ANTHROPIC_PATH, body, "application/json", hdrs, llm_req_timeout_ms(req));
     free(body);
     if (hdrs) {
         strmap_free(hdrs);
@@ -180,7 +180,7 @@ static int anthropic_stream(llm *llm, const llm_request *req, llm_stream_cb cb, 
     hdrs = anthropic_headers(llm);
 
     s =
-        sse_start(impl_of(llm)->base_url, ANTHROPIC_PATH, body, "application/json", hdrs, llm_timeout_ms());
+        sse_start(impl_of(llm)->base_url, ANTHROPIC_PATH, body, "application/json", hdrs, llm_req_timeout_ms(req));
     free(body);
     if (hdrs) {
         strmap_free(hdrs);

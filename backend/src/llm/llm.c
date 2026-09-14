@@ -46,6 +46,15 @@ int llm_timeout_ms(void) {
     return 300000;
 }
 
+/* Per-request timeout: bounded callers (e.g. the UI connection test, which
+ * runs inline on the single-threaded HTTP server) set req->timeout_ms so a
+ * dead provider cannot freeze every other request for the full 5 minutes. */
+int llm_req_timeout_ms(const llm_request *req) {
+    if (req && req->timeout_ms > 0)
+        return (int)req->timeout_ms;
+    return llm_timeout_ms();
+}
+
 /* Secret Security Plane ingress check (§13): scan every message content.
  * Passthrough mode only audits; strict mode blocks HIGH-confidence secrets
  * before the request leaves the trust boundary. */
@@ -138,8 +147,8 @@ char *llm_chat_simple_ex(llm *llm, const char *system_prompt, const char *user_p
     char *out;
 
     llm_message msgs[2] = {
-        {"system", system_prompt ? system_prompt : ""},
-        {"user", user_prompt ? user_prompt : ""},
+        {.role = "system", .content = system_prompt ? system_prompt : ""},
+        {.role = "user", .content = user_prompt ? user_prompt : ""},
     };
     req.messages = msgs;
     req.num_messages = 2;

@@ -1503,12 +1503,16 @@ static int h_config_llm_test(const http_request *req, http_response *resp, void 
         return 0;
     }
 
-    llm_message msgs[2] = {{"system", "You are a concise assistant. Reply in at most a few words."},
-                               {"user", "Reply with exactly the word: ok"}};
+    llm_message msgs[2] = {{.role = "system", .content = "You are a concise assistant. Reply in at most a few words."},
+                           {.role = "user", .content = "Reply with exactly the word: ok"}};
     lreq.messages = msgs;
     lreq.num_messages = 2;
     lreq.temperature = 0.2;
     lreq.max_tokens = 64;
+    /* Bound the probe: this handler runs inline on the single-threaded HTTP
+     * server, so the default 5-minute LLM timeout would freeze every other
+     * UI request while an unreachable provider drains the clock. */
+    lreq.timeout_ms = 20000;
     rc = llm_chat(nl, &lreq, &lr);
     o = cJSON_CreateObject();
     ok = (rc == 0 && lr.content && *lr.content);

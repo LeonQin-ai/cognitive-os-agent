@@ -66,6 +66,9 @@
 extern "C" {
 #endif
 
+/* retrieval engine index (retrieval/engine.h); pointer-only here */
+struct ret_index;
+
 /* Returns the library version string, e.g. "0.1.0". */
 const char *version(void);
 
@@ -97,7 +100,7 @@ typedef struct runtime_ctx {
     state_store *state;             /* Context layer: KV/Task/Agent state slots */
     memory_service *memsvc;         /* Memory Service interface (default backend) */
     attention *attention;           /* salience scoring / focus */
-    struct index *index;            /* code index over session-touched files */
+    struct ret_index *index;        /* code index over session-touched files */
     im *im;                         /* instant messaging store (sessions/messages) */
     im_channels *channels;          /* external messaging channel adapters (IM bridge) */
     struct thread_t *channels_poller; /* telegram inbound poller thread */

@@ -313,8 +313,8 @@ static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_act
     }
 
     llm_message msgs[2] = {
-        {"system", sys_prompt ? sys_prompt : SYS_PROMPT},
-        {"user", prompt},
+        {.role = "system", .content = sys_prompt ? sys_prompt : SYS_PROMPT},
+        {.role = "user", .content = prompt},
     };
     req.messages = msgs;
     req.num_messages = 2;
