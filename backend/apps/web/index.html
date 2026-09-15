@@ -1957,7 +1957,30 @@ async function chatSend(){
   const setBot = (text) => {
     if(entry){ entry.text = text; entry.pending = false; }
     const el = live();
-    if(el){ const pre = el.querySelector('pre'); if(pre) pre.textContent = text; }
+    if(el){
+      const pre = el.querySelector('pre');
+      if(pre){
+        pre.textContent = text;
+        pre.style.opacity = '';
+        pre.style.maxHeight = '';
+        pre.style.overflowY = '';
+      }
+    }
+  };
+  /* issue #5: 执行过程实时可见 — 轮询期间把 agent 循环的过程日志（思考/工具链）
+   * 显示在气泡里，结束后恢复为最终答案 */
+  const showLive = (t) => {
+    const el = live();
+    if(!el || !t || !t.process_log) return;
+    const pre = el.querySelector('pre');
+    if(!pre) return;
+    const lines = t.process_log.split('\n').filter(l => l.trim());
+    if(!lines.length) return;
+    pre.textContent = lines.slice(-25).join('\n');
+    pre.style.opacity = '0.7';
+    pre.style.maxHeight = '260px';
+    pre.style.overflowY = 'auto';
+    chatScroll();
   };
   const c = await call('POST', '/v1/chat', {message: msg, session: CHAT_SESSION});
   const id = c.obj && c.obj.id;
@@ -1972,6 +1995,7 @@ async function chatSend(){
     const t = r.obj;
     chatStatus((t && t.status && t.status !== 'DONE')
       ? ('状态: ' + t.status + (taskProgressText(t) ? ' · ' + taskProgressText(t) : '')) : '');
+    if(t && t.status === 'RUNNING') showLive(t);
     if(t && (t.status === 'DONE' || t.status === 'FAILED' || t.status === 'CANCELLED' || t.status === 'TIMEOUT')){
       setBot((t.output && t.output.trim()) ? t.output : ('(' + t.status + '，无输出)'));
       chatStatus('');

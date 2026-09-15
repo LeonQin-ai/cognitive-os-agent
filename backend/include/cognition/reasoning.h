@@ -106,6 +106,12 @@ void reasoning_progress_ex(reasoning *r, long long *elapsed_ms, int *round, int 
                            const char **cur_tool, long long *tokens_in, long long *tokens_out,
                            long long *llm_ms, long long *tool_ms, int *llm_calls);
 
+/* Tail of the live round log (narrations and executed action results of the
+ * running agent loop) for progress display — at most max_bytes taken from
+ * the end, cut at a line boundary. Caller frees; NULL when nothing logged
+ * yet. Polled without a lock — display-grade accuracy. */
+char *reasoning_round_log_tail(reasoning *r, size_t max_bytes);
+
 /* Recent conversation turns as a JSON array of {"q","a"} objects, oldest
  * first (the newest max_turns turns; <=0 = default 20). Thread-safe against
  * a concurrent run. Caller frees. */

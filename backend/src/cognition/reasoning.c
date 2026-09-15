@@ -1613,8 +1613,28 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     /* issue #4: the ANSWER carries only executed-action observations —
      * narration rounds and [system] nudges live in round_log (model context)
      * and must not appear in the user-visible output. */
-    if (r->obs_log_len > 0)
-        strbuf_append(&out, r->obs_log);
+    /* issue #8: a long run accumulates many 6K-capped entries and the raw
+     * obs_log can reach hundreds of K in the answer. Cap the final output
+     * with head+tail elision (recent actions matter most), line-boundary
+     * safe, with an explicit marker for the elided middle. */
+    if (r->obs_log_len > 0) {
+        const size_t head_keep = 2048, tail_keep = 12288;
+        if (r->obs_log_len <= head_keep + tail_keep + 64) {
+            strbuf_append(&out, r->obs_log);
+        } else {
+            size_t head = head_keep, tail_start = r->obs_log_len - tail_keep;
+            while (head < r->obs_log_len && r->obs_log[head] != '\n')
+                head++;
+            if (head < r->obs_log_len)
+                head++;
+            while (tail_start > 0 && r->obs_log[tail_start - 1] != '\n')
+                tail_start--;
+            strbuf_append_n(&out, r->obs_log, head);
+            strbuf_appendf(&out, "\n...[%zu bytes of earlier action results elided]...\n",
+                           tail_start - head);
+            strbuf_append_n(&out, r->obs_log + tail_start, r->obs_log_len - tail_start);
+        }
+    }
     if (final_text && *final_text) {
         if (r->round_log_len > 0)
             strbuf_append(&out, "\n回答: ");
@@ -1724,6 +1744,24 @@ void reasoning_progress_ex(reasoning *r, long long *elapsed_ms, int *round, int 
         *tool_ms = r ? r->prog_tool_ms : 0;
     if (llm_calls)
         *llm_calls = r ? r->prog_llm_calls : 0;
+}
+
+char *reasoning_round_log_tail(reasoning *r, size_t max_bytes) {
+    size_t start;
+
+    if (!r || !r->round_log || r->round_log_len == 0 || max_bytes == 0)
+        return NULL;
+    start = 0;
+    if (r->round_log_len > max_bytes) {
+        start = r->round_log_len - max_bytes;
+        /* snap forward to the next line boundary so a cut never lands
+         * mid-line; a leading partial line is display noise */
+        while (start < r->round_log_len && r->round_log[start] != '\n')
+            start++;
+        if (start < r->round_log_len)
+            start++;
+    }
+    return xstrdup(r->round_log + start);
 }
 
 char *reasoning_session_json(reasoning *r) {

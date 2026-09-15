@@ -176,6 +176,13 @@ static int h_task_get(const http_request *req, http_response *resp, void *ud) {
         cJSON_AddNumberToObject(o, "llm_ms", (double)llm_ms);
         cJSON_AddNumberToObject(o, "llm_calls", (double)llm_calls);
         cJSON_AddNumberToObject(o, "tool_ms", (double)tool_ms);
+        /* issue #5: live tail of the agent loop's narration/action log so the
+         * UI can show thinking + tool chain while the run is in flight */
+        char *tail = reasoning_round_log_tail(ctx->reasoning, 8192);
+        if (tail) {
+            cJSON_AddStringToObject(o, "process_log", tail);
+            free(tail);
+        }
     }
     s = cJSON_PrintUnformatted(o);
     cJSON_Delete(o);
