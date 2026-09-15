@@ -319,11 +319,13 @@ static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_act
     req.messages = msgs;
     req.num_messages = 2;
     req.temperature = 0.2;
-    req.max_tokens = 8192; /* tool plans carrying file_write content (whole
-                            * scripts) need real headroom; 2048 truncated the
-                            * JSON mid-string and the plan was lost. Thinking
-                            * models spend reasoning tokens from the same
-                            * budget; 1024 risked empty-content replies */
+    req.max_tokens = 32768; /* tool plans carrying file_write content (whole
+                             * scripts) need real headroom; 2048 truncated the
+                             * JSON mid-string and the plan was lost. Thinking
+                             * models spend reasoning tokens from the SAME
+                             * budget — glm-5.3-flash burned all 8192 on
+                             * invisible reasoning and returned empty content
+                             * (finish_reason=length) */
     rc = llm_chat(llm, &req, &resp);
     free(sys_prompt);
     if (rc != 0) {

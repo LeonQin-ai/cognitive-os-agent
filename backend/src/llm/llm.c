@@ -145,7 +145,9 @@ void llm_usage_totals(const llm *l, long long *tokens_in, long long *tokens_out)
 }
 
 char *llm_chat_simple(llm *llm, const char *system_prompt, const char *user_prompt) {
-    return llm_chat_simple_ex(llm, system_prompt, user_prompt, 1024);
+    /* thinking models spend reasoning tokens from the SAME output budget:
+     * 1024 left zero visible content for glm-5.3-flash (finish_reason=length) */
+    return llm_chat_simple_ex(llm, system_prompt, user_prompt, 16384);
 }
 
 char *llm_chat_simple_ex(llm *llm, const char *system_prompt, const char *user_prompt, int max_tokens) {
@@ -160,7 +162,7 @@ char *llm_chat_simple_ex(llm *llm, const char *system_prompt, const char *user_p
     req.messages = msgs;
     req.num_messages = 2;
     req.temperature = 0.2;
-    req.max_tokens = max_tokens > 0 ? max_tokens : 1024;
+    req.max_tokens = max_tokens > 0 ? max_tokens : 16384;
     if (llm_chat(llm, &req, &resp) != 0) {
         if (resp.error) {
             log_warn("llm: chat_simple failed: %s", resp.error);
