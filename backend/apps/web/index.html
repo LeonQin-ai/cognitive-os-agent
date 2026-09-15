@@ -2497,15 +2497,30 @@ async function addRoute(){
   loadModels();
 }
 
-/* Test an arbitrary LLM config against the live provider (no switch, no persist). */
+/* Test an arbitrary LLM config against the live provider (no switch, no persist).
+ * 异步探测：POST 启动后台线程探测，GET 轮询结果 — 探测期间服务器可以继续
+ * 响应其他界面请求（issue #3）。 */
 async function testLlm(body, prefix){
   prefix = prefix || '';
   const st = $('models-stat'); if(st) st.textContent = '测试 ' + prefix + '请求中…';
-  const r = await call('POST', '/v1/config/llm/test', body);
-  const ok = r.obj && r.obj.ok;
-  const detail = (r.obj && (r.obj.reply || r.obj.error)) || ('HTTP ' + r.status);
-  if(st) st.textContent = (ok ? '✅ 测试通过 ' : '❌ 测试失败 ') + prefix + detail;
-  toast((ok ? '✅ ' : '❌ ') + prefix + detail);
+  const r0 = await call('POST', '/v1/config/llm/test', body);
+  if(r0.obj && r0.obj.error && !r0.obj.pending){
+    if(st) st.textContent = '❌ 测试失败 ' + prefix + r0.obj.error;
+    toast('❌ ' + prefix + r0.obj.error);
+    return;
+  }
+  for(let i = 0; i < 120; i++){ /* 最多等 60s */
+    const r = await call('GET', '/v1/config/llm/test');
+    const o = r.obj || {};
+    if(o.pending){ await new Promise(res => setTimeout(res, 500)); continue; }
+    const ok = o.ok;
+    const detail = o.reply || o.error || ('HTTP ' + r.status);
+    if(st) st.textContent = (ok ? '✅ 测试通过 ' : '❌ 测试失败 ') + prefix + detail;
+    toast((ok ? '✅ ' : '❌ ') + prefix + detail);
+    return;
+  }
+  if(st) st.textContent = '❌ 测试超时 ' + prefix;
+  toast('❌ ' + prefix + '测试超时');
 }
 
 async function testRoute(i){

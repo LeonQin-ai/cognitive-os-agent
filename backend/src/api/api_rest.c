@@ -19,6 +19,7 @@
 #include "os/os_proc.h"
 #include "os/os_fs.h"
 #include "os/os_socket.h"
+#include "os/os_thread.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -1522,21 +1523,93 @@ static int h_config_snapshot(const http_request *req, http_response *resp, void 
 
 /* Validate that a given provider/base_url/model/api_key actually answers a chat
  * request. Creates a throwaway LLM instance (never persisted, never made active)
- * and returns {ok, reply|error}. Lets the UI prove a config works before saving. */
-static int h_config_llm_test(const http_request *req, http_response *resp, void *ud) {
-    runtime_ctx *ctx = (runtime_ctx *)ud;
-    char *b;
-    cJSON *root;
+ * and returns {ok, reply|error}. Lets the UI prove a config works before saving.
+ *
+ * issue #3: the probe runs on a detached worker thread — this handler runs on
+ * the single-threaded HTTP server, and an inline probe (up to its 20s timeout)
+ * froze every other UI request, leaving all other panels "loading". POST starts
+ * the probe and returns {pending:true}; GET polls for the verdict. */
+typedef struct {
+    char provider[40];
+    char base_url[256];
+    char api_key[256];
+    char model[128];
+} llm_probe_cfg;
+
+static struct {
+    volatile int phase; /* 0 = idle, 1 = running, 2 = result ready */
+    int ok;
+    char reply[512];
+} g_llm_probe;
+
+static void llm_probe_thread(void *arg) {
+    llm_probe_cfg *cfg = (llm_probe_cfg *)arg;
     llm *nl;
     llm_request lreq = {0};
     llm_response lr = {0};
     int rc;
+
+    nl = llm_create(cfg->provider, cfg->base_url, cfg->api_key, cfg->model);
+    if (!nl) {
+        snprintf(g_llm_probe.reply, sizeof(g_llm_probe.reply),
+                 "unknown provider (mock|openai|anthropic)");
+        g_llm_probe.ok = 0;
+    } else {
+        llm_message msgs[2] = {{.role = "system", .content = "You are a concise assistant. Reply in at most a few words."},
+                               {.role = "user", .content = "Reply with exactly the word: ok"}};
+        lreq.messages = msgs;
+        lreq.num_messages = 2;
+        lreq.temperature = 0.2;
+        /* thinking models burn reasoning tokens from the SAME output budget:
+         * 64 left zero visible content for glm-5.3-flash (issue found live) */
+        lreq.max_tokens = 2048;
+        lreq.timeout_ms = 20000;
+        rc = llm_chat(nl, &lreq, &lr);
+        g_llm_probe.ok = (rc == 0 && lr.content && *lr.content);
+        if (lr.content && *lr.content)
+            snprintf(g_llm_probe.reply, sizeof(g_llm_probe.reply), "%s", lr.content);
+        else if (lr.error)
+            snprintf(g_llm_probe.reply, sizeof(g_llm_probe.reply), "%s", lr.error);
+        else
+            snprintf(g_llm_probe.reply, sizeof(g_llm_probe.reply),
+                     "no response from provider (check base_url / model / api_key / network)");
+        free(lr.content);
+        free(lr.error);
+        llm_destroy(nl);
+    }
+    free(cfg);
+    g_llm_probe.phase = 2; /* result fields written before the flag — display-grade */
+}
+
+static int h_config_llm_test(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
+    char *b;
+    cJSON *root;
     cJSON *o;
-    int ok;
     char *s;
 
     if (!authz_ok(ctx, req, resp))
         return 0;
+
+    if (strcmp(req->method, "GET") == 0) {
+        o = cJSON_CreateObject();
+        if (g_llm_probe.phase == 1) {
+            cJSON_AddBoolToObject(o, "pending", 1);
+        } else if (g_llm_probe.phase == 2) {
+            cJSON_AddBoolToObject(o, "pending", 0);
+            cJSON_AddBoolToObject(o, "ok", g_llm_probe.ok);
+            cJSON_AddStringToObject(o, g_llm_probe.ok ? "reply" : "error", g_llm_probe.reply);
+            g_llm_probe.phase = 0; /* consumed; the next POST starts a fresh probe */
+        } else {
+            cJSON_AddBoolToObject(o, "pending", 0);
+        }
+        s = cJSON_PrintUnformatted(o);
+        cJSON_Delete(o);
+        http_resp_json(resp, s ? s : "{\"pending\":false}");
+        free(s);
+        return 0;
+    }
+
     b = body_str(req);
     root = b ? cJSON_Parse(b) : NULL;
     free(b);
@@ -1547,52 +1620,50 @@ static int h_config_llm_test(const http_request *req, http_response *resp, void 
         http_resp_json(resp, "{\"error\":\"body must be a JSON object\"}");
         return 0;
     }
-
-    const char *provider = json_str(root, "provider");
-    if (!provider || !*provider) {
+    if (!json_str(root, "provider") || !*json_str(root, "provider")) {
         cJSON_Delete(root);
         resp->status = 400;
         http_resp_json(resp, "{\"error\":\"need 'provider' string\"}");
         return 0;
     }
-
-    nl =
-        llm_create(provider, json_str(root, "base_url"), json_str(root, "api_key"), json_str(root, "model"));
-    if (!nl) {
+    if (g_llm_probe.phase == 1) {
         cJSON_Delete(root);
-        resp->status = 400;
-        http_resp_json(resp, "{\"ok\":false,\"error\":\"unknown provider (mock|openai|anthropic)\"}");
+        http_resp_json(resp, "{\"pending\":true,\"running\":true}");
         return 0;
     }
 
-    llm_message msgs[2] = {{.role = "system", .content = "You are a concise assistant. Reply in at most a few words."},
-                           {.role = "user", .content = "Reply with exactly the word: ok"}};
-    lreq.messages = msgs;
-    lreq.num_messages = 2;
-    lreq.temperature = 0.2;
-    lreq.max_tokens = 64;
-    /* Bound the probe: this handler runs inline on the single-threaded HTTP
-     * server, so the default 5-minute LLM timeout would freeze every other
-     * UI request while an unreachable provider drains the clock. */
-    lreq.timeout_ms = 20000;
-    rc = llm_chat(nl, &lreq, &lr);
-    o = cJSON_CreateObject();
-    ok = (rc == 0 && lr.content && *lr.content);
-    cJSON_AddBoolToObject(o, "ok", ok);
-    if (lr.content)
-        cJSON_AddStringToObject(o, "reply", lr.content);
-    else if (lr.error)
-        cJSON_AddStringToObject(o, "error", lr.error);
-    else
-        cJSON_AddStringToObject(o, "error", "no response from provider (check base_url / model / api_key / network)");
-    s = cJSON_PrintUnformatted(o);
-    http_resp_json(resp, s ? s : "{\"ok\":false}");
-    free(s);
-    cJSON_Delete(o);
-    free(lr.content);
-    free(lr.error);
-    llm_destroy(nl);
-    cJSON_Delete(root);
+    {
+        llm_probe_cfg *cfg = (llm_probe_cfg *)calloc(1, sizeof(llm_probe_cfg));
+        thread_t *th;
+        const char *v;
+
+        if (!cfg) {
+            cJSON_Delete(root);
+            resp->status = 500;
+            http_resp_json(resp, "{\"error\":\"out of memory\"}");
+            return 0;
+        }
+        v = json_str(root, "provider");
+        snprintf(cfg->provider, sizeof(cfg->provider), "%s", v ? v : "");
+        v = json_str(root, "base_url");
+        snprintf(cfg->base_url, sizeof(cfg->base_url), "%s", v ? v : "");
+        v = json_str(root, "api_key");
+        snprintf(cfg->api_key, sizeof(cfg->api_key), "%s", v ? v : "");
+        v = json_str(root, "model");
+        snprintf(cfg->model, sizeof(cfg->model), "%s", v ? v : "");
+        cJSON_Delete(root);
+        g_llm_probe.phase = 1;
+        th = thread_create(llm_probe_thread, cfg);
+        if (!th) {
+            g_llm_probe.phase = 0;
+            free(cfg);
+            resp->status = 500;
+            http_resp_json(resp, "{\"error\":\"failed to start probe thread\"}");
+            return 0;
+        }
+        thread_detach(th);
+    }
+    http_resp_json(resp, "{\"ok\":true,\"pending\":true}");
     return 0;
 }
 
@@ -3825,6 +3896,7 @@ int api_attach(runtime_ctx *ctx) {
     http_server_route(ctx->http, "GET", "/v1/config/llm", h_config_llm_get, ctx);
     http_server_route(ctx->http, "POST", "/v1/config/llm", h_config_llm, ctx);
     http_server_route(ctx->http, "POST", "/v1/config/llm/test", h_config_llm_test, ctx);
+    http_server_route(ctx->http, "GET", "/v1/config/llm/test", h_config_llm_test, ctx);
     http_server_route(ctx->http, "GET", "/v1/config/snapshot", h_config_snapshot_get, ctx);
     http_server_route(ctx->http, "POST", "/v1/config/snapshot", h_config_snapshot, ctx);
     http_server_route(ctx->http, "GET", "/v1/security/stats", h_security_stats, ctx);
