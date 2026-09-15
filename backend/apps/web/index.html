@@ -1937,7 +1937,9 @@ async function chatSend(){
   const input = $('chat-input');
   const msg = input ? input.value.trim() : '';
   if(!msg) return;
-  const st = $('chat-status');
+  /* 状态行每次现查：轮询期间对话面板可能被 innerHTML 重建，捕获的旧节点
+   * 已脱离文档；现查则切回面板后进度行继续实时刷新 */
+  const chatStatus = (text) => { const el = $('chat-status'); if(el) el.textContent = text; };
   CHAT_BUSY = true;
   CHAT_ROUND = 0;
   input.value = '';
@@ -1963,11 +1965,11 @@ async function chatSend(){
   for(let i = 0; i < 600; i++){
     const r = await call('GET', '/v1/tasks/' + id);
     const t = r.obj;
-    if(st && st.isConnected) st.textContent = (t && t.status && t.status !== 'DONE')
-      ? ('状态: ' + t.status + (taskProgressText(t) ? ' · ' + taskProgressText(t) : '')) : '';
+    chatStatus((t && t.status && t.status !== 'DONE')
+      ? ('状态: ' + t.status + (taskProgressText(t) ? ' · ' + taskProgressText(t) : '')) : '');
     if(t && (t.status === 'DONE' || t.status === 'FAILED' || t.status === 'CANCELLED' || t.status === 'TIMEOUT')){
       setBot((t.output && t.output.trim()) ? t.output : ('(' + t.status + '，无输出)'));
-      if(st && st.isConnected) st.textContent = '';
+      chatStatus('');
       CHAT_BUSY = false;
       chatScroll();
       loadChatSessions();
@@ -2023,9 +2025,19 @@ document.addEventListener('keydown', (e) => {
 let FLOW_BUSY = false;
 
 /* Flow 面板状态镜像：switchPanel 用 innerHTML 重建面板，DOM 里的任务输入、
- * DAG 编辑器和执行输出在切换后全部丢失。镜像保存在 JS 变量里，切回面板
- * 时恢复；后台轮询完成时同步更新镜像，即使人不在 Flow 页也不丢结果。 */
-let FLOW_MIRROR = {task:'', json:'', out:''};
+ * DAG 编辑器、执行输出和状态行（耗时/token/工具统计）在切换后全部丢失。
+ * 镜像保存在 JS 变量里，切回面板时恢复；轮询循环通过 flowStatus 同时写
+ * 镜像和（若存在的）当前 DOM 元素，即使人不在 Flow 页统计也不丢。 */
+let FLOW_MIRROR = {task:'', json:'', out:'', gen:'', run:'', follow:''};
+
+/* which: 'gen-status' | 'status' | 'follow-status'（对应 flow-*-status 元素）。
+ * 每次都用 $() 现查元素：面板被 innerHTML 重建后，轮询循环里捕获的旧节点
+ * 已脱离文档，写它无效；现查则切回面板后统计行继续实时刷新。 */
+function flowStatus(which, text){
+  FLOW_MIRROR[which === 'gen-status' ? 'gen' : which === 'follow-status' ? 'follow' : 'run'] = text;
+  const el = $('flow-' + which);
+  if(el) el.textContent = text;
+}
 
 function flowSaveState(){
   const t = $('flow-task'), j = $('flow-json'), o = $('flow-out');
@@ -2038,6 +2050,9 @@ function flowRestoreState(){
   const t = $('flow-task'), j = $('flow-json'), o = $('flow-out');
   if(t && FLOW_MIRROR.task) t.value = FLOW_MIRROR.task;
   if(j && FLOW_MIRROR.json) j.value = FLOW_MIRROR.json;
+  flowStatus('gen-status', FLOW_MIRROR.gen || '');
+  flowStatus('status', FLOW_MIRROR.run || '');
+  flowStatus('follow-status', FLOW_MIRROR.follow || '');
   if(o && FLOW_MIRROR.out) o.textContent = FLOW_MIRROR.out;
 }
 
@@ -2046,14 +2061,14 @@ async function flowGen(){
   const input = $('flow-task'), st = $('flow-gen-status'), ta = $('flow-json');
   if(!input || !st) return;
   const task = input.value.trim();
-  if(!task){ st.textContent = '请先输入总任务'; return; }
-  st.textContent = '分解中…';
+  if(!task){ flowStatus('gen-status', '请先输入总任务'); return; }
+  flowStatus('gen-status', '分解中…');
   const c = await call('POST', '/v1/flows/decompose', {task});
   if(c.status === 200 && c.obj && c.obj.dag){
     if(ta) ta.value = JSON.stringify(c.obj.dag, null, 2);
-    st.textContent = '已生成，可在下方修改后执行';
+    flowStatus('gen-status', '已生成，可在下方修改后执行');
   } else {
-    st.textContent = '生成失败: ' + ((c.obj && c.obj.error) || c.text || ('HTTP ' + c.status));
+    flowStatus('gen-status', '生成失败: ' + ((c.obj && c.obj.error) || c.text || ('HTTP ' + c.status)));
   }
 }
 
@@ -2063,35 +2078,35 @@ async function flowAuto(){
   const input = $('flow-task'), st = $('flow-gen-status'), out = $('flow-out');
   if(!input) return;
   const task = input.value.trim();
-  if(!task){ if(st) st.textContent = '请先输入总任务'; return; }
+  if(!task){ flowStatus('gen-status', '请先输入总任务'); return; }
   FLOW_BUSY = true;
-  if(st) st.textContent = '已提交（分解→执行→综合）…';
+  flowStatus('gen-status', '已提交（分解→执行→综合）…');
   FLOW_MIRROR.out = '';
   if(out) out.textContent = '';
   const c = await call('POST', '/v1/orchestrate', {task});
   const id = c.obj && c.obj.id;
   if(id === undefined){
-    if(st) st.textContent = '提交失败: ' + (c.text || ('HTTP ' + c.status));
+    flowStatus('gen-status', '提交失败: ' + (c.text || ('HTTP ' + c.status)));
     FLOW_BUSY = false;
     return;
   }
   for(let i = 0; i < 600; i++){
     const r = await call('GET', '/v1/tasks/' + id);
     const t = r.obj;
-    if(st && t && t.status && t.status !== 'DONE')
-      st.textContent = '状态: ' + t.status + (taskProgressText(t) ? ' · ' + taskProgressText(t) : '');
+    if(t && t.status && t.status !== 'DONE')
+      flowStatus('gen-status', '状态: ' + t.status + (taskProgressText(t) ? ' · ' + taskProgressText(t) : ''));
     if(t && (t.status === 'DONE' || t.status === 'FAILED' || t.status === 'CANCELLED' || t.status === 'TIMEOUT')){
       FLOW_LAST_OUTPUT = t.output || '';
       FLOW_MIRROR.out = FLOW_LAST_OUTPUT ? ('—— 综合答案 ——\n' + FLOW_LAST_OUTPUT) : '(无输出)';
-      if(out) out.textContent = FLOW_MIRROR.out;
-      if(st) st.textContent = '';
+      if(out && out.isConnected) out.textContent = FLOW_MIRROR.out;
+      flowStatus('gen-status', '');
       FLOW_BUSY = false;
       loadFlow();
       return;
     }
     await new Promise(res => setTimeout(res, 300));
   }
-  if(st) st.textContent = '(等待超时，任务仍在后台执行)';
+  flowStatus('gen-status', '(等待超时，任务仍在后台执行)');
   FLOW_BUSY = false;
 }
 
@@ -2180,38 +2195,41 @@ let FLOW_LAST_OUTPUT = '';
 /* 把 Flow 执行结果 + 追加指令交给 LLM（走 /v1/chat，保留对话上下文） */
 async function flowChat(promptPrefix, statusEl){
   if(FLOW_BUSY) return;
-  const out = $('flow-out'), st = statusEl, inp = $('flow-follow');
+  const out = $('flow-out'), inp = $('flow-follow');
+  /* 综合答案写 flow-status，继续对话写 flow-follow-status —— 轮询期间面板
+   * 可能被重建，状态一律走 flowStatus（镜像 + 现查元素） */
+  const which = (statusEl && statusEl.id === 'flow-follow-status') ? 'follow-status' : 'status';
   if(!FLOW_LAST_OUTPUT){
-    if(st) st.textContent = '请先执行 Flow（或加载黑板记录）';
+    flowStatus(which, '请先执行 Flow（或加载黑板记录）');
     return;
   }
   FLOW_BUSY = true;
-  if(st) st.textContent = 'LLM 处理中…';
+  flowStatus(which, 'LLM 处理中…');
   const tail = FLOW_LAST_OUTPUT.length > 3000 ? FLOW_LAST_OUTPUT.slice(-3000) : FLOW_LAST_OUTPUT;
   const message = promptPrefix.replace('%RESULTS%', tail) + ((inp && inp.value.trim()) ? ('\n\n' + inp.value.trim()) : '');
   const c = await call('POST', '/v1/chat', {message, session: CHAT_SESSION});
   const id = c.obj && c.obj.id;
   if(id === undefined){
-    if(st) st.textContent = '提交失败: ' + (c.text || ('HTTP ' + c.status));
+    flowStatus(which, '提交失败: ' + (c.text || ('HTTP ' + c.status)));
     FLOW_BUSY = false;
     return;
   }
   for(let i = 0; i < 600; i++){
     const r = await call('GET', '/v1/tasks/' + id);
     const t = r.obj;
-    if(st && t && t.status && t.status !== 'DONE')
-      st.textContent = '状态: ' + t.status + (taskProgressText(t) ? ' · ' + taskProgressText(t) : '');
+    if(t && t.status && t.status !== 'DONE')
+      flowStatus(which, '状态: ' + t.status + (taskProgressText(t) ? ' · ' + taskProgressText(t) : ''));
     if(t && (t.status === 'DONE' || t.status === 'FAILED' || t.status === 'CANCELLED' || t.status === 'TIMEOUT')){
       FLOW_MIRROR.out = (FLOW_MIRROR.out ? FLOW_MIRROR.out + '\n\n' : '') + '—— LLM 回答 ——\n' + (t.output || '(无输出)');
-      if(out) out.textContent = FLOW_MIRROR.out;
-      if(st) st.textContent = '';
+      if(out && out.isConnected) out.textContent = FLOW_MIRROR.out;
+      flowStatus(which, '');
       if(inp) inp.value = '';
       FLOW_BUSY = false;
       return;
     }
     await new Promise(res => setTimeout(res, 300));
   }
-  if(st) st.textContent = '(等待超时，任务仍在后台执行)';
+  flowStatus(which, '(等待超时，任务仍在后台执行)');
   FLOW_BUSY = false;
 }
 
@@ -2234,33 +2252,33 @@ async function flowRun(){
   catch(e){ if(st) st.textContent = 'JSON 解析失败: ' + e.message; return; }
   if(!dag.nodes){ if(st) st.textContent = '缺少 nodes 数组'; return; }
   FLOW_BUSY = true;
-  if(st) st.textContent = '提交中…';
+  flowStatus('status', '提交中…');
   FLOW_MIRROR.out = '';
   if(out) out.textContent = '';
   const c = await call('POST', '/v1/flows', dag);
   const id = c.obj && c.obj.id;
   if(id === undefined){
-    if(st) st.textContent = '提交失败: ' + (c.obj && c.obj.error ? c.obj.error : (c.text || ('HTTP ' + c.status)));
+    flowStatus('status', '提交失败: ' + (c.obj && c.obj.error ? c.obj.error : (c.text || ('HTTP ' + c.status))));
     FLOW_BUSY = false;
     return;
   }
   for(let i = 0; i < 600; i++){
     const r = await call('GET', '/v1/tasks/' + id);
     const t = r.obj;
-    if(st) st.textContent = (t && t.status && t.status !== 'DONE')
-      ? ('状态: ' + t.status + (taskProgressText(t) ? ' · ' + taskProgressText(t) : '')) : '';
+    flowStatus('status', (t && t.status && t.status !== 'DONE')
+      ? ('状态: ' + t.status + (taskProgressText(t) ? ' · ' + taskProgressText(t) : '')) : '');
     if(t && (t.status === 'DONE' || t.status === 'FAILED' || t.status === 'CANCELLED' || t.status === 'TIMEOUT')){
       FLOW_LAST_OUTPUT = t.output || '';
       FLOW_MIRROR.out = FLOW_LAST_OUTPUT ? ('—— Flow 输出 ——\n' + FLOW_LAST_OUTPUT) : '(无输出)';
-      if(out) out.textContent = FLOW_MIRROR.out;
-      if(st) st.textContent = '';
+      if(out && out.isConnected) out.textContent = FLOW_MIRROR.out;
+      flowStatus('status', '');
       FLOW_BUSY = false;
       loadFlow();
       return;
     }
     await new Promise(res => setTimeout(res, 300));
   }
-  if(st) st.textContent = '(等待超时，任务仍在后台执行)';
+  flowStatus('status', '(等待超时，任务仍在后台执行)');
   FLOW_BUSY = false;
 }
 
