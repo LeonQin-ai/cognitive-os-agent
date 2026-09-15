@@ -96,6 +96,23 @@ static tool_result *file_write_exec(const tool *self, const tool_ctx *ctx, const
 
     const char *content = (content_j && cJSON_IsString(content_j)) ? content_j->valuestring : "";
 
+    /* Models sometimes emit a literal "..." placeholder instead of the real
+     * file body (it even overwrote a generated header once). Reject the
+     * obvious cases so the loop retries with actual content. */
+    {
+        size_t clen = strlen(content);
+        int only_dots = clen > 0;
+        for (size_t i = 0; i < clen && only_dots; i++)
+            if (content[i] != '.' && content[i] != '\n' && content[i] != '\r')
+                only_dots = 0;
+        if (only_dots || (clen < 32 && strstr(content, "..."))) {
+            cJSON_Delete(args);
+            return tool_result_new(0,
+                                   "file_write: content looks like a placeholder (\"...\") — "
+                                   "rewrite the action with the FULL file content");
+        }
+    }
+
     rp = resolve_path(ctx, path_j->valuestring);
     /* ensure parent dir */
     slash = strrchr(rp, '/');

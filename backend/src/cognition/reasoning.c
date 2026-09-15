@@ -1164,6 +1164,24 @@ static int looks_like_intent(const char *text) {
     for (size_t i = 0; i < sizeof(marks) / sizeof(marks[0]); i++)
         if (strstr(text, marks[i]))
             return 1;
+    /* A long fenced code block in a narration-style answer usually means the
+     * model is dumping file content as text instead of writing it to disk
+     * with file_write — treat that as intent too and let the nudge redirect
+     * it. Genuine final answers rarely embed 15+ lines of fenced code. */
+    {
+        const char *f1 = strstr(text, "```");
+        if (f1) {
+            const char *f2 = strstr(f1 + 3, "```");
+            if (f2) {
+                int nl = 0;
+                for (const char *p = f1; p < f2 && nl < 15; p++)
+                    if (*p == '\n')
+                        nl++;
+                if (nl >= 15)
+                    return 1;
+            }
+        }
+    }
     return 0;
 }
 
@@ -1477,6 +1495,8 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
                 round_log_append(r, "[system] 上一轮只输出了意向说明，没有执行任何工具动作。"
                                     "如果任务还需要操作（读写文件、执行命令、生成文件等），"
                                     "请输出 JSON 动作数组并实际执行；"
+                                    "如果回答里包含应该写入文件的代码，用 file_write 把它写到磁盘，"
+                                    "不要把代码当文本贴在回答里；"
                                     "如果任务已经完成或确实无需任何工具，"
                                     "请直接给出最终答案文本。");
                 continue;
