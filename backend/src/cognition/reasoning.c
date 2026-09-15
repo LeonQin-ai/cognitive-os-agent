@@ -155,6 +155,8 @@ struct reasoning {
     char *prev_plan;     /* previous round's raw plan (stall detection) */
     char *round_log;     /* accumulated action results of previous rounds */
     size_t round_log_len, round_log_cap;
+    char *obs_log;       /* user-facing executed-action log (no narrations/nudges) */
+    size_t obs_log_len, obs_log_cap;
 
     /* live run progress for status display (polled via reasoning_progress):
      * run start time, executed tool-call count, tool currently running.
@@ -243,9 +245,9 @@ static void clear_actions(reasoning *r) {
 #define ROUND_LOG_HEAD_KEEP 4096
 #define ROUND_LOG_TAIL_KEEP 1536
 
-/* Append text to the round log, tail-keeping: once past ROUND_LOG_CAP the
- * oldest half is dropped so recent action results always stay available. */
-static void round_log_append(reasoning *r, const char *text) {
+/* Append text to a growable log buffer, tail-keeping: once past ROUND_LOG_CAP
+ * the oldest half is dropped so recent action results always stay available. */
+static void log_append(char **buf, size_t *blen, size_t *bcap, const char *text) {
     const char *add = text;
     char *elided = NULL;
     size_t len;
@@ -274,44 +276,61 @@ static void round_log_append(reasoning *r, const char *text) {
         }
     }
 
-    need = r->round_log_len + len + 1;
-    if (need > r->round_log_cap) {
-        size_t ncap = r->round_log_cap ? r->round_log_cap * 2 : 2048;
+    need = *blen + len + 1;
+    if (need > *bcap) {
+        size_t ncap = *bcap ? *bcap * 2 : 2048;
         while (ncap < need)
             ncap *= 2;
-        char *nb = (char *)realloc(r->round_log, ncap);
+        char *nb = (char *)realloc(*buf, ncap);
         if (!nb) {
             free(elided);
             return;
         }
-        r->round_log = nb;
-        r->round_log_cap = ncap;
+        *buf = nb;
+        *bcap = ncap;
     }
 
-    memcpy(r->round_log + r->round_log_len, add, len + 1);
-    r->round_log_len += len;
+    memcpy(*buf + *blen, add, len + 1);
+    *blen += len;
     free(elided);
-    if (r->round_log_len > ROUND_LOG_CAP) {
-        size_t half = r->round_log_len / 2;
-        memmove(r->round_log, r->round_log + half, r->round_log_len - half + 1);
-        r->round_log_len -= half;
+    if (*blen > ROUND_LOG_CAP) {
+        size_t half = *blen / 2;
+        memmove(*buf, *buf + half, *blen - half + 1);
+        *blen -= half;
         /* tell the model the log was folded, so it knows earlier results
          * may be gone and can re-read if truly needed */
         static const char fold_note[] =
             "(earlier action results were folded away to fit the budget)\n";
         size_t nlen = strlen(fold_note);
-        if (r->round_log_cap > nlen + r->round_log_len + 1) {
-            memmove(r->round_log + nlen, r->round_log, r->round_log_len + 1);
-            memcpy(r->round_log, fold_note, nlen);
-            r->round_log_len += nlen;
+        if (*bcap > nlen + *blen + 1) {
+            memmove(*buf + nlen, *buf, *blen + 1);
+            memcpy(*buf, fold_note, nlen);
+            *blen += nlen;
         }
     }
+}
+
+/* Model-facing log: everything the next planning round must see (action
+ * results, narrations, system nudges). */
+static void round_log_append(reasoning *r, const char *text) {
+    log_append(&r->round_log, &r->round_log_len, &r->round_log_cap, text);
+}
+
+/* User-facing observation log: only rounds that actually executed something
+ * (or failed to). Narration rounds and system nudges are prompt bookkeeping
+ * and must NOT leak into the final answer (GitHub issue #4: a simple "你好"
+ * ended up as 4× repeated narration + nudge spam). */
+static void obs_log_append(reasoning *r, const char *text) {
+    log_append(&r->obs_log, &r->obs_log_len, &r->obs_log_cap, text);
 }
 
 static void round_log_reset(reasoning *r) {
     if (r->round_log)
         r->round_log[0] = '\0';
     r->round_log_len = 0;
+    if (r->obs_log)
+        r->obs_log[0] = '\0';
+    r->obs_log_len = 0;
 }
 
 /* session notes: append "line\n" to a fixed-size buffer, keeping the TAIL
@@ -1042,6 +1061,7 @@ void reasoning_free(reasoning *r) {
     free(r->last_plan_raw);
     free(r->prev_plan);
     free(r->round_log);
+    free(r->obs_log);
     attention_free(r->attention);
     state_machine_free(r->sm);
     evaluator_free(r->eval);
@@ -1461,6 +1481,7 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
              * retry with a fixed path). Terminal only when the budget is
              * exhausted, and the report stays in the answer either way. */
             round_log_append(r, result && *result ? result : "(run failed)");
+            obs_log_append(r, result && *result ? result : "(run failed)");
             if (r->round_idx >= r->max_rounds)
                 break;
             continue;
@@ -1506,6 +1527,7 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
         }
         /* executed a planned round: keep the observation for the next round */
         round_log_append(r, result ? result : "");
+        obs_log_append(r, result ? result : "");
         r->intent_nudged = 0; /* narration recovered: reset the consecutive bound */
         /* stall detection: the LLM proposed the exact same plan twice — no
          * progress is possible. Give ONE recovery nudge ("the actions already
@@ -1565,8 +1587,11 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     }
 
     strbuf_init(&out);
-    if (r->round_log_len > 0)
-        strbuf_append(&out, r->round_log);
+    /* issue #4: the ANSWER carries only executed-action observations —
+     * narration rounds and [system] nudges live in round_log (model context)
+     * and must not appear in the user-visible output. */
+    if (r->obs_log_len > 0)
+        strbuf_append(&out, r->obs_log);
     if (final_text && *final_text) {
         if (r->round_log_len > 0)
             strbuf_append(&out, "\n回答: ");
