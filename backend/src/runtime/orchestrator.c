@@ -22,6 +22,23 @@
 
 #define ORCH_MAX_STEPS 4
 
+/* llm_chat_simple + book the token delta into the per-model usage ledger.
+ * Decompose/merge call the LLM directly, bypassing the reasoning loop's
+ * per-round accounting — without this they would never show on the dashboard. */
+static char *llm_simple_booked(runtime_ctx *ctx, const char *sys, const char *user) {
+    long long bin = 0, bout = 0, tin = 0, tout = 0;
+    char *out;
+
+    if (!ctx || !ctx->llm)
+        return NULL;
+    llm_usage_totals(ctx->llm, &bin, &bout);
+    out = llm_chat_simple(ctx->llm, sys, user);
+    llm_usage_totals(ctx->llm, &tin, &tout);
+    if (ctx->usage && (tin > bin || tout > bout))
+        usage_add(ctx->usage, ctx->llm->model ? ctx->llm->model : "?", (long)(tin - bin), (long)(tout - bout));
+    return out;
+}
+
 /* Roster lines for the decompose prompt, from the pool snapshot JSON.
  * Returns malloc'd text ("name (role)" per line) or NULL. */
 static char *roster_text(runtime_ctx *ctx) {
@@ -239,7 +256,7 @@ static int decompose_task(runtime_ctx *ctx, const char *task, char (*agents)[64]
         char *user = (char *)malloc(ulen);
         if (user) {
             snprintf(user, ulen, "可用 agent:\n%s\n任务: %s", roster, task);
-            char *raw = llm_chat_simple(ctx->llm, sys, user);
+            char *raw = llm_simple_booked(ctx, sys, user);
             free(user);
             if (raw) {
                 log_info("orchestrator: decompose raw: %s", raw);
@@ -368,7 +385,7 @@ int orchestrate(runtime_ctx *ctx, const char *task, char **answer, char **trace_
                       "若某步骤 status 不是 ok，或其结果只是意向说明而没有任何实际执行证据"
                       "（没有工具输出、没有验证过文件生成、没有真实测试运行结果），"
                       "必须如实报告该部分未完成，并说明缺失了什么，不得声称成功。";
-        final = llm_chat_simple(ctx->llm, sys2, merged);
+        final = llm_simple_booked(ctx, sys2, merged);
     }
 
     if (!final || !*final)

@@ -244,6 +244,7 @@ static reasoning *flow_reasoning_new(runtime_ctx *ctx) {
     rc.mcp = ctx->mcp;
     rc.state_root = ctx->state_root;
     rc.max_rounds = ctx->config ? (int)config_get_int(ctx->config, "reasoning.max_rounds", 32) : 32;
+    rc.usage_acc = ctx->usage; /* per-node token accounting lands on the dashboard */
     return reasoning_new(&rc);
 }
 
