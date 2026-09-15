@@ -56,6 +56,9 @@ struct llm {
     /* cumulative token usage from provider "usage" objects (polled without a
      * lock; drift under concurrent runs is acceptable for a status display) */
     volatile long long usage_in, usage_out;
+    /* invisible thinking tokens reported by thinking models (subset of
+     * usage_out; issue #7 — shown separately on the dashboard) */
+    volatile long long usage_reason;
 };
 
 /* Provider capability summary (bridge-level; agents pick models by capability
@@ -99,6 +102,9 @@ const llm_caps *llm_capabilities(llm *llm);
  * chats/streams on this instance (0 if the provider never reported usage).
  * Values are polled without a lock — a status display may lag slightly. */
 void llm_usage_totals(const llm *llm, long long *tokens_in, long long *tokens_out);
+/* Cumulative invisible thinking tokens reported by the provider (0 when the
+ * model is not a thinking model). Subset of usage_out. */
+long long llm_usage_reason_total(const llm *llm);
 
 /* Convenience one-shot chat. Returns malloc'd string (NULL on error). */
 char *llm_chat_simple(llm *llm, const char *system_prompt, const char *user_prompt);

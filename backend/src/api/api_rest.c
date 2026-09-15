@@ -160,10 +160,11 @@ static int h_task_get(const http_request *req, http_response *resp, void *ud) {
      * reasoning engine's progress IS this task's progress). Polled without
      * a lock — display-grade accuracy. */
     if (t->status == TS_RUNNING && ctx->reasoning) {
-        long long elapsed_ms = 0, tin = 0, tout = 0;
-        int round = 0, tool_calls = 0;
+        long long elapsed_ms = 0, tin = 0, tout = 0, llm_ms = 0, tool_ms = 0;
+        int round = 0, tool_calls = 0, llm_calls = 0;
         const char *cur_tool = "";
-        reasoning_progress(ctx->reasoning, &elapsed_ms, &round, &tool_calls, &cur_tool, &tin, &tout);
+        reasoning_progress_ex(ctx->reasoning, &elapsed_ms, &round, &tool_calls, &cur_tool, &tin, &tout,
+                              &llm_ms, &tool_ms, &llm_calls);
         cJSON_AddNumberToObject(o, "elapsed_ms", (double)elapsed_ms);
         cJSON_AddNumberToObject(o, "round", (double)round);
         cJSON_AddNumberToObject(o, "tool_calls", (double)tool_calls);
@@ -171,6 +172,10 @@ static int h_task_get(const http_request *req, http_response *resp, void *ud) {
             cJSON_AddStringToObject(o, "cur_tool", cur_tool);
         cJSON_AddNumberToObject(o, "tokens_in", (double)tin);
         cJSON_AddNumberToObject(o, "tokens_out", (double)tout);
+        /* issue #6: where the wall-clock time went */
+        cJSON_AddNumberToObject(o, "llm_ms", (double)llm_ms);
+        cJSON_AddNumberToObject(o, "llm_calls", (double)llm_calls);
+        cJSON_AddNumberToObject(o, "tool_ms", (double)tool_ms);
     }
     s = cJSON_PrintUnformatted(o);
     cJSON_Delete(o);

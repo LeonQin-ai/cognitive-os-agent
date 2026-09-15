@@ -26,16 +26,24 @@
  * Decompose/merge call the LLM directly, bypassing the reasoning loop's
  * per-round accounting — without this they would never show on the dashboard. */
 static char *llm_simple_booked(runtime_ctx *ctx, const char *sys, const char *user) {
-    long long bin = 0, bout = 0, tin = 0, tout = 0;
+    long long bin = 0, bout = 0, tin = 0, tout = 0, bren = 0, tren = 0;
     char *out;
 
     if (!ctx || !ctx->llm)
         return NULL;
     llm_usage_totals(ctx->llm, &bin, &bout);
+    bren = llm_usage_reason_total(ctx->llm);
     out = llm_chat_simple(ctx->llm, sys, user);
     llm_usage_totals(ctx->llm, &tin, &tout);
-    if (ctx->usage && (tin > bin || tout > bout))
-        usage_add(ctx->usage, ctx->llm->model ? ctx->llm->model : "?", (long)(tin - bin), (long)(tout - bout));
+    tren = llm_usage_reason_total(ctx->llm);
+    if (ctx->usage && (tin > bin || tout > bout)) {
+        long long rd = tren - bren;
+        if (rd < 0)
+            rd = 0;
+        long long vd = (tout - bout) - rd;
+        usage_add_ex(ctx->usage, ctx->llm->model ? ctx->llm->model : "?",
+                     (long)(tin - bin), (long)(vd > 0 ? vd : 0), (long)rd);
+    }
     return out;
 }
 

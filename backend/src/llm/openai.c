@@ -106,6 +106,16 @@ static void accumulate_usage(llm *llm, cJSON *root) {
         llm->usage_in += (long long)pi->valuedouble;
     if (co && cJSON_IsNumber(co))
         llm->usage_out += (long long)co->valuedouble;
+    /* thinking models report invisible reasoning tokens inside
+     * completion_tokens (e.g. {"completion_tokens_details":{"reasoning_tokens":
+     * 8192}}) — track them separately so the dashboard can show visible
+     * output apart from thinking (issue #7). */
+    {
+        cJSON *cd = cJSON_GetObjectItemCaseSensitive(u, "completion_tokens_details");
+        cJSON *rt = cd ? cJSON_GetObjectItemCaseSensitive(cd, "reasoning_tokens") : NULL;
+        if (rt && cJSON_IsNumber(rt))
+            llm->usage_reason += (long long)rt->valuedouble;
+    }
 }
 
 static char *normalize_base(const char *base, const char **path_out) {

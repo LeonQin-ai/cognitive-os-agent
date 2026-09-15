@@ -10,13 +10,14 @@
 typedef struct model_entry {
     char *model;
     long prompt, completion, calls;
+    long reasoning;
 } model_entry;
 
 struct usage {
     mutex_t mtx;
     model_entry *models;
     size_t count, cap;
-    long prompt_total, completion_total;
+    long prompt_total, completion_total, reasoning_total;
 };
 
 usage *usage_new(void) {
@@ -40,6 +41,11 @@ void usage_free(usage *u) {
 }
 
 void usage_add(usage *u, const char *model, long prompt_tokens, long completion_tokens) {
+    usage_add_ex(u, model, prompt_tokens, completion_tokens, 0);
+}
+
+void usage_add_ex(usage *u, const char *model, long prompt_tokens, long completion_tokens,
+                  long reasoning_tokens) {
     if (!u || !model)
         return;
     mutex_lock(&u->mtx);
@@ -69,8 +75,12 @@ void usage_add(usage *u, const char *model, long prompt_tokens, long completion_
     e->prompt += prompt_tokens;
     e->completion += completion_tokens;
     e->calls++;
+    if (reasoning_tokens > 0)
+        e->reasoning += reasoning_tokens;
     u->prompt_total += prompt_tokens;
     u->completion_total += completion_tokens;
+    if (reasoning_tokens > 0)
+        u->reasoning_total += reasoning_tokens;
     mutex_unlock(&u->mtx);
 }
 
@@ -108,12 +118,14 @@ char *usage_json(usage *u) {
             cJSON *o = cJSON_CreateObject();
             cJSON_AddNumberToObject(o, "prompt", (double)e->prompt);
             cJSON_AddNumberToObject(o, "completion", (double)e->completion);
+            cJSON_AddNumberToObject(o, "reasoning", (double)e->reasoning);
             cJSON_AddNumberToObject(o, "calls", (double)e->calls);
             cJSON_AddItemToObject(models, e->model, o);
         }
         cJSON *tot = cJSON_CreateObject();
         cJSON_AddNumberToObject(tot, "prompt", (double)u->prompt_total);
         cJSON_AddNumberToObject(tot, "completion", (double)u->completion_total);
+        cJSON_AddNumberToObject(tot, "reasoning", (double)u->reasoning_total);
         mutex_unlock(&u->mtx);
         cJSON_AddItemToObject(root, "total", tot);
     } else {

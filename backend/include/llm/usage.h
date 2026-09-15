@@ -15,9 +15,15 @@ void usage_free(usage *u);
 /* Record a completion for a model. */
 void usage_add(usage *u, const char *model, long prompt_tokens, long completion_tokens);
 
+/* Same, but `reasoning_tokens` is tracked separately: thinking models report
+ * reasoning tokens INSIDE completion_tokens, and the dashboard must show
+ * visible output apart from invisible thinking (GitHub issue #7). */
+void usage_add_ex(usage *u, const char *model, long prompt_tokens, long completion_tokens,
+                  long reasoning_tokens);
+
 long usage_prompt_total(usage *u);
 long usage_completion_total(usage *u);
-/* JSON object: {models:{<model>:{prompt,completion,calls}}, total:{prompt,completion}} (caller frees). */
+/* JSON object: {models:{<model>:{prompt,completion,reasoning,calls}}, total:{prompt,completion,reasoning}} (caller frees). */
 char *usage_json(usage *u);
 
 #ifdef __cplusplus

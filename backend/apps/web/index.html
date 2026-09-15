@@ -1927,6 +1927,11 @@ function taskProgressText(t){
   }
   if(t.round) bits.push('第' + t.round + '轮');
   if(t.tool_calls !== undefined) bits.push('工具×' + (t.tool_calls || 0) + (t.cur_tool ? '（' + t.cur_tool + '）' : ''));
+  if(t.llm_ms !== undefined){
+    const ls = ((t.llm_ms || 0) / 1000).toFixed(1);
+    const ts = ((t.tool_ms || 0) / 1000).toFixed(1);
+    bits.push('LLM ' + ls + 's×' + (t.llm_calls || 0) + ' · 工具 ' + ts + 's');
+  }
   if(t.tokens_in || t.tokens_out)
     bits.push('tokens ' + (t.tokens_in + t.tokens_out) + '（↑' + t.tokens_in + ' ↓' + t.tokens_out + '）');
   return bits.join(' · ');

@@ -100,6 +100,12 @@ char *reasoning_session_json(reasoning *r);
 void reasoning_progress(reasoning *r, long long *elapsed_ms, int *round, int *tool_calls,
                         const char **cur_tool, long long *tokens_in, long long *tokens_out);
 
+/* Same as reasoning_progress plus cumulative planner-LLM latency (ms), tool
+ * execution latency (ms) and planner-call count for the current run. */
+void reasoning_progress_ex(reasoning *r, long long *elapsed_ms, int *round, int *tool_calls,
+                           const char **cur_tool, long long *tokens_in, long long *tokens_out,
+                           long long *llm_ms, long long *tool_ms, int *llm_calls);
+
 /* Recent conversation turns as a JSON array of {"q","a"} objects, oldest
  * first (the newest max_turns turns; <=0 = default 20). Thread-safe against
  * a concurrent run. Caller frees. */

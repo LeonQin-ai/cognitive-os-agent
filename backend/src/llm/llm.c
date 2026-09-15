@@ -144,6 +144,10 @@ void llm_usage_totals(const llm *l, long long *tokens_in, long long *tokens_out)
         *tokens_out = l ? l->usage_out : 0;
 }
 
+long long llm_usage_reason_total(const llm *l) {
+    return l ? l->usage_reason : 0;
+}
+
 char *llm_chat_simple(llm *llm, const char *system_prompt, const char *user_prompt) {
     /* thinking models spend reasoning tokens from the SAME output budget:
      * 1024 left zero visible content for glm-5.3-flash (finish_reason=length) */

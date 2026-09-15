@@ -164,12 +164,15 @@ struct reasoning {
     long long prog_started_ms;
     int prog_tool_calls;
     char prog_tool[64];
+    long long prog_llm_ms;   /* cumulative planner LLM latency (issue #6) */
+    int prog_llm_calls;
+    long long prog_tool_ms;  /* cumulative tool execution latency */
 
     /* per-model token ledger (borrowed; may be NULL). Deltas are computed
      * against the run-start snapshot of llm usage counters so per-round
      * usage is attributed correctly even across llm swaps. */
     usage *usage_acc;
-    long long usage_base_in, usage_base_out;
+    long long usage_base_in, usage_base_out, usage_base_reason;
 };
 
 static struct session *session_get(reasoning *r, const char *id) {
@@ -653,8 +656,11 @@ static int h_reason(state_machine *sm, void *ud, const char *input, char **out) 
         return 0;
     }
 
+    long long t_llm0 = time_now_ms();
     int rc = planner_plan_ex(r->llm, r->tools, r->skills, r->policy, aug ? aug : input, &r->actions, &r->n_actions,
                                  &raw, &plan_err);
+    r->prog_llm_ms += time_now_ms() - t_llm0;
+    r->prog_llm_calls++;
     free(aug);
     if (rc != 0 || !raw) {
         free(raw);
@@ -822,6 +828,7 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
         }
         r->prog_tool_calls++;
         int rc;
+        long long t_tool0 = time_now_ms();
         if (tx) {
             rc = tx_run(tx, r->actions[i].tool, r->actions[i].args_json);
         } else if (exec) {
@@ -836,6 +843,7 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
         } else {
             rc = -1;
         }
+        r->prog_tool_ms += time_now_ms() - t_tool0;
         if (rc != 0) {
             r->all_actions_ok = 0;
             strbuf_appendf(&b, "[%s] FAILED\n", r->actions[i].tool);
@@ -1404,11 +1412,13 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
 
     /* run-start snapshot of the active llm's usage counters: per-round
      * deltas are attributed to this run's model in the ledger */
-    if (r->llm)
+    if (r->llm) {
         llm_usage_totals(r->llm, &r->usage_base_in, &r->usage_base_out);
-    else {
+        r->usage_base_reason = llm_usage_reason_total(r->llm);
+    } else {
         r->usage_base_in = 0;
         r->usage_base_out = 0;
+        r->usage_base_reason = 0;
     }
 
     free(r->last_prompt);
@@ -1452,6 +1462,9 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     r->intent_nudged = 0;
     r->prog_started_ms = (long long)time_now_ms();
     r->prog_tool_calls = 0;
+    r->prog_llm_ms = 0;
+    r->prog_llm_calls = 0;
+    r->prog_tool_ms = 0;
     r->prog_tool[0] = '\0';
 
      /* LLM's plain-text answer (had_plan == 0) */
@@ -1465,13 +1478,23 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
          * (deltas vs the previous snapshot; a mid-run llm swap would produce
          * a bogus negative delta, hence the guard) */
         if (r->usage_acc && r->llm) {
-            long long ti = 0, to = 0;
+            long long ti = 0, to = 0, tr = 0;
             llm_usage_totals(r->llm, &ti, &to);
-            if (ti > r->usage_base_in || to > r->usage_base_out)
-                usage_add(r->usage_acc, r->llm->model ? r->llm->model : "?",
-                          (long)(ti - r->usage_base_in), (long)(to - r->usage_base_out));
+            tr = llm_usage_reason_total(r->llm);
+            if (ti > r->usage_base_in || to > r->usage_base_out) {
+                long long rd = tr - r->usage_base_reason;
+                if (rd < 0)
+                    rd = 0;
+                /* visible completion = total completion minus invisible
+                 * thinking tokens (issue #7) */
+                long long vd = (to - r->usage_base_out) - rd;
+                usage_add_ex(r->usage_acc, r->llm->model ? r->llm->model : "?",
+                             (long)(ti - r->usage_base_in), (long)(vd > 0 ? vd : 0),
+                             (long)rd);
+            }
             r->usage_base_in = ti;
             r->usage_base_out = to;
+            r->usage_base_reason = tr;
         }
         if (st != ST_DONE) {
             /* Stage failure (planner LLM error, VERIFY gate, …): the failed
@@ -1671,6 +1694,14 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
  * cumulative LLM usage on the active provider instance. */
 void reasoning_progress(reasoning *r, long long *elapsed_ms, int *round, int *tool_calls,
                         const char **cur_tool, long long *tokens_in, long long *tokens_out) {
+    reasoning_progress_ex(r, elapsed_ms, round, tool_calls, cur_tool, tokens_in, tokens_out, NULL, NULL, NULL);
+}
+
+/* Extended progress snapshot; llm_ms/tool_ms/llm_calls are cumulative timing
+ * of planner LLM calls and tool executions within the current run (issue #6). */
+void reasoning_progress_ex(reasoning *r, long long *elapsed_ms, int *round, int *tool_calls,
+                           const char **cur_tool, long long *tokens_in, long long *tokens_out,
+                           long long *llm_ms, long long *tool_ms, int *llm_calls) {
     long long tin = 0, tout = 0;
 
     if (elapsed_ms)
@@ -1687,6 +1718,12 @@ void reasoning_progress(reasoning *r, long long *elapsed_ms, int *round, int *to
         *tokens_in = tin;
     if (tokens_out)
         *tokens_out = tout;
+    if (llm_ms)
+        *llm_ms = r ? r->prog_llm_ms : 0;
+    if (tool_ms)
+        *tool_ms = r ? r->prog_tool_ms : 0;
+    if (llm_calls)
+        *llm_calls = r ? r->prog_llm_calls : 0;
 }
 
 char *reasoning_session_json(reasoning *r) {
