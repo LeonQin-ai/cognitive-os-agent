@@ -182,6 +182,40 @@ static int h_task_get(const http_request *req, http_response *resp, void *ud) {
     return 0;
 }
 
+/* DELETE /v1/tasks/<id> — request cancellation of a queued/running task.
+ * Sets the scheduler's cancel flag; the worker aborts at the next round
+ * boundary and the task transitions to CANCELLED. */
+static int h_task_cancel(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
+    int64_t id;
+    task *t;
+
+    if (!authz_ok(ctx, req, resp))
+        return 0;
+    const char *suffix = req->path + strlen("/v1/tasks/");
+    if (!*suffix) {
+        resp->status = 404;
+        http_resp_json(resp, "{\"error\":\"missing task id\"}");
+        return 0;
+    }
+
+    id = atoll(suffix);
+    t = scheduler_get(ctx->scheduler, id);
+    if (!t) {
+        resp->status = 404;
+        http_resp_json(resp, "{\"error\":\"task not found\"}");
+        return 0;
+    }
+
+    if (t->status == TS_RUNNING || t->status == TS_QUEUED) {
+        t->cancel_flag = 1;
+        http_resp_appendf(resp, "{\"id\":%lld,\"status\":\"CANCELLING\"}", (long long)id);
+    } else {
+        http_resp_appendf(resp, "{\"id\":%lld,\"status\":\"%s\"}", (long long)id, task_status_str(t->status));
+    }
+    return 0;
+}
+
 /* POST /v1/chat {"message":"...", "session":"chat-tab-2"} — conversational
  * counterpart of task creation: same async scheduler path, but semantically
  * a chat turn (the reasoning engine keeps the multi-turn context across
@@ -3757,6 +3791,7 @@ int api_attach(runtime_ctx *ctx) {
 
     http_server_route(ctx->http, "POST", "/v1/tasks", h_task_create, ctx);
     http_server_route(ctx->http, "GET", "/v1/tasks/", h_task_get, ctx);
+    http_server_route(ctx->http, "DELETE", "/v1/tasks/", h_task_cancel, ctx);
     http_server_route(ctx->http, "GET", "/v1/tools", h_tools, ctx);
     http_server_route(ctx->http, "GET", "/v1/memory", h_memory, ctx);
     http_server_route(ctx->http, "GET", "/v1/blackboard", h_blackboard, ctx);

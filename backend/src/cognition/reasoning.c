@@ -598,7 +598,11 @@ static char *build_context(reasoning *r, const char *prompt) {
                           "- 即使历史记录里出现过相似的任务，也必须针对「Current request」重新规划并实际执行动作，"
                           "不允许凭历史记录直接回答\"已完成\"。\n"
                           "- 回答中声称对文件做过任何改动，必须以本轮实际出现的 [tool] 动作结果为依据；"
-                          "没有实际执行过对应动作，就不得声称做过。\n\n");
+                          "没有实际执行过对应动作，就不得声称做过。\n"
+                          "- 严禁伪造执行证据：编译输出、测试结果、命令输出（如 [TEST] ... OK、"
+                          "\"17 checks, 0 failed\"、exit code 0 之类）只能来自本轮真实出现的 [shell]/[tool] 结果原文；"
+                          "如果命令没有运行过、或运行失败了，必须如实说明失败原因，"
+                          "绝不允许在最终回答里编造看似成功的结果。\n\n");
 
     /* Context MMU accounting: per-tier bytes of this prompt */
     if (r->metrics) {

@@ -187,6 +187,12 @@ proc_result *proc_run_in(const char *cmd, int timeout_ms, const char *cwd) {
     si.cb = sizeof(si);
     si.hStdOutput = wr;
     si.hStdError = wr;
+    /* STARTF_USESTDHANDLES with a NULL hStdInput leaves the child with an
+     * invalid stdin: python subprocess (and anything calling GetStdHandle)
+     * then fails with "handle is invalid" when it spawns its own children.
+     * Point stdin at the NUL device instead. */
+    si.hStdInput = CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                               &sa, OPEN_EXISTING, 0, NULL);
     si.dwFlags |= STARTF_USESTDHANDLES;
 
     compose_shell_command(cmd, full, sizeof(full));
@@ -214,6 +220,8 @@ proc_result *proc_run_in(const char *cmd, int timeout_ms, const char *cwd) {
     free(wfull);
     free(cwd_heap);
     CloseHandle(wr);
+    if (si.hStdInput && si.hStdInput != INVALID_HANDLE_VALUE)
+        CloseHandle(si.hStdInput); /* child inherited its own copy */
     if (!ok) {
         CloseHandle(rd);
         return NULL;
