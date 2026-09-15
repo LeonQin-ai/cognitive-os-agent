@@ -42,7 +42,7 @@ typedef struct reasoning_config {
     struct ret_index *index;                  /* code index; touched files are indexed (may be NULL) */
     struct plugin_registry *plugin_registry; /* for missing-capability auto-generation */
     const char *state_root;                      /* state dir for plugin generation (may be NULL) */
-    int max_rounds;                              /* agent-loop rounds per run (0 = default 8; 1 = single-shot) */
+    int max_rounds;                              /* agent-loop rounds per run (<0 = unlimited, default; 1 = single-shot) */
     hook_registry *hooks;                    /* horizontal hook system (may be NULL) */
     /* Context MMU budgets (chars per prompt section; 0 = default). Over budget
      * a section degrades automatically: hot drops oldest turns to one line,

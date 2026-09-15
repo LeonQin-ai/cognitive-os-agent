@@ -302,7 +302,7 @@ int init(runtime_ctx *ctx, const config *cfg) {
     ctx->config = config_new();
     config_apply_json(ctx->config, "{\"llm.provider\":\"mock\",\"llm.model\":\"mock\",\"llm.base_url\":\"\","
                                        "\"scheduler.workers\":2,\"tx.use_transaction\":true,\"http.port\":0,"
-                                       "\"workspace\":\".\",\"market.url\":\"\",\"reasoning.max_rounds\":32}");
+                                       "\"workspace\":\".\",\"market.url\":\"\",\"reasoning.max_rounds\":-1}");
     {
         char cfgfile[600];
         path_join(cfgfile, sizeof(cfgfile), ctx->state_root, "cognitive-os-agent.json");
@@ -601,7 +601,7 @@ int init(runtime_ctx *ctx, const config *cfg) {
         rc.index = ctx->index;
         rc.plugin_registry = ctx->registry;
         rc.state_root = ctx->state_root;
-        rc.max_rounds = config_get_int(ctx->config, "reasoning.max_rounds", 32);
+        rc.max_rounds = config_get_int(ctx->config, "reasoning.max_rounds", -1);
         rc.hooks = ctx->hooks;
         /* Context MMU budgets (hot/warm/cold, chars per section) */
         rc.budget_hot = config_get_int(ctx->config, "context.budget_hot", 0);

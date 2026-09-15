@@ -228,7 +228,7 @@ static void clear_actions(reasoning *r) {
 #define LEARN_RESULT_CAP 300     /* chars of a result kept as a memory episode */
 #define COMPACT_SUMMARY_CAP 2000 /* rolling compaction summary cap */
 #define AGENT_LOOP_MAX_ROUNDS                                                                                          \
-    32                      /* default rounds when config does not set it;                                             \
+    -1                      /* default rounds when config does not set it;                                             \
                                config "reasoning.max_rounds" < 0 = unlimited */
 /* Tail-keep cap for accumulated round results. 16K was too small for long
  * agent runs: one file_read of a source file easily produces 5-15K, so a
