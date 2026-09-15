@@ -7,6 +7,7 @@
 #include "runtime/event_bus.h"
 #include "runtime/flow.h"
 #include "runtime/scheduler.h"
+#include "runtime/tasklog.h"
 #include "runtime/state_machine.h"
 #include "runtime/policy_engine.h"
 #include "memory/memory.h"
@@ -2243,9 +2244,10 @@ static void test_agent_loop(void) {
         char *ans = NULL;
         CHECK(reasoning_run(ctx.reasoning, "分析 a.txt 并修复其中的 OLD", &ans) == 0);
         CHECK(ans != NULL);
-        CHECK(ans && strstr(ans, "[file_read]") != NULL);   /* round 1 observed */
-        CHECK(ans && strstr(ans, "[file_edit]") != NULL);   /* round 2 applied */
+        /* answer = final text only; raw tool log must not leak into it */
         CHECK(ans && strstr(ans, "任务完成") != NULL);       /* final text */
+        CHECK(ans && strstr(ans, "[file_read]") == NULL);   /* round 1 observed */
+        CHECK(ans && strstr(ans, "[file_edit]") == NULL);   /* round 2 applied */
         /* live-progress accessor: after a multi-round run the counters must
          * reflect the executed tool calls and rounds (tokens stay 0 — the
          * mock provider never reports usage) */
@@ -2285,9 +2287,9 @@ static void test_agent_loop(void) {
         if (init(&ctx, &cfg) != 0) { CHECK(0); return; }
         char *ans = NULL;
         CHECK(reasoning_run(ctx.reasoning, "分析 b.txt 并修复其中的 OLD", &ans) == 0);
-        CHECK(ans && strstr(ans, "[file_read]") != NULL);
-        /* budget exhausted → forced tool-free synthesis instead of a dead note */
+        /* answer = final text only; raw tool log must not leak into it */
         CHECK(ans && strstr(ans, "综合回答") != NULL);
+        CHECK(ans && strstr(ans, "[file_read]") == NULL);
         free(ans);
         char *content = fs_read_file(f);
         CHECK(content && strstr(content, "OLD") != NULL); /* untouched */
@@ -2497,7 +2499,12 @@ static void test_policy_rules(void) {
 
         char *ans = NULL;
         CHECK(reasoning_run(ctx.reasoning, "创建 blocked.txt 写入内容 x", &ans) == 0);
-        CHECK(ans && strstr(ans, "denied by policy") != NULL);
+        /* the deny surfaces in the execution log (process tail), not the
+         * user-visible answer — the answer is final text only */
+        char *plog = reasoning_round_log_tail(ctx.reasoning, 65536);
+        CHECK(plog && strstr(plog, "denied by policy") != NULL);
+        free(plog);
+        CHECK(ans && strstr(ans, "denied by policy") == NULL);
         free(ans);
         /* the file must NOT exist (hard block, not just a warning) */
         char *data = fs_read_file("state-test/loop-w/blocked.txt");
@@ -4153,6 +4160,54 @@ static void test_task(void) {
     task_free(t);
 }
 
+/* ---------- runtime: durable task journal (checkpoint/恢复) ---------- */
+static void test_tasklog(void) {
+    section("tasklog (journal)");
+    fs_mkdirs("state-test/tlog");
+    fs_remove("state-test/tlog/journal/tasks.jsonl");
+    tasklog *tl = tasklog_new("state-test/tlog");
+    CHECK(tl != NULL);
+    if (!tl) return;
+
+    tasklog_record(tl, 1, "DONE", "chat-tab-1", "input-1", "output-1");
+    tasklog_record(tl, 2, "FAILED", NULL, "input-2", NULL);
+    tasklog_record(tl, 1, "DONE", "chat-tab-1", "input-1 again", "out again");
+
+    /* newest record wins for the same id */
+    char *status = NULL, *session = NULL, *input = NULL, *output = NULL;
+    CHECK(tasklog_find(tl, 1, &status, &session, &input, &output) == 1);
+    CHECK_STR(status, "DONE");
+    CHECK_STR(session, "chat-tab-1");
+    CHECK_STR(input, "input-1 again");
+    free(status); free(session); free(input); free(output);
+
+    /* unknown id -> miss (out params left untouched; reset first) */
+    status = session = input = output = NULL;
+    CHECK(tasklog_find(tl, 99, &status, &session, &input, &output) == 0);
+    CHECK(status == NULL && session == NULL && input == NULL && output == NULL);
+
+    /* limit keeps the newest N */
+    char *j = tasklog_json(tl, 2);
+    CHECK(j && strstr(j, "input-2") != NULL && strstr(j, "input-1 again") != NULL &&
+          strstr(j, "input-1\"") == NULL);
+    free(j);
+    j = tasklog_json(tl, 0);
+    CHECK(j && strstr(j, "input-1\"") != NULL); /* 0 = all */
+    free(j);
+
+    /* survive "restart": reopen from the same state_root */
+    tasklog_free(tl);
+    tl = tasklog_new("state-test/tlog");
+    CHECK(tl != NULL);
+    status = NULL;
+    CHECK(tasklog_find(tl, 2, &status, NULL, &input, NULL) == 1);
+    CHECK_STR(status, "FAILED");
+    CHECK_STR(input, "input-2");
+    free(status); free(input);
+    tasklog_free(tl);
+    fs_remove("state-test/tlog/journal/tasks.jsonl");
+}
+
 /* ---------- infra: model/MCP catalog JSON ---------- */
 static void test_catalog(void) {
     section("catalog");
@@ -4942,6 +4997,7 @@ int main(void) {
     test_im_bridge();
     test_plugin_generate();
     test_task();
+    test_tasklog();
     test_catalog();
     test_catalog_skills_run();
     test_audit();

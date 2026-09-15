@@ -51,6 +51,7 @@ struct session {
     char sn_errors[256];   /* recent errors */
     char sn_worklog[1024]; /* append-only per-action log (tail kept) */
     long long last_active_ms;
+    int loaded; /* persisted chat/<id>.jsonl already merged into the ring */
 };
 
 static struct session *session_new(const char *id) {
@@ -211,6 +212,137 @@ static struct session *session_get(reasoning *r, const char *id) {
 
     mutex_unlock(&r->sess_mtx);
     return s;
+}
+
+/* ---- per-session chat persistence (survives restarts) ----
+ * Each session's turns append to <state_root>/chat/<id>.jsonl; on first
+ * access after process start the file is replayed into the in-memory ring,
+ * so history survives restarts and switching sessions/panels always has a
+ * durable source of truth. */
+
+static void chat_file_path(char *out, size_t n, const char *state_root, const char *session_id) {
+    char safe[128];
+    char dir[600];
+    char fname[160];
+    size_t o = 0;
+
+    for (size_t i = 0; session_id && session_id[i] && o < sizeof(safe) - 1; i++) {
+        char ch = session_id[i];
+        if (!((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '-' ||
+              ch == '_' || ch == '.'))
+            ch = '_';
+        safe[o++] = ch;
+    }
+    safe[o] = '\0';
+    snprintf(fname, sizeof(fname), "%s.jsonl", safe);
+    path_join(dir, sizeof(dir), state_root ? state_root : "state", "chat");
+    fs_mkdirs(dir);
+    path_join(out, n, dir, fname);
+}
+
+/* Replay a session's persisted turns into its ring (caller holds s->mtx).
+ * Keeps at most the last CHAT_PERSIST_MAX turns. */
+#define CHAT_PERSIST_MAX 200
+static void session_load_persisted(reasoning *r, struct session *s) {
+    char fpath[700];
+    FILE *f;
+    char *buf = NULL;
+    size_t cap = 0, len = 0;
+    int ch;
+
+    if (!r || !s || !r->state_root)
+        return;
+    chat_file_path(fpath, sizeof(fpath), r->state_root, s->id);
+    f = fopen(fpath, "rb");
+    if (!f)
+        return;
+    /* slurp (bounded: 4 MB) */
+    while ((ch = fgetc(f)) != EOF) {
+        if (len + 2 > (cap = cap ? cap : 4096) - 1) {
+            if (cap >= 4u * 1024 * 1024)
+                break;
+            size_t ncap = cap * 2;
+            char *nb = (char *)realloc(buf, ncap);
+            if (!nb)
+                break;
+            buf = nb;
+            cap = ncap;
+        }
+        buf[len++] = (char)ch;
+    }
+    fclose(f);
+    if (!buf) {
+        return;
+    }
+    buf[len] = '\0';
+
+    /* parse line by line; keep only the last CHAT_PERSIST_MAX turns */
+    size_t total = 0;
+    for (const char *p = buf; *p; p++)
+        if (*p == '\n')
+            total++;
+    size_t skip = total > CHAT_PERSIST_MAX ? total - CHAT_PERSIST_MAX : 0;
+    size_t line_no = 0;
+    char *save = NULL;
+    for (char *line = strtok_r(buf, "\n", &save); line; line = strtok_r(NULL, "\n", &save)) {
+        if (line_no++ < skip)
+            continue;
+        cJSON *t = cJSON_Parse(line);
+        if (!t)
+            continue;
+        cJSON *q = cJSON_GetObjectItemCaseSensitive(t, "q");
+        cJSON *a = cJSON_GetObjectItemCaseSensitive(t, "a");
+        if (cJSON_IsString(q) && q->valuestring) {
+            /* grow the ring to admit the loaded turn (no compaction here:
+             * history is the durable record, the live cap applies to runs) */
+            if (s->hist_n >= s->hist_cap) {
+                size_t ncap = s->hist_cap ? s->hist_cap * 2 : 16;
+                char **nq = (char **)realloc(s->hist_q, ncap * sizeof(char *));
+                char **na = (char **)realloc(s->hist_a, ncap * sizeof(char *));
+                if (nq)
+                    s->hist_q = nq;
+                if (na)
+                    s->hist_a = na;
+                if (nq && na)
+                    s->hist_cap = ncap;
+            }
+            if (s->hist_n < s->hist_cap) {
+                s->hist_q[s->hist_n] = xstrdup(q->valuestring);
+                s->hist_a[s->hist_n] = cJSON_IsString(a) && a->valuestring ? xstrdup(a->valuestring) : xstrdup("");
+                if (s->hist_q[s->hist_n] && s->hist_a[s->hist_n])
+                    s->hist_n++;
+            }
+        }
+        cJSON_Delete(t);
+    }
+    free(buf);
+}
+
+static void chat_persist_append(reasoning *r, const char *session_id, const char *q, const char *a) {
+    char fpath[700];
+    FILE *f;
+    cJSON *t;
+    char *line;
+
+    if (!r || !r->state_root || !q || !a)
+        return;
+    chat_file_path(fpath, sizeof(fpath), r->state_root, session_id && *session_id ? session_id : "default");
+    t = cJSON_CreateObject();
+    if (!t)
+        return;
+    cJSON_AddStringToObject(t, "q", q);
+    cJSON_AddStringToObject(t, "a", a);
+    line = cJSON_PrintUnformatted(t);
+    cJSON_Delete(t);
+    if (!line)
+        return;
+    f = fopen(fpath, "ab");
+    if (f) {
+        fputs(line, f);
+        fputc('\n', f);
+        fclose(f);
+    }
+    free(line);
 }
 
 static void clear_actions(reasoning *r) {
@@ -1244,9 +1376,12 @@ static const char *strip_nudge_echo(const char *text) {
 }
 
 static void record_turn(reasoning *r, const char *q, const char *a) {
+    char *stored_q, *stored_a;
+
     if (!r || !q || !a)
         return;
     mutex_lock(&r->cur->mtx);
+    r->cur->loaded = 1; /* live turns win; no replay after this point */
     if (r->cur->hist_cap == 0) {
         r->cur->hist_cap = 16;
         r->cur->hist_q = calloc(r->cur->hist_cap, sizeof(char *));
@@ -1268,10 +1403,17 @@ static void record_turn(reasoning *r, const char *q, const char *a) {
     if (!r->cur->hist_a[r->cur->hist_n])
         r->cur->hist_a[r->cur->hist_n] = xstrdup(a);
     r->cur->hist_n++;
+    stored_q = xstrdup(r->cur->hist_q[r->cur->hist_n - 1] ? r->cur->hist_q[r->cur->hist_n - 1] : q);
+    stored_a = xstrdup(r->cur->hist_a[r->cur->hist_n - 1] ? r->cur->hist_a[r->cur->hist_n - 1] : a);
     /* ring full → compact the oldest half via LLM instead of silent loss */
     if (r->cur->hist_n >= r->cur->hist_cap && !r->cur->compact_disabled && r->llm)
         compact_history(r, r->cur->hist_cap / 2);
     mutex_unlock(&r->cur->mtx);
+    /* durable copy (after unlock — file I/O off the hot path; private copies
+     * survive compaction touching the ring) */
+    chat_persist_append(r, r->cur->id, stored_q, stored_a);
+    free(stored_q);
+    free(stored_a);
 }
 
 char *reasoning_history_json_ex(reasoning *r, const char *session_id, int max_turns) {
@@ -1288,6 +1430,10 @@ char *reasoning_history_json_ex(reasoning *r, const char *session_id, int max_tu
     if (!s)
         return xstrdup("[]");
     mutex_lock(&s->mtx);
+    if (!s->loaded) {
+        s->loaded = 1;
+        session_load_persisted(r, s); /* replay chat/<id>.jsonl after a restart */
+    }
     start = (s->hist_n > (size_t)max_turns) ? s->hist_n - (size_t)max_turns : 0;
     arr = cJSON_CreateArray();
     for (size_t i = start; i < s->hist_n; i++) {
@@ -1311,6 +1457,7 @@ char *reasoning_history_json(reasoning *r, int max_turns) {
 char *reasoning_sessions_json(reasoning *r) {
     cJSON *arr;
     char *sjson;
+    char dir[600];
 
     if (!r)
         return xstrdup("[]");
@@ -1326,6 +1473,42 @@ char *reasoning_sessions_json(reasoning *r) {
         mutex_unlock(&s->mtx);
         cJSON_AddNumberToObject(o, "last_active_ms", (double)s->last_active_ms);
         cJSON_AddItemToArray(arr, o);
+    }
+
+    /* sessions persisted on disk but not yet materialized in memory (e.g.
+     * after a restart) still show up in the "最近" list */
+    if (r->state_root) {
+        path_join(dir, sizeof(dir), r->state_root, "chat");
+        dir_list dl;
+        if (fs_list_dir(dir, &dl) == 0) {
+            for (size_t i = 0; i < dl.count; i++) {
+                if (dl.items[i].is_dir)
+                    continue;
+                const char *name = dl.items[i].name;
+                size_t nl = strlen(name);
+                if (nl < 7 || strcmp(name + nl - 6, ".jsonl") != 0)
+                    continue;
+                char sid[128];
+                snprintf(sid, sizeof(sid), "%.*s", (int)(nl - 6), name);
+                int seen = 0;
+                for (size_t k = 0; k < r->nsessions; k++)
+                    if (strcmp(r->sessions[k]->id, sid) == 0) {
+                        seen = 1;
+                        break;
+                    }
+                if (seen)
+                    continue;
+                cJSON *o = cJSON_CreateObject();
+                if (!o)
+                    break;
+                cJSON_AddStringToObject(o, "id", sid);
+                cJSON_AddNumberToObject(o, "turns", 0);
+                cJSON_AddStringToObject(o, "task", "");
+                cJSON_AddNumberToObject(o, "last_active_ms", 0);
+                cJSON_AddItemToArray(arr, o);
+            }
+            fs_list_free(&dl);
+        }
     }
 
     mutex_unlock(&r->sess_mtx);
@@ -1363,6 +1546,12 @@ int reasoning_session_clear(reasoning *r, const char *session_id) {
     s->sn_state[0] = s->sn_task[0] = s->sn_files[0] = 0;
     s->sn_errors[0] = s->sn_worklog[0] = 0;
     mutex_unlock(&s->mtx);
+    /* drop the durable copy too — clearing a session must survive restarts */
+    if (r->state_root) {
+        char fpath[700];
+        chat_file_path(fpath, sizeof(fpath), r->state_root, want);
+        fs_remove(fpath);
+    }
     return 0;
 }
 
@@ -1610,14 +1799,16 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     }
 
     strbuf_init(&out);
-    /* issue #4: the ANSWER carries only executed-action observations —
-     * narration rounds and [system] nudges live in round_log (model context)
-     * and must not appear in the user-visible output. */
-    /* issue #8: a long run accumulates many 6K-capped entries and the raw
-     * obs_log can reach hundreds of K in the answer. Cap the final output
-     * with head+tail elision (recent actions matter most), line-boundary
-     * safe, with an explicit marker for the elided middle. */
-    if (r->obs_log_len > 0) {
+    /* user-visible answer = the model's final text ONLY. Raw tool output and
+     * [tool]/action logs are execution details (visible live via
+     * process_log / the UI's process panel), never part of the answer. The
+     * obs_log is a fallback for runs that ended without a final answer. */
+    if (final_text && *final_text) {
+        strbuf_append(&out, final_text);
+    } else if (r->obs_log_len > 0) {
+        /* no final answer produced — fall back to the executed-action log.
+         * issue #8: cap with head+tail elision (recent actions matter most),
+         * line-boundary safe, with an explicit marker for the elided middle. */
         const size_t head_keep = 2048, tail_keep = 12288;
         if (r->obs_log_len <= head_keep + tail_keep + 64) {
             strbuf_append(&out, r->obs_log);
@@ -1635,16 +1826,14 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
             strbuf_append_n(&out, r->obs_log + tail_start, r->obs_log_len - tail_start);
         }
     }
-    if (final_text && *final_text) {
-        if (r->round_log_len > 0)
-            strbuf_append(&out, "\n回答: ");
-        strbuf_append(&out, final_text);
-    } else if (r->round_log_len > 0) {
-        if (stalled)
-            strbuf_appendf(&out, "\n(连续两轮计划相同，已停止；任务可能未完全完成，第 %d/%d 轮)", r->round_idx,
+    if (!final_text || !*final_text) {
+        if (r->round_log_len > 0 && r->obs_log_len == 0) {
+            if (stalled)
+                strbuf_appendf(&out, "(连续两轮计划相同，已停止；任务可能未完全完成，第 %d/%d 轮)", r->round_idx,
                                r->max_rounds);
-        else
-            strbuf_appendf(&out, "\n(已达到最大轮数 %d，任务可能未完全完成)", r->max_rounds);
+            else
+                strbuf_appendf(&out, "(已达到最大轮数 %d，任务可能未完全完成)", r->max_rounds);
+        }
     }
 
     free(final_text);

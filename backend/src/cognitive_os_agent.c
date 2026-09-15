@@ -5,6 +5,8 @@
 #include "api/api_rest.h"
 #include "runtime/event_bus.h"
 #include "runtime/flow.h"
+#include "runtime/cron.h"
+#include "runtime/tasklog.h"
 #include "os/os_socket.h"
 #include "os/os_fs.h"
 #include "os/os_time.h"
@@ -56,6 +58,9 @@ static void task_done(task *t, void *ud) {
     }
 
     state_store_task_set(ctx->state, t->id, st, t->input);
+
+    /* durable journal: append the terminal transition for checkpoint/resume */
+    tasklog_record(ctx->tasklog, t->id, st, t->tag, t->input, t->output);
 }
 
 /* ---------- process/state snapshot (architecture v1.0 §9) ---------- */
@@ -636,6 +641,14 @@ int init(runtime_ctx *ctx, const config *cfg) {
     /* mirror task lifecycle into the Context layer's task state slot */
     scheduler_set_completion_cb(ctx->scheduler, task_done, ctx);
 
+    /* scheduled tasks (定时任务): load persisted jobs and start the tick thread */
+    ctx->cron = cron_new(ctx->scheduler, ctx->state_root);
+    if (ctx->cron)
+        cron_start(ctx->cron);
+
+    /* durable task journal (checkpoint/恢复) */
+    ctx->tasklog = tasklog_new(ctx->state_root);
+
     if (api_attach(ctx) != 0) {
         log_error("init: failed to start HTTP API on port %u", (unsigned)ctx->http_port);
         runtime_shutdown(ctx);
@@ -670,6 +683,17 @@ void runtime_shutdown(runtime_ctx *ctx) {
 
     if (ctx->scheduler) {
         scheduler_shutdown(ctx->scheduler, 3000);
+    }
+
+    /* stop the tick thread before the scheduler it submits into dies */
+    if (ctx->cron) {
+        cron_free(ctx->cron);
+        ctx->cron = NULL;
+    }
+
+    if (ctx->tasklog) {
+        tasklog_free(ctx->tasklog);
+        ctx->tasklog = NULL;
     }
 
     if (ctx->scheduler) {

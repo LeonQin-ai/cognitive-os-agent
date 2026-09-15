@@ -86,6 +86,19 @@
   nav button{
     border-left:0; border-radius:8px; margin:1px 8px; padding:9px 12px;
   }
+  /* 可折叠分组（插件 / 更多） */
+  nav button.navgroup{position:relative}
+  nav button.navgroup .chev{
+    position:absolute; right:10px; opacity:.6; transition:transform var(--tr-dur) ease;
+  }
+  nav button.navgroup.open .chev{transform:rotate(180deg)}
+  nav .navsub{display:none; padding:1px 0 3px}
+  nav .navsub.open{display:block}
+  nav .navsub button{
+    padding:7px 12px 7px 36px; font-size:12.5px; color:var(--muted); margin:0 8px;
+  }
+  nav .navsub button:hover{color:var(--fg)}
+  nav .navsub button.on{background:var(--nav-on); color:var(--fg)}
   nav button.on, nav button[aria-current="true"]{ border-left-color:transparent }
   nav .side-sec{
     color:var(--muted); font-size:11px; padding:14px 20px 4px; letter-spacing:.4px;
@@ -349,62 +362,44 @@
       <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
       新聊天
     </button>
-    <button data-p="dashboard">
-      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
-      Dashboard
-    </button>
-    <button data-p="agents">
-      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-      Agents
-    </button>
-    <button data-p="policy">
-      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-      策略
-    </button>
     <button data-p="flow">
       <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="6" height="6" rx="1"/><rect x="15" y="15" width="6" height="6" rx="1"/><path d="M9 6h6a3 3 0 0 1 3 3v6"/></svg>
       Flow
     </button>
-    <button data-p="models">
-      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M1 9h3M1 15h3M20 9h3M20 15h3"/></svg>
-      Models
+    <button data-p="agents">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+      多 Agent
     </button>
-    <button data-p="mcp">
-      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
-      MCP
+    <button data-p="cron">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2.5M9 2h6M12 2v3"/></svg>
+      定时任务
     </button>
-    <button data-p="skills">
-      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
-      Skills
-    </button>
-    <button data-p="plugins">
+    <button class="navgroup" data-g="g-plugins">
       <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a7 7 0 1 1-7-7"/><path d="M21 4v5h-5"/></svg>
-      Plugins
+      插件
+      <svg class="chev" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
     </button>
-    <button data-p="im">
-      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-      IM
+    <div class="navsub" id="g-plugins">
+      <button data-p="mcp">MCP</button>
+      <button data-p="skills">Skills</button>
+      <button data-p="plugins">Plugins</button>
+    </div>
+    <button class="navgroup" data-g="g-more">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>
+      更多
+      <svg class="chev" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
     </button>
-    <button data-p="memory">
-      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.66 3.58 3 8 3s8-1.34 8-3V5"/><path d="M4 12c0 1.66 3.58 3 8 3s8-1.34 8-3"/></svg>
-      Memory
-    </button>
-    <button data-p="snapshots">
-      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
-      Execution
-    </button>
-    <button data-p="trace">
-      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
-      Monitor
-    </button>
-    <button data-p="cluster">
-      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="2" width="6" height="6"/><rect x="2" y="16" width="6" height="6"/><rect x="16" y="16" width="6" height="6"/><path d="M12 8v5M8 16v-3a4 4 0 0 1 8 0v3"/></svg>
-      Cluster
-    </button>
-    <button data-p="metrics">
-      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>
-      Metrics
-    </button>
+    <div class="navsub" id="g-more">
+      <button data-p="dashboard">Dashboard</button>
+      <button data-p="models">Models</button>
+      <button data-p="policy">策略</button>
+      <button data-p="im">IM</button>
+      <button data-p="memory">Memory</button>
+      <button data-p="snapshots">Execution</button>
+      <button data-p="trace">Monitor</button>
+      <button data-p="cluster">Cluster</button>
+      <button data-p="metrics">Metrics</button>
+    </div>
     <div class="side-sec">最近</div>
     <div id="side-recent"></div>
   </nav>
@@ -623,6 +618,88 @@ panels.agents = `
     </div>
   </div>`;
 
+panels.cron = `
+  <div class="card">
+    <h2>新建定时任务</h2>
+    <div class="hint">按计划把提示词自动发到指定会话执行（结果可在「最近」对应会话里查看）。两种模式：间隔秒数（every N 秒执行一次）或每日定时（HH:MM）。任务持久化到 state 目录 cron.json，重启不丢失。</div>
+    <div class="row">
+      <input id="cron-name" type="text" placeholder="名称" style="flex:1;min-width:120px">
+      <input id="cron-prompt" type="text" placeholder="提示词（如：检查系统状态并汇总）" style="flex:3;min-width:240px">
+      <input id="cron-session" type="text" placeholder="会话（默认 cron）" style="flex:1;min-width:120px">
+    </div>
+    <div class="row" style="margin-top:8px">
+      <select id="cron-kind" style="flex:0 0 130px" onchange="$('cron-at').style.display=this.value==='at'?'':'none';$('cron-every').style.display=this.value==='every'?'':'none'">
+        <option value="every">间隔秒数</option>
+        <option value="at">每日定时</option>
+      </select>
+      <input id="cron-every" type="number" min="30" value="3600" title="间隔秒数" style="flex:1;min-width:110px">
+      <input id="cron-at" type="time" value="09:00" title="每日 HH:MM" style="flex:1;min-width:110px;display:none">
+      <button onclick="cronAdd()">创建</button>
+      <span id="cron-stat" class="muted"></span>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-head">
+      <h2>任务列表</h2>
+      <button class="sec sm" onclick="loadCron()">Refresh</button>
+    </div>
+    <div id="cron-list">加载中…</div>
+  </div>`;
+
+async function loadCron(){
+  const r = await call('GET', '/v1/cron');
+  const list = (r.obj && Array.isArray(r.obj)) ? r.obj : [];
+  const box = $('cron-list'); if(!box) return;
+  if(!list.length){ box.innerHTML = '<div class="hint">暂无定时任务</div>'; return; }
+  box.innerHTML = '';
+  list.forEach(j => {
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.style.cssText = 'align-items:center;border-bottom:1px solid var(--border);padding:7px 2px';
+    const kind = j.every_sec > 0 ? ('每 ' + j.every_sec + ' 秒') : ('每天 ' + (j.at || ''));
+    const next = j.next_run_ms ? new Date(j.next_run_ms).toLocaleString() : '—';
+    row.innerHTML =
+      '<div style="flex:1;min-width:0"><b>' + esc(j.name || ('#' + j.id)) + '</b>' +
+      '<span class="muted"> · ' + esc(kind) + (j.enabled ? '' : ' · 已停用') + '</span>' +
+      '<div class="muted" style="font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(j.prompt) + '">' + esc(j.prompt) + '</div>' +
+      '<div class="muted" style="font-size:11px">会话 ' + esc(j.session || 'cron') + ' · 下次 ' + esc(next) + '</div></div>';
+    const tgl = document.createElement('button');
+    tgl.className = 'sec sm'; tgl.textContent = j.enabled ? '停用' : '启用';
+    tgl.onclick = async () => { await call('POST', '/v1/cron/' + j.id + '/toggle', {enabled: !j.enabled}); loadCron(); };
+    const del = document.createElement('button');
+    del.className = 'sec sm'; del.textContent = '删除';
+    del.onclick = async () => { if(!confirm('删除定时任务 ' + (j.name || j.id) + '?')) return; await call('DELETE', '/v1/cron/' + j.id); loadCron(); };
+    row.appendChild(tgl); row.appendChild(del);
+    box.appendChild(row);
+  });
+}
+
+async function cronAdd(){
+  const st = $('cron-stat'); if(st) st.textContent = '';
+  const kind = $('cron-kind').value;
+  const body = {
+    name: $('cron-name').value.trim(),
+    prompt: $('cron-prompt').value.trim(),
+    session: $('cron-session').value.trim() || undefined
+  };
+  if(!body.prompt){ if(st) st.textContent = 'need prompt'; return; }
+  if(kind === 'every'){
+    const s = parseInt($('cron-every').value, 10);
+    if(!s || s < 30){ if(st) st.textContent = '间隔至少 30 秒'; return; }
+    body.every_sec = s;
+  } else {
+    const at = $('cron-at').value;
+    if(!at){ if(st) st.textContent = 'need HH:MM'; return; }
+    body.at = at;
+  }
+  const r = await call('POST', '/v1/cron', body);
+  if(r.status < 300){
+    $('cron-name').value = ''; $('cron-prompt').value = '';
+    if(st) st.textContent = '已创建';
+    loadCron();
+  } else if(st) st.textContent = 'error: ' + ((r.obj && r.obj.error) || ('HTTP ' + r.status));
+}
+
 panels.policy = `
   <div class="card">
     <h2>添加策略规则</h2>
@@ -838,6 +915,13 @@ panels.snapshots = `
       <button class="sec sm" onclick="copyPre('snapshots-out')">Copy</button>
     </div>
     <pre id="snapshots-out">加载中…</pre>
+  </div>
+  <div class="card">
+    <div class="card-head">
+      <h2>任务历史（checkpoint，重启不丢）</h2>
+      <button class="sec sm" onclick="loadJournal()">Refresh</button>
+    </div>
+    <div id="journal-list" class="hint">加载中…</div>
   </div>`;
 
 panels.trace = `
@@ -1008,6 +1092,7 @@ async function load(panel){
   if(panel === 'plugins') return (loadFetcher('plugins'), loadPluginMarket());
   if(panel === 'snapshots') return loadSnapshots();
   if(panel === 'chat') return loadChat();
+  if(panel === 'cron') return loadCron();
   if(panel === 'policy') return loadPolicy();
   if(panel === 'flow') return loadFlow();
   if(panel === 'metrics'){
@@ -1024,6 +1109,43 @@ async function loadSnapshots(){
   const r = await call('GET', '/v1/snapshots');
   const el = $('snapshots-out'); if(el) renderJSON(r.obj, el);
   await loadSnapshotCfg();
+  loadJournal();
+}
+
+/* 任务历史（journal/checkpoint）：列出最近的任务终态记录，支持一键恢复 */
+async function loadJournal(){
+  const el = $('journal-list'); if(!el) return;
+  const r = await call('GET', '/v1/tasks/journal?limit=50');
+  const arr = (r.obj && Array.isArray(r.obj)) ? r.obj : [];
+  if(!arr.length){ el.textContent = '暂无任务历史'; return; }
+  el.classList.remove('hint');
+  el.innerHTML = '';
+  const COL = {DONE:'var(--ok,#4ade80)',FAILED:'var(--danger,#f87171)',CANCELLED:'var(--muted)',TIMEOUT:'var(--warn,#fbbf24)'};
+  arr.slice().reverse().forEach(t => {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:7px 10px;border:1px solid var(--border);border-radius:8px;margin-bottom:6px;font-size:12.5px';
+    const st = document.createElement('span');
+    st.style.cssText = 'color:' + (COL[t.status] || 'var(--muted)') + ';font-weight:600;min-width:72px';
+    st.textContent = t.status || '?';
+    const txt = document.createElement('span');
+    txt.style.cssText = 'flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+    txt.textContent = '#' + t.id + ' ' + (t.input || '');
+    txt.title = t.input || '';
+    const when = document.createElement('span');
+    when.className = 'muted';
+    when.style.fontSize = '11px';
+    when.textContent = t.ts ? new Date(t.ts).toLocaleString() : '';
+    row.appendChild(st); row.appendChild(txt); row.appendChild(when);
+    const btn = document.createElement('button');
+    btn.className = 'sec sm'; btn.textContent = '恢复';
+    btn.onclick = async () => {
+      const rr = await call('POST', '/v1/tasks/' + t.id + '/resume', {});
+      if(rr.obj && rr.obj.id){ toast('已恢复为新任务 #' + rr.obj.id); loadJournal(); }
+      else toast('恢复失败：' + (rr.obj && rr.obj.error || rr.status));
+    };
+    row.appendChild(btn);
+    el.appendChild(row);
+  });
 }
 
 async function loadSnapshotCfg(){
@@ -1844,6 +1966,10 @@ let CHAT_MSGS = [];             // 当前会话气泡的本地镜像 [{role,text
 // switchPanel 用 innerHTML 重绘面板，气泡若只活在 DOM 里，切页即丢；
 // 轮询循环持有的节点也会脱离文档导致任务结果更新到空中。所有渲染都从
 // CHAT_MSGS 恢复，进行中的回复以 pending 标记，切回面板后继续显示。
+// CHAT_CACHE: 每会话消息缓存（sessionId → msgs），切会话/切页时先回放缓存
+// 再等服务端历史，避免闪烁与清空。
+const CHAT_CACHE = {};
+function chatCacheStore(){ CHAT_CACHE[CHAT_SESSION] = CHAT_MSGS; }
 
 function chatRedraw(){
   const box = $('chat-box'); if(!box) return;
@@ -1923,15 +2049,18 @@ function sideRecent(list){
     b.className = id === CHAT_SESSION ? 'on' : '';
     b.textContent = id === 'default' ? '默认会话' : id;
     b.title = info && info.turns != null ? (id + '（' + info.turns + ' 轮）') : id;
-    b.onclick = () => { CHAT_SESSION = id; CHAT_NEW_SESSION = false; CHAT_MSGS = []; switchPanel('chat'); };
+    b.onclick = () => { if(id !== CHAT_SESSION){ chatSwitchSession(id); } else { switchPanel('chat'); } };
     box.appendChild(b);
   });
 }
 
 async function chatLoadHistory(){
   const box = $('chat-box'); if(!box) return;
+  // 先回放本地缓存（切页/切会话不闪空），再让服务端历史兜底刷新
+  const cached = CHAT_CACHE[CHAT_SESSION];
+  if(cached && cached.length && !CHAT_MSGS.length){ CHAT_MSGS = cached; chatRedraw(); }
   // 有进行中的回复时不要用服务端历史覆盖本地视图（本轮 q/a 还没入库）
-  if(CHAT_MSGS.some(m => m.pending)){ chatRedraw(); return; }
+  if(CHAT_MSGS.some(m => m.pending)){ return; }
   const r = await call('GET', '/v1/chat/history?session=' + encodeURIComponent(CHAT_SESSION));
   const turns = (r.obj && Array.isArray(r.obj.turns)) ? r.obj.turns : [];
   CHAT_MSGS = [];
@@ -1942,6 +2071,7 @@ async function chatLoadHistory(){
 
 async function chatSwitchSession(id){
   if(CHAT_BUSY || id === CHAT_SESSION) return;
+  chatCacheStore(); // 保存当前会话消息，切回时即时回放
   CHAT_SESSION = id;
   CHAT_NEW_SESSION = false;
   CHAT_MSGS = [];
@@ -1952,6 +2082,7 @@ async function chatSwitchSession(id){
 
 function chatNewSession(){
   if(CHAT_BUSY) return;
+  chatCacheStore(); // 保存当前会话消息，切回时即时回放
   CHAT_SESSION = 's-' + Date.now();
   CHAT_NEW_SESSION = true;
   CHAT_MSGS = [];
@@ -2551,6 +2682,7 @@ async function loadModels(){
       + '<td>' + (x.weight != null ? x.weight : 1) + '</td>'
       + '<td>' + (x.calls != null ? x.calls : 0) + '</td>'
       + '<td><button onclick="testRoute(' + i + ')" class="sec sm">Test</button> '
+      + '<button onclick="editRouteKey(' + i + ')" class="sec sm">改Key</button> '
       + '<button onclick="setActive(' + i + ')" class="sec sm"' + (isActive ? ' disabled' : '') + '>Set active</button> '
       + '<button onclick="deleteRoute(' + i + ')" class="sec sm danger">Delete</button></td></tr>';
   }).join('');
@@ -2571,6 +2703,20 @@ async function setActive(i){
 async function deleteRoute(i){
   const x = ROUTES[i]; if(!x) return;
   await call('DELETE', '/v1/routes/' + encodeURIComponent(x.name));
+  loadModels();
+}
+
+/* 修改已有路由的 api key：upsert 同名路由，其余字段保持不变 */
+async function editRouteKey(i){
+  const x = ROUTES[i]; if(!x) return;
+  const k = prompt('路由 ' + x.name + ' 的新 API Key：');
+  if(k === null) return;
+  const st = $('models-stat'); if(st) st.textContent = 'updating key…';
+  const r = await call('POST', '/v1/routes', {
+    name: x.name, provider: x.provider, base_url: x.base_url || '', model: x.model || '',
+    api_key: k.trim(), weight: x.weight != null ? x.weight : 1
+  });
+  if(st) st.textContent = (r.status < 300) ? 'API Key 已更新' : 'error ' + r.status;
   loadModels();
 }
 
@@ -2640,7 +2786,7 @@ async function testForm(){
 
 /* ================= 导航 ================= */
 
-const TITLES = {dashboard:'Dashboard', chat:'对话', agents:'Agents', policy:'策略', flow:'Flow', models:'Models', mcp:'MCP', skills:'Skills', plugins:'Plugins', im:'IM', memory:'Memory', snapshots:'Execution', trace:'Monitor', cluster:'Cluster', metrics:'Metrics'};
+const TITLES = {dashboard:'Dashboard', chat:'对话', cron:'定时任务', agents:'多 Agent', policy:'策略', flow:'Flow', models:'Models', mcp:'MCP', skills:'Skills', plugins:'Plugins', im:'IM', memory:'Memory', snapshots:'Execution', trace:'Monitor', cluster:'Cluster', metrics:'Metrics'};
 let current = 'dashboard';
 
 function switchPanel(p){
@@ -2661,6 +2807,19 @@ function switchPanel(p){
 document.querySelectorAll('#nav button').forEach(b => {
   b.addEventListener('click', () => {
     if(b.id === 'nav-newchat' && !CHAT_BUSY) chatNewSession();
+    if(b.classList.contains('navgroup')){
+      const sub = $(b.dataset.g);
+      const open = sub ? !sub.classList.contains('open') : false;
+      document.querySelectorAll('nav .navsub').forEach(s => s.classList.remove('open'));
+      document.querySelectorAll('nav .navgroup').forEach(g => g.classList.remove('open'));
+      if(sub){ sub.classList.add('open'); b.classList.add('open'); }
+      return;
+    }
+    if(b.closest('.navsub')){
+      const sub = b.closest('.navsub');
+      document.querySelectorAll('nav .navsub').forEach(s => s.classList.toggle('open', s === sub));
+      document.querySelectorAll('nav .navgroup').forEach(g => g.classList.toggle('open', g.dataset.g === sub.id));
+    }
     switchPanel(b.dataset.p);
   });
 });

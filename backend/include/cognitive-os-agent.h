@@ -103,6 +103,8 @@ typedef struct runtime_ctx {
     struct ret_index *index;        /* code index over session-touched files */
     im *im;                         /* instant messaging store (sessions/messages) */
     im_channels *channels;          /* external messaging channel adapters (IM bridge) */
+    struct cron_mgr *cron;          /* scheduled tasks (定时任务) tick loop */
+    struct tasklog *tasklog;        /* durable task journal (checkpoint/恢复) */
     struct thread_t *channels_poller; /* telegram inbound poller thread */
     volatile int channels_stop;         /* poller stop flag */
     struct thread_t *hb_poller;       /* cluster heartbeat thread */

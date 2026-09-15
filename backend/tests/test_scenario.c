@@ -171,27 +171,40 @@ static void s1_project_workflow(void) {
 
     /* read back through the agent */
     CHECK(run(&ctx, "读取 src/main.cpp", &ans) == 0);
-    CHECK(ans != NULL && strstr(ans, "hello-main") != NULL);
+    CHECK(ans != NULL && strstr(ans, "[file_read]") == NULL); /* answer = final text only */
     free(ans);
+    /* the tool's data shows up in the execution trace (process tail) */
+    char *lg = reasoning_round_log_tail(ctx.reasoning, 65536);
+    CHECK(lg != NULL && strstr(lg, "hello-main") != NULL);
+    free(lg);
 
     /* shell action */
     CHECK(run(&ctx, "执行命令 echo scen-shell-ok", &ans) == 0);
-    CHECK(ans != NULL && strstr(ans, "scen-shell-ok") != NULL);
+    CHECK(ans != NULL && strstr(ans, "scen-shell-ok") == NULL);
     free(ans);
+    lg = reasoning_round_log_tail(ctx.reasoning, 65536);
+    CHECK(lg != NULL && strstr(lg, "scen-shell-ok") != NULL);
+    free(lg);
 
     /* glob + grep through the full runtime (mock maps 查找文件/搜索) */
     CHECK(run(&ctx, "查找文件 **/*.cpp", &ans) == 0);
-    CHECK(ans != NULL && strstr(ans, "src/main.cpp") != NULL);
+    CHECK(ans != NULL);
     free(ans);
+    lg = reasoning_round_log_tail(ctx.reasoning, 65536);
+    CHECK(lg != NULL && strstr(lg, "src/main.cpp") != NULL);
+    free(lg);
     CHECK(run(&ctx, "搜索 hello-main", &ans) == 0);
-    CHECK(ans != NULL && strstr(ans, "src/main.cpp:1") != NULL);
+    CHECK(ans != NULL);
     free(ans);
+    lg = reasoning_round_log_tail(ctx.reasoning, 65536);
+    CHECK(lg != NULL && strstr(lg, "src/main.cpp:1") != NULL);
+    free(lg);
 
     /* agent loop: analyze -> fix -> final answer across rounds */
     fs_write_file("state-scen-1/w/note.txt", "v1 OLD v1", 9);
     CHECK(run(&ctx, "分析 note.txt 并修复其中的 OLD", &ans) == 0);
-    CHECK(ans != NULL && strstr(ans, "[file_read]") != NULL);
-    CHECK(ans != NULL && strstr(ans, "[file_edit]") != NULL);
+    CHECK(ans != NULL && strstr(ans, "[file_read]") == NULL);
+    CHECK(ans != NULL && strstr(ans, "[file_edit]") == NULL);
     free(ans);
     d = fs_read_file("state-scen-1/w/note.txt");
     CHECK(d != NULL && strstr(d, "NEW") != NULL && strstr(d, "OLD") == NULL);
@@ -238,8 +251,12 @@ static void s2_auto_evolution(void) {
 
     char *ans = NULL;
     CHECK(run(&ctx, "查询天气 北京", &ans) == 0);
-    CHECK(ans != NULL && strstr(ans, "plugin:") != NULL); /* generated skill ran */
+    CHECK(ans != NULL); /* generated skill ran */
     free(ans);
+    /* the generated plugin's execution trace (process tail) */
+    char *lg = reasoning_round_log_tail(ctx.reasoning, 65536);
+    CHECK(lg != NULL && strstr(lg, "plugin:") != NULL);
+    free(lg);
 
     /* the planned tool is now bound and the generated pieces observable */
     CHECK(tool_find(ctx.tools, "weather_lookup") != NULL);
@@ -253,8 +270,11 @@ static void s2_auto_evolution(void) {
     /* second run reuses the bound tool (no re-generation -> still exactly
      * one plugin in the registry) */
     CHECK(run(&ctx, "查询天气 上海", &ans) == 0);
-    CHECK(ans != NULL && strstr(ans, "plugin:") != NULL);
+    CHECK(ans != NULL);
     free(ans);
+    lg = reasoning_round_log_tail(ctx.reasoning, 65536);
+    CHECK(lg != NULL && strstr(lg, "plugin:") != NULL);
+    free(lg);
     int regs = 0;
     pj = plugin_registry_json(ctx.registry);
     if (pj) {

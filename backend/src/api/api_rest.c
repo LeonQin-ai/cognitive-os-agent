@@ -5,6 +5,8 @@
 #include "api/market.h"
 #include "runtime/scheduler.h"
 #include "runtime/flow.h"
+#include "runtime/cron.h"
+#include "runtime/tasklog.h"
 #include "action/tools.h"
 #include "memory/memory.h"
 #include "snapshot/snapshot.h"
@@ -226,6 +228,92 @@ static int h_task_cancel(const http_request *req, http_response *resp, void *ud)
     } else {
         http_resp_appendf(resp, "{\"id\":%lld,\"status\":\"%s\"}", (long long)id, task_status_str(t->status));
     }
+    return 0;
+}
+
+/* GET /v1/tasks/journal — durable task journal (checkpoint history). Serves
+ * the newest `?limit=` records (default 100) from <state>/journal/tasks.jsonl;
+ * survives restarts unlike the in-memory scheduler table. */
+static int h_task_journal(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
+    int limit = 100;
+    char *s;
+
+    if (!authz_ok(ctx, req, resp))
+        return 0;
+    const char *q = strchr(req->path, '?');
+    if (q) {
+        const char *lim = strstr(q, "limit=");
+        if (lim)
+            limit = atoi(lim + 6);
+    }
+    if (limit <= 0 || limit > 1000)
+        limit = 100;
+    s = tasklog_json(ctx->tasklog, limit);
+    http_resp_json(resp, s ? s : "[]");
+    free(s);
+    return 0;
+}
+
+/* POST /v1/tasks/<id>/resume — re-submit a terminal task's original input as
+ * a new task (checkpoint resume). Reads the newest journal record for the id;
+ * only DONE/FAILED/CANCELLED/TIMEOUT tasks are resumable. */
+static int h_task_resume(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
+    const char *suffix;
+    const char *slash;
+    int64_t id;
+    char *status = NULL, *session = NULL, *input = NULL, *output = NULL;
+
+    if (!authz_ok(ctx, req, resp))
+        return 0;
+    suffix = req->path + strlen("/v1/tasks/");
+    slash = strrchr(suffix, '/');
+    if (!slash || strcmp(slash, "/resume") != 0) {
+        resp->status = 404;
+        http_resp_json(resp, "{\"error\":\"expected /v1/tasks/<id>/resume\"}");
+        return 0;
+    }
+    id = atoll(suffix);
+    if (id <= 0) {
+        resp->status = 400;
+        http_resp_json(resp, "{\"error\":\"invalid task id\"}");
+        return 0;
+    }
+    if (!tasklog_find(ctx->tasklog, id, &status, &session, &input, &output)) {
+        resp->status = 404;
+        http_resp_json(resp, "{\"error\":\"no journal record for task\"}");
+        return 0;
+    }
+    if (status && (strcmp(status, "RUNNING") == 0 || strcmp(status, "QUEUED") == 0)) {
+        resp->status = 409;
+        http_resp_json(resp, "{\"error\":\"task not in a terminal state\"}");
+        free(status);
+        free(session);
+        free(input);
+        free(output);
+        return 0;
+    }
+    if (!input || !*input) {
+        resp->status = 409;
+        http_resp_json(resp, "{\"error\":\"task has no recorded input\"}");
+        free(status);
+        free(session);
+        free(input);
+        free(output);
+        return 0;
+    }
+    int64_t nid = scheduler_submit_tag(ctx->scheduler, 0, input, NULL, 0, session);
+    if (nid <= 0) {
+        resp->status = 500;
+        http_resp_json(resp, "{\"error\":\"submit failed\"}");
+    } else {
+        http_resp_appendf(resp, "{\"ok\":true,\"id\":%lld,\"resumed_from\":%lld}", (long long)nid, (long long)id);
+    }
+    free(status);
+    free(session);
+    free(input);
+    free(output);
     return 0;
 }
 
@@ -1289,6 +1377,124 @@ static int h_route_add(const http_request *req, http_response *resp, void *ud) {
         router_save_file(ctx->router, rpath);
     }
 
+    return 0;
+}
+
+/* ---- scheduled tasks (定时任务) ---- */
+
+/* GET /v1/cron — list jobs */
+static int h_cron_list(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
+    char *s;
+
+    if (!authz_ok(ctx, req, resp))
+        return 0;
+    s = ctx->cron ? cron_json(ctx->cron) : xstrdup("[]");
+    http_resp_json(resp, s ? s : "[]");
+    free(s);
+    return 0;
+}
+
+/* POST /v1/cron {"name","prompt","session"?,"every_sec"?|"at"?"HH:MM"} */
+static int h_cron_add(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
+    char *b;
+    cJSON *root, *es;
+    long long id;
+
+    if (!authz_ok(ctx, req, resp))
+        return 0;
+    if (!ctx->cron) {
+        resp->status = 503;
+        http_resp_json(resp, "{\"error\":\"cron not initialized\"}");
+        return 0;
+    }
+    b = body_str(req);
+    root = b ? cJSON_Parse(b) : NULL;
+    free(b);
+    if (!root || !cJSON_IsObject(root)) {
+        if (root)
+            cJSON_Delete(root);
+        resp->status = 400;
+        http_resp_json(resp, "{\"error\":\"body must be a JSON object\"}");
+        return 0;
+    }
+    const char *prompt = json_str(root, "prompt");
+    if (!prompt || !*prompt) {
+        cJSON_Delete(root);
+        resp->status = 400;
+        http_resp_json(resp, "{\"error\":\"need 'prompt' string\"}");
+        return 0;
+    }
+    es = cJSON_GetObjectItemCaseSensitive(root, "every_sec");
+    const char *at = json_str(root, "at");
+    if ((!es || !cJSON_IsNumber(es) || es->valuedouble <= 0) && (!at || !*at)) {
+        cJSON_Delete(root);
+        resp->status = 400;
+        http_resp_json(resp, "{\"error\":\"need 'every_sec' (>0) or 'at' (\"HH:MM\")\"}");
+        return 0;
+    }
+    id = cron_add(ctx->cron, json_str(root, "name"), prompt, json_str(root, "session"),
+                  (es && cJSON_IsNumber(es)) ? (int)es->valuedouble : -1, at);
+    cJSON_Delete(root);
+    if (id < 0) {
+        resp->status = 400;
+        http_resp_json(resp, "{\"error\":\"invalid job (bad schedule or too many jobs)\"}");
+        return 0;
+    }
+    {
+        char out[64];
+        snprintf(out, sizeof(out), "{\"ok\":true,\"id\":%lld}", id);
+        http_resp_json(resp, out);
+    }
+    return 0;
+}
+
+/* DELETE /v1/cron/<id> */
+static int h_cron_delete(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
+    long long id;
+
+    if (!authz_ok(ctx, req, resp))
+        return 0;
+    const char *suffix = req->path + strlen("/v1/cron/");
+    id = atoll(suffix);
+    if (!ctx->cron || cron_remove(ctx->cron, id) != 0) {
+        resp->status = 404;
+        http_resp_json(resp, "{\"error\":\"job not found\"}");
+        return 0;
+    }
+    http_resp_json(resp, "{\"ok\":true}");
+    return 0;
+}
+
+/* POST /v1/cron/<id>/toggle {"enabled":bool} — enable/disable a job */
+static int h_cron_toggle(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
+    char *b;
+    cJSON *root, *en;
+    long long id;
+    int rc;
+
+    if (!authz_ok(ctx, req, resp))
+        return 0;
+    b = body_str(req);
+    root = b ? cJSON_Parse(b) : NULL;
+    free(b);
+    en = root ? cJSON_GetObjectItemCaseSensitive(root, "enabled") : NULL;
+    int enabled = en ? cJSON_IsTrue(en) : 0;
+    if (root)
+        cJSON_Delete(root);
+    /* path is "/v1/cron/<id>/toggle" — id sits between the two slashes */
+    const char *p = req->path + strlen("/v1/cron/");
+    id = atoll(p);
+    rc = ctx->cron ? cron_set_enabled(ctx->cron, id, enabled) : -1;
+    if (rc != 0) {
+        resp->status = 404;
+        http_resp_json(resp, "{\"error\":\"job not found\"}");
+        return 0;
+    }
+    http_resp_json(resp, "{\"ok\":true}");
     return 0;
 }
 
@@ -3873,6 +4079,8 @@ int api_attach(runtime_ctx *ctx) {
     }
 
     http_server_route(ctx->http, "POST", "/v1/tasks", h_task_create, ctx);
+    http_server_route(ctx->http, "GET", "/v1/tasks/journal", h_task_journal, ctx);
+    http_server_route(ctx->http, "POST", "/v1/tasks/", h_task_resume, ctx);
     http_server_route(ctx->http, "GET", "/v1/tasks/", h_task_get, ctx);
     http_server_route(ctx->http, "DELETE", "/v1/tasks/", h_task_cancel, ctx);
     http_server_route(ctx->http, "GET", "/v1/tools", h_tools, ctx);
@@ -3892,6 +4100,10 @@ int api_attach(runtime_ctx *ctx) {
     http_server_route(ctx->http, "GET", "/v1/routes", h_routes, ctx);
     http_server_route(ctx->http, "POST", "/v1/routes", h_route_add, ctx);
     http_server_route(ctx->http, "POST", "/v1/routes/policy", h_route_policy, ctx);
+    http_server_route(ctx->http, "GET", "/v1/cron", h_cron_list, ctx);
+    http_server_route(ctx->http, "POST", "/v1/cron", h_cron_add, ctx);
+    http_server_route(ctx->http, "DELETE", "/v1/cron/", h_cron_delete, ctx);
+    http_server_route(ctx->http, "POST", "/v1/cron/", h_cron_toggle, ctx);
     http_server_route(ctx->http, "DELETE", "/v1/routes/", h_route_delete, ctx);
     http_server_route(ctx->http, "GET", "/v1/config/llm", h_config_llm_get, ctx);
     http_server_route(ctx->http, "POST", "/v1/config/llm", h_config_llm, ctx);
