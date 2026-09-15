@@ -284,7 +284,8 @@ static void session_load_persisted(reasoning *r, struct session *s) {
     size_t skip = total > CHAT_PERSIST_MAX ? total - CHAT_PERSIST_MAX : 0;
     size_t line_no = 0;
     char *save = NULL;
-    for (char *line = strtok_r(buf, "\n", &save); line; line = strtok_r(NULL, "\n", &save)) {
+    char *line = strtok_r(buf, "\n", &save);
+    for (; line; line = strtok_r(NULL, "\n", &save)) {
         if (line_no++ < skip)
             continue;
         cJSON *t = cJSON_Parse(line);

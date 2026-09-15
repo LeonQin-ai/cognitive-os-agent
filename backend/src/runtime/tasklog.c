@@ -113,7 +113,8 @@ static cJSON *journal_parse(const char *path, int limit, int64_t pick_id) {
         return NULL;
     }
     char *save = NULL;
-    for (char *line = strtok_r(buf, "\n", &save); line; line = strtok_r(NULL, "\n", &save)) {
+    char *line = strtok_r(buf, "\n", &save);
+    for (; line; line = strtok_r(NULL, "\n", &save)) {
         cJSON *o = cJSON_Parse(line);
         if (!o)
             continue;
