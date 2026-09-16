@@ -283,14 +283,22 @@ static void session_load_persisted(reasoning *r, struct session *s) {
             total++;
     size_t skip = total > CHAT_PERSIST_MAX ? total - CHAT_PERSIST_MAX : 0;
     size_t line_no = 0;
-    char *save = NULL;
-    char *line = strtok_r(buf, "\n", &save);
-    for (; line; line = strtok_r(NULL, "\n", &save)) {
-        if (line_no++ < skip)
+    /* manual '\n' split: strtok_r is not declared under strict -std=c11 on
+     * glibc (implicit decl truncates the returned pointer) */
+    char *line = buf;
+    while (line && *line) {
+        char *nl = strchr(line, '\n');
+        if (nl)
+            *nl = '\0';
+        if (line_no++ < skip) {
+            line = nl ? nl + 1 : NULL;
             continue;
+        }
         cJSON *t = cJSON_Parse(line);
-        if (!t)
+        if (!t) {
+            line = nl ? nl + 1 : NULL;
             continue;
+        }
         cJSON *q = cJSON_GetObjectItemCaseSensitive(t, "q");
         cJSON *a = cJSON_GetObjectItemCaseSensitive(t, "a");
         if (cJSON_IsString(q) && q->valuestring) {
@@ -315,6 +323,7 @@ static void session_load_persisted(reasoning *r, struct session *s) {
             }
         }
         cJSON_Delete(t);
+        line = nl ? nl + 1 : NULL;
     }
     free(buf);
 }

@@ -7,7 +7,7 @@
 [![Language](https://img.shields.io/badge/language-C11-blue.svg)](https://en.wikipedia.org/wiki/C11_(C_standard_revision))
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey.svg)](#quick-start)
 [![Dependencies](https://img.shields.io/badge/external%20deps-0-green.svg)](#project-structure)
-[![Tests](https://img.shields.io/badge/tests-1391%20passing-brightgreen.svg)](#testing)
+[![Tests](https://img.shields.io/badge/tests-1541%20passing-brightgreen.svg)](#testing)
 [![CI](https://github.com/LeonQin-ai/cognitive-os-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/LeonQin-ai/cognitive-os-agent/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
 
@@ -363,11 +363,19 @@ make
 # → http://localhost:8080/
 ```
 
+The embedded web console ships a ChatGPT-style dark UI: multi-session chat with
+**per-session history that survives restarts** (persisted as JSONL under the
+state root), live process log during runs, a model picker in the chat sidebar,
+scheduled jobs (cron, interval or daily) with visible run results, and a
+durable task journal with one-click **checkpoint resume** (`POST /v1/tasks/<id>/resume`).
+
 Drive it over HTTP:
 
 ```bash
 curl -X POST localhost:8080/v1/chat -d '{"prompt":"Create note.txt with content hello"}'
 curl localhost:8080/v1/tasks/0    # inspect a task
+curl localhost:8080/v1/tasks/journal   # durable task history (checkpoint)
+curl localhost:8080/v1/cron       # scheduled jobs (interval / daily)
 curl localhost:8080/v1/tools      # registered tools
 curl localhost:8080/v1/memory     # Memory OS state
 curl localhost:8080/metrics       # gauges: context.bytes_*, memory.*, tx.*
@@ -389,8 +397,8 @@ Point it at a real LLM (or run fully offline with the mock provider):
 Quality gate: **every change is verified on both Windows (zig cc) and Linux (gcc 12), including an AddressSanitizer-clean run.**
 
 ```
-unit:      1391 passed, 0 failed   (43 modules, 0 external deps; 1366 on Linux/gcc)
-scenario:  85 checks, 0 failed     (HTTP server, plugins, MCP stdio, flows)
+unit:      1541 passed, 0 failed   (44 modules, 0 external deps; 1517 on Linux/gcc)
+scenario:  91 checks, 0 failed     (HTTP server, plugins, MCP stdio, flows)
 e2e:       E2E PASS                (real HTTP, both protocols)
 adapters:  ADAPTER PASS            (chat + SSE stream, openai + anthropic)
 bench:     BFCL-style 22 cases     (simple / multiple / parallel / irrelevance / policy)

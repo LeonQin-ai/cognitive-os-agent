@@ -7,7 +7,7 @@
 [![Language](https://img.shields.io/badge/language-C11-blue.svg)](https://en.wikipedia.org/wiki/C11_(C_standard_revision))
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey.svg)](#快速开始)
 [![Dependencies](https://img.shields.io/badge/external%20deps-0-green.svg)](#项目结构)
-[![Tests](https://img.shields.io/badge/tests-1391%20passing-brightgreen.svg)](#测试与验证)
+[![Tests](https://img.shields.io/badge/tests-1541%20passing-brightgreen.svg)](#测试与验证)
 [![CI](https://github.com/LeonQin-ai/cognitive-os-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/LeonQin-ai/cognitive-os-agent/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
 
@@ -363,11 +363,18 @@ make
 # → http://localhost:8080/
 ```
 
+内嵌 Web 控制台为 ChatGPT 风格暗色 UI：多会话聊天，**聊天记录按会话持久化、重启不丢**
+（JSONL 存于 state 目录）、运行过程实时可见、对话侧栏可随时切换模型、定时任务
+（间隔/每日 cron）执行结果直接展示，以及持久化任务日志支持一键**检查点恢复**
+（`POST /v1/tasks/<id>/resume`）。
+
 通过 HTTP 驱动：
 
 ```bash
 curl -X POST localhost:8080/v1/chat -d '{"prompt":"创建 note.txt，内容为 hello"}'
 curl localhost:8080/v1/tasks/0    # 查看任务
+curl localhost:8080/v1/tasks/journal   # 持久化任务历史（checkpoint）
+curl localhost:8080/v1/cron       # 定时任务（间隔 / 每日）
 curl localhost:8080/v1/tools      # 已注册工具
 curl localhost:8080/v1/memory     # Memory OS 状态
 curl localhost:8080/metrics       # 指标：context.bytes_*、memory.*、tx.*
@@ -389,8 +396,8 @@ curl localhost:8080/metrics       # 指标：context.bytes_*、memory.*、tx.*
 质量门槛：**每次改动都在 Windows（zig cc）与 Linux（gcc 12）双平台验证，包含 AddressSanitizer 无报错运行。**
 
 ```
-unit:      1391 passed, 0 failed   （43 个模块，0 外部依赖；Linux/gcc 1366）
-scenario:  85 checks, 0 failed     （HTTP 服务器、插件、MCP stdio、Flow）
+unit:      1541 passed, 0 failed   （44 个模块，0 外部依赖；Linux/gcc 1517）
+scenario:  91 checks, 0 failed     （HTTP 服务器、插件、MCP stdio、Flow）
 e2e:       E2E PASS                （真实 HTTP，双协议）
 adapters:  ADAPTER PASS            （chat + SSE 流式，openai + anthropic）
 bench:     BFCL 风格 22 条          （simple / multiple / parallel / irrelevance / policy）
@@ -406,7 +413,7 @@ ASAN:      0 内存错误
 ```bash
 cd backend
 make                # 构建全部测试二进制（或 make test / make scenario 构建并运行单项）
-make test           # 单元测试            → "1391 passed, 0 failed"
+make test           # 单元测试            → "1541 passed, 0 failed"
 make scenario       # 场景检查            → "SCENARIO PASS"
 ./build/test-adapters            # 适配器检查          → "ADAPTER PASS"
 ./build/cognitive-os-agent-bench --mock   # 基准 sanity（离线 mock）
@@ -499,7 +506,7 @@ Claude Code 与 Codex 是前沿模型驱动、打磨成熟的终端 Agent 产品
 | 多智能体 | 子 Agent 工具 | — | — | **Flow DAG 编译器，每 Agent 独立记忆/上下文/工具/策略** |
 | 扩展 | MCP + 插件 | MCP | 函数调用 | **MCP + 自蒸馏技能（成功动作序列沉淀复用）+ 原生 / WASM 沙箱插件** |
 | 模型绑定 | Anthropic | OpenAI | DeepSeek | **任意 OpenAI 兼容 / Anthropic / 本地（Ollama）/ 离线 mock** |
-| 离线可验证 | 需 API 访问 | 需 API 访问 | 需 API 访问 | **1391 单元 + 85 场景 + e2e/适配器测试免密钥对 mock 运行，ASAN 干净** |
+| 离线可验证 | 需 API 访问 | 需 API 访问 | 需 API 访问 | **1541 单元 + 91 场景 + e2e/适配器测试免密钥对 mock 运行，ASAN 干净** |
 
 对比的重点不是"产品更好"，而是：**策略强制、事务、记忆生命周期、调度与隔离在这里是运行时服务，不是提示词约定或产品功能**。正因如此，同一套运行时用中端模型就能达到 GAIA 78.79%，并把策略遵循做成 4/4。
 

@@ -31,6 +31,7 @@ typedef struct {
     int enabled;
     long long last_run_ms;
     long long next_run_ms;
+    long long last_id;          /* task id of the most recent run (issue #13) */
 } cron_job;
 
 struct cron_mgr {
@@ -70,6 +71,7 @@ static void cron_save_locked(cron_mgr *c) {
         cJSON_AddBoolToObject(o, "enabled", j->enabled ? 1 : 0);
         cJSON_AddNumberToObject(o, "last_run_ms", (double)j->last_run_ms);
         cJSON_AddNumberToObject(o, "next_run_ms", (double)j->next_run_ms);
+        cJSON_AddNumberToObject(o, "last_id", (double)j->last_id);
         cJSON_AddItemToArray(arr, o);
     }
     s = cJSON_PrintUnformatted(arr);
@@ -124,6 +126,7 @@ static void cron_load(cron_mgr *c) {
         cJSON *ev = cJSON_GetObjectItemCaseSensitive(it, "every_sec");
         cJSON *at = cJSON_GetObjectItemCaseSensitive(it, "at");
         cJSON *en = cJSON_GetObjectItemCaseSensitive(it, "enabled");
+        cJSON *li = cJSON_GetObjectItemCaseSensitive(it, "last_id");
         cron_job *j;
 
         if (c->n == CRON_MAX_JOBS)
@@ -143,6 +146,8 @@ static void cron_load(cron_mgr *c) {
         if (at && cJSON_IsString(at) && at->valuestring)
             snprintf(j->at, sizeof(j->at), "%s", at->valuestring);
         j->enabled = en ? cJSON_IsTrue(en) : 1;
+        if (li && cJSON_IsNumber(li))
+            j->last_id = (long long)li->valuedouble;
         j->next_run_ms = 0; /* due immediately after restart */
         if (j->id >= c->next_id)
             c->next_id = j->id + 1;
@@ -198,8 +203,10 @@ int cron_tick(cron_mgr *c) {
             char session[CRON_SESSION_MAX];
             snprintf(session, sizeof(session), "%s", j->session[0] ? j->session : CRON_DEFAULT_SESSION);
             int64_t tid = scheduler_submit_tag(c->sched, 0, j->prompt, NULL, 0, session);
-            if (tid >= 0)
+            if (tid >= 0) {
+                j->last_id = (long long)tid; /* journal 查询结果用 (issue #13) */
                 log_info("cron: submitted job '%s' (task %lld, session %s)", j->name, (long long)tid, session);
+            }
         }
         j->last_run_ms = now;
         job_schedule_next(j, now);
@@ -346,6 +353,7 @@ char *cron_json(const cron_mgr *c) {
         cJSON_AddBoolToObject(o, "enabled", j->enabled ? 1 : 0);
         cJSON_AddNumberToObject(o, "last_run_ms", (double)j->last_run_ms);
         cJSON_AddNumberToObject(o, "next_run_ms", (double)j->next_run_ms);
+        cJSON_AddNumberToObject(o, "last_id", (double)j->last_id);
         cJSON_AddItemToArray(arr, o);
     }
     s = cJSON_PrintUnformatted(arr);

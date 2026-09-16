@@ -112,10 +112,15 @@ static cJSON *journal_parse(const char *path, int limit, int64_t pick_id) {
         free(buf);
         return NULL;
     }
-    char *save = NULL;
-    char *line = strtok_r(buf, "\n", &save);
-    for (; line; line = strtok_r(NULL, "\n", &save)) {
+    /* manual '\n' split: strtok_r is not declared under strict -std=c11 on
+     * glibc (implicit decl truncates the returned pointer) */
+    char *line = buf;
+    while (line && *line) {
+        char *nl = strchr(line, '\n');
+        if (nl)
+            *nl = '\0';
         cJSON *o = cJSON_Parse(line);
+        line = nl ? nl + 1 : NULL;
         if (!o)
             continue;
         if (pick_id > 0) {
