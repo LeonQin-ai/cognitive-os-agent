@@ -2448,12 +2448,24 @@ async function chatSend(){
   chatBusyUI(true);
   for(let i = 0; ; i++){
     const r = await call('GET', '/v1/tasks/' + id);
+    if(r.status === 404){
+      setBot('任务丢失（服务可能已重启），可点击「恢复」重跑上一条输入');
+      toast('任务丢失（服务可能已重启）');
+      chatStatus('');
+      CHAT_BUSY = false;
+      CHAT_TASK_ID = 0;
+      chatBusyUI(false);
+      return;
+    }
     const t = r.obj;
     chatStatus((t && t.status && t.status !== 'DONE')
       ? ('状态: ' + t.status + (taskProgressText(t) ? ' · ' + taskProgressText(t) : '')) : '');
     if(t && t.status === 'RUNNING') showLive(t);
     if(t && (t.status === 'DONE' || t.status === 'FAILED' || t.status === 'CANCELLED' || t.status === 'TIMEOUT')){
-      setBot((t.output && t.output.trim()) ? t.output : ('(' + t.status + '，无输出)'));
+      const zh = {FAILED: '失败', CANCELLED: '已取消', TIMEOUT: '超时'}[t.status];
+      setBot((t.output && t.output.trim() && t.output !== '(no output)') ? t.output
+        : ('任务' + (zh || t.status) + '，无输出'));
+      if(zh) toast('任务' + zh);
       chatStatus('');
       CHAT_BUSY = false;
       CHAT_TASK_ID = 0;
@@ -2493,7 +2505,17 @@ async function chatResume(){
   const bot = chatAddBubble('bot', '…');
   const chatStatus = (text) => { const el = $('chat-status'); if(el) el.textContent = text; };
   for(let i = 0; ; i++){
-    const t = (await call('GET', '/v1/tasks/' + id)).obj;
+    const rr = await call('GET', '/v1/tasks/' + id);
+    if(rr.status === 404){
+      if(bot){ const pre = bot.querySelector('pre'); if(pre) pre.textContent = '任务丢失（服务可能已重启），请重新恢复'; }
+      toast('任务丢失（服务可能已重启）');
+      chatStatus('');
+      CHAT_BUSY = false;
+      CHAT_TASK_ID = 0;
+      chatBusyUI(false);
+      return;
+    }
+    const t = rr.obj;
     chatStatus((t && t.status && t.status !== 'DONE')
       ? ('状态: ' + t.status + (taskProgressText(t) ? ' · ' + taskProgressText(t) : '')) : '');
     if(t && t.status === 'RUNNING' && t.process_log && bot){
@@ -2502,10 +2524,12 @@ async function chatResume(){
       chatScroll();
     }
     if(t && (t.status === 'DONE' || t.status === 'FAILED' || t.status === 'CANCELLED' || t.status === 'TIMEOUT')){
+      const zh = {FAILED: '失败', CANCELLED: '已取消', TIMEOUT: '超时'}[t.status];
       if(bot){
         const pre = bot.querySelector('pre');
-        if(pre) pre.textContent = (t.output && t.output.trim()) ? t.output : ('(' + t.status + '，无输出)');
+        if(pre) pre.textContent = (t.output && t.output.trim() && t.output !== '(no output)') ? t.output : ('任务' + (zh || t.status) + '，无输出');
       }
+      if(zh) toast('任务' + zh);
       chatStatus('');
       CHAT_BUSY = false;
       CHAT_TASK_ID = 0;
@@ -2630,6 +2654,12 @@ async function flowAuto(){
   }
   for(let i = 0; ; i++){
     const r = await call('GET', '/v1/tasks/' + id);
+    if(r.status === 404){
+      flowStatus('gen-status', '任务丢失（服务可能已重启），请重新提交');
+      toast('任务丢失（服务可能已重启）');
+      FLOW_BUSY = false;
+      return;
+    }
     const t = r.obj;
     if(t && t.status && t.status !== 'DONE')
       flowStatus('gen-status', '状态: ' + t.status + (taskProgressText(t) ? ' · ' + taskProgressText(t) : ''));
@@ -2637,7 +2667,13 @@ async function flowAuto(){
       FLOW_LAST_OUTPUT = t.output || '';
       FLOW_MIRROR.out = FLOW_LAST_OUTPUT ? ('—— 综合答案 ——\n' + FLOW_LAST_OUTPUT) : '(无输出)';
       if(out && out.isConnected) out.textContent = FLOW_MIRROR.out;
-      flowStatus('gen-status', '');
+      const zh = {FAILED: '失败', CANCELLED: '已取消', TIMEOUT: '超时'}[t.status];
+      if(zh){
+        flowStatus('gen-status', '❌ 任务' + zh + (FLOW_LAST_OUTPUT && FLOW_LAST_OUTPUT !== '(no output)' ? '：' + FLOW_LAST_OUTPUT.slice(0, 300) : '（无输出）'));
+        toast('任务' + zh);
+      } else {
+        flowStatus('gen-status', '');
+      }
       FLOW_BUSY = false;
       loadFlow();
       return;
