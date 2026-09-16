@@ -344,6 +344,21 @@ static char *mock_respond(const char *msg) {
             "\"arguments\":{\"path\":\"test/env.txt\"}}]");
     }
 
+    /* regression fixture: plan truncated by the LLM output limit — planner.c
+     * must salvage the complete leading actions instead of dropping the whole
+     * plan (real-world: 10-file file_write batch cut at ~29KB). The 1st
+     * element's content hides braces/quotes inside a string; the 3rd is cut
+     * mid-string. */
+    if (strstr(msg, "截断计划")) {
+        return xstrdup(
+            "[{\"tool\":\"file_write\",\"args\":{\"path\":\"a.h\","
+            "\"content\":\"#define X \\\"}\\\" // brace } inside\"}},"
+            "{\"tool\":\"file_write\",\"args\":{\"path\":\"b.h\","
+            "\"content\":\"int b;\"}},"
+            "{\"tool\":\"file_write\",\"args\":{\"path\":\"c.h\","
+            "\"content\":\"truncat");
+    }
+
     if (want_write || want_read) {
         char *path = find_path(msg);
         cJSON *arr = cJSON_CreateArray();

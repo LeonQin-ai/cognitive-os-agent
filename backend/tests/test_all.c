@@ -1405,6 +1405,23 @@ static void test_planner(void) {
     }
     planner_actions_free(actions, n);
     free(raw);
+
+    /* regression: plan truncated by the LLM output limit — planner must
+     * salvage the complete leading actions instead of dropping the whole
+     * plan as an "answer" (real-world: 10-file batch cut at ~29KB) */
+    actions = NULL;
+    n = -1;
+    raw = NULL;
+    CHECK(planner_plan(llm, "截断计划: 批量写 a.h b.h c.h", &actions, &n, &raw, NULL) == 0);
+    CHECK(n == 2);
+    if (n == 2 && actions) {
+        CHECK_STR(actions[0].tool, "file_write");
+        CHECK_STR(actions[1].tool, "file_write");
+        CHECK(strstr(actions[0].args_json, "\"a.h\"") != NULL);
+        CHECK(strstr(actions[1].args_json, "\"b.h\"") != NULL);
+    }
+    planner_actions_free(actions, n);
+    free(raw);
     llm_destroy(llm);
 }
 

@@ -206,6 +206,58 @@ static char *args_to_json(cJSON *args) {
     return xstrdup("{}");
 }
 
+/* Salvage a plan array that was truncated mid-output by the LLM's output
+ * token limit (real-world case: a 10-file file_write batch cut at ~29KB).
+ * Scans the text tracking string/escape state and bracket depth, finds the
+ * closing brace of the LAST COMPLETE top-level element, cuts there and
+ * closes the array. Re-asking the model to re-emit the same oversized plan
+ * truncates again, so the complete leading actions must be kept locally.
+ * Returns a malloc'd valid JSON array string, or NULL when no complete
+ * element exists. */
+static char *salvage_truncated_array(const char *plan) {
+    const char *start, *end = NULL, *p;
+    int depth = 0, in_str = 0, esc = 0;
+    char *out;
+    size_t len;
+
+    start = strstr(plan, "[{");
+    if (!start)
+        start = strchr(plan, '[');
+    if (!start)
+        return NULL;
+    for (p = start; *p; p++) {
+        char c = *p;
+        if (in_str) {
+            if (esc)
+                esc = 0;
+            else if (c == '\\')
+                esc = 1;
+            else if (c == '"')
+                in_str = 0;
+            continue;
+        }
+        if (c == '"') {
+            in_str = 1;
+        } else if (c == '[' || c == '{') {
+            depth++;
+        } else if (c == ']' || c == '}') {
+            depth--;
+            if (depth == 1 && c == '}')
+                end = p; /* closing brace of a complete top-level element */
+        }
+    }
+    if (!end)
+        return NULL;
+    len = (size_t)(end - start) + 1; /* include the closing brace, drop any trailing comma */
+    out = (char *)malloc(len + 2);
+    if (!out)
+        return NULL;
+    memcpy(out, start, len);
+    out[len] = ']';
+    out[len + 1] = '\0';
+    return out;
+}
+
 static int parse_plan_actions(const char *plan, planned_action **actions, int *n_actions) {
     cJSON *root;
     planned_action *a = NULL;
@@ -363,33 +415,65 @@ static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_act
         const char *epos = cJSON_GetErrorPtr();
         size_t off = (epos && epos >= plan && epos < plan + strlen(plan)) ? (size_t)(epos - plan) : 0;
         log_warn("planner: invalid plan JSON (byte %zu / len %zu) — requesting repair", off, strlen(plan));
-        /* one repair round-trip: the model re-emits its own plan as clean JSON */
-        size_t plen = strlen(plan);
-        char *user = (char *)malloc(plen + 512);
-        if (user) {
-            snprintf(user, plen + 512,
-                     "The following reply was meant to be a JSON array of tool actions "
-                     "but is not valid JSON (bad bracket order or truncation). "
-                     "Re-emit it as ONE valid JSON array. Output ONLY the JSON, no "
-                     "markdown fences, no prose:\n\n%s",
-                     plan);
-        }
-        char *fixed = user ? llm_chat_simple_ex(
-                                 llm, "You repair broken JSON. Output ONLY the corrected JSON array.", user, 8192)
-                           : NULL;
-        if (fixed) {
-            if (parse_plan_actions(fixed, actions, n_actions)) {
-                if (raw_out) {
-                    free(*raw_out);
-                    *raw_out = fixed;
-                } else
-                    free(fixed);
-                log_info("planner: repaired plan JSON accepted (%d actions)", *n_actions);
-            } else {
-                free(fixed);
+        /* Salvage first: plans carrying large file_write payloads are often
+         * truncated by the LLM output limit. The repair round-trip asks the
+         * model to re-emit the SAME oversized plan, which truncates again —
+         * so keep the complete leading actions locally before wasting that
+         * call. The agent loop re-plans for whatever the truncated tail
+         * dropped, so no work is silently lost. */
+        char *salv = salvage_truncated_array(plan);
+        if (salv && parse_plan_actions(salv, actions, n_actions) && *n_actions > 0) {
+            log_warn("planner: salvaged %d complete action(s) from truncated plan", *n_actions);
+            if (raw_out) {
+                free(*raw_out);
+                *raw_out = salv;
+            } else
+                free(salv);
+            have = 1;
+        } else {
+            free(salv);
+            /* one repair round-trip: the model re-emits its own plan as clean JSON */
+            size_t plen = strlen(plan);
+            char *user = (char *)malloc(plen + 512);
+            if (user) {
+                snprintf(user, plen + 512,
+                         "The following reply was meant to be a JSON array of tool actions "
+                         "but is not valid JSON (bad bracket order or truncation). "
+                         "Re-emit it as ONE valid JSON array. Output ONLY the JSON, no "
+                         "markdown fences, no prose:\n\n%s",
+                         plan);
             }
+            /* same headroom as the planning call — a plan that hit the output
+             * limit cannot fit in a smaller repair budget either */
+            char *fixed = user ? llm_chat_simple_ex(
+                                     llm, "You repair broken JSON. Output ONLY the corrected JSON array.", user,
+                                     32768)
+                               : NULL;
+            if (fixed) {
+                if (parse_plan_actions(fixed, actions, n_actions)) {
+                    if (raw_out) {
+                        free(*raw_out);
+                        *raw_out = fixed;
+                    } else
+                        free(fixed);
+                    log_info("planner: repaired plan JSON accepted (%d actions)", *n_actions);
+                } else if ((salv = salvage_truncated_array(fixed)) != NULL &&
+                           parse_plan_actions(salv, actions, n_actions) && *n_actions > 0) {
+                    /* the repair itself got truncated — salvage its prefix */
+                    log_warn("planner: salvaged %d action(s) from truncated repair", *n_actions);
+                    if (raw_out) {
+                        free(*raw_out);
+                        *raw_out = salv;
+                    } else
+                        free(salv);
+                    free(fixed);
+                } else {
+                    free(salv);
+                    free(fixed);
+                }
+            }
+            free(user);
         }
-        free(user);
     }
 
     if (!raw_out)
