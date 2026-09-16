@@ -2397,6 +2397,28 @@ static void test_chat_upload_evolve(void) {
         CHECK(reasoning_session_clear(ctx.reasoning, "no-such") == -1);
 
         runtime_shutdown(&ctx);
+
+        /* restart replay: a fresh runtime over the same state root must load
+         * the persisted turns from chat/<id>.jsonl (regression: the loader
+         * used to write into a NULL buffer and segfault on any non-empty
+         * history file) */
+        {
+            config cfg2;
+            memset(&cfg2, 0, sizeof(cfg2));
+            cfg2.state_root = "state-test/chat-sess";
+            cfg2.workspace = "state-test/loop-w";
+            cfg2.provider = "mock";
+            cfg2.http_port = 0;
+            runtime_ctx ctx2;
+            if (init(&ctx2, &cfg2) != 0) { CHECK(0); return; }
+            char *ra = reasoning_history_json_ex(ctx2.reasoning, "tab-b", 10);
+            CHECK(ra && strstr(ra, "天气怎么样") != NULL);
+            free(ra);
+            char *rd = reasoning_history_json_ex(ctx2.reasoning, "default", 10);
+            CHECK(rd && strstr(rd, "第三个话题") != NULL);
+            free(rd);
+            runtime_shutdown(&ctx2);
+        }
     }
 
     /* uploaded documents are recallable via the vector store (Chinese text

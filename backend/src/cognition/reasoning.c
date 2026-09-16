@@ -461,8 +461,14 @@ static void session_load_persisted(reasoning *r, struct session *s) {
     if (!f)
         return;
     /* slurp (bounded: 4 MB) */
+    cap = 4096;
+    buf = (char *)malloc(cap);
+    if (!buf) {
+        fclose(f);
+        return;
+    }
     while ((ch = fgetc(f)) != EOF) {
-        if (len + 2 > (cap = cap ? cap : 4096) - 1) {
+        if (len + 2 > cap - 1) {
             if (cap >= 4u * 1024 * 1024)
                 break;
             size_t ncap = cap * 2;
