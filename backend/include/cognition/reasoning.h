@@ -121,11 +121,23 @@ char *reasoning_history_json(reasoning *r, int max_turns);
 char *reasoning_history_json_ex(reasoning *r, const char *session_id, int max_turns);
 
 /* Chat session registry (multi-session support): list sessions as a JSON
- * array of {id, turns, task, last_active_ms}; clear one session's history
- * and notes (returns -1 if the session does not exist). Callers free the
- * JSON string. */
+ * array of {id, title, turns, created_ms, total_ms, last_active_ms,
+ * shared_memory, task}; clear one session's history and notes (returns -1
+ * if the session does not exist). Callers free the JSON string. */
 char *reasoning_sessions_json(reasoning *r);
 int reasoning_session_clear(reasoning *r, const char *session_id);
+
+/* Create a new session with a random UUID id (registered + persisted).
+ * Returns a malloc'd id string, NULL on failure. */
+char *reasoning_session_new(reasoning *r);
+
+/* Toggle per-session memory sharing (共享记忆): 1 = share the Memory OS
+ * across sessions (default), 0 = private memory. 0 on success, -1 on error. */
+int reasoning_session_set_shared(reasoning *r, const char *session_id, int shared);
+
+/* Last recorded user input of a session (for resume/恢复). Returns a malloc'd
+ * string or NULL when the session is unknown or has no turns. */
+char *reasoning_session_last_input(reasoning *r, const char *session_id);
 
 #ifdef __cplusplus
 }

@@ -317,6 +317,17 @@ static int h_task_resume(const http_request *req, http_response *resp, void *ud)
     return 0;
 }
 
+/* POST /v1/chat/sessions/<id>/<action> helpers live below; the LLM-configured
+ * gate is shared with h_chat (模型未配置时禁止使用聊天). */
+static int llm_configured(runtime_ctx *ctx) {
+    const char *prov = config_get_str(ctx->config, "llm.provider", "mock");
+    const char *ak = config_get_str(ctx->config, "llm.api_key", NULL);
+
+    if (prov && *prov && strcmp(prov, "mock") != 0)
+        return (ak && *ak) ? 1 : 0;
+    return 0;
+}
+
 /* POST /v1/chat {"message":"...", "session":"chat-tab-2"} — conversational
  * counterpart of task creation: same async scheduler path, but semantically
  * a chat turn (the reasoning engine keeps the multi-turn context across
@@ -350,6 +361,15 @@ static int h_chat(const http_request *req, http_response *resp, void *ud) {
             cJSON_Delete(root);
         resp->status = 400;
         http_resp_json(resp, "{\"error\":\"missing 'message' string\"}");
+        return 0;
+    }
+
+    /* 模型未配置时禁止使用聊天（新聊天入口先检查模型配置） */
+    if (!llm_configured(ctx)) {
+        cJSON_Delete(root);
+        resp->status = 409;
+        http_resp_json(resp,
+                       "{\"error\":\"model not configured: set provider/model/api_key in Settings\",\"code\":\"MODEL_NOT_CONFIGURED\"}");
         return 0;
     }
 
@@ -398,6 +418,81 @@ static int h_chat_sessions(const http_request *req, http_response *resp, void *u
     }
 
     http_resp_json(resp, "{\"status\":\"cleared\"}");
+    return 0;
+}
+
+/* POST /v1/chat/sessions — create a session with a fresh random UUID id.
+ * POST /v1/chat/sessions/<id>/shared {"shared":bool} — toggle memory sharing.
+ * POST /v1/chat/sessions/<id>/resume — re-run the session's last user input. */
+static int h_chat_session_post(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
+    const char *path = req->path;
+    size_t plen = strlen("/v1/chat/sessions");
+
+    if (!authz_ok(ctx, req, resp))
+        return 0;
+    if (strlen(path) <= plen + 1) {
+        /* create */
+        char *id = reasoning_session_new(ctx->reasoning);
+        if (!id) {
+            resp->status = 500;
+            http_resp_json(resp, "{\"error\":\"session create failed\"}");
+            return 0;
+        }
+        http_resp_appendf(resp, "{\"id\":\"%s\"}", id);
+        free(id);
+        return 0;
+    }
+
+    /* /v1/chat/sessions/<id>/<action> */
+    const char *rest = path + plen + 1;
+    char sid[128];
+    const char *slash = strchr(rest, '/');
+    if (!slash || (size_t)(slash - rest) >= sizeof(sid)) {
+        resp->status = 400;
+        http_resp_json(resp, "{\"error\":\"expected /v1/chat/sessions/<id>/<action>\"}");
+        return 0;
+    }
+    snprintf(sid, (size_t)(slash - rest) + 1, "%s", rest);
+    const char *action = slash + 1;
+
+    if (strcmp(action, "shared") == 0) {
+        char *b = body_str(req);
+        cJSON *root = b ? cJSON_Parse(b) : NULL;
+        free(b);
+        cJSON *sh = root ? cJSON_GetObjectItemCaseSensitive(root, "shared") : NULL;
+        int shared = (sh && cJSON_IsTrue(sh)) ? 1 : 0;
+        cJSON_Delete(root);
+        if (reasoning_session_set_shared(ctx->reasoning, sid, shared) != 0) {
+            resp->status = 404;
+            http_resp_json(resp, "{\"error\":\"session not found\"}");
+            return 0;
+        }
+        http_resp_appendf(resp, "{\"id\":\"%s\",\"shared_memory\":%s}", sid, shared ? "true" : "false");
+        return 0;
+    }
+
+    if (strcmp(action, "resume") == 0) {
+        char *input = reasoning_session_last_input(ctx->reasoning, sid);
+        if (!input || !*input) {
+            free(input);
+            resp->status = 409;
+            http_resp_json(resp, "{\"error\":\"session has no recorded input to resume\"}");
+            return 0;
+        }
+        int64_t nid = scheduler_submit_tag(ctx->scheduler, 0, input, NULL, 0, sid);
+        free(input);
+        if (nid <= 0) {
+            resp->status = 500;
+            http_resp_json(resp, "{\"error\":\"submit failed\"}");
+            return 0;
+        }
+        http_resp_appendf(resp, "{\"ok\":true,\"id\":%lld,\"session\":\"%s\"}", (long long)nid, sid);
+        return 0;
+    }
+
+    resp->status = 404;
+    http_resp_json(resp, "{\"error\":\"unknown action (shared|resume)\"}");
     return 0;
 }
 
@@ -4116,6 +4211,7 @@ int api_attach(runtime_ctx *ctx) {
     http_server_route(ctx->http, "POST", "/v1/chat", h_chat, ctx);
     http_server_route(ctx->http, "GET", "/v1/chat/history", h_chat_history, ctx);
     http_server_route(ctx->http, "GET", "/v1/chat/sessions", h_chat_sessions, ctx);
+    http_server_route(ctx->http, "POST", "/v1/chat/sessions", h_chat_session_post, ctx);
     http_server_route(ctx->http, "DELETE", "/v1/chat/sessions/", h_chat_sessions, ctx);
     http_server_route(ctx->http, "GET", "/v1/policy/rules", h_policy_rules, ctx);
     http_server_route(ctx->http, "POST", "/v1/policy/rules", h_policy_add, ctx);
