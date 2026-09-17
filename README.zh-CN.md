@@ -81,6 +81,26 @@ Cognitive OS 把这些职责**从提示词里搬进运行时**：
 
 值得注意：同一套运行时用中端模型 GLM-5.3-flash 即可达到 **GAIA 78.79%**、**SWE-bench mini 72.7%**；把规则从提示词移进运行时策略引擎后，策略遵循从 **0/4 变 4/4**。LLM 是加速器，运行时提供保证。
 
+## 项目展示
+
+### Web UI
+
+多会话聊天（新建/切换/取消/恢复、共享记忆开关）、多 Agent & Flow 编排、定时任务、插件——全部由 C 二进制内嵌单页提供。
+
+![Web UI](screenshots/ui.png)
+
+### 运行时真实开发的项目：[Nerve](https://github.com/LeonQin-ai/Nerve)
+
+一个 AI 加持的 SSH 终端（类 Xshell，C++20），由多 Agent 流水线（design → coder → tester，共享黑板协同，GLM-5.3-flash）**端到端开发，零人工代码**：
+
+- 自然语言设计文档进 → **架构与分层设计文档**出（L0–L4 分层、模块职责边界、C++ 接口、事件主题）
+- 完整代码库：事件总线、SSH 引擎、终端仿真器、输入路由、命令注入器、LLM 网关、上下文采集、打包 GUI
+- **自我验证**：编译轮次中发现并修复 3 处接口不一致，12/12 个源文件全量编译 exit 0，冒烟测试通过，产出验证报告
+- **打包交付**：agent 自研打包工具产出 v0.1.0 zip，2 个 commit / 44 个文件推送至 GitHub
+
+![多 Agent 池](screenshots/agent-pool.png)
+![Agent 自验证报告](screenshots/nerve-verification.png)
+
 ## 架构
 
 ```mermaid

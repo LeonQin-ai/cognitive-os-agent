@@ -81,6 +81,26 @@ All numbers are real full-agent-loop runs. Clean scorecard: [`backend/docs/BENCH
 
 Notable: the same runtime reaches **78.79% on GAIA** and **72.7% on SWE-bench mini** with a mid-tier GLM-5.3-flash — and policy compliance goes **0/4 → 4/4** when rules move from the prompt into the runtime policy engine. The LLM is the accelerator; the runtime provides the guarantees.
 
+## Showcase
+
+### Web UI
+
+Chat with sessions (create / switch / cancel / resume, shared-memory toggle), multi-agent & flow orchestration, cron jobs, plugins — served as a single embedded page by the C binary.
+
+![Web UI](screenshots/ui.png)
+
+### Real project built by the runtime: [Nerve](https://github.com/LeonQin-ai/Nerve)
+
+An AI-powered SSH terminal (Xshell-like, C++20), developed **end-to-end by the multi-agent pipeline** (design → coder → tester agents coordinating over a shared blackboard, GLM-5.3-flash as the LLM). Zero human-written code:
+
+- Plain-language design doc in → **architecture & layering doc** out (L0–L4 layers, module boundaries, C++ interfaces, event topics)
+- Full codebase: event bus, SSH engine, terminal emulator, input router, command injector, LLM gateway, context collector, packaging GUI
+- **Self-verified**: found and fixed 3 interface inconsistencies across compile rounds, 12/12 translation units compiled (exit 0), smoke test passed, verification report written
+- **Packaged & shipped**: v0.1.0 zip built by the agent's own packaging tool, 2 commits / 44 files pushed to GitHub
+
+![Multi-agent pool](screenshots/agent-pool.png)
+![Agent self-verification report](screenshots/nerve-verification.png)
+
 ## Architecture
 
 ```mermaid
