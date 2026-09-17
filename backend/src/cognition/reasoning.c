@@ -1702,6 +1702,18 @@ char *reasoning_sessions_json(reasoning *r) {
         cJSON *o = cJSON_CreateObject();
         cJSON_AddStringToObject(o, "id", s->id);
         mutex_lock(&s->mtx);
+        if (!s->title[0]) {
+            /* replayed sessions have an empty title (record_turn only names a
+             * session on its true first turn; replayed history defeats that)
+             * — adopt the title from the persisted sessions.json index so the
+             * "最近" list keeps the human-readable name after a click
+             * materializes the session (user report: 最近预览回退成 uuid) */
+            for (size_t k = 0; k < r->nmeta; k++)
+                if (strcmp(r->meta[k].id, s->id) == 0) {
+                    snprintf(s->title, sizeof(s->title), "%s", r->meta[k].title);
+                    break;
+                }
+        }
         cJSON_AddStringToObject(o, "title", s->title);
         cJSON_AddNumberToObject(o, "turns", (double)s->hist_n);
         cJSON_AddNumberToObject(o, "created_ms", (double)s->created_ms);
