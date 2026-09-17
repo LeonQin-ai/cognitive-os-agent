@@ -63,11 +63,14 @@ char *catalog_remote_skill_fetch(const catalog_remote_skill *e);
 /* skillhub.cn (技能市场) live catalog. Both do blocking network I/O against
  * api.skillhub.cn — call from a worker, not the HTTP thread. */
 
-/* Fetch the skillhub skill-package listing (first page, 40 entries) and
- * return a normalized JSON array:
- *   [{id,name,description,skill_count}]
+/* Fetch the skillhub skill-package listing and return a normalized JSON
+ * array: [{id,name,description,skill_count}]
+ * With q non-empty: fetches the FULL catalog (~400 entries) and keeps only
+ * entries whose slug/displayName/summary contain q (case-insensitive) —
+ * api.skillhub.cn has no server-side search, so market-wide search means
+ * fetch-all + local filter.
  * Returns NULL on network/parse failure. */
-char *catalog_skillhub_list_json(void);
+char *catalog_skillhub_list_json(const char *q);
 
 /* Download SKILL.md content for a skillhub slug. Slug is validated against
  * [A-Za-z0-9._-]. Returns the malloc'd markdown (truncated to 64 KB) or

@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 
 typedef struct model_entry {
     const char *id;
@@ -506,9 +507,31 @@ char *catalog_remote_skill_fetch(const catalog_remote_skill *e) {
 
 #define SKILLHUB_API "https://api.skillhub.cn"
 #define SKILLHUB_LIST_PATH "/api/v1/skillsets?page=1&pageSize=40"
+#define SKILLHUB_SEARCH_PATH "/api/v1/skillsets?page=1&pageSize=400"
 
-char *catalog_skillhub_list_json(void) {
-    http_response *r = http_get(SKILLHUB_API, SKILLHUB_LIST_PATH, NULL, 10000);
+/* ASCII case-insensitive substring match (keyword filter for market search;
+ * UTF-8 bytes pass through untouched so Chinese keywords compare exactly) */
+static int ci_contains(const char *hay, const char *needle) {
+    size_t n;
+    if (!hay || !needle)
+        return 0;
+    n = strlen(needle);
+    if (n == 0)
+        return 1;
+    for (; *hay; hay++) {
+        size_t k = 0;
+        while (k < n && hay[k] &&
+               tolower((unsigned char)hay[k]) == tolower((unsigned char)needle[k]))
+            k++;
+        if (k == n)
+            return 1;
+    }
+    return 0;
+}
+
+char *catalog_skillhub_list_json(const char *q) {
+    int search = q && *q;
+    http_response *r = http_get(SKILLHUB_API, search ? SKILLHUB_SEARCH_PATH : SKILLHUB_LIST_PATH, NULL, 10000);
     /* body is not NUL-terminated — copy for cJSON */
     char *body;
     cJSON *root;
@@ -556,6 +579,11 @@ char *catalog_skillhub_list_json(void) {
     char *no;
 
         if (!cJSON_IsString(jslug) || !jslug->valuestring[0])
+            continue;
+        /* market search: keep only entries matching the keyword */
+        if (search && !ci_contains(jslug->valuestring, q) &&
+            !(cJSON_IsString(jname) && ci_contains(jname->valuestring, q)) &&
+            !(cJSON_IsString(jsum) && ci_contains(jsum->valuestring, q)))
             continue;
         char id[128], name[256], desc[1200];
         json_esc(id, sizeof(id), jslug->valuestring);

@@ -44,6 +44,35 @@ static char *body_str(const http_request *req) {
     return s;
 }
 
+/* Extract a query parameter from req->query into buf, percent-decoding it
+ * (Chinese keywords arrive as %E6%BC%94... UTF-8; '+' means space).
+ * Returns buf (empty string when the parameter is absent). */
+static char *query_param(const http_request *req, const char *key, char *buf, size_t cap) {
+    const char *p = strstr(req->query, key);
+    size_t o = 0;
+
+    buf[0] = '\0';
+    if (!p || p[strlen(key)] != '=')
+        return buf;
+    p += strlen(key) + 1;
+    while (*p && *p != '&' && o + 1 < cap) {
+        char c = *p;
+        if (c == '%' && p[1] && p[2]) {
+            char hex[3] = {p[1], p[2], 0};
+            buf[o++] = (char)strtol(hex, NULL, 16);
+            p += 3;
+        } else if (c == '+') {
+            buf[o++] = ' ';
+            p++;
+        } else {
+            buf[o++] = c;
+            p++;
+        }
+    }
+    buf[o] = '\0';
+    return buf;
+}
+
 /* Extract an optional string / number field from a JSON object. */
 static const char *json_str(cJSON *o, const char *key) {
     cJSON *v = cJSON_GetObjectItemCaseSensitive(o, key);
@@ -3382,10 +3411,11 @@ static int h_skill_install_remote(const http_request *req, http_response *resp, 
  * same tradeoff as /v1/skills/install-remote. */
 static int h_catalog_skillhub(const http_request *req, http_response *resp, void *ud) {
     char *s;
+    char q[192];
 
-    (void)req;
     (void)ud;
-    s = catalog_skillhub_list_json();
+    query_param(req, "q", q, sizeof(q));
+    s = catalog_skillhub_list_json(q);
     if (!s) {
         resp->status = 502;
         http_resp_json(resp, "{\"error\":\"skillhub.cn list fetch failed (check network)\"}");

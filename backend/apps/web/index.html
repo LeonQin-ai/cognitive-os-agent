@@ -612,6 +612,12 @@ panels.agents = `
   <div class="card">
     <h2>Create agent</h2>
     <div class="hint">多智能体协调器：注册命名 agent（带角色描述），通过共享黑板协同工作、可发布事实。模型从路由（Model routes）下拉选择，默认使用当前激活模型。创建完 agent 后可在下方「Flow 自动编排」中一键编排。</div>
+    <div class="hint" style="margin-top:6px">⭐ 预置专业角色（点击填入，人设已调教好）：</div>
+    <div class="chips" id="agent-presets" style="margin:4px 0 6px"></div>
+    <div class="row" style="margin-bottom:8px">
+      <input id="agent-team-task" type="text" placeholder="描述一个任务，按关键词自动匹配组合角色并批量创建，如：设计并开发一个导出功能，测试后写文档" style="flex:1;min-width:220px">
+      <button onclick="agentTeamCompose()">🎯 智能组队</button>
+    </div>
     <div class="row">
       <input id="agent-name" type="text" placeholder="name (如 writer)" style="flex:1;min-width:140px">
       <input id="agent-role" type="text" placeholder="role (如 负责写作)" style="flex:2;min-width:200px">
@@ -884,6 +890,7 @@ panels.skills = `
       <input type="text" id="skillname" placeholder="技能名，例如 echo_hello" style="flex:1;min-width:180px">
       <button onclick="runSkill()">Run</button>
     </div>
+    <input id="skill-search" class="search-in" type="text" placeholder="🔍 搜索技能（名称或描述，同时过滤已注册技能 / 精选目录 / GitHub / SkillHub 市场）" oninput="renderSkillCatalogs()">
   </div>
   <div class="card">
     <div class="card-head">
@@ -898,7 +905,6 @@ panels.skills = `
       <button class="sec sm" onclick="loadSkillsCatalog()">Refresh</button>
     </div>
     <div class="hint">精选可运行技能（shell/python，一键安装并测试）与来自 fabric / SkillHub / awesome-cursorrules 生态的参考仓库。</div>
-    <input id="skill-search" class="search-in" type="text" placeholder="🔍 搜索技能（名称或描述，同时过滤下方全部目录与 SkillHub 市场）" oninput="renderSkillCatalogs()">
     <div id="skill-catalog">加载中…</div>
     <pre id="skill-test-out" style="display:none"></pre>
     <div class="sub" style="margin-top:12px">GitHub 仓库技能（展开仓库 → 安装时拉取原文）</div>
@@ -1262,6 +1268,7 @@ async function fillAgentModelSelect(){
 }
 
 async function loadAgents(){
+  renderAgentPresets();
   const r = await call('GET', '/v1/agents');
   const box = $('agents-out2');
   if(!box) return;
@@ -1278,6 +1285,71 @@ async function loadAgents(){
   html += '<div class="hint" style="margin-top:8px">共享黑板 facts:</div><pre>' + esc(JSON.stringify(obj.facts || {}, null, 2)) + '</pre>';
   box.innerHTML = html;
   fillAgentModelSelect();
+}
+
+/* ================= 预置专业 Agent 角色 ================= */
+/* 常用角色的人设模板：点击填入创建表单，或按任务关键词「智能组队」批量注册 */
+const AGENT_PRESETS = [
+  {key:'architect', name:'architect', label:'🏗️ 架构设计', kw:['架构','设计','方案','选型','模块','拆分','结构','重构','技术路线'],
+   role:'资深软件架构师：负责需求分析与技术方案设计，输出模块划分、接口约定与数据流设计；对关键取舍给出明确理由与备选方案，不负责具体编码实现。'},
+  {key:'coder', name:'coder', label:'💻 代码开发', kw:['开发','编码','实现','写代码','功能','修复','bug','脚本','编程','交付'],
+   role:'资深开发工程师：负责按架构约定高质量编码实现，遵循项目现有代码风格与规范；小步交付、改动自测通过后才提交，对边界条件与异常路径负责。'},
+  {key:'reviewer', name:'reviewer', label:'🔍 代码检视', kw:['检视','审查','评审','review','质量','审计','走查','code review'],
+   role:'资深代码审查员：负责对代码变更做严格检视，重点检查正确性、边界条件、资源泄漏、并发安全与安全漏洞；输出分级问题清单（阻塞项/建议项）并给出修改建议。'},
+  {key:'tester', name:'tester', label:'🧪 测试', kw:['测试','用例','单测','test','qa','验证','回归','冒烟','自动化测试'],
+   role:'资深测试工程师：负责制定测试计划、编写并执行测试用例，覆盖正常路径、边界值与异常场景；发现缺陷时输出可复现步骤、实际/期望结果与严重级别。'},
+  {key:'ppt', name:'ppt-expert', label:'📊 PPT专家', kw:['ppt','幻灯片','演示','汇报','slides','路演','宣讲','答辩'],
+   role:'资深演示设计专家：负责把主题内容提炼为结构清晰的演示文稿大纲与逐页内容；逻辑严密、要点突出、语言精炼，并根据受众调整表达深度与详略。'},
+  {key:'docs', name:'docs-writer', label:'📝 文档', kw:['文档','readme','说明','手册','注释','教程','guide','使用指南'],
+   role:'资深技术文档工程师：负责编写与维护项目文档（README、API 说明、使用指南）；内容准确、结构清晰、示例可直接运行，并随代码变更保持同步。'},
+  {key:'researcher', name:'researcher', label:'🔬 调研分析', kw:['调研','分析','调查','竞品','评估','对比','可行性','报告'],
+   role:'资深调研分析师：负责收集资料并交叉验证，输出结论先行的结构化调研报告；论据充分、标注来源与置信度，最后给出可执行的建议。'}
+];
+
+function renderAgentPresets(){
+  const box = $('agent-presets'); if(!box) return;
+  if(box.dataset.init) return;
+  box.dataset.init = '1';
+  box.innerHTML = AGENT_PRESETS.map(p =>
+    '<button class="sec sm" onclick="agentPresetFill(\'' + p.key + '\')" title="' + esc(p.role) + '">' + esc(p.label) + '</button>').join(' ');
+}
+
+function agentPresetFill(key){
+  const p = AGENT_PRESETS.find(x => x.key === key); if(!p) return;
+  $('agent-name').value = p.name;
+  $('agent-role').value = p.role;
+  $('agent-name').focus();
+  if($('agent-stat')) $('agent-stat').textContent = '已填入「' + p.label + '」人设，可直接 Add';
+}
+
+/* 按任务描述匹配角色组合：命中任一关键词即入选；全不命中兜底给 coder */
+function agentMatchPresets(text){
+  const t = (text || '').toLowerCase();
+  const hits = AGENT_PRESETS.filter(p => p.kw.some(k => t.includes(k.toLowerCase())));
+  return hits.length ? hits : [AGENT_PRESETS.find(p => p.key === 'coder')];
+}
+
+async function agentTeamCompose(){
+  const task = $('agent-team-task').value.trim();
+  const st = $('agent-stat');
+  if(!task){ if(st) st.textContent = '先输入任务描述再智能组队'; return; }
+  const picks = agentMatchPresets(task);
+  const have = new Set(AGENTS.map(a => a.name));
+  const todo = picks.filter(p => !have.has(p.name));
+  const skipped = picks.filter(p => have.has(p.name)).map(p => p.name);
+  if(skipped.length) toast('已跳过已存在的 agent：' + skipped.join(', '));
+  if(!todo.length){ if(st) st.textContent = '匹配到的角色均已存在'; return; }
+  if(st) st.textContent = '创建中… ' + todo.map(p => p.name).join(', ');
+  for(const p of todo){
+    const r = await call('POST', '/v1/agents', {name: p.name, role: p.role});
+    if(r.status >= 300){
+      if(st) st.textContent = '创建 ' + p.name + ' 失败: ' + ((r.obj && r.obj.error) || r.status);
+      return;
+    }
+  }
+  if(st) st.textContent = '✔ 智能组队完成（' + todo.length + ' 个 agent）';
+  toast('🎯 按任务匹配创建：' + todo.map(p => p.label).join(' / '));
+  loadAgents();
 }
 
 function agentAdd(){
@@ -1537,7 +1609,19 @@ async function runSkill(){
   const name = $('skillname').value.trim();
   if(!name) return;
   const r = await call('POST', '/v1/skills/run', {name});
+  SKILLS_LIST = null; /* skills-out 现在显示的是运行结果，搜索过滤暂停生效 */
   renderJSON(r.obj, $('skills-out'));
+}
+
+/* 已注册技能列表（供顶部搜索框过滤） */
+let SKILLS_LIST = null;
+
+function renderRegisteredSkills(){
+  if(!SKILLS_LIST) return;
+  const q = skillQ();
+  const list = !q ? SKILLS_LIST : SKILLS_LIST.filter(s =>
+    [s.name, s.description, s.kind].some(f => f && String(f).toLowerCase().includes(q)));
+  if($('skills-out')) renderJSON(list, $('skills-out'));
 }
 
 /* ================= 技能广场（精选目录） ================= */
@@ -1585,11 +1669,21 @@ function renderSkillCatalog(){
   box.innerHTML = html;
 }
 
-/* 搜索框输入时统一重渲染三个目录（数据均已在全局缓存） */
+/* 搜索框输入时统一重渲染：已注册技能 + 精选目录实时过滤；
+ * SkillHub 市场搜索走网络（后端全量拉取+过滤），防抖 400ms 后按关键字重新拉取 */
+let SKH_Q_LAST = '';   /* 缓存列表对应的关键字（'' = 默认首页） */
+let SKH_TIMER = null;
 function renderSkillCatalogs(){
+  renderRegisteredSkills();
   renderSkillCatalog();
   if(GH_SKILLS.length) renderGhSkills();
-  if(SKH_SKILLS.length) renderSkhSkills();
+  const q = skillQ();
+  if(q !== SKH_Q_LAST){
+    clearTimeout(SKH_TIMER);
+    SKH_TIMER = setTimeout(loadSkillhubList, 400);
+  } else if(SKH_SKILLS.length || SKH_Q_LAST){
+    renderSkhSkills();
+  }
 }
 
 /* GitHub 仓库真实技能：按仓库分组折叠展示，安装时后端实时拉取文件原文 */
@@ -1630,7 +1724,14 @@ function renderGhSkills(){
       }).join('') +
       '</details>';
   }
-  if (!html) html = GH_SKILLS.length ? '<span class="muted">（无匹配技能）</span>' : '<span class="muted">（加载失败）</span>';
+  if (!html) {
+    html = GH_SKILLS.length
+      ? '<span class="muted">（精选仓库无匹配）</span>' +
+        (skillQ() ? '<div class="hint">可到 GitHub 全站搜索：<a href="https://github.com/search?q=' +
+          encodeURIComponent(skillQ()) + '&type=repositories" target="_blank" rel="noopener">' +
+          esc(skillQ()) + ' @ GitHub</a></div>' : '')
+      : '<span class="muted">（加载失败）</span>';
+  }
   box.innerHTML = html;
 }
 
@@ -1648,16 +1749,21 @@ let SKH_SKILLS = [];
 
 async function loadSkillhubList(){
   const box = $('skh-skill-catalog'); if(!box) return;
-  box.innerHTML = '<span class="muted">加载中…（访问 api.skillhub.cn）</span>';
-  const r = await call('GET', '/v1/catalog/skillhub');
+  const q = skillQ();
+  box.innerHTML = q ? '<span class="muted">🔍 正在 SkillHub 市场全量搜索「' + esc(q) + '」…</span>'
+                    : '<span class="muted">加载中…（访问 api.skillhub.cn）</span>';
+  const r = await call('GET', '/v1/catalog/skillhub' + (q ? '?q=' + encodeURIComponent(q) : ''));
   SKH_SKILLS = Array.isArray(r.obj) ? r.obj : [];
+  SKH_Q_LAST = q;
   renderSkhSkills();
 }
 
 function renderSkhSkills(){
   const box = $('skh-skill-catalog'); if(!box) return;
   if(!SKH_SKILLS.length){
-    box.innerHTML = '<span class="muted">（加载失败：无法从 skillhub.cn 获取列表，检查网络）</span>';
+    box.innerHTML = (skillQ() && skillQ() === SKH_Q_LAST)
+      ? '<span class="muted">（市场全量搜索无匹配，换个关键字试试）</span>'
+      : '<span class="muted">（加载失败：无法从 skillhub.cn 获取列表，检查网络）</span>';
     return;
   }
   const list = SKH_SKILLS.filter(x => skillHit(x, [x.name, x.id, x.description]));
@@ -1711,7 +1817,8 @@ let SKILL_MARKET = {templates:[], installed:[]};
 
 async function loadSkillsMarket(){
   const r = await call('GET', '/v1/skills');
-  if($('skills-out')) renderJSON(r.obj, $('skills-out'));
+  SKILLS_LIST = Array.isArray(r.obj) ? r.obj : null;
+  renderRegisteredSkills();
   const m = await call('GET', '/v1/skills/market');
   SKILL_MARKET = (m.obj && typeof m.obj === 'object') ? m.obj : {templates:[], installed:[]};
   const box = $('skill-market'); if(!box) return;
@@ -3236,9 +3343,7 @@ function switchPanel(p){
   /* Flow 状态镜像：合并后的 agents 面板也包含 Flow 编辑器 */
   if((current === 'flow' || current === 'agents') && p !== 'agents' && p !== 'flow') flowSaveState();
   current = p;
-  /* 任何面板切换都收起侧栏折叠分组（issue #11） */
-  document.querySelectorAll('nav .navsub').forEach(s => s.classList.remove('open'));
-  document.querySelectorAll('nav .navgroup').forEach(g => g.classList.remove('open'));
+  /* 分组折叠只由用户点击分组头控制（2026-09-18：切面板不再自动收起） */
   document.querySelectorAll('#nav button').forEach(b => {
     const on = b.dataset.p === p;
     b.classList.toggle('on', on);
