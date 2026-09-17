@@ -346,6 +346,9 @@
   @media (prefers-reduced-motion:reduce){
     *{transition:none !important; animation:none !important}
   }
+  /* 聊天输入区拖拽文件悬停高亮 */
+  #chat-wrap.drop{outline:2px dashed var(--accent,#7c5cff);outline-offset:-6px;border-radius:12px}
+  .search-in{width:100%;padding:7px 10px;margin-bottom:8px;font-size:12.5px}
 </style>
 </head>
 <body>
@@ -554,7 +557,7 @@ panels.dashboard = `
   </div>`;
 
 panels.chat = `
-  <div class="chat-wrap">
+  <div class="chat-wrap" id="chat-wrap">
     <div id="chat-hero">
       <div class="hero-title">今天有什么计划？</div>
       <div class="hero-subs">
@@ -586,9 +589,10 @@ panels.chat = `
     </div>
     <div id="chat-box" style="display:flex;flex-direction:column;gap:8px;max-height:52vh;overflow-y:auto;padding:4px 2px"></div>
     <div class="muted" id="chat-status" style="min-height:16px;font-size:12px"></div>
+    <div id="chat-attach" style="display:none;flex-wrap:wrap;gap:4px;margin:0 0 6px"></div>
     <div class="pillbar">
       <button class="pill-ic" onclick="$('chat-file').click()" title="上传文件（RAG）">＋</button>
-      <textarea id="chat-input" placeholder="有问题，随便问（Enter 发送，Shift+Enter 换行）" rows="1"></textarea>
+      <textarea id="chat-input" placeholder="有问题，随便问（Enter 发送，Shift+Enter 换行，支持粘贴图片/拖拽文件）" rows="1"></textarea>
       <button class="sec" id="chat-cancel" onclick="chatCancel()" style="display:none;padding:6px 10px" title="取消当前运行中的任务">取消</button>
       <button class="sec" id="chat-resume" onclick="chatResume()" style="display:none;padding:6px 10px" title="恢复：重跑本会话上一条输入">恢复</button>
       <button class="pill-send" id="chat-send" onclick="chatSend()" title="发送">↑</button>
@@ -836,6 +840,7 @@ panels.mcp = `
   <div class="card">
     <h2>MCP 广场</h2>
     <div class="hint">精选 MCP 服务器，一键添加连接。标"需本地运行"的条目要先启动对应服务（见提示）。更多服务器： <a href="https://modelscope.cn/mcp" target="_blank" rel="noopener">ModelScope MCP 广场（modelscope.cn/mcp）</a></div>
+    <input id="mcp-search" class="search-in" type="text" placeholder="🔍 搜索 MCP 服务器（名称或描述）" oninput="renderMcpPlaza()">
     <div id="mcp-plaza" class="plaza">加载中…</div>
   </div>
   <div class="card">
@@ -893,6 +898,7 @@ panels.skills = `
       <button class="sec sm" onclick="loadSkillsCatalog()">Refresh</button>
     </div>
     <div class="hint">精选可运行技能（shell/python，一键安装并测试）与来自 fabric / SkillHub / awesome-cursorrules 生态的参考仓库。</div>
+    <input id="skill-search" class="search-in" type="text" placeholder="🔍 搜索技能（名称或描述，同时过滤下方全部目录与 SkillHub 市场）" oninput="renderSkillCatalogs()">
     <div id="skill-catalog">加载中…</div>
     <pre id="skill-test-out" style="display:none"></pre>
     <div class="sub" style="margin-top:12px">GitHub 仓库技能（展开仓库 → 安装时拉取原文）</div>
@@ -1352,8 +1358,21 @@ async function loadMcpPlaza(){
   if(!box) return;
   const r = await call('GET', '/v1/catalog/mcp');
   MCP_PLAZA = Array.isArray(r.obj) ? r.obj : [];
+  renderMcpPlaza();
+}
+
+/* 按搜索框关键字过滤渲染（名称/描述/传输类型） */
+function renderMcpPlaza(){
+  const box = $('mcp-plaza');
+  if(!box) return;
+  const q = (($('mcp-search') || {}).value || '').trim().toLowerCase();
+  const list = !q ? MCP_PLAZA : MCP_PLAZA.filter(m =>
+    [m.name, m.description, m.transport, m.url, m.command, m.repo]
+      .some(f => f && String(f).toLowerCase().includes(q)));
   if(!MCP_PLAZA.length){ box.innerHTML = '<span class="muted" style="font-size:12px">（目录为空）</span>'; return; }
-  box.innerHTML = MCP_PLAZA.map((m, i) => {
+  if(!list.length){ box.innerHTML = '<span class="muted" style="font-size:12px">（无匹配 "' + esc(q) + '" 的 MCP 服务器）</span>'; return; }
+  box.innerHTML = list.map((m) => {
+    const i = MCP_PLAZA.indexOf(m);
     const isRef = m.transport === 'reference';
     const target = isRef ? esc(m.repo || '')
       : esc(m.transport === 'stdio' ? ((m.command || '') + ' ' + (m.args || '')) : (m.url || ''));
@@ -1529,10 +1548,28 @@ async function loadSkillsCatalog(){
   const box = $('skill-catalog'); if(!box) return;
   const r = await call('GET', '/v1/catalog/skills');
   SKILL_CATALOG = Array.isArray(r.obj) ? r.obj : [];
+  renderSkillCatalog();
+  loadGhSkills();
+  loadSkillhubList();
+}
+
+/* 搜索过滤（技能广场全部目录共用一个关键字） */
+function skillQ(){
+  return (($('skill-search') || {}).value || '').trim().toLowerCase();
+}
+function skillHit(x, fields){
+  const q = skillQ();
+  if(!q) return true;
+  return fields.some(f => f && String(f).toLowerCase().includes(q));
+}
+function renderSkillCatalog(){
+  const box = $('skill-catalog'); if(!box) return;
   const run = [], refs = [];
   SKILL_CATALOG.forEach(x => (x.type === 'reference' ? refs : run).push(x));
+  const runF = run.filter(x => skillHit(x, [x.id, x.description, x.kind]));
+  const refsF = refs.filter(x => skillHit(x, [x.name, x.description, x.source]));
   let html = '<div class="sub">可安装技能（安装 → 测试运行）</div>' +
-    (run.length ? run.map(x => {
+    (runF.length ? runF.map(x => {
       const i = SKILL_CATALOG.indexOf(x);
       return '<div class="item"><b>' + esc(x.id) + '</b> <span class="muted">' + esc(x.kind) + '</span>' +
         '<div class="hint">' + esc(x.description || '') + '</div>' +
@@ -1540,14 +1577,19 @@ async function loadSkillsCatalog(){
         '<button class="sec sm" onclick="catalogSkillInstall(' + i + ')">安装</button></div>';
     }).join('') : '<span class="muted">（空）</span>');
   html += '<div class="sub">参考仓库</div>' +
-    (refs.length ? refs.map(x =>
+    (refsF.length ? refsF.map(x =>
       '<div class="item"><b><a href="' + esc(x.source) + '" target="_blank" rel="noopener">' + esc(x.name) + '</a></b> <span class="tag">参考仓库</span>' +
       '<div class="hint">' + esc(x.description || '') + '</div>' +
       '<a class="sec sm" href="' + esc(x.source) + '" target="_blank" rel="noopener">查看仓库</a></div>').join('')
       : '<span class="muted">（空）</span>');
   box.innerHTML = html;
-  loadGhSkills();
-  loadSkillhubList();
+}
+
+/* 搜索框输入时统一重渲染三个目录（数据均已在全局缓存） */
+function renderSkillCatalogs(){
+  renderSkillCatalog();
+  if(GH_SKILLS.length) renderGhSkills();
+  if(SKH_SKILLS.length) renderSkhSkills();
 }
 
 /* GitHub 仓库真实技能：按仓库分组折叠展示，安装时后端实时拉取文件原文 */
@@ -1562,8 +1604,14 @@ async function loadGhSkills(){
   box.innerHTML = '<span class="muted">加载中…</span>';
   const r = await call('GET', '/v1/catalog/github-skills');
   GH_SKILLS = Array.isArray(r.obj) ? r.obj : [];
+  renderGhSkills();
+}
+
+function renderGhSkills(){
+  const box = $('gh-skill-catalog'); if(!box) return;
   const groups = {};
-  GH_SKILLS.forEach(x => { (groups[x.repo] = groups[x.repo] || []).push(x); });
+  GH_SKILLS.filter(x => skillHit(x, [x.name, x.description, x.repo, x.id]))
+    .forEach(x => { (groups[x.repo] = groups[x.repo] || []).push(x); });
   let html = '';
   for (const repo of Object.keys(groups)) {
     const items = groups[repo];
@@ -1582,7 +1630,7 @@ async function loadGhSkills(){
       }).join('') +
       '</details>';
   }
-  if (!html) html = '<span class="muted">（加载失败）</span>';
+  if (!html) html = GH_SKILLS.length ? '<span class="muted">（无匹配技能）</span>' : '<span class="muted">（加载失败）</span>';
   box.innerHTML = html;
 }
 
@@ -1603,15 +1651,24 @@ async function loadSkillhubList(){
   box.innerHTML = '<span class="muted">加载中…（访问 api.skillhub.cn）</span>';
   const r = await call('GET', '/v1/catalog/skillhub');
   SKH_SKILLS = Array.isArray(r.obj) ? r.obj : [];
+  renderSkhSkills();
+}
+
+function renderSkhSkills(){
+  const box = $('skh-skill-catalog'); if(!box) return;
   if(!SKH_SKILLS.length){
     box.innerHTML = '<span class="muted">（加载失败：无法从 skillhub.cn 获取列表，检查网络）</span>';
     return;
   }
-  box.innerHTML = SKH_SKILLS.map((x, i) =>
-    '<div class="item"><b>' + esc(x.name || x.id) + '</b> <span class="muted">' + (x.skill_count || 0) + ' 技能</span>' +
-    '<div class="hint">' + esc(x.description || '') + '</div>' +
-    '<a class="sec sm" href="' + esc(x.source) + '" target="_blank" rel="noopener">详情</a> ' +
-    '<button class="sec sm" onclick="skillhubInstall(' + i + ')">安装</button></div>').join('');
+  const list = SKH_SKILLS.filter(x => skillHit(x, [x.name, x.id, x.description]));
+  if(!list.length){ box.innerHTML = '<span class="muted">（无匹配技能）</span>'; return; }
+  box.innerHTML = list.map((x) => {
+    const i = SKH_SKILLS.indexOf(x);
+    return '<div class="item"><b>' + esc(x.name || x.id) + '</b> <span class="muted">' + (x.skill_count || 0) + ' 技能</span>' +
+      '<div class="hint">' + esc(x.description || '') + '</div>' +
+      '<a class="sec sm" href="' + esc(x.source) + '" target="_blank" rel="noopener">详情</a> ' +
+      '<button class="sec sm" onclick="skillhubInstall(' + i + ')">安装</button></div>';
+  }).join('');
 }
 
 async function skillhubInstall(i){
@@ -2061,6 +2118,8 @@ async function loadChat(){
   await chatLoadHistory();
   loadUploads();
   fillChatModelSelect();
+  chatInitDrop(); /* 粘贴图片 / 拖拽文件支持 */
+  chatAttachRender();
   chatGateCheck(); /* 进入新聊天先检查模型配置，未配置则禁用发送 */
 }
 
@@ -2392,14 +2451,18 @@ async function chatSend(){
   /* 未配置模型时禁止发送（后端同样拦截） */
   if(input && input.disabled){ toast('尚未配置模型，请先在设置里配置对话模型'); return; }
   const msg = input ? input.value.trim() : '';
-  if(!msg) return;
+  if(!msg && !CHAT_ATTACH.length) return;
+  /* 附件随消息一并发送：文件内容已由 /v1/upload 入库，告知 agent 文件名 */
+  const fullMsg = CHAT_ATTACH.length
+    ? ('[附件: ' + CHAT_ATTACH.map(a => a.name).join(', ') + ']' + (msg ? '\n' + msg : ''))
+    : msg;
   /* 状态行每次现查：轮询期间对话面板可能被 innerHTML 重建，捕获的旧节点
    * 已脱离文档；现查则切回面板后进度行继续实时刷新 */
   const chatStatus = (text) => { const el = $('chat-status'); if(el) el.textContent = text; };
   CHAT_BUSY = true;
   CHAT_ROUND = 0;
   input.value = '';
-  chatAddBubble('user', msg);
+  chatAddBubble('user', fullMsg);
   const bot = chatAddBubble('bot', '…');
   // 镜像中的待回复条目：切面板导致 DOM 重建后仍可恢复
   const entry = CHAT_MSGS[CHAT_MSGS.length - 1];
@@ -2433,7 +2496,7 @@ async function chatSend(){
     pre.style.overflowY = 'auto';
     chatScroll();
   };
-  const c = await call('POST', '/v1/chat', {message: msg, session: CHAT_SESSION});
+  const c = await call('POST', '/v1/chat', {message: fullMsg, session: CHAT_SESSION});
   const id = c.obj && c.obj.id;
   if(id === undefined){
     /* 后端 409 = 模型未配置等业务拦截 */
@@ -2442,6 +2505,8 @@ async function chatSend(){
     CHAT_BUSY = false;
     return;
   }
+  CHAT_ATTACH = [];
+  chatAttachRender();
   if(CHAT_NEW_SESSION){ CHAT_NEW_SESSION = false; renderChatTabs([]); loadChatSessions(); }
   CHAT_TASK_ID = id;
   CHAT_RESUME_OK = false;
@@ -2546,17 +2611,78 @@ async function chatResume(){
 async function uploadFile(inp){
   const f = inp.files && inp.files[0];
   if(!f) return;
-  const st = $('chat-status');
-  if(st) st.textContent = '上传中: ' + f.name + '…';
-  try {
-    const resp = await fetch('/v1/upload?name=' + encodeURIComponent(f.name), {method:'POST', body: f});
-    const obj = await resp.json().catch(() => ({}));
-    if(resp.ok && obj.ok) toast('已上传 ' + obj.name + (obj.chunks ? ('（' + obj.chunks + ' 块入库）') : ''));
-    else toast('上传失败: ' + (obj.error || ('HTTP ' + resp.status)));
-  } catch(e) { toast('上传失败: ' + e); }
+  await uploadBlob(f.name, f);
   inp.value = '';
-  if(st) st.textContent = '';
   loadUploads();
+}
+
+/* ===== 聊天附件：粘贴图片 / 拖拽文件 / ＋按钮 统一走这里 =====
+ * 上传成功后加入待发送队列（chip 展示），发送时在消息前附 [附件: ...]，
+ * 让 agent 知道有哪些文件（内容已由 /v1/upload 入库 RAG）。 */
+let CHAT_ATTACH = [];
+
+function chatAttachRender(){
+  const el = $('chat-attach'); if(!el) return;
+  el.style.display = CHAT_ATTACH.length ? 'flex' : 'none';
+  el.innerHTML = CHAT_ATTACH.map((a, i) =>
+    '<span class="tag" style="cursor:pointer" onclick="chatAttachRemove(' + i + ')" title="点击移除">📎 ' + esc(a.name) + ' ×</span>').join('');
+}
+
+function chatAttachRemove(i){
+  CHAT_ATTACH.splice(i, 1);
+  chatAttachRender();
+}
+
+async function uploadBlob(name, blob){
+  const st = $('chat-status');
+  if(st) st.textContent = '上传中: ' + name + '…';
+  try {
+    const resp = await fetch('/v1/upload?name=' + encodeURIComponent(name), {method:'POST', body: blob});
+    const obj = await resp.json().catch(() => ({}));
+    if(resp.ok && obj.ok){
+      CHAT_ATTACH.push({name: obj.name || name});
+      chatAttachRender();
+      toast('已添加附件 ' + (obj.name || name));
+    } else {
+      toast('上传失败: ' + (obj.error || ('HTTP ' + resp.status)));
+    }
+  } catch(e) { toast('上传失败: ' + e); }
+  if(st) st.textContent = '';
+}
+
+/* 粘贴图片（clipboardData 里的文件项）+ 整个聊天区拖拽文件 */
+function chatInitDrop(){
+  const input = $('chat-input');
+  const wrap = $('chat-wrap');
+  if(!input || !wrap || wrap.dataset.dropInit) return;
+  wrap.dataset.dropInit = '1';
+  input.addEventListener('paste', (e) => {
+    const items = (e.clipboardData && e.clipboardData.items) || [];
+    let handled = false;
+    for(const it of items){
+      if(it.kind === 'file'){
+        const f = it.getAsFile();
+        if(f){
+          handled = true;
+          const name = f.name || ('粘贴图片-' + new Date().toISOString().replace(/[:.]/g, '-') + '.png');
+          uploadBlob(name, f);
+        }
+      }
+    }
+    if(handled) e.preventDefault();
+  });
+  ['dragenter', 'dragover'].forEach(ev =>
+    wrap.addEventListener(ev, (e) => { e.preventDefault(); wrap.classList.add('drop'); }));
+  ['dragleave', 'drop'].forEach(ev =>
+    wrap.addEventListener(ev, (e) => {
+      e.preventDefault();
+      if(ev === 'dragleave' && e.target !== wrap) return; /* 内部元素间移动不算离开 */
+      wrap.classList.remove('drop');
+    }));
+  wrap.addEventListener('drop', (e) => {
+    const files = (e.dataTransfer && e.dataTransfer.files) || [];
+    for(const f of files) uploadBlob(f.name, f);
+  });
 }
 
 async function loadUploads(){
