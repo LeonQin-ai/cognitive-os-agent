@@ -162,7 +162,11 @@ int tx_run(tx *tx, const char *tool_name, const char *args_json) {
         int npaths = 0;
         extract_paths(args_json, tx->ctx.workspace, paths, &npaths);
         for (int i = 0; i < npaths; i++) {
-            snapshot_capture(tx->snap, paths[i]);
+            /* per-path git check: the workspace itself may be non-git while
+             * the write target lives inside a git repo — git already versions
+             * those files, snapshotting them again is wasted work */
+            if (!is_git_managed(paths[i]))
+                snapshot_capture(tx->snap, paths[i]);
             free(paths[i]);
         }
     }
