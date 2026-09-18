@@ -1732,6 +1732,8 @@ async function loadGhSkills(){
 }
 
 /* GitHub 全网在线搜索：实时调 GitHub search API 找技能仓库（后端代理） */
+let GH_SEARCH_LAST = [];
+
 async function githubSearchOnline(){
   const box = $('gh-online-catalog'); if(!box) return;
   const q = skillQ();
@@ -1739,15 +1741,27 @@ async function githubSearchOnline(){
   box.innerHTML = '<span class="muted">🌐 正在 GitHub 全网搜索「' + esc(q) + '」…</span>';
   const r = await call('GET', '/v1/catalog/github-search?q=' + encodeURIComponent(q));
   const list = Array.isArray(r.obj) ? r.obj : [];
+  GH_SEARCH_LAST = list;
   if(!list.length){
     box.innerHTML = '<span class="muted">（GitHub 全网无匹配或搜索失败，可 <a href="https://github.com/search?q=' +
       encodeURIComponent(q) + '&type=repositories" target="_blank" rel="noopener">去 GitHub 站内搜</a>）</span>';
     return;
   }
-  box.innerHTML = list.map(x =>
+  box.innerHTML = list.map((x, i) =>
     '<div class="item"><b><a href="' + esc(x.url) + '" target="_blank" rel="noopener">' + esc(x.repo) + '</a></b> ' +
     '<span class="muted">⭐ ' + (x.stars || 0) + '</span>' +
+    '<button class="sec sm" onclick="ghInstall(' + i + ')">安装</button>' +
     '<div class="hint">' + esc(x.description || '') + '</div></div>').join('');
+}
+
+/* 安装 GitHub 全网搜索结果：后端拉取仓库的 SKILL.md（退回 README.md）注册为 prompt 技能 */
+async function ghInstall(i){
+  const x = (Array.isArray(GH_SEARCH_LAST) ? GH_SEARCH_LAST : [])[i]; if(!x) return;
+  toast('从 GitHub 拉取 ' + x.repo + ' …（首次需下载，稍候）');
+  const r = await call('POST', '/v1/skills/install-github', {repo: x.repo});
+  if(r.obj && r.obj.ok) toast('✔ 已安装 ' + r.obj.name + '（仓库原文）');
+  else toast('安装失败: ' + ((r.obj && r.obj.error) || ('HTTP ' + r.status)));
+  loadSkillsMarket();
 }
 
 function renderGhSkills(){

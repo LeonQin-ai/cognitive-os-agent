@@ -3787,6 +3787,82 @@ static int h_skill_install_skillhub(const http_request *req, http_response *resp
     return 0;
 }
 
+/* Install a skill from an ARBITRARY GitHub repository (online-search result):
+ * download SKILL.md (fallback README.md) from raw.githubusercontent.com and
+ * register it as a prompt-kind skill (same persistence flow as install-skillhub). */
+static int h_skill_install_github(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
+    char *b;
+    cJSON *root;
+    char repo_buf[256] = "";
+    char *content;
+    skill sk;
+    int rc;
+    cJSON *o;
+    char *s;
+    char name[192], desc[384];
+    char nm[160];
+    size_t w = 0;
+
+    if (!authz_ok(ctx, req, resp))
+        return 0;
+    b = body_str(req);
+    root = b ? cJSON_Parse(b) : NULL;
+    free(b);
+    const char *repo = json_str(root, "repo");
+    if (repo && *repo)
+        snprintf(repo_buf, sizeof(repo_buf), "%s", repo);
+    cJSON_Delete(root);
+    if (!repo_buf[0]) {
+        resp->status = 400;
+        http_resp_json(resp, "{\"error\":\"need 'repo' string\"}");
+        return 0;
+    }
+
+    content = catalog_github_fetch_skill(repo_buf);
+    if (!content) {
+        resp->status = 502;
+        http_resp_json(resp, "{\"error\":\"fetch failed: no SKILL.md/README.md in repo (check network)\"}");
+        return 0;
+    }
+
+    /* runtime skill name = gh_<owner>_<repo> with unsafe chars folded to '_' */
+    snprintf(nm, sizeof(nm), "gh_%s", repo_buf);
+    for (char *p = nm; *p && w < sizeof(nm) - 1; p++, w++) {
+        if (!((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') || (*p >= '0' && *p <= '9') || *p == '_' ||
+              *p == '-' || *p == '.'))
+            *p = '_';
+    }
+    nm[w] = '\0';
+    snprintf(desc, sizeof(desc), "GitHub 技能（github.com/%s）", repo_buf);
+    memset(&sk, 0, sizeof(sk));
+    sk.name = nm;
+    sk.description = desc;
+    sk.kind = "prompt";
+    sk.body = content;
+    sk.caps = "";
+    rc = skill_register_ex(ctx->skills, &sk, 1);
+    free(content);
+    if (rc != 0) {
+        resp->status = 400;
+        http_resp_json(resp, "{\"error\":\"register failed\"}");
+        return 0;
+    }
+
+    if (ctx->state_root)
+        skill_registry_persist(ctx->skills, ctx->state_root);
+    o = cJSON_CreateObject();
+    cJSON_AddBoolToObject(o, "ok", 1);
+    cJSON_AddStringToObject(o, "name", nm);
+    cJSON_AddStringToObject(o, "kind", "prompt");
+    cJSON_AddStringToObject(o, "repo", repo_buf);
+    s = cJSON_PrintUnformatted(o);
+    cJSON_Delete(o);
+    http_resp_json(resp, s ? s : "{\"ok\":true}");
+    free(s);
+    return 0;
+}
+
 /* ================= IM (instant messaging) ================= */
 
 /* Push a new IM message to every WebSocket client + record an experience. */
@@ -4604,6 +4680,7 @@ int api_attach(runtime_ctx *ctx) {
     http_server_route(ctx->http, "GET", "/v1/catalog/skillhub", h_catalog_skillhub, ctx);
     http_server_route(ctx->http, "GET", "/v1/catalog/github-search", h_catalog_github_search, ctx);
     http_server_route(ctx->http, "POST", "/v1/skills/install-skillhub", h_skill_install_skillhub, ctx);
+    http_server_route(ctx->http, "POST", "/v1/skills/install-github", h_skill_install_github, ctx);
     http_server_route(ctx->http, "GET", "/", h_index, ctx);
     http_server_route(ctx->http, "GET", "/favicon.ico", h_favicon, ctx);
     return 0;

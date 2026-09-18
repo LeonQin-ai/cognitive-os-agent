@@ -82,6 +82,13 @@ char *catalog_skillhub_fetch_skill(const char *slug);
  * a worker, not the HTTP thread. NULL on failure / empty q. */
 char *catalog_github_search_json(const char *q);
 
+/* Download the skill document of an ARBITRARY "owner/repo" GitHub repository
+ * (from the online search): SKILL.md first, then README.md (HEAD ref = default
+ * branch); ghproxy mirror tried when the direct fetch fails. Returns the
+ * malloc'd markdown (truncated to 64 KB) or NULL on failure / bad repo.
+ * Blocking network I/O — call from a worker, not the HTTP thread. */
+char *catalog_github_fetch_skill(const char *repo);
+
 /* issue #18 — provider model catalog. Asks an OpenAI-/Anthropic-compatible
  * provider (GET <base>/models, Bearer / x-api-key auth) which models the
  * api_key can use. Returns a malloc'd JSON array of model-id strings

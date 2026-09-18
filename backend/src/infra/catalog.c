@@ -960,3 +960,58 @@ char *catalog_github_search_json(const char *q) {
     memcpy(out + off, "]", 2);
     return out;
 }
+
+/* Fetch the skill document of an ARBITRARY GitHub repository (from the online
+ * search): prefer SKILL.md, fall back to README.md. The HEAD ref resolves to
+ * the default branch on raw.githubusercontent.com; a ghproxy mirror is tried
+ * when the direct fetch fails. Returns malloc'd text (caller frees) or NULL. */
+char *catalog_github_fetch_skill(const char *repo) {
+    static const char *FILES[] = {"SKILL.md", "README.md"};
+    const char *slash;
+
+    if (!repo || !*repo)
+        return NULL;
+    /* repo must be "owner/repo" with URL-safe characters only */
+    slash = strchr(repo, '/');
+    if (!slash || slash == repo || !slash[1] || strchr(slash + 1, '/'))
+        return NULL;
+    for (const char *p = repo; *p; p++) {
+        if (!((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') || (*p >= '0' && *p <= '9') || *p == '-' ||
+              *p == '_' || *p == '.' || *p == '/'))
+            return NULL;
+    }
+
+    for (size_t f = 0; f < sizeof(FILES) / sizeof(FILES[0]); f++) {
+        char path[512];
+        const char *bases[2] = {"https://raw.githubusercontent.com", "https://ghproxy.net"};
+        snprintf(path, sizeof(path), "/%s/HEAD/%s", repo, FILES[f]);
+        for (int b = 0; b < 2; b++) {
+            char mpath[600];
+            http_response *r;
+            char *text = NULL;
+
+            if (b == 0)
+                r = http_get(bases[0], path, NULL, 10000);
+            else {
+                snprintf(mpath, sizeof(mpath), "/https://raw.githubusercontent.com%s", path);
+                r = http_get(bases[1], mpath, NULL, 10000);
+            }
+            if (r && r->status == 200 && r->body && r->body_len > 0) {
+                size_t n = r->body_len;
+                if (n > REMOTE_SKILL_MAX)
+                    n = REMOTE_SKILL_MAX;
+                text = (char *)malloc(n + 1);
+                if (text) {
+                    memcpy(text, r->body, n);
+                    text[n] = '\0';
+                }
+            }
+            if (r)
+                http_response_free(r);
+            if (text)
+                return text;
+        }
+    }
+
+    return NULL;
+}
