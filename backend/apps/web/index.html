@@ -3230,7 +3230,10 @@ async function loadModels(){
   if(!ROUTES.length){ t.innerHTML = '<tr><td colspan="7" class="muted">（暂无路由）</td></tr>'; return; }
   const ap = ACTIVE.provider || '';
   t.innerHTML = ROUTES.map((x, i) => {
-    const isActive = x.name === ap;
+    /* active = 路由与当前激活 LLM 的 provider+model+base_url 一致（自动路由已不再按名对应） */
+    const isActive = (x.provider || '') === ap
+      && (x.model || '') === (ACTIVE.model || '')
+      && (x.base_url || '') === (ACTIVE.base_url || '');
     return '<tr class="' + (isActive ? 'active-row' : '') + '">'
       + '<td>' + esc(x.name || '') + (isActive ? ' <span class="badge badge-ok">active</span>' : '') + '</td>'
       + '<td>' + esc(x.provider || '') + '</td>'
