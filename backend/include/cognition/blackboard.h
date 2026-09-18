@@ -24,6 +24,15 @@ int blackboard_count(blackboard *b);
 /* All entries as a JSON object (malloc'd; caller frees). */
 char *blackboard_snapshot_json(blackboard *b);
 
+/* Persistence: mirror every put/remove to <path> as a JSON object snapshot
+ * (written under the board mutex; small files, low write frequency).
+ * NULL path disables saving. Applies to later mutations only. */
+void blackboard_set_persist(blackboard *b, const char *path);
+/* Load entries from a JSON object snapshot written by the saver (merge:
+ * existing keys with the same name are overwritten). Returns 0 ok, -1 on
+ * missing/unparsable file. */
+int blackboard_load_json(blackboard *b, const char *path);
+
 #ifdef __cplusplus
 }
 #endif

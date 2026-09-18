@@ -956,6 +956,36 @@ static void test_blackboard(void) {
     blackboard_free(b);
 }
 
+/* blackboard persistence: mutations mirror to disk, reload restores them */
+static void test_blackboard_persist(void) {
+    const char *path = "state-test-bb/blackboard.json";
+    section("blackboard_persist");
+    fs_mkdirs("state-test-bb");
+    blackboard *b = blackboard_new();
+    CHECK(b != NULL);
+    if (!b) return;
+    blackboard_set_persist(b, path);
+    blackboard_put(b, "flow/trace", "step1->step2");
+    blackboard_put(b, "flow/final", "done");
+    blackboard_put(b, "flow/final", "done-v2"); /* overwrite also mirrors */
+    blackboard_remove(b, "flow/trace");
+    blackboard_free(b);
+
+    blackboard *b2 = blackboard_new();
+    CHECK(b2 != NULL);
+    if (!b2) return;
+    CHECK(blackboard_load_json(b2, path) == 0);
+    CHECK(blackboard_count(b2) == 1);
+    char *g = blackboard_get(b2, "flow/final");
+    CHECK_STR(g, "done-v2");
+    free(g);
+    blackboard_free(b2);
+    /* missing file is a clean failure */
+    blackboard *b3 = blackboard_new();
+    CHECK(blackboard_load_json(b3, "state-test-bb/no-such-file.json") == -1);
+    blackboard_free(b3);
+}
+
 /* ---------- runtime: multi-agent coordinator ---------- */
 static void test_agent_pool(void) {
     section("agent_pool");
@@ -4979,6 +5009,7 @@ int main(void) {
     test_metrics();
     test_config();
     test_blackboard();
+    test_blackboard_persist();
     test_agent_pool();
     test_auth();
     test_websocket();
