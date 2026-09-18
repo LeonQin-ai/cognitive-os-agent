@@ -857,3 +857,106 @@ char *catalog_provider_models_json(const char *provider, const char *base_url, c
     }
     return out;
 }
+
+/* ================= GitHub global skill search (online) ================= */
+
+#define GITHUB_API "https://api.github.com"
+#define GITHUB_SEARCH_PATH "/search/repositories?q="
+#define GITHUB_SEARCH_MAX 10
+
+/* percent-encode q as UTF-8 query component (keep unreserved chars) */
+static void gh_urlencode(char *dst, size_t cap, const char *src) {
+    static const char HEX[] = "0123456789ABCDEF";
+    size_t o = 0;
+
+    for (const unsigned char *p = (const unsigned char *)src; *p && o + 4 < cap; p++) {
+        if ((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || (*p >= '0' && *p <= '9') ||
+            *p == '-' || *p == '_' || *p == '.' || *p == '~') {
+            dst[o++] = (char)*p;
+        } else {
+            dst[o++] = '%';
+            dst[o++] = HEX[*p >> 4];
+            dst[o++] = HEX[*p & 0xF];
+        }
+    }
+
+    dst[o] = '\0';
+}
+
+char *catalog_github_search_json(const char *q) {
+    char enc[512];
+    char path[768];
+    strmap hdr;
+    http_response *r;
+    char *body;
+    cJSON *root, *items, *it;
+    char *out;
+    int n = 0;
+
+    if (!q || !*q)
+        return NULL;
+    gh_urlencode(enc, sizeof(enc), q);
+    snprintf(path, sizeof(path), GITHUB_SEARCH_PATH "%s+skill&sort=stars&order=desc&per_page=%d", enc,
+             GITHUB_SEARCH_MAX);
+
+    memset(&hdr, 0, sizeof(hdr));
+    strmap_set(&hdr, "User-Agent", "cognitive-os-agent");
+    strmap_set(&hdr, "Accept", "application/vnd.github+json");
+    r = http_get(GITHUB_API, path, &hdr, 10000);
+    strmap_free(&hdr);
+    if (!r || r->status != 200 || !r->body || r->body_len == 0) {
+        if (r)
+            http_response_free(r);
+        return NULL;
+    }
+
+    body = (char *)malloc(r->body_len + 1);
+    if (!body) {
+        http_response_free(r);
+        return NULL;
+    }
+    memcpy(body, r->body, r->body_len);
+    body[r->body_len] = '\0';
+    http_response_free(r);
+
+    root = cJSON_Parse(body);
+    free(body);
+    items = root ? cJSON_GetObjectItemCaseSensitive(root, "items") : NULL;
+    if (!cJSON_IsArray(items)) {
+        cJSON_Delete(root);
+        return NULL;
+    }
+
+    out = xstrdup("[");
+    size_t off = 1;
+    cJSON_ArrayForEach(it, items) {
+        cJSON *jfull = cJSON_GetObjectItemCaseSensitive(it, "full_name");
+        cJSON *jdesc = cJSON_GetObjectItemCaseSensitive(it, "description");
+        cJSON *jurl = cJSON_GetObjectItemCaseSensitive(it, "html_url");
+        cJSON *jstars = cJSON_GetObjectItemCaseSensitive(it, "stargazers_count");
+        char repo[256], desc[800], url[300], buf[1500];
+        size_t blen;
+        char *no;
+
+        if (!cJSON_IsString(jfull) || !jfull->valuestring[0])
+            continue;
+        json_esc(repo, sizeof(repo), jfull->valuestring);
+        json_esc(desc, sizeof(desc), cJSON_IsString(jdesc) ? jdesc->valuestring : "");
+        json_esc(url, sizeof(url), cJSON_IsString(jurl) ? jurl->valuestring : "");
+        blen = (size_t)snprintf(buf, sizeof(buf),
+                                "%s{\"repo\":\"%s\",\"description\":\"%s\",\"url\":\"%s\",\"stars\":%d}", n ? "," : "",
+                                repo, desc, url, cJSON_IsNumber(jstars) ? (int)jstars->valuedouble : 0);
+        no = realloc(out, off + blen + 2);
+        if (!no)
+            break;
+        out = no;
+        memcpy(out + off, buf, blen + 1);
+        off += blen;
+        if (++n >= GITHUB_SEARCH_MAX)
+            break;
+    }
+
+    cJSON_Delete(root);
+    memcpy(out + off, "]", 2);
+    return out;
+}

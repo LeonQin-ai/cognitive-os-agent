@@ -7,6 +7,7 @@
 #include "runtime/flow.h"
 #include "runtime/cron.h"
 #include "runtime/tasklog.h"
+#include "runtime/flow_store.h"
 #include "action/tools.h"
 #include "memory/memory.h"
 #include "snapshot/snapshot.h"
@@ -579,6 +580,8 @@ static int h_flow_run(const http_request *req, http_response *resp, void *ud) {
     cJSON *dag = NULL;
     char *dag_json;
     char *verr = NULL;
+    char name_buf[128] = "";
+    char input_buf[1024] = "";
     /* userdata marker 2 routes the task runner to flow_run */
     int64_t id;
 
@@ -594,6 +597,16 @@ static int h_flow_run(const http_request *req, http_response *resp, void *ud) {
             dag = f;
         if (!cJSON_GetObjectItemCaseSensitive(dag, "nodes"))
             dag = NULL;
+        /* optional label + original task text, stored with the run for the
+         * collaboration-task list (修改/继续 flows) */
+        cJSON *jn = cJSON_GetObjectItemCaseSensitive(root, "name");
+        cJSON *jin = cJSON_GetObjectItemCaseSensitive(root, "input");
+        if (!cJSON_IsString(jin))
+            jin = cJSON_GetObjectItemCaseSensitive(root, "task");
+        if (cJSON_IsString(jn) && jn->valuestring)
+            snprintf(name_buf, sizeof(name_buf), "%s", jn->valuestring);
+        if (cJSON_IsString(jin) && jin->valuestring)
+            snprintf(input_buf, sizeof(input_buf), "%s", jin->valuestring);
     }
 
     if (!dag) {
@@ -623,14 +636,144 @@ static int h_flow_run(const http_request *req, http_response *resp, void *ud) {
     free(verr);
     /* userdata marker 2 routes the task runner to flow_run */
     id = scheduler_submit(ctx->scheduler, 0, dag_json, (void *)2, 0);
-    free(dag_json);
     if (id < 0) {
+        free(dag_json);
         resp->status = 500;
         http_resp_json(resp, "{\"error\":\"scheduler submit failed\"}");
         return 0;
     }
+    /* persist the collaboration task so it can be listed/继续/取消/修改,
+     * and survives restarts (RUNNING → INTERRUPTED on load) */
+    if (ctx->flowstore)
+        flow_store_add(ctx->flowstore, id, name_buf, input_buf, dag_json);
+    free(dag_json);
 
     http_resp_appendf(resp, "{\"id\":%lld,\"status\":\"queued\"}", (long long)id);
+    return 0;
+}
+
+/* GET /v1/flows/list — persisted collaboration task records (newest first). */
+static int h_flow_list(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
+    char *s;
+
+    if (!authz_ok(ctx, req, resp))
+        return 0;
+    (void)req;
+    s = ctx->flowstore ? flow_store_json(ctx->flowstore) : xstrdup("[]");
+    http_resp_appendf(resp, "{\"records\":");
+    http_resp_append(resp, s);
+    http_resp_append(resp, "}");
+    free(s);
+    return 0;
+}
+
+/* PUT /v1/flows/<id> {"name"?,"input"?,"dag"?:object|string} — edit a
+ * collaboration task while it is not RUNNING. */
+static int h_flow_modify(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
+    char *b;
+    cJSON *root;
+    cJSON *jn, *ji, *jd;
+    const char *name = NULL, *input = NULL, *dag_str = NULL;
+    char *dag_owned = NULL;
+    char idbuf[32] = "";
+    int64_t id;
+    int rc;
+
+    if (!authz_ok(ctx, req, resp))
+        return 0;
+    const char *p = req->path + strlen("/v1/flows/");
+    snprintf(idbuf, sizeof(idbuf), "%.*s", (int)strcspn(p, "/"), p);
+    id = atoll(idbuf);
+    b = body_str(req);
+    root = b ? cJSON_Parse(b) : NULL;
+    free(b);
+    if (!root || !cJSON_IsObject(root)) {
+        if (root)
+            cJSON_Delete(root);
+        resp->status = 400;
+        http_resp_json(resp, "{\"error\":\"body must be a JSON object\"}");
+        return 0;
+    }
+    jn = cJSON_GetObjectItemCaseSensitive(root, "name");
+    ji = cJSON_GetObjectItemCaseSensitive(root, "input");
+    jd = cJSON_GetObjectItemCaseSensitive(root, "dag");
+    if (cJSON_IsString(jn))
+        name = jn->valuestring;
+    if (cJSON_IsString(ji))
+        input = ji->valuestring;
+    if (cJSON_IsString(jd)) {
+        dag_str = jd->valuestring;
+    } else if (cJSON_IsObject(jd) || cJSON_IsArray(jd)) {
+        dag_owned = cJSON_PrintUnformatted(jd);
+        dag_str = dag_owned;
+    }
+    if (dag_str && dag_owned) {
+        /* validate edited DAG before storing */
+        char *verr = NULL;
+        if (flow_validate(dag_str, &verr) != 0) {
+            http_resp_appendf(resp, "{\"error\":\"invalid flow: %s\"}", verr ? verr : "unknown");
+            free(verr);
+            free(dag_owned);
+            cJSON_Delete(root);
+            resp->status = 400;
+            return 0;
+        }
+        free(verr);
+    }
+    rc = ctx->flowstore ? flow_store_modify(ctx->flowstore, id, name, input, dag_str) : -1;
+    free(dag_owned);
+    cJSON_Delete(root);
+    if (rc != 0) {
+        resp->status = 409;
+        http_resp_json(resp, "{\"error\":\"cannot modify (unknown id or task is RUNNING)\"}");
+        return 0;
+    }
+    http_resp_json(resp, "{\"ok\":true}");
+    return 0;
+}
+
+/* POST /v1/flows/<id>/resume — re-submit a persisted collaboration task as a
+ * NEW run (DAG may have been edited). Returns the new task id. */
+static int h_flow_resume(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
+    char idbuf[32] = "";
+    int64_t old_id, id;
+    const flow_record *rec;
+
+    if (!authz_ok(ctx, req, resp))
+        return 0;
+    const char *p = req->path + strlen("/v1/flows/");
+    snprintf(idbuf, sizeof(idbuf), "%.*s", (int)strcspn(p, "/"), p);
+    old_id = atoll(idbuf);
+    rec = ctx->flowstore ? flow_store_find(ctx->flowstore, old_id) : NULL;
+    if (!rec || !rec->dag_json || !rec->dag_json[0]) {
+        resp->status = 404;
+        http_resp_json(resp, "{\"error\":\"flow task not found\"}");
+        return 0;
+    }
+    char *dag_json = xstrdup(rec->dag_json);
+    char *verr = NULL;
+    if (flow_validate(dag_json, &verr) != 0) {
+        http_resp_appendf(resp, "{\"error\":\"stored flow no longer valid: %s\"}", verr ? verr : "unknown");
+        free(verr);
+        free(dag_json);
+        resp->status = 400;
+        return 0;
+    }
+    free(verr);
+    id = scheduler_submit(ctx->scheduler, 0, dag_json, (void *)2, 0);
+    if (id < 0) {
+        free(dag_json);
+        resp->status = 500;
+        http_resp_json(resp, "{\"error\":\"scheduler submit failed\"}");
+        return 0;
+    }
+    if (ctx->flowstore)
+        flow_store_add(ctx->flowstore, id, rec->name, rec->input, dag_json);
+    free(dag_json);
+    http_resp_appendf(resp, "{\"ok\":true,\"id\":%lld,\"resumed_from\":%lld}", (long long)id, (long long)old_id);
     return 0;
 }
 
@@ -3553,6 +3696,31 @@ static int h_catalog_skillhub(const http_request *req, http_response *resp, void
     return 0;
 }
 
+/* GET /v1/catalog/github-search?q= — live GitHub repo search for skill
+ * projects matching q (top 10 by stars). */
+static int h_catalog_github_search(const http_request *req, http_response *resp, void *ud) {
+    char *s;
+    char q[192];
+
+    (void)ud;
+    query_param(req, "q", q, sizeof(q));
+    if (!q[0]) {
+        resp->status = 400;
+        http_resp_json(resp, "{\"error\":\"need q\"}");
+        return 0;
+    }
+    s = catalog_github_search_json(q);
+    if (!s) {
+        resp->status = 502;
+        http_resp_json(resp, "{\"error\":\"github search failed (check network / rate limit)\"}");
+        return 0;
+    }
+
+    http_resp_json(resp, s);
+    free(s);
+    return 0;
+}
+
 /* Install a skillhub.cn skill: download SKILL.md for the given slug and
  * register it as a prompt-kind skill (same persistence flow as install-remote). */
 static int h_skill_install_skillhub(const http_request *req, http_response *resp, void *ud) {
@@ -4377,6 +4545,9 @@ int api_attach(runtime_ctx *ctx) {
     http_server_route(ctx->http, "POST", "/v1/orchestrate", h_orchestrate, ctx);
     http_server_route(ctx->http, "POST", "/v1/flows", h_flow_run, ctx);
     http_server_route(ctx->http, "POST", "/v1/flows/decompose", h_flow_decompose, ctx);
+    http_server_route(ctx->http, "GET", "/v1/flows/list", h_flow_list, ctx);
+    http_server_route(ctx->http, "PUT", "/v1/flows/", h_flow_modify, ctx);
+    http_server_route(ctx->http, "POST", "/v1/flows/", h_flow_resume, ctx);
     http_server_route(ctx->http, "GET", "/v1/hooks", h_hooks, ctx);
     http_server_route(ctx->http, "POST", "/v1/hooks", h_hook_add, ctx);
     http_server_route(ctx->http, "DELETE", "/v1/hooks/", h_hook_delete, ctx);
@@ -4431,6 +4602,7 @@ int api_attach(runtime_ctx *ctx) {
     http_server_route(ctx->http, "GET", "/v1/catalog/skills", h_catalog_skills, ctx);
     http_server_route(ctx->http, "GET", "/v1/catalog/github-skills", h_catalog_github_skills, ctx);
     http_server_route(ctx->http, "GET", "/v1/catalog/skillhub", h_catalog_skillhub, ctx);
+    http_server_route(ctx->http, "GET", "/v1/catalog/github-search", h_catalog_github_search, ctx);
     http_server_route(ctx->http, "POST", "/v1/skills/install-skillhub", h_skill_install_skillhub, ctx);
     http_server_route(ctx->http, "GET", "/", h_index, ctx);
     http_server_route(ctx->http, "GET", "/favicon.ico", h_favicon, ctx);

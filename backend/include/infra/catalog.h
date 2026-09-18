@@ -77,6 +77,11 @@ char *catalog_skillhub_list_json(const char *q);
  * NULL on failure / bad slug. */
 char *catalog_skillhub_fetch_skill(const char *slug);
 
+/* GitHub global skill search (live repo search API, "q + skill", top 10 by
+ * stars): [{repo,description,url,stars}]. Blocking network I/O — call from
+ * a worker, not the HTTP thread. NULL on failure / empty q. */
+char *catalog_github_search_json(const char *q);
+
 /* issue #18 — provider model catalog. Asks an OpenAI-/Anthropic-compatible
  * provider (GET <base>/models, Bearer / x-api-key auth) which models the
  * api_key can use. Returns a malloc'd JSON array of model-id strings
