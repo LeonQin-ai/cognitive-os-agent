@@ -854,12 +854,32 @@ int set_llm(runtime_ctx *ctx, const char *provider, const char *base_url, const 
     ctx->llm = nl;
     if (ctx->reasoning)
         reasoning_set_llm(ctx->reasoning, nl);
-    /* keep the route table in sync: drop the previously-active route, then add
-     * the new active one so round-robin never falls back to a stale config. */
+    /* keep the route table in sync: drop the previously-active auto route, then
+     * make sure the new active config exists as a route so round-robin never
+     * falls back to a stale config. When a route already carries the same
+     * provider+model (activation of a listed route), don't duplicate it. */
     if (ctx->router) {
+        int have_same = 0;
+        int ri;
+        for (ri = 0; ri < router_count(ctx->router); ri++) {
+            const route *rt = router_get(ctx->router, ri);
+            if (!rt || !rt->provider || !rt->model)
+                continue;
+            if (strcmp(rt->provider, provider) != 0)
+                continue;
+            if (!model || !*model ? (!rt->model[0]) : strcmp(rt->model, model) == 0) {
+                const char *rb = rt->base_url ? rt->base_url : "";
+                const char *nb = base_url ? base_url : "";
+                if (strcmp(rb, nb) == 0) {
+                    have_same = 1;
+                    break;
+                }
+            }
+        }
         if (ctx->provider)
             router_remove(ctx->router, ctx->provider);
-        router_add(ctx->router, provider, provider, base_url, api_key, model, 1.0);
+        if (!have_same)
+            router_add(ctx->router, provider, provider, base_url, api_key, model, 1.0);
     }
 
     mutex_unlock(&ctx->run_lock);

@@ -3308,7 +3308,7 @@ async function fetchModels(){
     }
     FETCHED_MODELS = Array.isArray(o.models) ? o.models : [];
     renderFetchedModels();
-    if(st) st.textContent = '✅ 拉取到 ' + FETCHED_MODELS.length + ' 个模型，点击填入或全部创建';
+    if(st) st.textContent = '✅ 拉取到 ' + FETCHED_MODELS.length + ' 个模型，点击即创建路由并激活，也可全部创建';
     return;
   }
   if(st) st.textContent = '❌ 拉取超时';
@@ -3325,13 +3325,27 @@ function renderFetchedModels(){
   }
   box.innerHTML = FETCHED_MODELS.map(m =>
     '<button class="sec sm" onclick="pickFetchedModel(\'' + esc(String(m).replace(/'/g, "\\'")) + '\')" ' +
-    'title="点击填入 model 字段；也可用「全部创建」批量建路由">' + esc(String(m)) + '</button>').join(' ');
+    'title="点击创建该模型的路由并激活；也可用「全部创建」批量建路由">' + esc(String(m)) + '</button>').join(' ');
   if(btn) btn.style.display = '';
 }
 
-function pickFetchedModel(m){
+/* 点模型 chip = 直接创建该模型的路由（不存在才建）并立即激活 */
+async function pickFetchedModel(m){
+  const provider = presetProvider();
+  const base = $('r-base') ? $('r-base').value.trim() : '';
+  const key = $('r-key') ? $('r-key').value.trim() : '';
+  const name = (provider + '-' + String(m).replace(/[^A-Za-z0-9._-]/g, '-')).slice(0, 60);
+  const have = new Set(ROUTES.map(x => x.name));
+  if(!have.has(name)){
+    const r = await call('POST', '/v1/routes', {name, provider, base_url: base, model: m, api_key: key, weight: 1});
+    if(!(r.status < 300)){ toast('创建路由失败：HTTP ' + r.status); return; }
+  }
   const inp = $('r-model'); if(inp) inp.value = m;
-  if($('routes-msg')) $('routes-msg').textContent = '已选择 ' + m + '，点 Add route 保存';
+  const st = $('models-stat'); if(st) st.textContent = 'switching…';
+  const a = await call('POST', '/v1/config/llm', {provider, base_url: base, model: m, api_key: key});
+  if(st) st.textContent = (a.obj && a.obj.ok) ? 'switched to ' + m : 'error: ' + ((a.obj && a.obj.error) || a.status);
+  toast('已创建并激活 ' + m + '，其他模型点 chip 即可切换');
+  loadModels();
 }
 
 /* 一键把拉取到的模型全部建成路由：命名 <provider>-<model>，重名自动跳过 */

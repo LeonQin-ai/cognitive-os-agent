@@ -825,11 +825,15 @@ char *catalog_provider_models_json(const char *provider, const char *base_url, c
     off = 1;
     cJSON_ArrayForEach(it, arr) {
         cJSON *id = cJSON_GetObjectItemCaseSensitive(it, idkey);
+        cJSON *status = cJSON_GetObjectItemCaseSensitive(it, "status");
         char esc[300];
         char buf[340];
         size_t blen;
         char *no;
         if (!cJSON_IsString(id) || !id->valuestring[0])
+            continue;
+        /* skip models the provider has already retired (e.g. ark "Shutdown") */
+        if (cJSON_IsString(status) && ci_contains(status->valuestring, "shutdown"))
             continue;
         json_esc(esc, sizeof(esc), id->valuestring);
         blen = (size_t)snprintf(buf, sizeof(buf), "%s\"%s\"", n ? "," : "", esc);
