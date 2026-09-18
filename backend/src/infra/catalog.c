@@ -734,3 +734,122 @@ char *catalog_skills_json(void) {
 
     return out;
 }
+
+/* ================= provider model catalog (issue #18) ================= */
+
+char *catalog_provider_models_json(const char *provider, const char *base_url, const char *api_key, char *err,
+                                   size_t errcap) {
+    static const char *OPENAI_PATHS[] = {"/models", "/v1/models"};
+    static const char *ANTHROPIC_PATHS[] = {"/v1/models", "/models"};
+    const char **paths;
+    char authbuf[320];
+    int is_anthropic;
+    int attempt;
+    http_response *r = NULL;
+    char *body;
+    cJSON *root;
+    cJSON *arr;
+    const char *idkey = "id";
+    char *out;
+    size_t off;
+    int n = 0;
+    cJSON *it;
+
+#define MODELS_SET_ERR(msg)                                                                                        \
+    do {                                                                                                           \
+        if (err && errcap)                                                                                         \
+            snprintf(err, errcap, "%s", msg);                                                                      \
+    } while (0)
+
+    if (!provider || !base_url || !*base_url) {
+        MODELS_SET_ERR("need provider and base_url");
+        return NULL;
+    }
+    is_anthropic = strcmp(provider, "anthropic") == 0;
+    paths = is_anthropic ? ANTHROPIC_PATHS : OPENAI_PATHS;
+
+    for (attempt = 0; attempt < 2 && !r; attempt++) {
+        strmap hdr;
+        memset(&hdr, 0, sizeof(hdr));
+        if (is_anthropic) {
+            strmap_set(&hdr, "x-api-key", api_key ? api_key : "");
+            strmap_set(&hdr, "anthropic-version", "2023-06-01");
+        } else {
+            snprintf(authbuf, sizeof(authbuf), "Bearer %s", api_key ? api_key : "");
+            strmap_set(&hdr, "Authorization", authbuf);
+        }
+        r = http_get(base_url, paths[attempt], &hdr, 10000);
+        strmap_free(&hdr);
+        if (r && r->status == 404) {
+            http_response_free(r);
+            r = NULL; /* alternate base shape — try the next path */
+        }
+    }
+
+    if (!r) {
+        MODELS_SET_ERR("request failed (check base_url / network)");
+        return NULL;
+    }
+    if (r->status != 200 || !r->body || r->body_len == 0) {
+        snprintf(err, errcap, "HTTP %d from provider", r->status);
+        http_response_free(r);
+        return NULL;
+    }
+
+    /* body is not NUL-terminated — copy for cJSON */
+    body = (char *)malloc(r->body_len + 1);
+    if (!body) {
+        http_response_free(r);
+        MODELS_SET_ERR("out of memory");
+        return NULL;
+    }
+    memcpy(body, r->body, r->body_len);
+    body[r->body_len] = '\0';
+    http_response_free(r);
+
+    root = cJSON_Parse(body);
+    free(body);
+    arr = root ? cJSON_GetObjectItemCaseSensitive(root, "data") : NULL;
+    if (!cJSON_IsArray(arr)) {
+        /* ollama native format: {"models":[{"name":...}]} */
+        arr = cJSON_GetObjectItemCaseSensitive(root, "models");
+        idkey = "name";
+    }
+    if (!cJSON_IsArray(arr)) {
+        cJSON_Delete(root);
+        MODELS_SET_ERR("unexpected response shape from provider");
+        return NULL;
+    }
+
+    out = xstrdup("[");
+    off = 1;
+    cJSON_ArrayForEach(it, arr) {
+        cJSON *id = cJSON_GetObjectItemCaseSensitive(it, idkey);
+        char esc[300];
+        char buf[340];
+        size_t blen;
+        char *no;
+        if (!cJSON_IsString(id) || !id->valuestring[0])
+            continue;
+        json_esc(esc, sizeof(esc), id->valuestring);
+        blen = (size_t)snprintf(buf, sizeof(buf), "%s\"%s\"", n ? "," : "", esc);
+        no = realloc(out, off + blen + 2);
+        if (!no)
+            break;
+        out = no;
+        memcpy(out + off, buf, blen + 1);
+        off += blen;
+        n++;
+        if (n >= 200)
+            break;
+    }
+    out[off] = ']';
+    out[off + 1] = '\0';
+    cJSON_Delete(root);
+    if (n == 0) {
+        free(out);
+        MODELS_SET_ERR("provider returned an empty model list");
+        return NULL;
+    }
+    return out;
+}

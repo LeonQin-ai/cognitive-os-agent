@@ -77,6 +77,14 @@ char *catalog_skillhub_list_json(const char *q);
  * NULL on failure / bad slug. */
 char *catalog_skillhub_fetch_skill(const char *slug);
 
+/* issue #18 — provider model catalog. Asks an OpenAI-/Anthropic-compatible
+ * provider (GET <base>/models, Bearer / x-api-key auth) which models the
+ * api_key can use. Returns a malloc'd JSON array of model-id strings
+ * (["id",...]) or NULL on failure (err filled with a short reason).
+ * Blocking network I/O — call from a worker, not the HTTP thread. */
+char *catalog_provider_models_json(const char *provider, const char *base_url, const char *api_key, char *err,
+                                   size_t errcap);
+
 #ifdef __cplusplus
 }
 #endif

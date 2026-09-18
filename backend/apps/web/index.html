@@ -1139,6 +1139,13 @@ panels.models = `
       <button class="sec sm" onclick="testForm()">测试连接</button>
       <span id="routes-msg" class="muted"></span>
     </div>
+    <div class="hint" style="margin-top:8px">🔍 用 api-key 拉取该供应商的可用模型列表（issue #18：一个供应商可配多个模型，随时 Set active 切换）：</div>
+    <div class="row" style="margin-bottom:6px">
+      <button class="sec sm" onclick="fetchModels()">拉取模型列表</button>
+      <button class="sec sm" id="models-addall" style="display:none" onclick="addFetchedModels()">➕ 全部创建</button>
+      <span id="models-fetch-stat" class="muted" style="font-size:12px"></span>
+    </div>
+    <div class="chips" id="fetched-models"><span class="muted" style="font-size:12px">（先填 base_url 和 api_key，再点拉取）</span></div>
   </div>`;
 
 const fetchers = {
@@ -3267,6 +3274,84 @@ async function editRouteKey(i){
     api_key: k.trim(), weight: x.weight != null ? x.weight : 1
   });
   if(st) st.textContent = (r.status < 300) ? 'API Key 已更新' : 'error ' + r.status;
+  loadModels();
+}
+
+/* ===== 拉取供应商可用模型列表（issue #18）===== */
+let FETCHED_MODELS = [];
+
+async function fetchModels(){
+  const st = $('models-fetch-stat');
+  const box = $('fetched-models');
+  const btn = $('models-addall');
+  const provider = presetProvider();
+  const base = $('r-base').value.trim();
+  const key = $('r-key').value.trim();
+  if(!base){ if(st) st.textContent = '先填 base_url'; return; }
+  if(st) st.textContent = '请求中…';
+  if(box) box.innerHTML = '<span class="muted" style="font-size:12px">请求中…</span>';
+  const r0 = await call('POST', '/v1/routes/models', {provider, base_url: base, api_key: key});
+  if(!(r0.status < 300)){
+    if(st) st.textContent = '❌ ' + ((r0.obj && r0.obj.error) || ('HTTP ' + r0.status));
+    return;
+  }
+  for(let i = 0; i < 40; i++){ /* 最多等 20s */
+    const r = await call('GET', '/v1/routes/models');
+    const o = r.obj || {};
+    if(o.pending){ await new Promise(res => setTimeout(res, 500)); continue; }
+    if(!o.ok){
+      FETCHED_MODELS = [];
+      if(box) box.innerHTML = '<span class="muted" style="font-size:12px">（拉取失败：' + esc(o.error || '未知错误') + '）</span>';
+      if(st) st.textContent = '❌ ' + (o.error || '拉取失败');
+      if(btn) btn.style.display = 'none';
+      return;
+    }
+    FETCHED_MODELS = Array.isArray(o.models) ? o.models : [];
+    renderFetchedModels();
+    if(st) st.textContent = '✅ 拉取到 ' + FETCHED_MODELS.length + ' 个模型，点击填入或全部创建';
+    return;
+  }
+  if(st) st.textContent = '❌ 拉取超时';
+}
+
+function renderFetchedModels(){
+  const box = $('fetched-models');
+  const btn = $('models-addall');
+  if(!box) return;
+  if(!FETCHED_MODELS.length){
+    box.innerHTML = '<span class="muted" style="font-size:12px">（无可用模型）</span>';
+    if(btn) btn.style.display = 'none';
+    return;
+  }
+  box.innerHTML = FETCHED_MODELS.map(m =>
+    '<button class="sec sm" onclick="pickFetchedModel(\'' + esc(String(m).replace(/'/g, "\\'")) + '\')" ' +
+    'title="点击填入 model 字段；也可用「全部创建」批量建路由">' + esc(String(m)) + '</button>').join(' ');
+  if(btn) btn.style.display = '';
+}
+
+function pickFetchedModel(m){
+  const inp = $('r-model'); if(inp) inp.value = m;
+  if($('routes-msg')) $('routes-msg').textContent = '已选择 ' + m + '，点 Add route 保存';
+}
+
+/* 一键把拉取到的模型全部建成路由：命名 <provider>-<model>，重名自动跳过 */
+async function addFetchedModels(){
+  if(!FETCHED_MODELS.length) return;
+  const st = $('models-fetch-stat');
+  const provider = presetProvider();
+  const base = $('r-base').value.trim();
+  const key = $('r-key').value.trim();
+  const have = new Set(ROUTES.map(x => x.name));
+  let created = 0, skipped = 0;
+  for(const m of FETCHED_MODELS){
+    const name = (provider + '-' + String(m).replace(/[^A-Za-z0-9._-]/g, '-')).slice(0, 60);
+    if(have.has(name)){ skipped++; continue; }
+    have.add(name);
+    const r = await call('POST', '/v1/routes', {name, provider, base_url: base, model: m, api_key: key, weight: 1});
+    if(r.status < 300) created++; else skipped++;
+  }
+  if(st) st.textContent = '✔ 已创建 ' + created + ' 条路由' + (skipped ? '（跳过 ' + skipped + ' 条已存在）' : '');
+  toast('已创建 ' + created + ' 条模型路由，可在 Model routes 里 Set active 切换');
   loadModels();
 }
 

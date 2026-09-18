@@ -1997,6 +1997,132 @@ static int h_config_llm_test(const http_request *req, http_response *resp, void 
     return 0;
 }
 
+/* ---- provider model listing (issue #18: one provider, many models) ---- */
+
+/* Fetch the model list an OpenAI-/Anthropic-compatible provider exposes for
+ * an api_key. The blocking network work lives in catalog.c
+ * (catalog_provider_models_json); this thread wrapper keeps the single-threaded
+ * HTTP server responsive (same pattern as the LLM probe, issue #3). POST
+ * starts the fetch; GET polls the verdict. */
+static struct {
+    volatile int phase; /* 0 = idle, 1 = running, 2 = result ready */
+    int ok;
+    char models_json[12288]; /* JSON array of model-id strings */
+    char error[256];
+} g_models_fetch;
+
+static void models_fetch_thread(void *arg) {
+    llm_probe_cfg *cfg = (llm_probe_cfg *)arg;
+    char *arr;
+
+    g_models_fetch.ok = 0;
+    g_models_fetch.models_json[0] = '\0';
+    g_models_fetch.error[0] = '\0';
+    arr = catalog_provider_models_json(cfg->provider, cfg->base_url, cfg->api_key, g_models_fetch.error,
+                                       sizeof(g_models_fetch.error));
+    if (arr) {
+        size_t len = strlen(arr);
+        if (len >= sizeof(g_models_fetch.models_json))
+            len = sizeof(g_models_fetch.models_json) - 1;
+        memcpy(g_models_fetch.models_json, arr, len);
+        g_models_fetch.models_json[len] = '\0';
+        g_models_fetch.ok = 1;
+        free(arr);
+    }
+    free(cfg);
+    g_models_fetch.phase = 2; /* result fields written before the flag — display-grade */
+}
+
+static int h_routes_models(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
+    char *b;
+    cJSON *root;
+    char *s;
+
+    if (!authz_ok(ctx, req, resp))
+        return 0;
+
+    if (strcmp(req->method, "GET") == 0) {
+        cJSON *o = cJSON_CreateObject();
+        if (g_models_fetch.phase == 1) {
+            cJSON_AddBoolToObject(o, "pending", 1);
+        } else if (g_models_fetch.phase == 2) {
+            cJSON_AddBoolToObject(o, "pending", 0);
+            cJSON_AddBoolToObject(o, "ok", g_models_fetch.ok);
+            if (g_models_fetch.ok) {
+                cJSON *arr = cJSON_Parse(g_models_fetch.models_json);
+                if (!arr)
+                    arr = cJSON_CreateArray();
+                cJSON_AddItemToObject(o, "models", arr);
+            } else {
+                cJSON_AddStringToObject(o, "error", g_models_fetch.error);
+            }
+            g_models_fetch.phase = 0; /* consumed; the next POST starts a fresh fetch */
+        } else {
+            cJSON_AddBoolToObject(o, "pending", 0);
+        }
+        s = cJSON_PrintUnformatted(o);
+        cJSON_Delete(o);
+        http_resp_json(resp, s ? s : "{\"pending\":false}");
+        free(s);
+        return 0;
+    }
+
+    b = body_str(req);
+    root = b ? cJSON_Parse(b) : NULL;
+    free(b);
+    if (!root || !cJSON_IsObject(root)) {
+        if (root)
+            cJSON_Delete(root);
+        resp->status = 400;
+        http_resp_json(resp, "{\"error\":\"body must be a JSON object\"}");
+        return 0;
+    }
+    if (g_models_fetch.phase == 1) {
+        cJSON_Delete(root);
+        http_resp_json(resp, "{\"pending\":true,\"running\":true}");
+        return 0;
+    }
+
+    {
+        llm_probe_cfg *cfg = (llm_probe_cfg *)calloc(1, sizeof(llm_probe_cfg));
+        thread_t *th;
+        const char *v;
+
+        if (!cfg) {
+            cJSON_Delete(root);
+            resp->status = 500;
+            http_resp_json(resp, "{\"error\":\"out of memory\"}");
+            return 0;
+        }
+        v = json_str(root, "provider");
+        snprintf(cfg->provider, sizeof(cfg->provider), "%s", v ? v : "");
+        v = json_str(root, "base_url");
+        snprintf(cfg->base_url, sizeof(cfg->base_url), "%s", v ? v : "");
+        v = json_str(root, "api_key");
+        snprintf(cfg->api_key, sizeof(cfg->api_key), "%s", v ? v : "");
+        cJSON_Delete(root);
+        if (!cfg->provider[0] || !cfg->base_url[0]) {
+            free(cfg);
+            resp->status = 400;
+            http_resp_json(resp, "{\"error\":\"need 'provider' and 'base_url' strings\"}");
+            return 0;
+        }
+        g_models_fetch.phase = 1;
+        th = thread_create(models_fetch_thread, cfg);
+        if (!th) {
+            g_models_fetch.phase = 0;
+            free(cfg);
+            resp->status = 500;
+            http_resp_json(resp, "{\"error\":\"failed to start fetch thread\"}");
+            return 0;
+        }
+        thread_detach(th);
+    }
+    http_resp_json(resp, "{\"ok\":true,\"pending\":true}");
+    return 0;
+}
+
 static int h_usage(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
     char *s;
@@ -4234,6 +4360,8 @@ int api_attach(runtime_ctx *ctx) {
     http_server_route(ctx->http, "POST", "/v1/config/llm", h_config_llm, ctx);
     http_server_route(ctx->http, "POST", "/v1/config/llm/test", h_config_llm_test, ctx);
     http_server_route(ctx->http, "GET", "/v1/config/llm/test", h_config_llm_test, ctx);
+    http_server_route(ctx->http, "POST", "/v1/routes/models", h_routes_models, ctx);
+    http_server_route(ctx->http, "GET", "/v1/routes/models", h_routes_models, ctx);
     http_server_route(ctx->http, "GET", "/v1/config/snapshot", h_config_snapshot_get, ctx);
     http_server_route(ctx->http, "POST", "/v1/config/snapshot", h_config_snapshot, ctx);
     http_server_route(ctx->http, "GET", "/v1/security/stats", h_security_stats, ctx);
