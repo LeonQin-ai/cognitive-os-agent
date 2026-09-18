@@ -679,6 +679,15 @@ panels.agents = `
       <button class="sec sm" onclick="loadFlow()">Refresh</button>
     </div>
     <div id="flow-board">加载中…</div>
+  </div>
+  <div class="card">
+    <div class="card-head">
+      <h2>协作任务（多 Agent，持久化）</h2>
+      <button class="sec sm" onclick="loadFlowTasks()">Refresh</button>
+      <button class="sec sm" onclick="flowTasksResumeAll()">全部继续</button>
+    </div>
+    <div class="hint">每次 Flow 执行都会记录到 state/flows.json：可继续（以原 DAG 重新提交为新任务）、取消（终止运行中的任务）、修改（名称/输入/DAG，仅非 RUNNING 可改）。重启后未完成任务标记为 INTERRUPTED，可一键继续。</div>
+    <div id="flow-tasks">加载中…</div>
   </div>`;
 
 panels.cron = `
@@ -840,6 +849,15 @@ panels.flow = `
       <button class="sec sm" onclick="loadFlow()">Refresh</button>
     </div>
     <div id="flow-board">加载中…</div>
+  </div>
+  <div class="card">
+    <div class="card-head">
+      <h2>协作任务（多 Agent，持久化）</h2>
+      <button class="sec sm" onclick="loadFlowTasks()">Refresh</button>
+      <button class="sec sm" onclick="flowTasksResumeAll()">全部继续</button>
+    </div>
+    <div class="hint">每次 Flow 执行都会记录到 state/flows.json：可继续（以原 DAG 重新提交为新任务）、取消（终止运行中的任务）、修改（名称/输入/DAG，仅非 RUNNING 可改）。重启后未完成任务标记为 INTERRUPTED，可一键继续。</div>
+    <div id="flow-tasks">加载中…</div>
   </div>`;
 
 panels.mcp = `
@@ -907,6 +925,8 @@ panels.skills = `
     <div class="hint">精选可运行技能（shell/python，一键安装并测试）与来自 fabric / SkillHub / awesome-cursorrules 生态的参考仓库。</div>
     <div id="skill-catalog">加载中…</div>
     <pre id="skill-test-out" style="display:none"></pre>
+    <div class="sub" style="margin-top:12px">GitHub 全网搜索（在线，输入关键字自动触发）</div>
+    <div id="gh-online-catalog">（输入关键字在线搜索 GitHub 技能仓库）</div>
     <div class="sub" style="margin-top:12px">GitHub 仓库技能（展开仓库 → 安装时拉取原文）</div>
     <div id="gh-skill-catalog">加载中…</div>
     <div class="sub" style="margin-top:12px">SkillHub 技能市场（skillhub.cn，安装时拉取 SKILL.md 原文）</div>
@@ -1173,7 +1193,7 @@ async function load(panel){
   if(panel === 'models') return loadModels();
   if(panel === 'dashboard') return loadDashboard();
   if(panel === 'im') return renderIm();
-  if(panel === 'agents') return (loadAgents(), loadFlow());
+  if(panel === 'agents') return (loadAgents(), loadFlow(), loadFlowTasks());
   if(panel === 'mcp') return loadMcp();
   if(panel === 'skills') return (loadSkillsMarket(), loadSkillsCatalog());
   if(panel === 'plugins') return (loadFetcher('plugins'), loadPluginMarket());
@@ -1181,7 +1201,7 @@ async function load(panel){
   if(panel === 'chat') return loadChat();
   if(panel === 'cron') return loadCron();
   if(panel === 'policy') return loadPolicy();
-  if(panel === 'flow') return loadFlow();
+  if(panel === 'flow') return (loadFlow(), loadFlowTasks());
   if(panel === 'metrics'){
     const r = await call('GET', '/metrics');
     const el = $('metrics-out'); if(el) el.textContent = r.text;
@@ -1379,10 +1399,7 @@ function agentAdd(){
     if(r.status < 300){
       $('agent-name').value = ''; $('agent-role').value = ''; $('agent-model').value = '';
       loadAgents();
-      /* 创建完 agent → 引导到 Flow 自动编排 */
       if(st) st.textContent = '✔ 已创建，可在下方 Flow 自动编排';
-      const fo = $('flow-orchestrate');
-      if(fo) fo.scrollIntoView({behavior:'smooth', block:'start'});
       toast('agent「' + name + '」已创建，试试 Flow 自动编排');
     }
   });
@@ -1677,7 +1694,7 @@ function renderSkillCatalog(){
 }
 
 /* 搜索框输入时统一重渲染：已注册技能 + 精选目录实时过滤；
- * SkillHub 市场搜索走网络（后端全量拉取+过滤），防抖 400ms 后按关键字重新拉取 */
+ * SkillHub 市场 + GitHub 全网搜索走网络，防抖 400ms 后按关键字重新拉取 */
 let SKH_Q_LAST = '';   /* 缓存列表对应的关键字（'' = 默认首页） */
 let SKH_TIMER = null;
 function renderSkillCatalogs(){
@@ -1687,10 +1704,16 @@ function renderSkillCatalogs(){
   const q = skillQ();
   if(q !== SKH_Q_LAST){
     clearTimeout(SKH_TIMER);
-    SKH_TIMER = setTimeout(loadSkillhubList, 400);
+    SKH_TIMER = setTimeout(onlineSkillSearch, 400);
   } else if(SKH_SKILLS.length || SKH_Q_LAST){
     renderSkhSkills();
   }
+}
+
+/* 联网搜索：SkillHub 市场全量过滤 + GitHub 全网仓库搜索 */
+function onlineSkillSearch(){
+  loadSkillhubList();
+  githubSearchOnline();
 }
 
 /* GitHub 仓库真实技能：按仓库分组折叠展示，安装时后端实时拉取文件原文 */
@@ -1706,6 +1729,25 @@ async function loadGhSkills(){
   const r = await call('GET', '/v1/catalog/github-skills');
   GH_SKILLS = Array.isArray(r.obj) ? r.obj : [];
   renderGhSkills();
+}
+
+/* GitHub 全网在线搜索：实时调 GitHub search API 找技能仓库（后端代理） */
+async function githubSearchOnline(){
+  const box = $('gh-online-catalog'); if(!box) return;
+  const q = skillQ();
+  if(!q){ box.innerHTML = '<span class="muted">（输入关键字在线搜索 GitHub 技能仓库）</span>'; return; }
+  box.innerHTML = '<span class="muted">🌐 正在 GitHub 全网搜索「' + esc(q) + '」…</span>';
+  const r = await call('GET', '/v1/catalog/github-search?q=' + encodeURIComponent(q));
+  const list = Array.isArray(r.obj) ? r.obj : [];
+  if(!list.length){
+    box.innerHTML = '<span class="muted">（GitHub 全网无匹配或搜索失败，可 <a href="https://github.com/search?q=' +
+      encodeURIComponent(q) + '&type=repositories" target="_blank" rel="noopener">去 GitHub 站内搜</a>）</span>';
+    return;
+  }
+  box.innerHTML = list.map(x =>
+    '<div class="item"><b><a href="' + esc(x.url) + '" target="_blank" rel="noopener">' + esc(x.repo) + '</a></b> ' +
+    '<span class="muted">⭐ ' + (x.stars || 0) + '</span>' +
+    '<div class="hint">' + esc(x.description || '') + '</div></div>').join('');
 }
 
 function renderGhSkills(){
@@ -3000,6 +3042,96 @@ async function loadFlow(){
   }
   el.innerHTML = parts.length ? parts.join('')
     : '<span class="muted" style="font-size:12px">暂无 Flow 记录</span>';
+}
+
+/* ===== 协作任务列表（state/flows.json 持久化）===== */
+function flowStatusBadge(s){
+  const c = {'RUNNING':'#b58900','DONE':'#2da44e','FAILED':'#cf222e','CANCELLED':'#6e7781','TIMEOUT':'#cf222e','INTERRUPTED':'#b58900'}[s] || '#6e7781';
+  return '<span style="color:#fff;background:' + c + ';border-radius:8px;padding:1px 8px;font-size:11px">' + esc(s || '?') + '</span>';
+}
+
+async function loadFlowTasks(){
+  const el = $('flow-tasks'); if(!el) return;
+  const r = await call('GET', '/v1/flows/list');
+  if(r.status !== 200){ el.innerHTML = '<span class="muted" style="font-size:12px">加载失败: ' + esc(r.text || ('HTTP ' + r.status)) + '</span>'; return; }
+  const recs = (r.obj && r.obj.records) ? r.obj.records : [];
+  if(!recs.length){ el.innerHTML = '<span class="muted" style="font-size:12px">暂无协作任务记录</span>'; return; }
+  const rows = recs.map(x => {
+    const id = x.id, s = x.status || '?';
+    const live = (s === 'RUNNING');
+    const editable = !live;
+    const resume = (!live && s !== 'DONE') ? '<button class="sec sm" onclick="flowTaskResume(' + id + ')">继续</button>' : '';
+    const cancel = live ? '<button class="sec sm" onclick="flowTaskCancel(' + id + ')">取消</button>' : '';
+    const edit = editable ? '<button class="sec sm" onclick="flowTaskEdit(' + id + ')">修改</button>' : '';
+    return '<div id="flow-task-' + id + '" style="border:1px solid var(--bd,#ddd);border-radius:8px;padding:8px 10px;margin:6px 0">' +
+      '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">' +
+      '<b>#' + id + '</b>' + flowStatusBadge(s) +
+      '<span style="flex:1;min-width:150px;font-size:12.5px">' + esc(x.name || (x.input || '').slice(0, 60) || '(无名称)') + '</span>' +
+      resume + cancel + edit +
+      '</div>' +
+      (x.input ? '<div class="muted" style="font-size:11.5px;margin-top:4px;white-space:pre-wrap">' + esc(x.input).slice(0, 200) + '</div>' : '') +
+      '<div class="muted" style="font-size:11px;margin-top:2px">创建: ' + new Date(x.created_ms).toLocaleString() + ' · 更新: ' + new Date(x.updated_ms).toLocaleString() + '</div>' +
+      '<div id="flow-task-edit-' + id + '"></div>' +
+      '</div>';
+  });
+  el.innerHTML = rows.join('');
+}
+
+async function flowTaskResume(id){
+  const r = await call('POST', '/v1/flows/' + id + '/resume', {});
+  if(r.status === 200) toast('已继续: 新任务 #' + ((r.obj && r.obj.id) || '?'));
+  else toast('继续失败: ' + (r.text || ('HTTP ' + r.status)));
+  loadFlowTasks();
+}
+
+async function flowTaskCancel(id){
+  const r = await call('DELETE', '/v1/tasks/' + id);
+  if(r.status === 200) toast('已请求取消 #' + id);
+  else toast('取消失败: ' + (r.text || ('HTTP ' + r.status)));
+  setTimeout(loadFlowTasks, 500);
+}
+
+function flowTaskEdit(id){
+  const box = $('flow-task-edit-' + id); if(!box || box.innerHTML) return;
+  call('GET', '/v1/flows/list').then(r => {
+    const recs = (r.obj && r.obj.records) ? r.obj.records : [];
+    const x = recs.find(t => String(t.id) === String(id));
+    if(!x){ toast('记录不存在'); return; }
+    box.innerHTML =
+      '<textarea id="flow-task-input-' + id + '" style="width:100%;min-height:40px;font-size:12px;margin-top:6px" placeholder="任务描述">' + esc(x.input || '') + '</textarea>' +
+      '<textarea id="flow-task-dag-' + id + '" style="width:100%;min-height:120px;font-family:monospace;font-size:12px;margin-top:4px">' + esc(x.dag || '') + '</textarea>' +
+      '<div class="row" style="margin-top:4px">' +
+      '<input id="flow-task-name-' + id + '" type="text" placeholder="名称" style="flex:1;min-width:120px" value="' + esc(x.name || '') + '">' +
+      '<button class="sm" onclick="flowTaskSave(' + id + ')">保存</button>' +
+      '<button class="sec sm" onclick="loadFlowTasks()">放弃</button>' +
+      '<span id="flow-task-save-status-' + id + '" class="muted" style="font-size:12px"></span></div>';
+  });
+}
+
+async function flowTaskSave(id){
+  const st = $('flow-task-save-status-' + id);
+  const name = ($('flow-task-name-' + id) || {}).value;
+  const input = ($('flow-task-input-' + id) || {}).value;
+  const dagRaw = (($('flow-task-dag-' + id) || {}).value || '').trim();
+  let body = {};
+  if(name !== undefined) body.name = name;
+  if(input !== undefined) body.input = input;
+  try { if(dagRaw) body.dag = JSON.parse(dagRaw); }
+  catch(e){ toast('DAG JSON 语法错误: ' + e.message); return; }
+  const r = await call('PUT', '/v1/flows/' + id, body);
+  const ok = (r.status === 200);
+  if(st) st.textContent = ok ? '已保存' : '保存失败: ' + (r.text || ('HTTP ' + r.status));
+  if(ok) setTimeout(loadFlowTasks, 600);
+}
+
+async function flowTasksResumeAll(){
+  const r = await call('GET', '/v1/flows/list');
+  const recs = (r.obj && r.obj.records) ? r.obj.records : [];
+  const ids = recs.filter(x => x.status && x.status !== 'RUNNING' && x.status !== 'DONE').map(x => x.id);
+  if(!ids.length){ toast('没有可继续的任务'); return; }
+  for(const id of ids) await call('POST', '/v1/flows/' + id + '/resume', {});
+  toast('已继续 ' + ids.length + ' 个任务');
+  loadFlowTasks();
 }
 
 let FLOW_LAST_OUTPUT = '';
