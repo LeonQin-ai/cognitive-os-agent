@@ -6,14 +6,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
-
-#if defined(_WIN32)
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#else
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/select.h>
@@ -24,7 +16,6 @@
 #include <unistd.h>
 #include <errno.h>
 #include <fcntl.h>
-#endif
 
 struct sock {
     int fd;
@@ -33,69 +24,23 @@ struct listener {
     int fd;
 };
 
-#if defined(_WIN32)
-#define CLOSEFD(fd) closesocket((fd))
-#else
 #define CLOSEFD(fd) close((fd))
-#endif
 
 static char g_err[256] = "";
 
 static const char *sock_strerror(int err) {
-#if defined(_WIN32)
-    switch (err) {
-    case WSAETIMEDOUT:
-        return "connect timeout";
-    case WSAECONNREFUSED:
-        return "connection refused";
-    case WSAECONNRESET:
-        return "connection reset";
-    default:
-        return "socket error";
-    }
-#else
     return strerror(err);
-#endif
 }
 
 static void set_err(const char *msg) {
     snprintf(g_err, sizeof(g_err), "%s", msg);
 }
 
-#if defined(_WIN32)
-/* WSAStartup must precede any Winsock call. Initialization normally happens in
- * init(), but the socket layer self-initializes too so standalone users
- * (e.g. tests that call the LLM adapters directly) work without it. The guard
- * flag makes this idempotent. */
-static int wsa_started = 0;
-static int wsa_start(void) {
-    if (!wsa_started) {
-        WSADATA wsa;
-        if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
-            set_err("WSAStartup failed");
-            return -1;
-        }
-        wsa_started = 1;
-    }
-
-    return 0;
-}
-#endif
-
 int sock_init(void) {
-#if defined(_WIN32)
-    return wsa_start();
-#endif
     return 0;
 }
 
 void sock_cleanup(void) {
-#if defined(_WIN32)
-    if (wsa_started) {
-        WSACleanup();
-        wsa_started = 0;
-    }
-#endif
 }
 
 const char *sock_error(void) {
@@ -103,13 +48,8 @@ const char *sock_error(void) {
 }
 
 static void set_nonblock(int fd, int nb) {
-#if defined(_WIN32)
-    u_long mode = nb ? 1 : 0;
-    ioctlsocket(fd, FIONBIO, &mode);
-#else
     int fl = fcntl(fd, F_GETFL, 0);
     fcntl(fd, F_SETFL, nb ? (fl | O_NONBLOCK) : (fl & ~O_NONBLOCK));
-#endif
 }
 
 sock *sock_connect(const char *host, uint16_t port, int timeout_ms) {
@@ -122,10 +62,6 @@ sock *sock_connect(const char *host, uint16_t port, int timeout_ms) {
     struct addrinfo *ai;
     sock *s;
 
-#if defined(_WIN32)
-    if (wsa_start() != 0)
-        return NULL;
-#endif
     struct addrinfo hints;
     memset(&hints, 0, sizeof(hints));
     hints.ai_family = AF_UNSPEC;
@@ -151,31 +87,17 @@ sock *sock_connect(const char *host, uint16_t port, int timeout_ms) {
             err = 0;
             break;
         }
-#if defined(_WIN32)
-        int we = WSAGetLastError();
-        if (we != WSAEWOULDBLOCK) {
-            err = we;
-            CLOSEFD(fd);
-            fd = -1;
-            continue;
-        }
-#else
         if (errno != EINPROGRESS) {
             err = errno;
             CLOSEFD(fd);
             fd = -1;
             continue;
         }
-#endif
         /* wait for writability; budget per address = timeout split across all,
          * bounded to [2s, 5s] so a dead address is skipped quickly */
         fd_set wset;
         FD_ZERO(&wset);
-#if defined(_WIN32)
-        FD_SET((SOCKET)fd, &wset); /* fd_array is SOCKET; cast to avoid sign-compare */
-#else
         FD_SET(fd, &wset);
-#endif
         int per = naddrs > 1 && timeout_ms > 0 ? timeout_ms / naddrs : timeout_ms;
         if (per > 5000)
             per = 5000;
@@ -242,10 +164,8 @@ int sock_send(sock *s, const void *data, size_t len) {
     while (off < len) {
         int n = (int)send(s->fd, p + off, (int)(len - off), 0);
         if (n <= 0) {
-#if !defined(_WIN32)
             if (errno == EINTR)
                 continue;
-#endif
             return (int)off;
         }
         off += (size_t)n;
@@ -259,10 +179,8 @@ int sock_recv(sock *s, void *buf, size_t cap) {
     if (n == 0)
         return 0; /* EOF */
     if (n < 0) {
-#if !defined(_WIN32)
         if (errno == EINTR)
             return -1;
-#endif
         return -1;
     }
 
@@ -276,11 +194,7 @@ int sock_wait_readable(sock *s, int timeout_ms) {
         return -1;
     fd_set rset;
     FD_ZERO(&rset);
-#if defined(_WIN32)
-    FD_SET((SOCKET)s->fd, &rset);
-#else
     FD_SET(s->fd, &rset);
-#endif
     struct timeval tv;
     if (timeout_ms < 0)
         timeout_ms = 0;
@@ -291,13 +205,8 @@ int sock_wait_readable(sock *s, int timeout_ms) {
         return -1;
     if (r == 0)
         return 0;
-#if defined(_WIN32)
-    if (FD_ISSET((SOCKET)s->fd, &rset))
-        return 1;
-#else
     if (FD_ISSET(s->fd, &rset))
         return 1;
-#endif
     return 0;
 }
 
@@ -305,33 +214,18 @@ listener *listen_addr(const char *host, uint16_t port) {
     int one = 1;
     listener *l;
 
-#if defined(_WIN32)
-    if (wsa_start() != 0)
-        return NULL;
-#endif
     int fd = (int)socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) {
         set_err("socket() failed");
         return NULL;
     }
-#if defined(_WIN32)
-    /* Windows: SO_REUSEADDR permits a SECOND process to bind the same
-     * address while the first is actively listening (double-bind). Two
-     * desktop shells then both "listen" on 18300 and traffic is split
-     * unpredictably between them — closing one kills the server the page
-     * is talking to (observed as a black window). SO_EXCLUSIVEADDRUSE
-     * makes a conflicting bind fail loudly with WSAEADDRINUSE instead. */
-    setsockopt(fd, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, (const char *)&one, sizeof(one));
-#else
     setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (const char *)&one, sizeof(one));
-#endif
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
     if (host && *host) {
         /* bind only the given address (default 127.0.0.1): keeps the console
-         * off the LAN and avoids the Windows Firewall authorization prompt on
-         * first run */
+         * off the LAN and avoids firewall prompts on first run */
         addr.sin_addr.s_addr = inet_addr(host);
         if (addr.sin_addr.s_addr == INADDR_NONE)
             addr.sin_addr.s_addr = INADDR_ANY;
@@ -370,19 +264,13 @@ sock *sock_accept(listener *l, int timeout_ms) {
 
     if (l->fd < 0)
         return NULL;
-    /* Wait for an inbound connection with a real timeout. SO_RCVTIMEO does
-     * NOT unblock accept() on Windows/Winsock (it only affects recv), so the
-     * old code could hang a serving thread forever and ignore stop requests.
-     * select() before accept() gives a portable timeout: http_server_stop()
-     * sets stop_flag and the serve loop wakes within timeout_ms. */
+    /* Wait for an inbound connection with a real timeout. select() before
+     * accept() gives a portable timeout: http_server_stop() sets stop_flag
+     * and the serve loop wakes within timeout_ms. */
     if (timeout_ms > 0) {
         fd_set rset;
         FD_ZERO(&rset);
-#if defined(_WIN32)
-        FD_SET((SOCKET)l->fd, &rset);
-#else
         FD_SET(l->fd, &rset);
-#endif
         struct timeval tv;
         tv.tv_sec = timeout_ms / 1000;
         tv.tv_usec = (timeout_ms % 1000) * 1000;
@@ -407,17 +295,10 @@ sock *sock_accept(listener *l, int timeout_ms) {
     s->fd = fd;
     /* SO_RCVTIMEO so a half-open connection (connected but never sends a
      * complete request) cannot wedge the single-threaded HTTP server: recv()
-     * returns WSAETIMEDOUT and the connection is dropped instead of blocking
-     * the accept loop forever. NOTE: on Windows the timeout is a DWORD in
-     * milliseconds (NOT struct timeval); 30s is generous for the WebSocket
-     * client threads, which poll with sock_wait_readable() before recv. */
-#ifdef _WIN32
-    DWORD rto = 30000;
-    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, (const char *)&rto, sizeof(rto));
-#else
+     * times out and the connection is dropped instead of blocking the accept
+     * loop forever. */
     struct timeval rto = {30, 0};
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, (const char *)&rto, sizeof(rto));
-#endif
     return s;
 }
 

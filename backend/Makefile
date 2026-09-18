@@ -3,10 +3,24 @@
 CC      ?= cc
 CFLAGS  ?= -std=c11 -Wall -Wextra -O1 -g -Iinclude -Ithird_party/cJSON -Ithird_party/wasm3
 LDLIBS  := $(shell uname | grep -qi 'mingw\|msys\|cygwin' && echo '-lws2_32 -lwinhttp -lm' || echo '-lpthread -ldl -lm')
-PLAT    := $(shell uname | grep -qi 'mingw\|msys\|cygwin' && echo 'src/os/windows' || echo 'src/os/linux')
 
-# per-OS platform backends register as hooks (see include/os/platform.h)
-SRCS := $(shell find src third_party/cJSON -name '*.c' | grep -v -E '^src/os/(linux|windows)/' | sort) $(wildcard $(PLAT)/*.c) third_party/wasm3/wasm3_all.c
+# per-OS platform backends (issue #19): one OS directory + the shared POSIX
+# base on non-Windows. sockets/fs/proc/thread/coro/time live in
+# src/os/posix/, HTTP in src/os/<linux|macos>/, everything Windows-specific
+# in src/os/windows/. Adding an OS = new directory implementing the headers
+# under include/os/ + a selection rule here.
+ifeq ($(shell uname | grep -qiE 'mingw|msys|cygwin' && echo win),win)
+PLAT  := src/os/windows
+POSIX :=
+else ifeq (Darwin,$(shell uname -s))
+PLAT  := src/os/macos
+POSIX := src/os/posix
+else
+PLAT  := src/os/linux
+POSIX := src/os/posix
+endif
+
+SRCS := $(shell find src third_party/cJSON -name '*.c' | grep -v -E '^src/os/(linux|macos|windows|posix)/' | sort) $(wildcard $(POSIX)/*.c) $(wildcard $(PLAT)/*.c) third_party/wasm3/wasm3_all.c
 
 all: build/cognitive-os-agent build/cognitive-os-agent-test build/cognitive-os-agent-scenario build/mock-llm-server build/test-adapters build/cognitive-os-agent-e2e build/cognitive-os-agent-bench
 

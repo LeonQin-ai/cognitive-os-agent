@@ -78,8 +78,10 @@ static void cu_load(void) {
     /* Debian-based images ship only the GnuTLS build (libcurl-gnutls.so.4)
      * — same curl_easy_* ABI, different TLS backend — so it must be on the
      * candidate list or HTTPS is silently unavailable there. */
+    /* "libcurl.dylib" covers macOS (harmless elsewhere: dlopen of a
+     * nonexistent name just fails and the next candidate is tried). */
     const char *names[] = {"libcurl.so.4", "libcurl-gnutls.so.4",
-                           "libcurl.so", NULL};
+                           "libcurl.so", "libcurl.dylib", NULL};
     for (int i = 0; names[i] && !cu.lib; i++)
         cu.lib = dlopen(names[i], RTLD_NOW | RTLD_GLOBAL);
     if (!cu.lib) {
