@@ -21,6 +21,7 @@
 #include "runtime/hook.h"
 #include "runtime/scheduler.h"
 #include "runtime/state_store.h"
+#include "runtime/flow_store.h"
 #include "memory/service.h"
 #include "runtime/task.h"
 #include "runtime/state_machine.h"
@@ -105,6 +106,7 @@ typedef struct runtime_ctx {
     im_channels *channels;          /* external messaging channel adapters (IM bridge) */
     struct cron_mgr *cron;          /* scheduled tasks (定时任务) tick loop */
     struct tasklog *tasklog;        /* durable task journal (checkpoint/恢复) */
+    struct flow_store *flowstore;   /* multi-agent collaboration task registry (持久化/继续/取消/修改) */
     struct thread_t *channels_poller; /* telegram inbound poller thread */
     volatile int channels_stop;         /* poller stop flag */
     struct thread_t *hb_poller;       /* cluster heartbeat thread */

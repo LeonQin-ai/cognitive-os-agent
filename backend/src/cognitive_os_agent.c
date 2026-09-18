@@ -61,6 +61,9 @@ static void task_done(task *t, void *ud) {
 
     /* durable journal: append the terminal transition for checkpoint/resume */
     tasklog_record(ctx->tasklog, t->id, st, t->tag, t->input, t->output);
+    /* collaboration tasks: mirror terminal status into the persistent registry */
+    if (ctx->flowstore)
+        flow_store_mark(ctx->flowstore, t->id, st);
 }
 
 /* ---------- process/state snapshot (architecture v1.0 §9) ---------- */
@@ -463,6 +466,14 @@ int init(runtime_ctx *ctx, const config *cfg) {
 
     /* multi-agent coordination: shared blackboard + agent pool + optional auth */
     ctx->blackboard = blackboard_new();
+    if (ctx->blackboard && ctx->state_root) {
+        char bbpath[600];
+        path_join(bbpath, sizeof(bbpath), ctx->state_root, "blackboard.json");
+        /* restore collaboration records (flow traces, posted results) then
+         * keep mirroring every mutation to disk */
+        blackboard_load_json(ctx->blackboard, bbpath);
+        blackboard_set_persist(ctx->blackboard, bbpath);
+    }
     ctx->agents = agent_pool_new();
     agent_pool_adopt_blackboard(ctx->agents, ctx->blackboard); /* one shared space */
     if (ctx->agents) {
@@ -649,6 +660,17 @@ int init(runtime_ctx *ctx, const config *cfg) {
     /* durable task journal (checkpoint/恢复) */
     ctx->tasklog = tasklog_new(ctx->state_root);
 
+    /* multi-agent collaboration task registry: restore flow runs; anything
+     * that was still RUNNING when the process died becomes INTERRUPTED and
+     * can be resumed from the UI / POST /v1/flows/<id>/resume */
+    ctx->flowstore = flow_store_new();
+    if (ctx->flowstore) {
+        int nflows = flow_store_init(ctx->flowstore, ctx->state_root);
+        if (nflows > 0)
+            log_info("flows: %d collaboration task%s restored from %s/flows.json", nflows,
+                         nflows == 1 ? "" : "s", ctx->state_root);
+    }
+
     if (api_attach(ctx) != 0) {
         log_error("init: failed to start HTTP API on port %u", (unsigned)ctx->http_port);
         runtime_shutdown(ctx);
@@ -694,6 +716,11 @@ void runtime_shutdown(runtime_ctx *ctx) {
     if (ctx->tasklog) {
         tasklog_free(ctx->tasklog);
         ctx->tasklog = NULL;
+    }
+
+    if (ctx->flowstore) {
+        flow_store_free(ctx->flowstore);
+        ctx->flowstore = NULL;
     }
 
     if (ctx->scheduler) {
