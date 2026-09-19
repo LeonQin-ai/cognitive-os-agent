@@ -16,9 +16,15 @@ typedef struct {
 } WinCond;
 typedef struct {
     HANDLE h;
+} WinThread;
+/* Boot payload handed to the new thread: the thread copies fn/arg out and
+ * frees it before calling fn, so thread_detach() freeing the WinThread (or
+ * reusing its heap block) can never race the thread's own read of fn/arg
+ * (use-after-free crash: call [rax+8] with garbage fn, 0xC0000005). */
+typedef struct {
     thread_fn fn;
     void *arg;
-} WinThread;
+} WinBoot;
 
 int mutex_init(mutex_t *m) {
     WinMutex *w = (WinMutex *)m;
@@ -58,20 +64,34 @@ void cond_broadcast(cond *c) {
 }
 
 static unsigned __stdcall win_thread_proc(void *arg) {
-    WinThread *wt = (WinThread *)arg;
-    wt->fn(wt->arg);
+    WinBoot *b = (WinBoot *)arg;
+    thread_fn fn = b->fn;
+    void *a = b->arg;
+
+    free(b);
+    fn(a);
     return 0;
 }
 
 thread_t *thread_create(thread_fn fn, void *arg) {
     thread_t *t = (thread_t *)malloc(sizeof(thread_t));
+    WinThread *wt;
+    WinBoot *b;
+
     if (!t)
         return NULL;
-    WinThread *wt = (WinThread *)t;
-    wt->fn = fn;
-    wt->arg = arg;
-    wt->h = (HANDLE)_beginthreadex(NULL, 0, win_thread_proc, wt, 0, NULL);
+    wt = (WinThread *)t;
+    b = (WinBoot *)malloc(sizeof(*b));
+    if (!b) {
+        free(t);
+        return NULL;
+    }
+
+    b->fn = fn;
+    b->arg = arg;
+    wt->h = (HANDLE)_beginthreadex(NULL, 0, win_thread_proc, b, 0, NULL);
     if (!wt->h) {
+        free(b);
         free(t);
         return NULL;
     }

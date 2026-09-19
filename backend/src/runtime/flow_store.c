@@ -15,7 +15,8 @@ struct flow_store {
     flow_record *recs;
     size_t count;
     size_t cap;
-    char path[600]; /* "" = persistence disabled */
+    int64_t next_id;   /* persistent record ids (never reused across restarts) */
+    char path[600];    /* "" = persistence disabled */
 };
 
 static void rec_clear(flow_record *r) {
@@ -44,6 +45,7 @@ static void save_locked(flow_store *fs) {
         if (!o)
             break;
         cJSON_AddNumberToObject(o, "id", (double)r->id);
+        cJSON_AddNumberToObject(o, "task_id", (double)r->task_id);
         cJSON_AddStringToObject(o, "name", r->name ? r->name : "");
         cJSON_AddStringToObject(o, "input", r->input ? r->input : "");
         cJSON_AddStringToObject(o, "dag", r->dag_json ? r->dag_json : "");
@@ -82,6 +84,15 @@ void flow_store_free(flow_store *fs) {
     free(fs);
 }
 
+/* index of the record with this id, or -1 (caller holds the mutex) */
+static int flow_store_find_id_locked(flow_store *fs, int64_t id) {
+    for (size_t i = 0; i < fs->count; i++) {
+        if (fs->recs[i].id == id)
+            return (int)i;
+    }
+    return -1;
+}
+
 int flow_store_init(flow_store *fs, const char *state_root) {
     char *s;
     cJSON *root, *arr;
@@ -105,6 +116,7 @@ int flow_store_init(flow_store *fs, const char *state_root) {
     cJSON *it;
     cJSON_ArrayForEach(it, arr) {
         cJSON *jid = cJSON_GetObjectItemCaseSensitive(it, "id");
+        cJSON *jtask = cJSON_GetObjectItemCaseSensitive(it, "task_id");
         cJSON *jname = cJSON_GetObjectItemCaseSensitive(it, "name");
         cJSON *jinput = cJSON_GetObjectItemCaseSensitive(it, "input");
         cJSON *jdag = cJSON_GetObjectItemCaseSensitive(it, "dag");
@@ -114,6 +126,9 @@ int flow_store_init(flow_store *fs, const char *state_root) {
         flow_record r;
         memset(&r, 0, sizeof(r));
         r.id = cJSON_IsNumber(jid) ? (int64_t)jid->valuedouble : 0;
+        /* pre-task_id files stored the scheduler id in "id": that task is gone
+         * (different process), so it can never match a live task_done */
+        r.task_id = cJSON_IsNumber(jtask) ? (int64_t)jtask->valuedouble : -1;
         r.name = xstrdup(cJSON_IsString(jname) && jname->valuestring ? jname->valuestring : "");
         r.input = xstrdup(cJSON_IsString(jinput) && jinput->valuestring ? jinput->valuestring : "");
         r.dag_json = xstrdup(cJSON_IsString(jdag) && jdag->valuestring ? jdag->valuestring : "");
@@ -124,6 +139,12 @@ int flow_store_init(flow_store *fs, const char *state_root) {
             r.status = xstrdup("INTERRUPTED");
         else
             r.status = xstrdup(cJSON_IsString(jstatus) && jstatus->valuestring ? jstatus->valuestring : "?");
+        /* records imported with duplicate ids (pre-split files could collide
+         * across restarts) get re-keyed so ids stay unique */
+        if (r.id < 0 || flow_store_find_id_locked(fs, r.id) >= 0)
+            r.id = fs->next_id++;
+        else if (r.id >= fs->next_id)
+            fs->next_id = r.id + 1;
         if (fs->count == fs->cap) {
             size_t cap = fs->cap ? fs->cap * 2 : 8;
             flow_record *nb = (flow_record *)realloc(fs->recs, cap * sizeof(flow_record));
@@ -143,8 +164,8 @@ int flow_store_init(flow_store *fs, const char *state_root) {
     return restored;
 }
 
-int flow_store_add(flow_store *fs, int64_t id, const char *name, const char *input, const char *dag_json) {
-    if (!fs || id < 0 || !dag_json || !*dag_json)
+int flow_store_add(flow_store *fs, int64_t task_id, const char *name, const char *input, const char *dag_json) {
+    if (!fs || task_id < 0 || !dag_json || !*dag_json)
         return -1;
     mutex_lock(&fs->mtx);
     if (fs->count == fs->cap) {
@@ -159,7 +180,8 @@ int flow_store_add(flow_store *fs, int64_t id, const char *name, const char *inp
     }
     flow_record *r = &fs->recs[fs->count++];
     memset(r, 0, sizeof(*r));
-    r->id = id;
+    r->id = fs->next_id++;
+    r->task_id = task_id;
     r->name = xstrdup(name ? name : "");
     r->input = xstrdup(input ? input : "");
     r->dag_json = xstrdup(dag_json);
@@ -170,12 +192,12 @@ int flow_store_add(flow_store *fs, int64_t id, const char *name, const char *inp
     return 0;
 }
 
-void flow_store_mark(flow_store *fs, int64_t id, const char *status) {
+void flow_store_mark(flow_store *fs, int64_t task_id, const char *status) {
     if (!fs || !status || !*status)
         return;
     mutex_lock(&fs->mtx);
     for (size_t i = 0; i < fs->count; i++) {
-        if (fs->recs[i].id == id) {
+        if (fs->recs[i].task_id == task_id) {
             free(fs->recs[i].status);
             fs->recs[i].status = xstrdup(status);
             fs->recs[i].updated_ms = time_now_ms();
@@ -274,6 +296,7 @@ char *flow_store_json(flow_store *fs) {
         if (!o)
             break;
         cJSON_AddNumberToObject(o, "id", (double)r->id);
+        cJSON_AddNumberToObject(o, "task_id", (double)r->task_id);
         cJSON_AddStringToObject(o, "name", r->name ? r->name : "");
         cJSON_AddStringToObject(o, "input", r->input ? r->input : "");
         cJSON_AddStringToObject(o, "dag", r->dag_json ? r->dag_json : "");

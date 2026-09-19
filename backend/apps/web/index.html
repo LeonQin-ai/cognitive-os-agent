@@ -3099,7 +3099,13 @@ async function flowTaskResume(id){
 }
 
 async function flowTaskCancel(id){
-  const r = await call('DELETE', '/v1/tasks/' + id);
+  /* id = record id；取消运行中的任务要用 scheduler task id */
+  const r0 = await call('GET', '/v1/flows/list');
+  const recs = (r0.obj && r0.obj.records) ? r0.obj.records : [];
+  const x = recs.find(t => String(t.id) === String(id));
+  const tid = (x && x.task_id != null && x.task_id >= 0) ? x.task_id : null;
+  if(tid == null){ toast('该记录没有运行中的任务（无需取消）'); return; }
+  const r = await call('DELETE', '/v1/tasks/' + tid);
   if(r.status === 200) toast('已请求取消 #' + id);
   else toast('取消失败: ' + (r.text || ('HTTP ' + r.status)));
   setTimeout(loadFlowTasks, 500);
@@ -3175,6 +3181,17 @@ async function flowChat(promptPrefix, statusEl){
   for(let i = 0; ; i++){
     const r = await call('GET', '/v1/tasks/' + id);
     const t = r.obj;
+    if(r.status === 404 || (r.obj && r.obj.error && !t.status)){
+      flowStatus(which, '⚠ 任务 #' + id + ' 已丢失（服务可能重启过）');
+      FLOW_BUSY = false;
+      return;
+    }
+    if(r.status === 0){
+      flowStatus(which, '⚠ 服务连接失败，等待服务恢复…（' + (i + 1) + '）');
+      if(i > 200){ flowStatus(which, '⚠ 服务长时间无响应，停止轮询'); FLOW_BUSY = false; return; }
+      await new Promise(res => setTimeout(res, 300));
+      continue;
+    }
     if(t && t.status && t.status !== 'DONE')
       flowStatus(which, '状态: ' + t.status + (taskProgressText(t) ? ' · ' + taskProgressText(t) : ''));
     if(t && (t.status === 'DONE' || t.status === 'FAILED' || t.status === 'CANCELLED' || t.status === 'TIMEOUT')){
@@ -3221,6 +3238,21 @@ async function flowRun(){
   for(let i = 0; ; i++){
     const r = await call('GET', '/v1/tasks/' + id);
     const t = r.obj;
+    if(r.status === 404 || (r.obj && r.obj.error && !t.status)){
+      /* 任务不存在：服务重启后内存任务表清空（协作任务记录仍在 flows.json，可「继续」） */
+      flowStatus('status', '⚠ 任务 #' + id + ' 已丢失（服务可能重启过）。可在下方「协作任务」列表里点「继续」恢复执行。');
+      if(out && out.isConnected) out.textContent = FLOW_MIRROR.out + '\n\n⚠ 任务已丢失（服务重启），到「协作任务」列表点「继续」可恢复。';
+      FLOW_BUSY = false;
+      loadFlowTasks();
+      return;
+    }
+    if(r.status === 0){
+      /* 网络失败：服务可能崩溃/重启中，短暂等待重试（看门狗 ~20s 内拉起） */
+      flowStatus('status', '⚠ 服务连接失败，等待服务恢复…（' + (i + 1) + '）');
+      if(i > 200){ flowStatus('status', '⚠ 服务长时间无响应，停止轮询。服务恢复后到「协作任务」列表点「继续」。'); FLOW_BUSY = false; return; }
+      await new Promise(res => setTimeout(res, 300));
+      continue;
+    }
     flowStatus('status', (t && t.status && t.status !== 'DONE')
       ? ('状态: ' + t.status + (taskProgressText(t) ? ' · ' + taskProgressText(t) : '')) : '');
     if(t && (t.status === 'DONE' || t.status === 'FAILED' || t.status === 'CANCELLED' || t.status === 'TIMEOUT')){
@@ -3230,6 +3262,7 @@ async function flowRun(){
       flowStatus('status', '');
       FLOW_BUSY = false;
       loadFlow();
+      loadFlowTasks();
       return;
     }
     await new Promise(res => setTimeout(res, 300));

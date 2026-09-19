@@ -986,6 +986,62 @@ static void test_blackboard_persist(void) {
     blackboard_free(b3);
 }
 
+/* ---------- runtime: flow_store (collaboration-task persistence) ---------- */
+static void test_flow_store(void) {
+    const char *root = "state-test-flow";
+    section("flow_store");
+    fs_mkdirs(root);
+    flow_store *fs = flow_store_new();
+    CHECK(fs != NULL);
+    if (!fs) return;
+    CHECK(flow_store_init(fs, root) >= 0);
+    CHECK(flow_store_add(fs, 0, "t1", "input1", "{\"nodes\":[]}") == 0);
+    CHECK(flow_store_add(fs, 1, "t2", "input2", "{\"nodes\":[]}") == 0);
+    CHECK(flow_store_count(fs) == 2);
+    /* ids unique even though scheduler ids restart from 0 every process */
+    const flow_record *r0 = flow_store_at(fs, 0);
+    const flow_record *r1 = flow_store_at(fs, 1);
+    CHECK(r0 != NULL && r1 != NULL);
+    if (r0 && r1) {
+        CHECK(r0->id != r1->id);
+        CHECK(r0->task_id == 0 && r1->task_id == 1);
+    }
+    /* terminal status mirrored by SCHEDULER task id */
+    flow_store_mark(fs, 1, "DONE");
+    CHECK(r1 && r1->status && strcmp(r1->status, "DONE") == 0);
+    flow_store_free(fs);
+
+    /* restart: RUNNING -> INTERRUPTED, ids stay unique, new run gets fresh id */
+    flow_store *fs2 = flow_store_new();
+    CHECK(fs2 != NULL);
+    if (!fs2) return;
+    CHECK(flow_store_init(fs2, root) == 2);
+    const flow_record *s0 = flow_store_at(fs2, 0);
+    const flow_record *s1 = flow_store_at(fs2, 1);
+    CHECK(s0 != NULL && s1 != NULL);
+    if (s0 && s1) {
+        CHECK(s0->id != s1->id);
+        CHECK(s0->status && strcmp(s0->status, "INTERRUPTED") == 0);
+    }
+    CHECK(flow_store_add(fs2, 0, "t3", "input3", "{\"nodes\":[]}") == 0);
+    const flow_record *s2 = flow_store_at(fs2, 2);
+    CHECK(s2 != NULL);
+    if (s0 && s2)
+        CHECK(s2->id != s0->id); /* no collision with re-used scheduler id 0 */
+    /* modify by record id; refused while RUNNING */
+    if (s0)
+        CHECK(flow_store_modify(fs2, s0->id, "renamed", NULL, NULL) == 0);
+    CHECK(flow_store_modify(fs2, s2->id, "x", NULL, NULL) == -1);
+    if (s0) {
+        const flow_record *m = flow_store_find(fs2, s0->id);
+        CHECK(m != NULL && m->name && strcmp(m->name, "renamed") == 0);
+    }
+    char *js = flow_store_json(fs2);
+    CHECK(js != NULL && strstr(js, "\"task_id\"") != NULL);
+    free(js);
+    flow_store_free(fs2);
+}
+
 /* ---------- runtime: multi-agent coordinator ---------- */
 static void test_agent_pool(void) {
     section("agent_pool");
@@ -5010,6 +5066,7 @@ int main(void) {
     test_config();
     test_blackboard();
     test_blackboard_persist();
+    test_flow_store();
     test_agent_pool();
     test_auth();
     test_websocket();

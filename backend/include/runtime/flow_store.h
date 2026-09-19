@@ -14,7 +14,10 @@ extern "C" {
 typedef struct flow_store flow_store;
 
 typedef struct flow_record {
-    int64_t id;         /* scheduler task id of the latest run */
+    int64_t id;         /* persistent record id (unique across restarts) */
+    int64_t task_id;    /* scheduler task id of the latest run (-1 = none;
+                         * scheduler ids restart from 0 each process, so they
+                         * are NOT unique and never used as record key) */
     char *name;         /* optional label ("" = none) */
     char *input;        /* original task text ("" = none) */
     char *dag_json;     /* Flow DAG definition (serialized object) */
@@ -31,17 +34,19 @@ void flow_store_free(flow_store *fs);
  * Returns the number of restored records, -1 on error. */
 int flow_store_init(flow_store *fs, const char *state_root);
 
-/* Register a new run. Returns 0 ok, -1 on bad args. */
-int flow_store_add(flow_store *fs, int64_t id, const char *name, const char *input, const char *dag_json);
+/* Register a new run. `task_id` is the scheduler task id used for live status
+ * mirroring; the record itself gets a fresh persistent id. Returns 0 ok,
+ * -1 on bad args. */
+int flow_store_add(flow_store *fs, int64_t task_id, const char *name, const char *input, const char *dag_json);
 
-/* Update the terminal status of a run (no-op if unknown id). */
-void flow_store_mark(flow_store *fs, int64_t id, const char *status);
+/* Update the terminal status of a run by SCHEDULER task id (no-op if none). */
+void flow_store_mark(flow_store *fs, int64_t task_id, const char *status);
 
-/* Edit name/input/dag of a run (NULL = keep). Refused (-1) while RUNNING;
- * the id keeps pointing at the original task. */
+/* Edit name/input/dag of a run by RECORD id (NULL = keep). Refused (-1) while
+ * RUNNING. */
 int flow_store_modify(flow_store *fs, int64_t id, const char *name, const char *input, const char *dag_json);
 
-/* Find a record by task id (borrowed). NULL when unknown. */
+/* Find a record by RECORD id (borrowed). NULL when unknown. */
 const flow_record *flow_store_find(flow_store *fs, int64_t id);
 
 size_t flow_store_count(flow_store *fs);
