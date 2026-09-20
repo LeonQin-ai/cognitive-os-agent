@@ -761,6 +761,8 @@ static void clear_actions(reasoning *r) {
 #define AGENT_LOOP_MAX_ROUNDS                                                                                          \
     -1                      /* default rounds when config does not set it;                                             \
                                config "reasoning.max_rounds" < 0 = unlimited */
+#define REASONING_CONSEC_FAIL_ABORT 5 /* consecutive stage failures before aborting the run */
+#define REASONING_CONSEC_FAIL_ABORT_STR "5"
 /* Tail-keep cap for accumulated round results. 16K was too small for long
  * agent runs: one file_read of a source file easily produces 5-15K, so a
  * multi-round SWE-style task overflowed within 2-3 reads and the halving
@@ -2286,6 +2288,8 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
      /* LLM's plain-text answer (had_plan == 0) */
          /* per-round pipeline output */
     state st = ST_FAILED;
+    int consec_fail = 0; /* consecutive stage failures → circuit breaker */
+    int fail_aborted = 0;
     for (r->round_idx = 1; r->round_idx <= r->max_rounds; r->round_idx++) {
         free(result);
         result = NULL;
@@ -2319,10 +2323,23 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
              * round budget remains — the next round can self-correct (e.g.
              * retry with a fixed path). Terminal only when the budget is
              * exhausted, and the report stays in the answer either way. */
+            consec_fail++;
             round_log_append(r, result && *result ? result : "(run failed)");
             obs_log_append(r, result && *result ? result : "(run failed)");
             if (r->round_idx >= r->max_rounds)
                 break;
+            /* Circuit breaker: a PERSISTENT failure (LLM endpoint down /
+             * rate-limited / network gone) makes every round fail instantly,
+             * and with an effectively-unlimited round budget the loop would
+             * spin at full CPU appending failure text forever (burned a
+             * whole night once). A single transient failure is still fed
+             * back per issue #25 — only N consecutive failures abort. */
+            if (consec_fail >= REASONING_CONSEC_FAIL_ABORT) {
+                round_log_append(r, "[system] 连续 " REASONING_CONSEC_FAIL_ABORT_STR
+                                    " 轮阶段失败（如模型服务持续不可用），任务中止。");
+                fail_aborted = 1;
+                break;
+            }
             /* issue #25: a failed action (e.g. ssh login failure) must not end
              * the task. Without an explicit recovery instruction the model
              * tends to answer with an apology and the remaining steps of the
@@ -2335,6 +2352,7 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
                                 "只有在确认任务确实无法完成时，才输出最终答案并如实说明失败环节。");
             continue;
         }
+        consec_fail = 0; /* a successful (ST_DONE) round resets the breaker */
         if (!r->had_plan) { /* no actions planned → this is the final answer */
             /* Intent narration ("Let me check the files…") without a single
              * action is a premature stop: the model announced its plan
@@ -2472,6 +2490,10 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
                 strbuf_appendf(&out, "(已达到最大轮数 %d，任务可能未完全完成)", r->max_rounds);
         }
     }
+
+    if (fail_aborted)
+        strbuf_appendf(&out, "\n(连续 %s 轮阶段失败，任务中止 — 请检查模型服务/网络可用性后重试)",
+                       REASONING_CONSEC_FAIL_ABORT_STR);
 
     free(final_text);
     free(result);
