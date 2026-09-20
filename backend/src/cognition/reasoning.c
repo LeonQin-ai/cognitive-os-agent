@@ -401,6 +401,48 @@ static void meta_upsert_locked(reasoning *r, struct session *s) {
     mutex_unlock(&s->mtx);
 }
 
+/* Recover a session title from the first user message ("q") of its persisted
+ * transcript. Returns 1 when a title was written into out, 0 otherwise. */
+static char *str_head(const char *s, size_t n); /* forward: defined below */
+
+static int title_recover_from_transcript(const char *state_root, const char *id, char *out, size_t cap) {
+    char fpath[700];
+    FILE *f;
+    char line[16384];
+    size_t n;
+    char *nl;
+    cJSON *t;
+    cJSON *q;
+    char *h;
+    int ok = 0;
+
+    if (!state_root || !id || !out || cap == 0)
+        return 0;
+    out[0] = '\0';
+    chat_file_path(fpath, sizeof(fpath), state_root, id);
+    f = fopen(fpath, "rb");
+    if (!f)
+        return 0;
+    n = fread(line, 1, sizeof(line) - 1, f);
+    fclose(f);
+    nl = memchr(line, '\n', n);
+    line[nl ? (size_t)(nl - line) : n] = '\0';
+    t = cJSON_Parse(line);
+    if (!t)
+        return 0;
+    q = cJSON_GetObjectItemCaseSensitive(t, "q");
+    if (cJSON_IsString(q) && q->valuestring && *q->valuestring) {
+        h = str_head(q->valuestring, 60); /* same head rule as record_turn */
+        if (h) {
+            snprintf(out, cap, "%s", h);
+            ok = out[0] != '\0';
+            free(h);
+        }
+    }
+    cJSON_Delete(t);
+    return ok;
+}
+
 /* Load the persisted index at startup (call before any run). */
 static void meta_load(reasoning *r) {
     char path[700];
@@ -470,6 +512,58 @@ static void meta_load(reasoning *r) {
             m->last_active_ms = (long long)la->valuedouble;
         m->shared_memory = sh ? cJSON_IsTrue(sh) : 1;
     }
+    /* self-heal 1: entries with an empty title get it back from the first
+     * user message of their persisted transcript (a degraded in-memory index
+     * could be saved out with titles wiped — regression guard) */
+    int healed = 0;
+    for (size_t i = 0; i < r->ss->nmeta; i++) {
+        struct sess_meta *m = &r->ss->meta[i];
+        if (!m->title[0] && title_recover_from_transcript(r->state_root, m->id, m->title, sizeof(m->title)))
+            healed = 1;
+    }
+    /* self-heal 2: transcripts on disk missing from the index (e.g. the
+     * degraded save dropped them) are re-admitted with recovered titles */
+    {
+        char dir[600];
+        path_join(dir, sizeof(dir), r->state_root ? r->state_root : "state", "chat");
+        dir_list dl;
+        if (fs_list_dir(dir, &dl) == 0) {
+            for (size_t i = 0; i < dl.count; i++) {
+                if (dl.items[i].is_dir)
+                    continue;
+                const char *name = dl.items[i].name;
+                size_t nl = strlen(name);
+                if (nl < 7 || strcmp(name + nl - 6, ".jsonl") != 0)
+                    continue;
+                char sid[128];
+                snprintf(sid, sizeof(sid), "%.*s", (int)(nl - 6), name);
+                int seen = 0;
+                for (size_t k = 0; k < r->ss->nmeta; k++)
+                    if (strcmp(r->ss->meta[k].id, sid) == 0) {
+                        seen = 1;
+                        break;
+                    }
+                if (seen)
+                    continue;
+                if (r->ss->nmeta == r->ss->metacap) {
+                    size_t ncap = r->ss->metacap ? r->ss->metacap * 2 : 16;
+                    struct sess_meta *nm = realloc(r->ss->meta, ncap * sizeof(*nm));
+                    if (!nm)
+                        break;
+                    r->ss->meta = nm;
+                    r->ss->metacap = ncap;
+                }
+                struct sess_meta *m = &r->ss->meta[r->ss->nmeta++];
+                memset(m, 0, sizeof(*m));
+                snprintf(m->id, sizeof(m->id), "%s", sid);
+                title_recover_from_transcript(r->state_root, m->id, m->title, sizeof(m->title));
+                m->shared_memory = 1; /* same default as session_new */
+                healed = 1;
+            }
+        }
+    }
+    if (healed)
+        meta_save_locked(r);
     mutex_unlock(&r->ss->sess_mtx);
     cJSON_Delete(root);
 }
@@ -515,6 +609,13 @@ void reasoning_attach_sess_store(reasoning *r, sess_store *ss) {
     mutex_unlock(&r->own_store_.sess_mtx);
     mutex_destroy(&r->own_store_.sess_mtx);
     r->ss = ss;
+    /* meta_load at reasoning_new filled the EMBEDDED store's metadata index,
+     * which the wipe above discarded — reload it into the shared store so the
+     * 最近 list keeps human-readable titles after a restart (regression:
+     * session tabs fell back to raw uuid). First attach wins; later lanes
+     * see nmeta > 0 and skip. */
+    if (ss->nmeta == 0)
+        meta_load(r);
 }
 
 /* Replay a session's persisted turns into its ring (caller holds s->mtx).

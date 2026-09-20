@@ -2565,6 +2565,14 @@ static void test_chat_upload_evolve(void) {
             cfg2.http_port = 0;
             runtime_ctx ctx2;
             if (init(&ctx2, &cfg2) != 0) { CHECK(0); return; }
+            /* regression (chat lanes): the persisted title index must be
+             * loaded into the SHARED session store — the 最近 list keeps
+             * human-readable titles after a restart instead of uuids
+             * (only sessions with a transcript file are listed; tab-a was
+             * cleared so its file is gone, tab-b was deleted) */
+            char *sj2 = reasoning_sessions_json(ctx2.reasoning);
+            CHECK(sj2 && strstr(sj2, "第三个话题") != NULL && strstr(sj2, "tab-b") == NULL);
+            free(sj2);
             /* tab-b was DELETED above: its transcript must stay gone after a
              * restart (deletion, unlike clearing, survives restarts) */
             char *ra = reasoning_history_json_ex(ctx2.reasoning, "tab-b", 10);
