@@ -191,8 +191,19 @@ static int h_task_get(const http_request *req, http_response *resp, void *ud) {
         cJSON_AddStringToObject(o, "output", t->output);
     /* live progress of the running agent loop (runs are serialized, so the
      * reasoning engine's progress IS this task's progress). Polled without
-     * a lock — display-grade accuracy. */
-    if (t->status == TS_RUNNING && ctx->reasoning) {
+     * a lock — display-grade accuracy. Flow container tasks (userdata==2)
+     * run per-node reasoning instances instead, so they report the flow
+     * progress registry's per-node states rather than the unused main
+     * engine counters (which would stay at 0 and mislead). */
+    if (t->status == TS_RUNNING && t->userdata == (void *)2) {
+        char *fnodes = flow_progress_json(t->id);
+        if (fnodes) {
+            cJSON *arr = cJSON_Parse(fnodes);
+            if (arr)
+                cJSON_AddItemToObject(o, "flow_nodes", arr);
+            free(fnodes);
+        }
+    } else if (t->status == TS_RUNNING && ctx->reasoning) {
         long long elapsed_ms = 0, tin = 0, tout = 0, llm_ms = 0, tool_ms = 0;
         int round = 0, tool_calls = 0, llm_calls = 0;
         const char *cur_tool = "";

@@ -991,6 +991,8 @@ static void test_flow_store(void) {
     const char *root = "state-test-flow";
     section("flow_store");
     fs_mkdirs(root);
+    /* re-runnable: drop records left by a previous run of this suite */
+    fs_remove("state-test-flow/flows.json");
     flow_store *fs = flow_store_new();
     CHECK(fs != NULL);
     if (!fs) return;
@@ -2790,13 +2792,26 @@ static void test_flow(void) {
             "\"edges\":[{\"from\":\"a\",\"to\":\"b\"}]}";
 
         char *ans = NULL, *trace = NULL;
-        CHECK(flow_run(&ctx, dag, &ans, &trace) == 0);
+        CHECK(flow_run(&ctx, dag, -1, &ans, &trace) == 0);
         CHECK(ans && *ans != '\0');
         /* both nodes ran; {{a}} was substituted away in b's recorded task */
         CHECK(trace && strstr(trace, "\"id\":\"a\"") != NULL &&
               strstr(trace, "\"id\":\"b\"") != NULL &&
               strstr(trace, "\"status\":\"ok\"") != NULL);
         CHECK(trace && strstr(trace, "{{a}}") == NULL);
+        /* progress registry: unbound runs (-1) leave no entry */
+        CHECK(flow_progress_json(-1) == NULL);
+        free(ans); free(trace);
+
+        /* progress registry: a bound run records per-node status */
+        {
+            char *prog = NULL;
+            CHECK(flow_run(&ctx, dag, 777, &ans, &trace) == 0);
+            prog = flow_progress_json(777);
+            CHECK(prog && strstr(prog, "\"id\":\"a\"") && strstr(prog, "\"id\":\"b\"") &&
+                  strstr(prog, "\"status\":\"ok\"") && !strstr(prog, "queued"));
+            free(prog);
+        }
         free(ans); free(trace);
 
         /* node a actually executed its file write */
@@ -2822,12 +2837,12 @@ static void test_flow(void) {
         char *ans = NULL;
         CHECK(flow_run(&ctx,
             "{\"nodes\":[{\"id\":\"a\",\"agent\":\"ghost\",\"task\":\"t\"}]}",
-            &ans, NULL) == -1);
+            -1, &ans, NULL) == -1);
         CHECK(flow_run(&ctx,
             "{\"nodes\":[{\"id\":\"a\",\"agent\":\"alpha\",\"task\":\"t\"},"
             "{\"id\":\"b\",\"agent\":\"alpha\",\"task\":\"t\"}],"
             "\"edges\":[{\"from\":\"a\",\"to\":\"b\"},{\"from\":\"b\",\"to\":\"a\"}]}",
-            &ans, NULL) == -1);
+            -1, &ans, NULL) == -1);
         free(ans);
         runtime_shutdown(&ctx);
     }

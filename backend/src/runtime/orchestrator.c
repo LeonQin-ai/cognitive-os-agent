@@ -358,7 +358,7 @@ int orchestrate(runtime_ctx *ctx, const char *task, char **answer, char **trace_
     if (!dag)
         return -1;
 
-    rc = flow_run(ctx, dag, &flow_answer, &trace);
+    rc = flow_run(ctx, dag, -1, &flow_answer, &trace);
     free(dag);
     if (rc != 0)
         return -1;

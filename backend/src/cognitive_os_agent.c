@@ -176,7 +176,7 @@ static void sched_trampoline(task *t, scheduler *s, void *ud) {
         /* userdata marker (set by /v1/orchestrate = 1, /v1/flows = 2): run the
          * multi-agent pipeline / flow DAG instead of the single-agent loop */
         if (t->userdata == (void *)2)
-            flow_run(ctx, t->input, &answer, NULL);
+            flow_run(ctx, t->input, t->id, &answer, NULL);
         else
             orchestrate(ctx, t->input, &answer, NULL);
     } else {

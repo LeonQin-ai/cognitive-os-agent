@@ -2594,10 +2594,27 @@ function chatBusyUI(busy){
   if(resume) resume.style.display = (!busy && CHAT_RESUME_OK) ? '' : 'none';
 }
 
+/* Flow 容器任务进度：各节点执行状态（flow_nodes 来自 /v1/tasks/<id>） */
+function flowNodesText(t){
+  if(!t || !Array.isArray(t.flow_nodes) || !t.flow_nodes.length) return '';
+  const ICON = {queued:'⏸', running:'⏳', ok:'✓', error:'✗'};
+  const now = Date.now();
+  return t.flow_nodes.map(n => {
+    let s = (n.id || '?') + ' ' + (ICON[n.status] || '·');
+    let ms = 0;
+    if(n.status === 'running' && n.start_ms) ms = now - n.start_ms;
+    else if((n.status === 'ok' || n.status === 'error') && n.start_ms && n.end_ms) ms = n.end_ms - n.start_ms;
+    if(ms > 0) s += ' ' + Math.floor(ms / 1000) + 's';
+    return s;
+  }).join(' · ');
+}
+
 /* 任务实时进度行：耗时 / 轮次 / 工具调用 / token —— 数据来自
  * /v1/tasks/<id> 的 live 进度字段（RUNNING 时返回） */
 function taskProgressText(t){
   if(!t) return '';
+  /* Flow 容器任务：引擎计数器恒为 0，显示节点级进度才有意义 */
+  if(t.flow_nodes) return flowNodesText(t);
   const bits = [];
   if(t.elapsed_ms !== undefined){
     const sec = Math.floor((t.elapsed_ms || 0) / 1000);

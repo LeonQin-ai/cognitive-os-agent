@@ -9,11 +9,13 @@
 #include "infra/util.h"
 #include "infra/logging.h"
 #include "os/os_thread.h"
+#include "os/os_time.h"
 
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
 #include <stdarg.h>
+#include <stdatomic.h>
 #include "cJSON.h"
 
 #define FLOW_MAX_NODES 16
@@ -221,8 +223,165 @@ static int flow_layer(flow_dag *d) {
 
 /* ---------- execution ---------- */
 
+/* ---------- per-node progress registry (keyed by scheduler task id) ----------
+ * Flow container tasks never drive the main reasoning engine's progress
+ * counters (each node runs its own isolated reasoning instance in a worker
+ * thread), so /v1/tasks/<id> previously reported static zeros. This registry
+ * snapshots the node list when a run starts and tracks queued/running/ok/error
+ * per node so the API can render real execution progress. */
+#define FLOW_PROG_MAX 8 /* concurrent tracked runs; full table -> reuse finished slots */
+
+enum { FP_QUEUED = 0, FP_RUNNING = 1, FP_OK = 2, FP_ERROR = 3 };
+
+typedef struct flow_prog_node {
+    char id[64];
+    char agent[64];
+    int layer;
+    int state; /* FP_* */
+    int64_t start_ms, end_ms;
+} flow_prog_node;
+
+typedef struct flow_prog {
+    int64_t task_id;
+    int n;
+    int done; /* run finished; slot reusable */
+    flow_prog_node nodes[FLOW_MAX_NODES];
+} flow_prog;
+
+static flow_prog flow_progs[FLOW_PROG_MAX];
+static mutex_t flow_prog_mtx;
+static atomic_int flow_prog_ready; /* 0=uninit 1=initializing 2=ready */
+
+/* First-use init: C11 CAS elects exactly one initializer, late arrivals spin
+ * through the tiny init window. */
+static void flow_prog_init_once(void) {
+    int expect = 0;
+    if (atomic_compare_exchange_strong(&flow_prog_ready, &expect, 1)) {
+        mutex_init(&flow_prog_mtx);
+        atomic_store(&flow_prog_ready, 2);
+    } else {
+        while (atomic_load(&flow_prog_ready) == 1) {
+            /* init takes nanoseconds */
+        }
+    }
+}
+
+/* caller holds flow_prog_mtx */
+static flow_prog *flow_prog_slot(int64_t task_id) {
+    for (int i = 0; i < FLOW_PROG_MAX; i++)
+        if (flow_progs[i].task_id == task_id && flow_progs[i].n > 0)
+            return &flow_progs[i];
+    return NULL;
+}
+
+static void flow_prog_begin(int64_t task_id, const flow_dag *d) {
+    flow_prog *p;
+    int64_t now;
+
+    if (task_id < 0)
+        return;
+    flow_prog_init_once();
+    now = time_now_ms();
+    mutex_lock(&flow_prog_mtx);
+    p = flow_prog_slot(task_id);
+    if (!p) {
+        for (int i = 0; i < FLOW_PROG_MAX; i++)
+            if (flow_progs[i].n == 0 || flow_progs[i].done) {
+                p = &flow_progs[i];
+                break;
+            }
+        if (!p)
+            p = &flow_progs[0]; /* table full: overwrite — display-grade data */
+    }
+    memset(p, 0, sizeof(*p));
+    p->task_id = task_id;
+    p->n = d->n;
+    for (int i = 0; i < d->n; i++) {
+        snprintf(p->nodes[i].id, sizeof(p->nodes[i].id), "%s", d->nodes[i].id);
+        snprintf(p->nodes[i].agent, sizeof(p->nodes[i].agent), "%s", d->nodes[i].agent);
+        p->nodes[i].layer = d->nodes[i].layer;
+        p->nodes[i].state = FP_QUEUED;
+    }
+    mutex_unlock(&flow_prog_mtx);
+}
+
+static void flow_prog_node_mark(int64_t task_id, const char *id, int state) {
+    int64_t now;
+
+    if (task_id < 0 || !id)
+        return;
+    flow_prog_init_once();
+    now = time_now_ms();
+    mutex_lock(&flow_prog_mtx);
+    flow_prog *p = flow_prog_slot(task_id);
+    if (p) {
+        for (int i = 0; i < p->n; i++)
+            if (strcmp(p->nodes[i].id, id) == 0) {
+                p->nodes[i].state = state;
+                if (state == FP_RUNNING)
+                    p->nodes[i].start_ms = now;
+                else
+                    p->nodes[i].end_ms = now;
+            }
+    }
+    mutex_unlock(&flow_prog_mtx);
+}
+
+static void flow_prog_end(int64_t task_id) {
+    if (task_id < 0)
+        return;
+    flow_prog_init_once();
+    mutex_lock(&flow_prog_mtx);
+    flow_prog *p = flow_prog_slot(task_id);
+    if (p) {
+        int64_t now = time_now_ms();
+        for (int i = 0; i < p->n; i++)
+            if (p->nodes[i].state == FP_QUEUED || p->nodes[i].state == FP_RUNNING) {
+                p->nodes[i].state = FP_ERROR;
+                p->nodes[i].end_ms = now;
+            }
+        p->done = 1;
+    }
+    mutex_unlock(&flow_prog_mtx);
+}
+
+char *flow_progress_json(int64_t task_id) {
+    char *out = NULL;
+
+    if (task_id < 0)
+        return NULL;
+    flow_prog_init_once();
+    mutex_lock(&flow_prog_mtx);
+    flow_prog *p = flow_prog_slot(task_id);
+    if (p) {
+        cJSON *arr = cJSON_CreateArray();
+        if (arr) {
+            for (int i = 0; i < p->n; i++) {
+                cJSON *o = cJSON_CreateObject();
+                if (!o)
+                    continue;
+                cJSON_AddStringToObject(o, "id", p->nodes[i].id);
+                cJSON_AddStringToObject(o, "agent", p->nodes[i].agent);
+                cJSON_AddNumberToObject(o, "layer", (double)p->nodes[i].layer);
+                cJSON_AddStringToObject(o, "status", p->nodes[i].state == FP_QUEUED  ? "queued"
+                                                     : p->nodes[i].state == FP_RUNNING ? "running"
+                                                     : p->nodes[i].state == FP_OK      ? "ok"
+                                                                                       : "error");
+                cJSON_AddNumberToObject(o, "start_ms", (double)p->nodes[i].start_ms);
+                cJSON_AddNumberToObject(o, "end_ms", (double)p->nodes[i].end_ms);
+                cJSON_AddItemToArray(arr, o);
+            }
+            out = cJSON_PrintUnformatted(arr);
+            cJSON_Delete(arr);
+        }
+    }
+    mutex_unlock(&flow_prog_mtx);
+    return out;
+}
+
 typedef struct flow_job {
     runtime_ctx *ctx;
+    int64_t task_id;
     flow_node *nd;
     char task[FLOW_MAX_TASKLEN]; /* after {{ref}} substitution */
     char *out;
@@ -254,6 +413,7 @@ static void flow_worker(void *arg) {
 
     flow_job *j = (flow_job *)arg;
     flow_event(j->ctx, "execute", j->nd->id, j->nd->agent, j->task);
+    flow_prog_node_mark(j->task_id, j->nd->id, FP_RUNNING);
     r = flow_reasoning_new(j->ctx);
     if (r) {
         j->rc = reasoning_run(r, j->task, &j->out);
@@ -266,6 +426,7 @@ static void flow_worker(void *arg) {
     snprintf(key, sizeof(key), "flow/%s/result", j->nd->id);
     blackboard_put(j->ctx->blackboard, key, result);
     flow_event(j->ctx, "done", j->nd->id, j->nd->agent, j->rc == 0 ? "ok" : "error");
+    flow_prog_node_mark(j->task_id, j->nd->id, j->rc == 0 ? FP_OK : FP_ERROR);
 }
 
 /* Replace "{{<id>}}" in the node's task with upstream results (capped). */
@@ -356,7 +517,7 @@ int flow_validate(const char *dag_json, char **err) {
     return 0;
 }
 
-int flow_run(runtime_ctx *ctx, const char *dag_json, char **answer, char **trace_json) {
+int flow_run(runtime_ctx *ctx, const char *dag_json, int64_t task_id, char **answer, char **trace_json) {
     char *err = NULL;
     int maxlayer = 0;
     char **results;
@@ -397,6 +558,8 @@ int flow_run(runtime_ctx *ctx, const char *dag_json, char **answer, char **trace
         if (d.nodes[i].layer > maxlayer)
             maxlayer = d.nodes[i].layer;
 
+    flow_prog_begin(task_id, &d);
+
     results = (char **)calloc((size_t)d.n, sizeof(char *));
     tasks = (char **)calloc((size_t)d.n, sizeof(char *));
     flow_job *jobs = (flow_job *)calloc((size_t)d.n, sizeof(flow_job));
@@ -421,6 +584,7 @@ int flow_run(runtime_ctx *ctx, const char *dag_json, char **answer, char **trace
             else
                 tasks[i] = xstrdup(d.nodes[i].task);
             jobs[i].ctx = ctx;
+            jobs[i].task_id = task_id;
             jobs[i].nd = &d.nodes[i];
             snprintf(jobs[i].task, FLOW_MAX_TASKLEN, "%s", tasks[i] ? tasks[i] : d.nodes[i].task);
             jobs[i].out = NULL;
@@ -483,6 +647,7 @@ int flow_run(runtime_ctx *ctx, const char *dag_json, char **answer, char **trace
         free(trace_str);
     }
 
+    flow_prog_end(task_id);
     cJSON_Delete(trace);
     for (int i = 0; i < d.n; i++)
         free(results[i]);
