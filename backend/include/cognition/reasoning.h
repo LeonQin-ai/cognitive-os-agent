@@ -144,6 +144,23 @@ int reasoning_session_set_shared(reasoning *r, const char *session_id, int share
  * string or NULL when the session is unknown or has no turns. */
 char *reasoning_session_last_input(reasoning *r, const char *session_id);
 
+/* ---- shared session registry + parallel lanes ----
+ * A sess_store holds the chat-session registry and metadata index. Attach ONE
+ * store to every reasoning lane so concurrent lanes see the same sessions and
+ * transcripts (并发聊天：每条 lane 一个 reasoning 实例，会话注册表共享). */
+typedef struct sess_store sess_store;
+
+sess_store *sess_store_new(void);
+void sess_store_free(sess_store *ss);
+/* Attach an external store (r uses its own embedded store until this is
+ * called; attach right after reasoning_new, before any run). */
+void reasoning_attach_sess_store(reasoning *r, sess_store *ss);
+
+/* Steps of the current/most recent run, as a JSON array of
+ * {tool,args,out,ok,ms} (Claude-Code style execution display; ok: 1 ok,
+ * 0 failed, -1 skipped). Caller frees. */
+char *reasoning_steps_json(reasoning *r);
+
 #ifdef __cplusplus
 }
 #endif

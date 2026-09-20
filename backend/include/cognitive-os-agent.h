@@ -111,7 +111,16 @@ typedef struct runtime_ctx {
     volatile int channels_stop;         /* poller stop flag */
     struct thread_t *hb_poller;       /* cluster heartbeat thread */
     volatile int hb_stop;               /* heartbeat stop flag */
-    mutex_t run_lock;                 /* serializes reasoning runs */
+    mutex_t run_lock;                 /* serializes reasoning runs (lane 0 legacy) */
+    /* Chat lanes: parallel reasoning instances so concurrent chat tasks do
+     * not block each other (并发聊天). All lanes share one sess_store (one
+     * session registry) and borrow the ctx resources. lane_task[lane] holds
+     * the task id currently executing on that lane (0 = idle). */
+#define CHAT_LANE_MAX 4
+    reasoning *chat_lanes[CHAT_LANE_MAX];
+    mutex_t lane_mtx[CHAT_LANE_MAX];
+    volatile long long lane_task[CHAT_LANE_MAX];
+    sess_store *sess;                 /* shared chat-session registry (owned) */
     char *state_root;
     char *workspace;
     char *provider;

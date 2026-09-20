@@ -26,6 +26,8 @@ typedef struct thread_t {
 int mutex_init(mutex_t *m);
 void mutex_destroy(mutex_t *m);
 void mutex_lock(mutex_t *m);
+/* Non-blocking acquire: 0 = acquired, non-zero = busy. */
+int mutex_trylock(mutex_t *m);
 void mutex_unlock(mutex_t *m);
 
 /* ---------- condition variable ---------- */

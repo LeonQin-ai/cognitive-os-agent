@@ -2737,6 +2737,26 @@ function taskProgressText(t){
   return bits.join(' · ');
 }
 
+/* Claude-Code 风格步骤化执行显示：● Tool(args) + ⎿ 输出首行摘要（不刷屏）；
+ * RUNNING 时末尾显示 ⏳ 思考中…；无步骤数据时回退到过程日志尾部 */
+function stepsText(t){
+  const lines = [];
+  const steps = t && t.steps;
+  if(steps && steps.length){
+    for(const s of steps){
+      const mark = s.ok === 1 ? '●' : (s.ok === 0 ? '✗' : '⊘');
+      const args = (s.args || '').replace(/\s+/g, ' ').trim();
+      lines.push(mark + ' ' + (s.tool || '?') + '(' + (args.length > 90 ? args.slice(0, 90) + '…' : args) + ')');
+      const out = (s.out || '').split('\n').map(x => x.trim()).filter(Boolean)[0] || '';
+      if(out) lines.push('  ⎿ ' + (out.length > 110 ? out.slice(0, 110) + '…' : out));
+    }
+  } else if(t && t.process_log){
+    for(const l of t.process_log.split('\n').filter(x => x.trim()).slice(-25)) lines.push(l);
+  }
+  if(t && t.status === 'RUNNING') lines.push('⏳ 思考中…');
+  return lines.join('\n');
+}
+
 async function chatSend(){
   if(chatIsBusy()){ toast('当前会话任务执行中，请先取消或等待完成'); return; }
   const mySession = CHAT_SESSION; /* issue #21: 轮询期间用户可能切到别的会话 */
@@ -2776,16 +2796,17 @@ async function chatSend(){
       }
     }
   };
-  /* issue #5: 执行过程实时可见 — 轮询期间把 agent 循环的过程日志（思考/工具链）
-   * 显示在气泡里，结束后恢复为最终答案 */
+  /* issue #5: 执行过程实时可见 — 轮询期间把步骤化执行显示（● 工具(参数) +
+   * ⎿ 输出摘要 + ⏳ 思考中…）显示在气泡里，结束后恢复为最终答案 */
   const showLive = (t) => {
     const el = live();
-    if(!el || !t || !t.process_log) return;
+    if(!el || !t) return;
+    if(!(t.steps && t.steps.length) && !t.process_log) return;
     const pre = el.querySelector('pre');
     if(!pre) return;
-    const lines = t.process_log.split('\n').filter(l => l.trim());
-    if(!lines.length) return;
-    pre.textContent = lines.slice(-25).join('\n');
+    const text = stepsText(t);
+    if(!text) return;
+    pre.textContent = text;
     pre.style.opacity = '0.7';
     pre.style.maxHeight = '260px';
     pre.style.overflowY = 'auto';
@@ -2816,7 +2837,7 @@ async function chatSend(){
     }
     const t = r.obj;
     chatStatus((t && t.status && t.status !== 'DONE')
-      ? ('状态: ' + t.status + (taskProgressText(t) ? ' · ' + taskProgressText(t) : '')) : '');
+      ? ('状态: ' + (t.status === 'RUNNING' ? '思考中' : t.status) + (taskProgressText(t) ? ' · ' + taskProgressText(t) : '')) : '');
     if(t && t.status === 'RUNNING') showLive(t);
     if(t && (t.status === 'DONE' || t.status === 'FAILED' || t.status === 'CANCELLED' || t.status === 'TIMEOUT')){
       const zh = {FAILED: '失败', CANCELLED: '已取消', TIMEOUT: '超时'}[t.status];
@@ -2884,13 +2905,13 @@ async function chatResume(){
     }
     const t = rr.obj;
     chatStatus((t && t.status && t.status !== 'DONE')
-      ? ('状态: ' + t.status + (taskProgressText(t) ? ' · ' + taskProgressText(t) : '')) : '');
-    if(t && t.status === 'RUNNING' && t.process_log){
+      ? ('状态: ' + (t.status === 'RUNNING' ? '思考中' : t.status) + (taskProgressText(t) ? ' · ' + taskProgressText(t) : '')) : '');
+    if(t && t.status === 'RUNNING'){
       const el = live();
       if(el){
         const pre = el.querySelector('pre');
         if(pre){
-          pre.textContent = t.process_log.split('\n').filter(l => l.trim()).slice(-25).join('\n');
+          pre.textContent = stepsText(t);
           pre.style.opacity = '0.7';
           chatScroll();
         }

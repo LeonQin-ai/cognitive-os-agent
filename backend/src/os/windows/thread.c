@@ -37,6 +37,9 @@ void mutex_destroy(mutex_t *m) {
 void mutex_lock(mutex_t *m) {
     AcquireSRWLockExclusive(&((WinMutex *)m)->lock);
 }
+int mutex_trylock(mutex_t *m) {
+    return TryAcquireSRWLockExclusive(&((WinMutex *)m)->lock) ? 0 : -1;
+}
 void mutex_unlock(mutex_t *m) {
     ReleaseSRWLockExclusive(&((WinMutex *)m)->lock);
 }

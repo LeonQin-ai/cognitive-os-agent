@@ -2527,6 +2527,29 @@ static void test_chat_upload_evolve(void) {
         CHECK(hd2 && strstr(hd2, "第三个话题") != NULL);
         free(hd2);
 
+        /* chat lanes (并发聊天): the runtime wires CHAT_LANE_MAX reasoning
+         * lanes onto one shared sess_store; lane 0 doubles as ctx->reasoning
+         * and every lane sees the same sessions (created via any lane) */
+        CHECK(ctx.sess != NULL);
+        CHECK(ctx.chat_lanes[0] == ctx.reasoning && ctx.reasoning != NULL);
+        for (int li = 0; li < CHAT_LANE_MAX; li++)
+            CHECK(ctx.chat_lanes[li] != NULL);
+        /* a run on lane 1's session registry shows up in lane 0's (shared store) */
+        char *lanes_before = reasoning_sessions_json(ctx.reasoning);
+        CHECK(lanes_before != NULL);
+        free(lanes_before);
+        char *ans_lane = NULL;
+        CHECK(reasoning_run_ex(ctx.chat_lanes[1], "lane-share-check", "共享会话注册表验证", &ans_lane) == 0);
+        free(ans_lane);
+        char *lanes_after = reasoning_sessions_json(ctx.reasoning);
+        CHECK(lanes_after && strstr(lanes_after, "lane-share-check") != NULL);
+        free(lanes_after);
+
+        /* step registry API: empty at first (no actions executed yet) */
+        char *steps0 = reasoning_steps_json(ctx.reasoning);
+        CHECK(steps0 && strstr(steps0, "[]") != NULL);
+        free(steps0);
+
         runtime_shutdown(&ctx);
 
         /* restart replay: a fresh runtime over the same state root must load

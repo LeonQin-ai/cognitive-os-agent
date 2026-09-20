@@ -158,9 +158,82 @@ int state_import(runtime_ctx *ctx, const char *path) {
     return rc;
 }
 
+/* ---- chat lanes: parallel reasoning instances (线程池隔离) ----
+ * Up to CHAT_LANE_MAX chat tasks run concurrently, each pinned to its own
+ * reasoning lane (own session ring caches, own agent loop state) so agents
+ * never block each other. Tasks on the SAME session still serialize through
+ * a per-session lock; all lanes share one session registry (ctx->sess). */
+#define LANE_SESS_MAX 32
+typedef struct {
+    char id[64];
+    mutex_t m;
+    int used;
+} lane_sess_lock;
+static lane_sess_lock g_lane_sess[LANE_SESS_MAX];
+static mutex_t g_lane_sess_mtx;
+
+/* Acquire the per-session run lock (entry created on first use). Blocks
+ * while another task on the SAME session is still executing. */
+static lane_sess_lock *lane_sess_lock_acquire(const char *session_id) {
+    const char *want = (session_id && *session_id) ? session_id : "default";
+    lane_sess_lock *e = NULL;
+
+    mutex_lock(&g_lane_sess_mtx);
+    for (int i = 0; i < LANE_SESS_MAX; i++) {
+        if (g_lane_sess[i].used && strcmp(g_lane_sess[i].id, want) == 0) {
+            e = &g_lane_sess[i];
+            break;
+        }
+    }
+    if (!e) {
+        for (int i = 0; i < LANE_SESS_MAX; i++) {
+            if (!g_lane_sess[i].used) {
+                g_lane_sess[i].used = 1;
+                snprintf(g_lane_sess[i].id, sizeof(g_lane_sess[i].id), "%s", want);
+                e = &g_lane_sess[i];
+                break;
+            }
+        }
+        if (!e)
+            e = &g_lane_sess[0]; /* map full: degrade to slot 0 */
+    }
+    mutex_unlock(&g_lane_sess_mtx);
+    mutex_lock(&e->m);
+    return e;
+}
+
+static void lane_sess_lock_release(lane_sess_lock *e) {
+    if (e)
+        mutex_unlock(&e->m);
+}
+
+/* Pick an idle chat lane (try-lock in order) and run the prompt on it; when
+ * all lanes are busy, block on lane 0 (bounded concurrency, overflow waits). */
+static void chat_lane_run(runtime_ctx *ctx, const char *session_id, int64_t task_id, const char *prompt,
+                          char **answer) {
+    lane_sess_lock *se = lane_sess_lock_acquire(session_id);
+    int lane = -1;
+
+    for (int i = 0; i < CHAT_LANE_MAX; i++) {
+        if (mutex_trylock(&ctx->lane_mtx[i]) == 0) {
+            lane = i;
+            break;
+        }
+    }
+    if (lane < 0) {
+        mutex_lock(&ctx->lane_mtx[0]);
+        lane = 0;
+    }
+    ctx->lane_task[lane] = task_id;
+    reasoning_run_ex(ctx->chat_lanes[lane], session_id, prompt, answer);
+    ctx->lane_task[lane] = 0;
+    mutex_unlock(&ctx->lane_mtx[lane]);
+    lane_sess_lock_release(se);
+}
+
 /* Scheduler task runner: run the prompt through the reasoning pipeline and
- * store the result on the task. Runs under the ctx run-lock (tasks are
- * serialized; the scheduler/worker machinery is still exercised). */
+ * store the result on the task. Chat tasks (userdata == 0) run on a lane;
+ * orchestration/flow tasks keep their dedicated pipelines. */
 static void sched_trampoline(task *t, scheduler *s, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
     char *answer = NULL;
@@ -180,9 +253,7 @@ static void sched_trampoline(task *t, scheduler *s, void *ud) {
         else
             orchestrate(ctx, t->input, &answer, NULL);
     } else {
-        mutex_lock(&ctx->run_lock);
-        reasoning_run_ex(ctx->reasoning, t->tag, t->input, &answer);
-        mutex_unlock(&ctx->run_lock);
+        chat_lane_run(ctx, t->tag, t->id, t->input, &answer);
     }
 
     t->output = answer ? answer : xstrdup("(no output)");
@@ -296,6 +367,9 @@ int init(runtime_ctx *ctx, const config *cfg) {
         return -1;
     memset(ctx, 0, sizeof(*ctx));
     mutex_init(&ctx->run_lock);
+    mutex_init(&g_lane_sess_mtx);
+    for (int i = 0; i < LANE_SESS_MAX; i++)
+        mutex_init(&g_lane_sess[i].m);
 
     const char *state_root = (cfg && cfg->state_root && *cfg->state_root) ? cfg->state_root : "state";
     const char *workspace = (cfg && cfg->workspace && *cfg->workspace) ? cfg->workspace : ".";
@@ -309,7 +383,7 @@ int init(runtime_ctx *ctx, const config *cfg) {
     /* layered config: defaults -> <state_root>/cognitive-os-agent.json -> env COA_ */
     ctx->config = config_new();
     config_apply_json(ctx->config, "{\"llm.provider\":\"mock\",\"llm.model\":\"mock\",\"llm.base_url\":\"\","
-                                       "\"scheduler.workers\":2,\"tx.use_transaction\":true,\"http.port\":0,"
+                                       "\"scheduler.workers\":8,\"tx.use_transaction\":true,\"http.port\":0,"
                                        "\"workspace\":\".\",\"market.url\":\"\",\"reasoning.max_rounds\":-1}");
     {
         char cfgfile[600];
@@ -333,7 +407,7 @@ int init(runtime_ctx *ctx, const config *cfg) {
     const char *api_key =
         (cfg && cfg->api_key && *cfg->api_key) ? cfg->api_key : config_get_str(ctx->config, "llm.api_key", NULL);
     ctx->workers =
-        (cfg && cfg->workers > 0) ? cfg->workers : (int)config_get_int(ctx->config, "scheduler.workers", 2);
+        (cfg && cfg->workers > 0) ? cfg->workers : (int)config_get_int(ctx->config, "scheduler.workers", 8);
     ctx->use_transaction =
         (cfg && cfg->use_transaction) ? 1 : (int)config_get_bool(ctx->config, "tx.use_transaction", 1);
     ctx->http_port =
@@ -601,39 +675,52 @@ int init(runtime_ctx *ctx, const config *cfg) {
     ctx->hb_poller = thread_create(heartbeat_loop, ctx);
 
     {
-        reasoning_config rc;
-        memset(&rc, 0, sizeof(rc));
-        rc.llm = ctx->llm;
-        rc.tools = ctx->tools;
-        rc.memory = ctx->memory;
-        rc.policy = ctx->policy;
-        rc.snapshot = ctx->snapshot;
-        rc.bus = ctx->bus;
-        rc.metrics = ctx->metrics;
-        rc.workspace = ctx->workspace;
-        rc.use_transaction = ctx->use_transaction;
-        rc.skills = ctx->skills;
-        rc.mcp = ctx->mcp;
-        rc.index = ctx->index;
-        rc.plugin_registry = ctx->registry;
-        rc.state_root = ctx->state_root;
-        rc.max_rounds = config_get_int(ctx->config, "reasoning.max_rounds", -1);
-        rc.hooks = ctx->hooks;
-        /* Context MMU budgets (hot/warm/cold, chars per section) */
-        rc.budget_hot = config_get_int(ctx->config, "context.budget_hot", 0);
-        rc.budget_warm = config_get_int(ctx->config, "context.budget_warm", 0);
-        rc.budget_cold = config_get_int(ctx->config, "context.budget_cold", 0);
-        /* HyDE retrieval: hypothetical answer passage as cold-tier query */
-        rc.hyde = (int)config_get_int(ctx->config, "retrieval.hyde", 0);
-        /* Execution backend: local (default) | wsl | remote:<host> via
-         * execution.backend + execution.remote_host */
-        rc.exec_backend = config_get_str(ctx->config, "execution.backend", "local");
-        rc.exec_host = config_get_str(ctx->config, "execution.remote_host", NULL);
-        rc.usage_acc = ctx->usage;
-        ctx->reasoning = reasoning_new(&rc);
-        /* wire the multi-provider router into the reasoning loop */
-        if (ctx->reasoning && ctx->router)
-            reasoning_set_router(ctx->reasoning, ctx->router);
+        /* chat lanes: CHAT_LANE_MAX parallel reasoning instances sharing ONE
+         * session registry (ctx->sess) and borrowing the ctx resources —
+         * concurrent chat tasks never block each other (并发聊天). Lane 0
+         * doubles as ctx->reasoning for legacy callers (run/agent_run). */
+        ctx->sess = sess_store_new();
+        for (int i = 0; i < CHAT_LANE_MAX; i++) {
+            reasoning_config rc;
+            mutex_init(&ctx->lane_mtx[i]);
+            ctx->lane_task[i] = 0;
+            memset(&rc, 0, sizeof(rc));
+            rc.llm = ctx->llm;
+            rc.tools = ctx->tools;
+            rc.memory = ctx->memory;
+            rc.policy = ctx->policy;
+            rc.snapshot = ctx->snapshot;
+            rc.bus = ctx->bus;
+            rc.metrics = ctx->metrics;
+            rc.workspace = ctx->workspace;
+            rc.use_transaction = ctx->use_transaction;
+            rc.skills = ctx->skills;
+            rc.mcp = ctx->mcp;
+            rc.index = ctx->index;
+            rc.plugin_registry = ctx->registry;
+            rc.state_root = ctx->state_root;
+            rc.max_rounds = config_get_int(ctx->config, "reasoning.max_rounds", -1);
+            rc.hooks = ctx->hooks;
+            /* Context MMU budgets (hot/warm/cold, chars per section) */
+            rc.budget_hot = config_get_int(ctx->config, "context.budget_hot", 0);
+            rc.budget_warm = config_get_int(ctx->config, "context.budget_warm", 0);
+            rc.budget_cold = config_get_int(ctx->config, "context.budget_cold", 0);
+            /* HyDE retrieval: hypothetical answer passage as cold-tier query */
+            rc.hyde = (int)config_get_int(ctx->config, "retrieval.hyde", 0);
+            /* Execution backend: local (default) | wsl | remote:<host> via
+             * execution.backend + execution.remote_host */
+            rc.exec_backend = config_get_str(ctx->config, "execution.backend", "local");
+            rc.exec_host = config_get_str(ctx->config, "execution.remote_host", NULL);
+            rc.usage_acc = ctx->usage;
+            ctx->chat_lanes[i] = reasoning_new(&rc);
+            if (ctx->chat_lanes[i]) {
+                reasoning_attach_sess_store(ctx->chat_lanes[i], ctx->sess);
+                /* wire the multi-provider router into the reasoning loop */
+                if (ctx->router)
+                    reasoning_set_router(ctx->chat_lanes[i], ctx->router);
+            }
+        }
+        ctx->reasoning = ctx->chat_lanes[0];
     }
 
     if (!ctx->reasoning) {
@@ -730,6 +817,16 @@ void runtime_shutdown(runtime_ctx *ctx) {
 
     reasoning_free(ctx->reasoning);
     ctx->reasoning = NULL;
+    for (int i = 1; i < CHAT_LANE_MAX; i++) {
+        reasoning_free(ctx->chat_lanes[i]);
+        ctx->chat_lanes[i] = NULL;
+    }
+    for (int i = 0; i < CHAT_LANE_MAX; i++)
+        mutex_destroy(&ctx->lane_mtx[i]);
+    if (ctx->sess) {
+        sess_store_free(ctx->sess);
+        ctx->sess = NULL;
+    }
     llm_destroy(ctx->llm);
     ctx->llm = NULL;
     tx_manager_free(ctx->txm);
@@ -876,11 +973,17 @@ int set_llm(runtime_ctx *ctx, const char *provider, const char *base_url, const 
     if (!nl)
         return -1;
 
-    mutex_lock(&ctx->run_lock);
+    /* swap the LLM into every chat lane; each lane lock excludes in-flight
+     * runs on that lane (no global run-lock — lanes are the only runners) */
+    for (int i = 0; i < CHAT_LANE_MAX; i++) {
+        if (!ctx->chat_lanes[i])
+            continue;
+        mutex_lock(&ctx->lane_mtx[i]);
+        reasoning_set_llm(ctx->chat_lanes[i], nl);
+        mutex_unlock(&ctx->lane_mtx[i]);
+    }
     old = ctx->llm;
     ctx->llm = nl;
-    if (ctx->reasoning)
-        reasoning_set_llm(ctx->reasoning, nl);
     /* keep the route table in sync: drop the previously-active auto route, then
      * make sure the new active config exists as a route so round-robin never
      * falls back to a stale config. When a route already carries the same
@@ -909,7 +1012,6 @@ int set_llm(runtime_ctx *ctx, const char *provider, const char *base_url, const 
             router_add(ctx->router, provider, provider, base_url, api_key, model, 1.0);
     }
 
-    mutex_unlock(&ctx->run_lock);
     if (old)
         llm_destroy(old);
 
@@ -940,9 +1042,10 @@ int run(runtime_ctx *ctx, const char *prompt, char **answer) {
 
     if (!ctx || !prompt || !ctx->reasoning)
         return -1;
-    mutex_lock(&ctx->run_lock);
+    /* legacy single-agent path runs on lane 0 */
+    mutex_lock(&ctx->lane_mtx[0]);
     rc = reasoning_run(ctx->reasoning, prompt, answer);
-    mutex_unlock(&ctx->run_lock);
+    mutex_unlock(&ctx->lane_mtx[0]);
     return rc;
 }
 
@@ -956,9 +1059,9 @@ int agent_run(runtime_ctx *ctx, const char *agent, const char *task, char **answ
         return -1;
     if (agent_pool_find(ctx->agents, agent) < 0)
         return -2; /* unknown agent */
-    mutex_lock(&ctx->run_lock);
+    mutex_lock(&ctx->lane_mtx[0]);
     rc = reasoning_run(ctx->reasoning, task, answer);
-    mutex_unlock(&ctx->run_lock);
+    mutex_unlock(&ctx->lane_mtx[0]);
     if (rc == 0 && answer && *answer) {
         char key[160];
         snprintf(key, sizeof(key), "result:%s", agent);

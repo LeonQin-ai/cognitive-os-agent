@@ -204,11 +204,20 @@ static int h_task_get(const http_request *req, http_response *resp, void *ud) {
             free(fnodes);
         }
     } else if (t->status == TS_RUNNING && ctx->reasoning) {
+        /* chat lanes: this task may run on any lane; route progress polling
+         * to the lane currently executing it (falls back to lane 0). */
+        reasoning *lane = ctx->reasoning;
+        for (int i = 0; i < CHAT_LANE_MAX; i++) {
+            if (ctx->lane_task[i] == (long long)t->id) {
+                lane = ctx->chat_lanes[i];
+                break;
+            }
+        }
         long long elapsed_ms = 0, tin = 0, tout = 0, llm_ms = 0, tool_ms = 0;
         int round = 0, tool_calls = 0, llm_calls = 0;
         const char *cur_tool = "";
-        reasoning_progress_ex(ctx->reasoning, &elapsed_ms, &round, &tool_calls, &cur_tool, &tin, &tout,
-                              &llm_ms, &tool_ms, &llm_calls);
+        reasoning_progress_ex(lane, &elapsed_ms, &round, &tool_calls, &cur_tool, &tin, &tout, &llm_ms, &tool_ms,
+                              &llm_calls);
         cJSON_AddNumberToObject(o, "elapsed_ms", (double)elapsed_ms);
         cJSON_AddNumberToObject(o, "round", (double)round);
         cJSON_AddNumberToObject(o, "tool_calls", (double)tool_calls);
@@ -222,10 +231,19 @@ static int h_task_get(const http_request *req, http_response *resp, void *ud) {
         cJSON_AddNumberToObject(o, "tool_ms", (double)tool_ms);
         /* issue #5: live tail of the agent loop's narration/action log so the
          * UI can show thinking + tool chain while the run is in flight */
-        char *tail = reasoning_round_log_tail(ctx->reasoning, 8192);
+        char *tail = reasoning_round_log_tail(lane, 8192);
         if (tail) {
             cJSON_AddStringToObject(o, "process_log", tail);
             free(tail);
+        }
+        /* Claude-Code style steps: executed actions as {tool,args,out,ok,ms}
+         * (rendered as "● Tool(args) ⎿ out-head" by the UI) */
+        char *steps = reasoning_steps_json(lane);
+        if (steps) {
+            cJSON *arr = cJSON_Parse(steps);
+            if (arr)
+                cJSON_AddItemToObject(o, "steps", arr);
+            free(steps);
         }
     }
     s = cJSON_PrintUnformatted(o);

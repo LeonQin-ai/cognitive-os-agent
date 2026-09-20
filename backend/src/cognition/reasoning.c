@@ -58,6 +58,8 @@ struct session {
     long long created_ms; /* session creation time */
     long long total_ms;   /* accumulated execution duration across runs */
     int shared_memory;    /* 1 = share the Memory OS across sessions (default) */
+    volatile int in_run;  /* >0 while a lane run executes on this session
+                           * (reasoning_session_delete refuses to free it) */
 };
 
 static struct session *session_new(const char *id) {
@@ -93,6 +95,37 @@ static void session_free(struct session *s) {
     free(s);
 }
 
+/* ---- shared session registry (sess_store) ----
+ * One store holds the chat-session registry + the persisted metadata index.
+ * A standalone reasoning instance uses its embedded store; parallel lanes
+ * attach ONE shared store so every lane sees the same sessions/transcripts
+ * (并发聊天：每条 lane 一个 reasoning 实例，会话注册表共享). */
+struct sess_meta {
+    char id[64];
+    char title[128];
+    long long created_ms;
+    long long total_ms;
+    long long last_active_ms;
+    int shared_memory;
+};
+
+struct sess_store {
+    mutex_t sess_mtx;          /* guards sessions + meta below */
+    struct session **sessions;
+    size_t nsessions, scap;
+    struct sess_meta *meta;
+    size_t nmeta, metacap;
+};
+
+/* One executed action of the current/most recent run (step registry). */
+struct run_step {
+    char tool[48];
+    char args[160];
+    char out[240];
+    int ok; /* 1 ok, 0 failed, -1 skipped (policy/hook) */
+    int ms;
+};
+
 /* Find-or-create the session with this id (NULL/"" = default). Registry cap
  * SESSION_MAX; beyond it the default session is reused (no unbounded
  * growth from hostile clients). Callers hold no run in flight. (Defined
@@ -121,30 +154,21 @@ struct reasoning {
     attention *attention; /* salience ranking over retrieved context */
 
     /* multi-turn conversation history (bounded ring of recent turns), kept
-     * PER CHAT SESSION. sess_mtx guards the session registry; each session's
-     * own mtx guards its ring: the reasoning run itself is serialized by the
-     * ctx run-lock, but /v1/chat/history reads a ring from the HTTP thread
-     * while a run may be in flight. `cur` is the session selected for the
-     * current run (set at run entry, stable for the run's duration). */
-    mutex_t sess_mtx;
-    struct session **sessions;
-    size_t nsessions, scap;
+     * PER CHAT SESSION. The session registry + metadata index live in a
+     * sess_store (`ss`): embedded by default, or an externally attached
+     * shared store so parallel lanes see the same sessions. Each session's
+     * own mtx guards its ring; /v1/chat/history reads a ring from the HTTP
+     * thread while a run may be in flight. `cur` is the session selected
+     * for the current run (set at run entry, stable for the run's duration). */
+    sess_store own_store_; /* embedded store (used unless a shared one is attached) */
+    sess_store *ss;        /* active store: &own_store_ or an attached shared store */
     struct session *cur;
-    struct session *run_sess; /* session a run is currently executing on (NULL = idle) */
 
-    /* session metadata index (chat/sessions.json): survives restarts so the
-     * 最近 list keeps id/title/created/duration/shared-memory even for
-     * sessions whose ring is not yet materialized in memory. Guarded by
-     * sess_mtx; live sessions win over stale index entries. */
-    struct sess_meta {
-        char id[64];
-        char title[128];
-        long long created_ms;
-        long long total_ms;
-        long long last_active_ms;
-        int shared_memory;
-    } *meta;
-    size_t nmeta, metacap;
+    /* Claude-Code style step registry for the current/most recent run:
+     * executed actions as {tool,args,out,ok,ms}, rendered by the UI as
+     * "● Tool(args) ⎿ out-head". ok: 1 ok, 0 failed, -1 skipped. */
+    struct run_step *steps;
+    int n_steps, steps_cap;
 
     /* code index: touched files are indexed for term -> file:line recall */
     struct ret_index *index;
@@ -204,17 +228,17 @@ static struct session *session_get_locked(reasoning *r, const char *id) {
     const char *want = (id && *id) ? id : "default";
     struct session *s = NULL;
 
-    for (size_t i = 0; i < r->nsessions; i++)
-        if (strcmp(r->sessions[i]->id, want) == 0)
-            return r->sessions[i];
+    for (size_t i = 0; i < r->ss->nsessions; i++)
+        if (strcmp(r->ss->sessions[i]->id, want) == 0)
+            return r->ss->sessions[i];
 
-    if (r->nsessions < SESSION_MAX) {
+    if (r->ss->nsessions < SESSION_MAX) {
         s = session_new(want);
         if (s) {
-            struct session **na = realloc(r->sessions, (r->nsessions + 1) * sizeof(*na));
+            struct session **na = realloc(r->ss->sessions, (r->ss->nsessions + 1) * sizeof(*na));
             if (na) {
-                r->sessions = na;
-                r->sessions[r->nsessions++] = s;
+                r->ss->sessions = na;
+                r->ss->sessions[r->ss->nsessions++] = s;
             } else {
                 session_free(s);
                 s = NULL;
@@ -223,9 +247,9 @@ static struct session *session_get_locked(reasoning *r, const char *id) {
     }
 
     if (!s) { /* cap reached or alloc failed: fall back to default */
-        for (size_t i = 0; i < r->nsessions; i++)
-            if (strcmp(r->sessions[i]->id, "default") == 0) {
-                s = r->sessions[i];
+        for (size_t i = 0; i < r->ss->nsessions; i++)
+            if (strcmp(r->ss->sessions[i]->id, "default") == 0) {
+                s = r->ss->sessions[i];
                 break;
             }
     }
@@ -236,9 +260,9 @@ static struct session *session_get_locked(reasoning *r, const char *id) {
 static struct session *session_get(reasoning *r, const char *id) {
     struct session *s;
 
-    mutex_lock(&r->sess_mtx);
+    mutex_lock(&r->ss->sess_mtx);
     s = session_get_locked(r, id);
-    mutex_unlock(&r->sess_mtx);
+    mutex_unlock(&r->ss->sess_mtx);
     return s;
 }
 
@@ -317,8 +341,8 @@ static void meta_save_locked(reasoning *r) {
     arr = cJSON_CreateArray();
     if (!arr)
         return;
-    for (size_t i = 0; i < r->nmeta; i++) {
-        struct sess_meta *m = &r->meta[i];
+    for (size_t i = 0; i < r->ss->nmeta; i++) {
+        struct sess_meta *m = &r->ss->meta[i];
         cJSON *o = cJSON_CreateObject();
         if (!o)
             break;
@@ -348,21 +372,21 @@ static void meta_save_locked(reasoning *r) {
 static void meta_upsert_locked(reasoning *r, struct session *s) {
     struct sess_meta *m = NULL;
 
-    for (size_t i = 0; i < r->nmeta; i++)
-        if (strcmp(r->meta[i].id, s->id) == 0) {
-            m = &r->meta[i];
+    for (size_t i = 0; i < r->ss->nmeta; i++)
+        if (strcmp(r->ss->meta[i].id, s->id) == 0) {
+            m = &r->ss->meta[i];
             break;
         }
     if (!m) {
-        if (r->nmeta == r->metacap) {
-            size_t ncap = r->metacap ? r->metacap * 2 : 16;
-            struct sess_meta *nm = realloc(r->meta, ncap * sizeof(*nm));
+        if (r->ss->nmeta == r->ss->metacap) {
+            size_t ncap = r->ss->metacap ? r->ss->metacap * 2 : 16;
+            struct sess_meta *nm = realloc(r->ss->meta, ncap * sizeof(*nm));
             if (!nm)
                 return;
-            r->meta = nm;
-            r->metacap = ncap;
+            r->ss->meta = nm;
+            r->ss->metacap = ncap;
         }
-        m = &r->meta[r->nmeta++];
+        m = &r->ss->meta[r->ss->nmeta++];
         memset(m, 0, sizeof(*m));
         snprintf(m->id, sizeof(m->id), "%s", s->id);
     }
@@ -413,7 +437,7 @@ static void meta_load(reasoning *r) {
             cJSON_Delete(root);
         return;
     }
-    mutex_lock(&r->sess_mtx);
+    mutex_lock(&r->ss->sess_mtx);
     cJSON_ArrayForEach(it, root) {
         cJSON *jid = cJSON_GetObjectItemCaseSensitive(it, "id");
         cJSON *ti = cJSON_GetObjectItemCaseSensitive(it, "title");
@@ -425,15 +449,15 @@ static void meta_load(reasoning *r) {
 
         if (!jid || !cJSON_IsString(jid) || !jid->valuestring || !*jid->valuestring)
             continue;
-        if (r->nmeta == r->metacap) {
-            size_t ncap = r->metacap ? r->metacap * 2 : 16;
-            struct sess_meta *nm = realloc(r->meta, ncap * sizeof(*nm));
+        if (r->ss->nmeta == r->ss->metacap) {
+            size_t ncap = r->ss->metacap ? r->ss->metacap * 2 : 16;
+            struct sess_meta *nm = realloc(r->ss->meta, ncap * sizeof(*nm));
             if (!nm)
                 break;
-            r->meta = nm;
-            r->metacap = ncap;
+            r->ss->meta = nm;
+            r->ss->metacap = ncap;
         }
-        m = &r->meta[r->nmeta++];
+        m = &r->ss->meta[r->ss->nmeta++];
         memset(m, 0, sizeof(*m));
         snprintf(m->id, sizeof(m->id), "%s", jid->valuestring);
         if (ti && cJSON_IsString(ti) && ti->valuestring)
@@ -446,8 +470,51 @@ static void meta_load(reasoning *r) {
             m->last_active_ms = (long long)la->valuedouble;
         m->shared_memory = sh ? cJSON_IsTrue(sh) : 1;
     }
-    mutex_unlock(&r->sess_mtx);
+    mutex_unlock(&r->ss->sess_mtx);
     cJSON_Delete(root);
+}
+
+/* ---- shared session registry: public sess_store API ---- */
+
+sess_store *sess_store_new(void) {
+    sess_store *ss = calloc(1, sizeof(*ss));
+    if (!ss)
+        return NULL;
+    mutex_init(&ss->sess_mtx);
+    return ss;
+}
+
+void sess_store_free(sess_store *ss) {
+    if (!ss)
+        return;
+    for (size_t i = 0; i < ss->nsessions; i++)
+        session_free(ss->sessions[i]);
+    free(ss->sessions);
+    free(ss->meta);
+    mutex_destroy(&ss->sess_mtx);
+    free(ss);
+}
+
+void reasoning_attach_sess_store(reasoning *r, sess_store *ss) {
+    if (!r || !ss || ss == &r->own_store_ || r->ss == ss)
+        return;
+    /* drop any lazily created sessions of the embedded store (attach is
+     * documented to happen right after reasoning_new, before any run) */
+    mutex_lock(&r->own_store_.sess_mtx);
+    for (size_t i = 0; i < r->own_store_.nsessions; i++)
+        session_free(r->own_store_.sessions[i]);
+    free(r->own_store_.sessions);
+    free(r->own_store_.meta);
+    r->own_store_.sessions = NULL;
+    r->own_store_.nsessions = 0;
+    r->own_store_.scap = 0;
+    r->own_store_.meta = NULL;
+    r->own_store_.nmeta = 0;
+    r->own_store_.metacap = 0;
+    r->cur = NULL;
+    mutex_unlock(&r->own_store_.sess_mtx);
+    mutex_destroy(&r->own_store_.sess_mtx);
+    r->ss = ss;
 }
 
 /* Replay a session's persisted turns into its ring (caller holds s->mtx).
@@ -1058,6 +1125,30 @@ static int h_plan(state_machine *sm, void *ud, const char *input, char **out) {
 }
 
 /* ACT: execute the planned actions, wrapped in a transaction. */
+/* Record one executed action in the step registry (Claude-Code style
+ * "● Tool(args) ⎿ out-head" display; args/out are truncated heads). */
+static void run_step_add(reasoning *r, const char *tool, const char *args, const char *out, int ok, int ms) {
+    struct run_step *st;
+
+    if (!r)
+        return;
+    if (r->n_steps == r->steps_cap) {
+        int ncap = r->steps_cap ? r->steps_cap * 2 : 16;
+        struct run_step *ns = realloc(r->steps, (size_t)ncap * sizeof(*ns));
+        if (!ns)
+            return;
+        r->steps = ns;
+        r->steps_cap = ncap;
+    }
+    st = &r->steps[r->n_steps++];
+    memset(st, 0, sizeof(*st));
+    snprintf(st->tool, sizeof(st->tool), "%s", tool ? tool : "?");
+    snprintf(st->args, sizeof(st->args), "%s", args ? args : "");
+    snprintf(st->out, sizeof(st->out), "%s", out ? out : "");
+    st->ok = ok;
+    st->ms = ms;
+}
+
 static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
     reasoning *r = ud;
     strbuf b;
@@ -1121,6 +1212,7 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
                 sn_append_line(r->cur->sn_worklog, sizeof(r->cur->sn_worklog), el);
                 if (r->metrics)
                     metrics_inc(r->metrics, "tools.denied");
+                run_step_add(r, r->actions[i].tool, r->actions[i].args_json, NULL, -1, 0);
                 continue;
             }
         }
@@ -1180,6 +1272,7 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
                 sn_append_line(r->cur->sn_errors, sizeof(r->cur->sn_errors), el);
                 if (r->metrics)
                     metrics_inc(r->metrics, "tools.hook_blocked");
+                run_step_add(r, r->actions[i].tool, r->actions[i].args_json, NULL, -1, 0);
                 continue;
             }
             free(hp);
@@ -1187,6 +1280,7 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
         r->prog_tool_calls++;
         int rc;
         long long t_tool0 = time_now_ms();
+        char step_out[240] = ""; /* output head for the step registry */
         if (tx) {
             rc = tx_run(tx, r->actions[i].tool, r->actions[i].args_json);
         } else if (exec) {
@@ -1196,12 +1290,15 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
             if (er) {
                 /* executor output is already UTF-8 sanitized */
                 strbuf_appendf(&b, "[%s] %s\n", r->actions[i].tool, er->output ? er->output : "");
+                snprintf(step_out, sizeof(step_out), "%s", er->output ? er->output : "");
                 executor_result_free(er);
             }
         } else {
             rc = -1;
         }
         r->prog_tool_ms += time_now_ms() - t_tool0;
+        run_step_add(r, r->actions[i].tool, r->actions[i].args_json, step_out, rc == 0 ? 1 : 0,
+                     (int)(time_now_ms() - t_tool0));
         if (rc != 0) {
             r->all_actions_ok = 0;
             strbuf_appendf(&b, "[%s] FAILED\n", r->actions[i].tool);
@@ -1369,7 +1466,8 @@ reasoning *reasoning_new(const reasoning_config *cfg) {
     r = calloc(1, sizeof(reasoning));
     if (!r)
         return NULL;
-    mutex_init(&r->sess_mtx);
+    r->ss = &r->own_store_; /* embedded store until a shared one is attached */
+    mutex_init(&r->own_store_.sess_mtx);
     r->cur = session_get(r, NULL); /* default session, always present */
     r->llm = cfg->llm;
     r->tools = cfg->tools;
@@ -1421,11 +1519,16 @@ void reasoning_free(reasoning *r) {
     free(r->last_prompt);
     free(r->workspace);
     free(r->state_root);
-    for (size_t i = 0; i < r->nsessions; i++)
-        session_free(r->sessions[i]);
-    free(r->sessions);
-    free(r->meta);
-    mutex_destroy(&r->sess_mtx);
+    if (r->ss == &r->own_store_) {
+        /* sessions/meta belong to this instance; an attached shared store is
+         * owned by its creator and must NOT be torn down here */
+        for (size_t i = 0; i < r->own_store_.nsessions; i++)
+            session_free(r->own_store_.sessions[i]);
+        free(r->own_store_.sessions);
+        free(r->own_store_.meta);
+        mutex_destroy(&r->own_store_.sess_mtx);
+    }
+    free(r->steps);
     free(r->last_plan_raw);
     free(r->prev_plan);
     free(r->round_log);
@@ -1649,10 +1752,10 @@ static void record_turn(reasoning *r, const char *q, const char *a) {
     free(stored_q);
     free(stored_a);
     /* refresh the metadata index (title on first turn) */
-    mutex_lock(&r->sess_mtx);
+    mutex_lock(&r->ss->sess_mtx);
     meta_upsert_locked(r, r->cur);
     meta_save_locked(r);
-    mutex_unlock(&r->sess_mtx);
+    mutex_unlock(&r->ss->sess_mtx);
 }
 
 char *reasoning_history_json_ex(reasoning *r, const char *session_id, int max_turns) {
@@ -1701,10 +1804,10 @@ char *reasoning_sessions_json(reasoning *r) {
 
     if (!r)
         return xstrdup("[]");
-    mutex_lock(&r->sess_mtx);
+    mutex_lock(&r->ss->sess_mtx);
     arr = cJSON_CreateArray();
-    for (size_t i = 0; i < r->nsessions; i++) {
-        struct session *s = r->sessions[i];
+    for (size_t i = 0; i < r->ss->nsessions; i++) {
+        struct session *s = r->ss->sessions[i];
         cJSON *o = cJSON_CreateObject();
         cJSON_AddStringToObject(o, "id", s->id);
         mutex_lock(&s->mtx);
@@ -1714,9 +1817,9 @@ char *reasoning_sessions_json(reasoning *r) {
              * — adopt the title from the persisted sessions.json index so the
              * "最近" list keeps the human-readable name after a click
              * materializes the session (user report: 最近预览回退成 uuid) */
-            for (size_t k = 0; k < r->nmeta; k++)
-                if (strcmp(r->meta[k].id, s->id) == 0) {
-                    snprintf(s->title, sizeof(s->title), "%s", r->meta[k].title);
+            for (size_t k = 0; k < r->ss->nmeta; k++)
+                if (strcmp(r->ss->meta[k].id, s->id) == 0) {
+                    snprintf(s->title, sizeof(s->title), "%s", r->ss->meta[k].title);
                     break;
                 }
         }
@@ -1748,8 +1851,8 @@ char *reasoning_sessions_json(reasoning *r) {
                 char sid[128];
                 snprintf(sid, sizeof(sid), "%.*s", (int)(nl - 6), name);
                 int seen = 0;
-                for (size_t k = 0; k < r->nsessions; k++)
-                    if (strcmp(r->sessions[k]->id, sid) == 0) {
+                for (size_t k = 0; k < r->ss->nsessions; k++)
+                    if (strcmp(r->ss->sessions[k]->id, sid) == 0) {
                         seen = 1;
                         break;
                     }
@@ -1759,9 +1862,9 @@ char *reasoning_sessions_json(reasoning *r) {
                 if (!o)
                     break;
                 const struct sess_meta *m = NULL;
-                for (size_t k = 0; k < r->nmeta; k++)
-                    if (strcmp(r->meta[k].id, sid) == 0) {
-                        m = &r->meta[k];
+                for (size_t k = 0; k < r->ss->nmeta; k++)
+                    if (strcmp(r->ss->meta[k].id, sid) == 0) {
+                        m = &r->ss->meta[k];
                         break;
                     }
                 cJSON_AddStringToObject(o, "id", sid);
@@ -1778,7 +1881,7 @@ char *reasoning_sessions_json(reasoning *r) {
         }
     }
 
-    mutex_unlock(&r->sess_mtx);
+    mutex_unlock(&r->ss->sess_mtx);
     sjson = cJSON_PrintUnformatted(arr);
     cJSON_Delete(arr);
     return sjson ? sjson : xstrdup("[]");
@@ -1796,10 +1899,10 @@ char *reasoning_session_new(reasoning *r) {
     s = session_get(r, uuid);
     if (!s || strcmp(s->id, uuid) != 0)
         return NULL; /* cap reached or alloc failed — do not silently alias */
-    mutex_lock(&r->sess_mtx);
+    mutex_lock(&r->ss->sess_mtx);
     meta_upsert_locked(r, s);
     meta_save_locked(r);
-    mutex_unlock(&r->sess_mtx);
+    mutex_unlock(&r->ss->sess_mtx);
     return xstrdup(uuid);
 }
 
@@ -1815,10 +1918,10 @@ int reasoning_session_set_shared(reasoning *r, const char *session_id, int share
     mutex_lock(&s->mtx);
     s->shared_memory = shared ? 1 : 0;
     mutex_unlock(&s->mtx);
-    mutex_lock(&r->sess_mtx);
+    mutex_lock(&r->ss->sess_mtx);
     meta_upsert_locked(r, s);
     meta_save_locked(r);
-    mutex_unlock(&r->sess_mtx);
+    mutex_unlock(&r->ss->sess_mtx);
     return 0;
 }
 
@@ -1831,13 +1934,13 @@ char *reasoning_session_last_input(reasoning *r, const char *session_id) {
 
     if (!r || !session_id || !*session_id)
         return NULL;
-    mutex_lock(&r->sess_mtx);
-    for (size_t i = 0; i < r->nsessions; i++)
-        if (strcmp(r->sessions[i]->id, session_id) == 0) {
-            s = r->sessions[i];
+    mutex_lock(&r->ss->sess_mtx);
+    for (size_t i = 0; i < r->ss->nsessions; i++)
+        if (strcmp(r->ss->sessions[i]->id, session_id) == 0) {
+            s = r->ss->sessions[i];
             break;
         }
-    mutex_unlock(&r->sess_mtx);
+    mutex_unlock(&r->ss->sess_mtx);
     if (!s)
         return NULL;
     mutex_lock(&s->mtx);
@@ -1858,14 +1961,14 @@ int reasoning_session_clear(reasoning *r, const char *session_id) {
 
     if (!r)
         return -1;
-    mutex_lock(&r->sess_mtx);
-    for (size_t i = 0; i < r->nsessions; i++)
-        if (strcmp(r->sessions[i]->id, want) == 0) {
-            s = r->sessions[i];
+    mutex_lock(&r->ss->sess_mtx);
+    for (size_t i = 0; i < r->ss->nsessions; i++)
+        if (strcmp(r->ss->sessions[i]->id, want) == 0) {
+            s = r->ss->sessions[i];
             break;
         }
 
-    mutex_unlock(&r->sess_mtx);
+    mutex_unlock(&r->ss->sess_mtx);
     if (!s)
         return -1;
     mutex_lock(&s->mtx);
@@ -1899,11 +2002,11 @@ int reasoning_session_delete(reasoning *r, const char *session_id) {
 
     if (!r)
         return -1;
-    mutex_lock(&r->sess_mtx);
+    mutex_lock(&r->ss->sess_mtx);
 
-    for (size_t i = 0; i < r->nsessions; i++)
-        if (strcmp(r->sessions[i]->id, want) == 0) {
-            s = r->sessions[i];
+    for (size_t i = 0; i < r->ss->nsessions; i++)
+        if (strcmp(r->ss->sessions[i]->id, want) == 0) {
+            s = r->ss->sessions[i];
             idx = i;
             break;
         }
@@ -1911,16 +2014,16 @@ int reasoning_session_delete(reasoning *r, const char *session_id) {
     if (!s) {
         /* not live in memory — still drop it from the persisted meta index */
         int removed = 0;
-        for (size_t i = 0; i < r->nmeta; i++) {
-            if (strcmp(r->meta[i].id, want) == 0) {
-                memmove(&r->meta[i], &r->meta[i + 1], (r->nmeta - i - 1) * sizeof(r->meta[0]));
-                r->nmeta--;
+        for (size_t i = 0; i < r->ss->nmeta; i++) {
+            if (strcmp(r->ss->meta[i].id, want) == 0) {
+                memmove(&r->ss->meta[i], &r->ss->meta[i + 1], (r->ss->nmeta - i - 1) * sizeof(r->ss->meta[0]));
+                r->ss->nmeta--;
                 removed = 1;
                 break;
             }
         }
         meta_save_locked(r);
-        mutex_unlock(&r->sess_mtx);
+        mutex_unlock(&r->ss->sess_mtx);
         if (removed && r->state_root) {
             char fpath[700];
             chat_file_path(fpath, sizeof(fpath), r->state_root, want);
@@ -1929,25 +2032,25 @@ int reasoning_session_delete(reasoning *r, const char *session_id) {
         return removed ? 0 : -1;
     }
 
-    if (r->run_sess == s) {
-        mutex_unlock(&r->sess_mtx);
+    if (s->in_run) {
+        mutex_unlock(&r->ss->sess_mtx);
         return -2;
     }
 
-    memmove(&r->sessions[idx], &r->sessions[idx + 1],
-            (r->nsessions - idx - 1) * sizeof(*r->sessions));
-    r->nsessions--;
+    memmove(&r->ss->sessions[idx], &r->ss->sessions[idx + 1],
+            (r->ss->nsessions - idx - 1) * sizeof(*r->ss->sessions));
+    r->ss->nsessions--;
     if (r->cur == s)
         r->cur = NULL;
-    for (size_t i = 0; i < r->nmeta; i++) {
-        if (strcmp(r->meta[i].id, want) == 0) {
-            memmove(&r->meta[i], &r->meta[i + 1], (r->nmeta - i - 1) * sizeof(r->meta[0]));
-            r->nmeta--;
+    for (size_t i = 0; i < r->ss->nmeta; i++) {
+        if (strcmp(r->ss->meta[i].id, want) == 0) {
+            memmove(&r->ss->meta[i], &r->ss->meta[i + 1], (r->ss->nmeta - i - 1) * sizeof(r->ss->meta[0]));
+            r->ss->nmeta--;
             break;
         }
     }
     meta_save_locked(r);
-    mutex_unlock(&r->sess_mtx);
+    mutex_unlock(&r->ss->sess_mtx);
 
     if (r->state_root) {
         char fpath[700];
@@ -1982,16 +2085,21 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
         return -1;
     run_t0 = (long long)time_now_ms();
 
-    /* select (or create) the chat session this run belongs to; the ctx
-     * run-lock serializes runs, so swapping r->cur here is race-free.
-     * run_sess is published under sess_mtx so reasoning_session_delete can
-     * refuse to free a session that is executing. */
-    mutex_lock(&r->sess_mtx);
+    /* select (or create) the chat session this run belongs to; a lane runs
+     * one prompt at a time so swapping r->cur here is race-free. The
+     * session's in_run flag is published under sess_mtx so
+     * reasoning_session_delete can refuse to free a session that is
+     * executing (across lanes via the shared store). */
+    mutex_lock(&r->ss->sess_mtx);
     r->cur = session_get_locked(r, session_id);
-    r->run_sess = r->cur;
-    mutex_unlock(&r->sess_mtx);
+    if (r->cur)
+        r->cur->in_run++;
+    mutex_unlock(&r->ss->sess_mtx);
     if (r->cur)
         r->cur->last_active_ms = (long long)time_now_ms();
+
+    /* fresh step registry for this run (keep the buffer) */
+    r->n_steps = 0;
     /* 会话可关闭共享记忆：关闭后本会话的运行不读写全局 Memory OS */
     mem_shared = !r->cur || r->cur->shared_memory;
 
@@ -2274,10 +2382,10 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
         mutex_lock(&r->cur->mtx);
         r->cur->total_ms += (long long)time_now_ms() - run_t0;
         mutex_unlock(&r->cur->mtx);
-        mutex_lock(&r->sess_mtx);
+        mutex_lock(&r->ss->sess_mtx);
         meta_upsert_locked(r, r->cur);
         meta_save_locked(r);
-        mutex_unlock(&r->sess_mtx);
+        mutex_unlock(&r->ss->sess_mtx);
     }
 
     if (r->metrics)
@@ -2329,9 +2437,10 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     }
 
     free(safe_prompt);
-    mutex_lock(&r->sess_mtx);
-    r->run_sess = NULL;
-    mutex_unlock(&r->sess_mtx);
+    mutex_lock(&r->ss->sess_mtx);
+    if (r->cur && r->cur->in_run > 0)
+        r->cur->in_run--;
+    mutex_unlock(&r->ss->sess_mtx);
     return ret;
 }
 
@@ -2389,6 +2498,34 @@ char *reasoning_round_log_tail(reasoning *r, size_t max_bytes) {
             start++;
     }
     return xstrdup(r->round_log + start);
+}
+
+/* Steps of the current/most recent run as a JSON array of
+ * {tool,args,out,ok,ms} (Claude-Code style execution display). Caller frees. */
+char *reasoning_steps_json(reasoning *r) {
+    cJSON *arr;
+    char *js;
+
+    if (!r)
+        return NULL;
+    arr = cJSON_CreateArray();
+    if (!arr)
+        return NULL;
+    for (int i = 0; i < r->n_steps; i++) {
+        const struct run_step *st = &r->steps[i];
+        cJSON *o = cJSON_CreateObject();
+        if (!o)
+            break;
+        cJSON_AddStringToObject(o, "tool", st->tool);
+        cJSON_AddStringToObject(o, "args", st->args);
+        cJSON_AddStringToObject(o, "out", st->out);
+        cJSON_AddNumberToObject(o, "ok", st->ok);
+        cJSON_AddNumberToObject(o, "ms", st->ms);
+        cJSON_AddItemToArray(arr, o);
+    }
+    js = cJSON_PrintUnformatted(arr);
+    cJSON_Delete(arr);
+    return js;
 }
 
 char *reasoning_session_json(reasoning *r) {
