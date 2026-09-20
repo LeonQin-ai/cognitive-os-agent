@@ -1301,17 +1301,51 @@ async function loadAgents(){
   if(!box) return;
   const obj = (r.obj && typeof r.obj === 'object') ? r.obj : {};
   AGENTS = Array.isArray(obj.agents) ? obj.agents : [];
+  /* 模型选项来自路由表：每个 agent 可单独换模型（PUT /v1/agents/<name>） */
+  const rr = await call('GET', '/v1/routes');
+  const routes = Array.isArray(rr.obj) ? rr.obj : [];
+  const modelOptions = (cur) => {
+    let h = '<option value="">（当前激活模型）</option>';
+    let found = false;
+    routes.forEach(x => {
+      const v = (x.provider || '') + '|' + (x.model || '');
+      const label = (x.name || x.model || 'route') + '（' + (x.provider || '?') + ' / ' + (x.model || '?') + '）';
+      h += '<option value="' + esc(v) + '"' + (v === cur ? ' selected' : '') + '>' + esc(label) + '</option>';
+      if(v === cur) found = true;
+    });
+    /* 存储的模型已被删除时保留显示，避免静默回退 */
+    if(cur && cur !== '|' && !found)
+      h += '<option value="' + esc(cur) + '" selected>' + esc(cur.replace('|', ' / ')) + '（已删除的路由）</option>';
+    return h;
+  };
   let html = '<div class="table-wrap"><table><thead><tr><th>Agent</th><th>Role</th><th>Model</th><th>操作</th></tr></thead><tbody>';
   if(!AGENTS.length) html += '<tr><td colspan="4" class="muted">（暂无 agent，先创建一个）</td></tr>';
   AGENTS.forEach(a => {
-    const model = [a.provider, a.model].filter(Boolean).join(' / ') || '（当前激活）';
-    html += '<tr><td>' + esc(a.name || '') + '</td><td>' + esc(a.role || '') + '</td><td class="muted">' + esc(model) + '</td>' +
-      '<td><button class="sec sm danger" onclick="agentDelete(\'' + esc(a.name || '') + '\')">删除</button></td></tr>';
+    const cur = (a.provider || '') + '|' + (a.model || '');
+    const hasModel = (a.provider || a.model) ? true : false;
+    html += '<tr><td>' + esc(a.name || '') + '</td><td>' + esc(a.role || '') + '</td>' +
+      '<td><select class="agent-model-sel" style="max-width:240px">' + modelOptions(hasModel ? cur : '') + '</select></td>' +
+      '<td><button class="sec sm" onclick="agentSetModel(\'' + esc(a.name || '') + '\', this)">保存模型</button> ' +
+      '<button class="sec sm danger" onclick="agentDelete(\'' + esc(a.name || '') + '\')">删除</button></td></tr>';
   });
   html += '</tbody></table></div>';
   html += '<div class="hint" style="margin-top:8px">共享黑板 facts:</div><pre>' + esc(JSON.stringify(obj.facts || {}, null, 2)) + '</pre>';
   box.innerHTML = html;
   fillAgentModelSelect();
+}
+
+/* 修改指定 agent 使用的模型（PUT /v1/agents/<name>，空 = 回退当前激活模型） */
+async function agentSetModel(name, btn){
+  const tr = btn && btn.closest ? btn.closest('tr') : null;
+  const sel = tr ? tr.querySelector('select.agent-model-sel') : null;
+  if(!sel){ toast('未找到模型选择框'); return; }
+  const val = sel.value || '';
+  const i = val.indexOf('|');
+  const provider = i >= 0 ? val.slice(0, i) : '';
+  const model = i >= 0 ? val.slice(i + 1) : '';
+  const r = await call('PUT', '/v1/agents/' + encodeURIComponent(name), {provider, model});
+  if(r.status === 200) toast('已更新 ' + name + ' 的模型');
+  else toast('更新失败: ' + ((r.obj && r.obj.error) || r.text || ('HTTP ' + r.status)));
 }
 
 /* ================= 预置专业 Agent 角色 ================= */
@@ -3062,7 +3096,8 @@ async function policyDelete(idx){
 async function loadFlow(){
   const el = $('flow-board'); if(!el) return;
   const r = await call('GET', '/v1/blackboard');
-  const facts = (r.obj && r.obj.facts) ? r.obj.facts : {};
+  /* /v1/blackboard 返回扁平 JSON：键是黑板 key（如 flow/trace），值是内容 */
+  const facts = (r.obj && typeof r.obj === 'object' && !Array.isArray(r.obj)) ? r.obj : {};
   const parts = [];
   for(const k of Object.keys(facts)){
     if(k === 'flow/trace' || k.indexOf('flow/') === 0){

@@ -22,6 +22,10 @@ int agent_pool_add(agent_pool *p, const char *name, const char *role);
  * be NULL (falls back to the global active model). */
 int agent_pool_add_model(agent_pool *p, const char *name, const char *role, const char *provider,
                              const char *model);
+/* Change the provider/model an existing agent uses. NULL or "" clears the
+ * stored value so the agent falls back to the globally active model.
+ * Returns 0 ok, -1 on unknown name / bad args. */
+int agent_pool_set_model(agent_pool *p, const char *name, const char *provider, const char *model);
 int agent_pool_count(agent_pool *p);
 
 /* Remove a registered agent by name. Returns 0 ok, -1 if unknown/bad args. */

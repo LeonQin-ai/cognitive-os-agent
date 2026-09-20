@@ -1054,6 +1054,16 @@ static void test_agent_pool(void) {
     CHECK(agent_pool_add(p, "executor", "act") >= 0);
     CHECK(agent_pool_add(p, "planner", "dup") == -1);  /* duplicate */
     CHECK(agent_pool_count(p) == 2);
+    /* set_model: change, then clear back to the active-model fallback */
+    CHECK(agent_pool_set_model(p, "executor", "openai", "gpt-4o") == 0);
+    char *snapm = agent_pool_snapshot_json(p);
+    CHECK(snapm && strstr(snapm, "gpt-4o") != NULL);
+    free(snapm);
+    CHECK(agent_pool_set_model(p, "ghost", "openai", "gpt-4o") == -1); /* unknown */
+    CHECK(agent_pool_set_model(p, "executor", "", "") == 0);           /* clear */
+    char *snapc = agent_pool_snapshot_json(p);
+    CHECK(snapc && strstr(snapc, "gpt-4o") == NULL);
+    free(snapc);
     CHECK(agent_post(p, "planner", "plan", "step1") == 0);
     CHECK(agent_post(p, "ghost", "k", "v") == -1);     /* unknown agent */
     blackboard *bb = agent_pool_blackboard(p);

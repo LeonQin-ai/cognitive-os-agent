@@ -1438,6 +1438,54 @@ static int h_agent_delete(const http_request *req, http_response *resp, void *ud
     return 0;
 }
 
+/* PUT /v1/agents/<name> {"provider":"...","model":"..."} — change the model
+ * an agent uses. Empty strings clear the stored values so the agent falls
+ * back to the globally active model. 404 when the name is unknown. */
+static int h_agent_update(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
+    char *b;
+    cJSON *root;
+    char prov_buf[128], model_buf[128];
+    int rc;
+
+    if (!authz_ok(ctx, req, resp))
+        return 0;
+    const char *name = req->path + strlen("/v1/agents/");
+    if (!*name) {
+        resp->status = 400;
+        http_resp_json(resp, "{\"error\":\"need agent name in path\"}");
+        return 0;
+    }
+
+    b = body_str(req);
+    root = b ? cJSON_Parse(b) : NULL;
+    free(b);
+    if (root && cJSON_IsObject(root)) {
+        cJSON *prov = cJSON_GetObjectItemCaseSensitive(root, "provider");
+        cJSON *mod = cJSON_GetObjectItemCaseSensitive(root, "model");
+        /* copy out of the cJSON tree — borrowed valuestrings must stay valid
+         * after cJSON_Delete below */
+        snprintf(prov_buf, sizeof(prov_buf), "%s", (prov && cJSON_IsString(prov)) ? prov->valuestring : "");
+        snprintf(model_buf, sizeof(model_buf), "%s", (mod && cJSON_IsString(mod)) ? mod->valuestring : "");
+    } else {
+        prov_buf[0] = '\0';
+        model_buf[0] = '\0';
+    }
+    if (root)
+        cJSON_Delete(root);
+
+    rc = ctx->agents ? agent_pool_set_model(ctx->agents, name, prov_buf, model_buf) : -1;
+    if (rc != 0) {
+        resp->status = 404;
+        http_resp_json(resp, "{\"error\":\"unknown agent\"}");
+        return 0;
+    }
+
+    agent_pool_save(ctx->agents, ctx->state_root); /* roster persists across restarts */
+    http_resp_json(resp, "{\"ok\":true}");
+    return 0;
+}
+
 static int h_agent_post(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
     char name[128];
@@ -4596,6 +4644,7 @@ int api_attach(runtime_ctx *ctx) {
     http_server_route(ctx->http, "GET", "/v1/agents", h_agents, ctx);
     http_server_route(ctx->http, "POST", "/v1/agents", h_agent_add, ctx);
     http_server_route(ctx->http, "POST", "/v1/agents/", h_agent_post, ctx);
+    http_server_route(ctx->http, "PUT", "/v1/agents/", h_agent_update, ctx);
     http_server_route(ctx->http, "DELETE", "/v1/agents/", h_agent_delete, ctx);
     http_server_route(ctx->http, "GET", "/v1/snapshots", h_snapshots, ctx);
     http_server_route(ctx->http, "POST", "/v1/snapshots/rollback", h_snapshot_rollback, ctx);

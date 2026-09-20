@@ -119,6 +119,30 @@ int agent_pool_add_model(agent_pool *p, const char *name, const char *role, cons
     return idx;
 }
 
+/* Change the provider/model an existing agent uses (agent 换模型).
+ * NULL or "" clears the stored value so the agent falls back to the globally
+ * active model. Returns 0 ok, -1 on unknown name / bad args. */
+int agent_pool_set_model(agent_pool *p, const char *name, const char *provider, const char *model) {
+    int idx;
+    agent_entry *a;
+
+    if (!p || !name || !*name)
+        return -1;
+    mutex_lock(&p->mtx);
+    idx = find_agent(p, name);
+    if (idx < 0) {
+        mutex_unlock(&p->mtx);
+        return -1;
+    }
+    a = &p->agents[idx];
+    free(a->provider);
+    free(a->model);
+    a->provider = (provider && *provider) ? xstrdup(provider) : NULL;
+    a->model = (model && *model) ? xstrdup(model) : NULL;
+    mutex_unlock(&p->mtx);
+    return 0;
+}
+
 /* Remove a registered agent by name (frees its strings, shifts the tail).
  * Returns 0 on success, -1 when the pool or name is unknown. */
 int agent_pool_remove(agent_pool *p, const char *name) {
