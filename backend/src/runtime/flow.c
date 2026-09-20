@@ -239,6 +239,12 @@ typedef struct flow_prog_node {
     int layer;
     int state; /* FP_* */
     int64_t start_ms, end_ms;
+    /* Live reasoning instance of the node's agent loop while FP_RUNNING.
+     * Set/cleared by the worker under flow_prog_mtx so flow_progress_json can
+     * surface in-node progress (round / current tool / executed steps).
+     * Display-grade accuracy: the pointer is only ever dereferenced by the
+     * lock-free progress pollers, never by the run itself. */
+    reasoning *rn;
 } flow_prog_node;
 
 typedef struct flow_prog {
@@ -327,6 +333,22 @@ static void flow_prog_node_mark(int64_t task_id, const char *id, int state) {
     mutex_unlock(&flow_prog_mtx);
 }
 
+/* Bind/unbind the node's live reasoning instance (rn=NULL when the node's
+ * agent loop is not running) so flow_progress_json can poll in-node progress. */
+static void flow_prog_node_attach(int64_t task_id, const char *id, reasoning *rn) {
+    if (task_id < 0 || !id)
+        return;
+    flow_prog_init_once();
+    mutex_lock(&flow_prog_mtx);
+    flow_prog *p = flow_prog_slot(task_id);
+    if (p) {
+        for (int i = 0; i < p->n; i++)
+            if (strcmp(p->nodes[i].id, id) == 0)
+                p->nodes[i].rn = rn;
+    }
+    mutex_unlock(&flow_prog_mtx);
+}
+
 static void flow_prog_end(int64_t task_id) {
     if (task_id < 0)
         return;
@@ -339,6 +361,7 @@ static void flow_prog_end(int64_t task_id) {
             if (p->nodes[i].state == FP_QUEUED || p->nodes[i].state == FP_RUNNING) {
                 p->nodes[i].state = FP_ERROR;
                 p->nodes[i].end_ms = now;
+                p->nodes[i].rn = NULL;
             }
         p->done = 1;
     }
@@ -369,6 +392,31 @@ char *flow_progress_json(int64_t task_id) {
                                                                                        : "error");
                 cJSON_AddNumberToObject(o, "start_ms", (double)p->nodes[i].start_ms);
                 cJSON_AddNumberToObject(o, "end_ms", (double)p->nodes[i].end_ms);
+                /* In-node live progress: poll the node's own reasoning engine
+                 * (lock-free display-grade pollers) while its agent loop runs. */
+                if (p->nodes[i].state == FP_RUNNING && p->nodes[i].rn) {
+                    long long elapsed_ms = 0, tin = 0, tout = 0, llm_ms = 0, tool_ms = 0;
+                    int round = 0, tool_calls = 0, llm_calls = 0;
+                    const char *cur_tool = NULL;
+                    reasoning_progress_ex(p->nodes[i].rn, &elapsed_ms, &round, &tool_calls,
+                                          &cur_tool, &tin, &tout, &llm_ms, &tool_ms, &llm_calls);
+                    if (round > 0)
+                        cJSON_AddNumberToObject(o, "round", round);
+                    cJSON_AddNumberToObject(o, "tool_calls", tool_calls);
+                    if (cur_tool && *cur_tool)
+                        cJSON_AddStringToObject(o, "cur_tool", cur_tool);
+                    if (llm_calls > 0)
+                        cJSON_AddNumberToObject(o, "llm_calls", llm_calls);
+                    if (llm_ms > 0)
+                        cJSON_AddNumberToObject(o, "llm_ms", llm_ms);
+                    char *steps = reasoning_steps_json(p->nodes[i].rn);
+                    if (steps) {
+                        cJSON *sarr = cJSON_Parse(steps);
+                        if (sarr)
+                            cJSON_AddItemToObject(o, "steps", sarr);
+                        free(steps);
+                    }
+                }
                 cJSON_AddItemToArray(arr, o);
             }
             out = cJSON_PrintUnformatted(arr);
@@ -416,7 +464,9 @@ static void flow_worker(void *arg) {
     flow_prog_node_mark(j->task_id, j->nd->id, FP_RUNNING);
     r = flow_reasoning_new(j->ctx);
     if (r) {
+        flow_prog_node_attach(j->task_id, j->nd->id, r);
         j->rc = reasoning_run(r, j->task, &j->out);
+        flow_prog_node_attach(j->task_id, j->nd->id, NULL);
         reasoning_free(r);
     } else {
         j->rc = -1;

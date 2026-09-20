@@ -2710,6 +2710,14 @@ function flowNodesText(t){
     if(n.status === 'running' && n.start_ms) ms = now - n.start_ms;
     else if((n.status === 'ok' || n.status === 'error') && n.start_ms && n.end_ms) ms = n.end_ms - n.start_ms;
     if(ms > 0) s += ' ' + Math.floor(ms / 1000) + 's';
+    /* 运行中节点显示引擎内部进度：第N轮 · 工具×N（当前工具） · LLM 耗时 */
+    if(n.status === 'running'){
+      const d = [];
+      if(n.round) d.push('第' + n.round + '轮');
+      if(n.tool_calls !== undefined) d.push('工具×' + (n.tool_calls || 0) + (n.cur_tool ? '（' + n.cur_tool + '）' : ''));
+      if(n.llm_ms) d.push('LLM ' + Math.floor(n.llm_ms / 1000) + 's');
+      if(d.length) s += ' · ' + d.join(' · ');
+    }
     return s;
   }).join(' · ');
 }
@@ -2738,21 +2746,35 @@ function taskProgressText(t){
 }
 
 /* Claude-Code 风格步骤化执行显示：● Tool(args) + ⎿ 输出首行摘要（不刷屏）；
- * RUNNING 时末尾显示 ⏳ 思考中…；无步骤数据时回退到过程日志尾部 */
+ * RUNNING 时末尾显示 ⏳ 思考中…；无步骤数据时回退到过程日志尾部。
+ * Flow 容器任务：显示运行中节点（stepN:agent）已执行的步骤 */
+function stepLines(s){
+  const mark = s.ok === 1 ? '●' : (s.ok === 0 ? '✗' : '⊘');
+  const args = (s.args || '').replace(/\s+/g, ' ').trim();
+  const out = (s.out || '').split('\n').map(x => x.trim()).filter(Boolean)[0] || '';
+  const outClean = out.replace(/^\[[^\]]+\]\s*/, '');
+  const ls = [mark + ' ' + (s.tool || '?') + '(' + (args.length > 90 ? args.slice(0, 90) + '…' : args) + ')'];
+  if(outClean) ls.push('  ⎿ ' + (outClean.length > 110 ? outClean.slice(0, 110) + '…' : outClean));
+  return ls;
+}
+function flowRunningNodes(t){
+  return (t && Array.isArray(t.flow_nodes))
+    ? t.flow_nodes.filter(n => n.status === 'running' && n.steps && n.steps.length) : [];
+}
 function stepsText(t){
   const lines = [];
-  const steps = t && t.steps;
-  if(steps && steps.length){
-    for(const s of steps){
-      const mark = s.ok === 1 ? '●' : (s.ok === 0 ? '✗' : '⊘');
-      const args = (s.args || '').replace(/\s+/g, ' ').trim();
-      lines.push(mark + ' ' + (s.tool || '?') + '(' + (args.length > 90 ? args.slice(0, 90) + '…' : args) + ')');
-      const out = (s.out || '').split('\n').map(x => x.trim()).filter(Boolean)[0] || '';
-      const outClean = out.replace(/^\[[^\]]+\]\s*/, '');
-      if(outClean) lines.push('  ⎿ ' + (outClean.length > 110 ? outClean.slice(0, 110) + '…' : outClean));
+  const frun = flowRunningNodes(t);
+  for(const n of frun){
+    lines.push('[' + (n.id || '?') + ':' + (n.agent || '') + ']');
+    for(const s of n.steps) lines.push(...stepLines(s));
+  }
+  if(!frun.length){
+    const steps = t && t.steps;
+    if(steps && steps.length){
+      for(const s of steps) lines.push(...stepLines(s));
+    } else if(t && t.process_log){
+      for(const l of t.process_log.split('\n').filter(x => x.trim()).slice(-25)) lines.push(l);
     }
-  } else if(t && t.process_log){
-    for(const l of t.process_log.split('\n').filter(x => x.trim()).slice(-25)) lines.push(l);
   }
   if(t && t.status === 'RUNNING') lines.push('⏳ 思考中…');
   return lines.join('\n');
@@ -2802,7 +2824,7 @@ async function chatSend(){
   const showLive = (t) => {
     const el = live();
     if(!el || !t) return;
-    if(!(t.steps && t.steps.length) && !t.process_log) return;
+    if(!(t.steps && t.steps.length) && !t.process_log && !flowRunningNodes(t).length) return;
     const pre = el.querySelector('pre');
     if(!pre) return;
     const text = stepsText(t);
