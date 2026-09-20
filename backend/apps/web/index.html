@@ -2748,7 +2748,8 @@ function stepsText(t){
       const args = (s.args || '').replace(/\s+/g, ' ').trim();
       lines.push(mark + ' ' + (s.tool || '?') + '(' + (args.length > 90 ? args.slice(0, 90) + '…' : args) + ')');
       const out = (s.out || '').split('\n').map(x => x.trim()).filter(Boolean)[0] || '';
-      if(out) lines.push('  ⎿ ' + (out.length > 110 ? out.slice(0, 110) + '…' : out));
+      const outClean = out.replace(/^\[[^\]]+\]\s*/, '');
+      if(outClean) lines.push('  ⎿ ' + (outClean.length > 110 ? outClean.slice(0, 110) + '…' : outClean));
     }
   } else if(t && t.process_log){
     for(const l of t.process_log.split('\n').filter(x => x.trim()).slice(-25)) lines.push(l);

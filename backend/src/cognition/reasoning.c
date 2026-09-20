@@ -1282,7 +1282,12 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
         long long t_tool0 = time_now_ms();
         char step_out[240] = ""; /* output head for the step registry */
         if (tx) {
+            /* per-action output = the chunk tx_run appends to the aggregate */
+            size_t out_before = tx_output(tx) ? strlen(tx_output(tx)) : 0;
             rc = tx_run(tx, r->actions[i].tool, r->actions[i].args_json);
+            const char *agg = tx_output(tx);
+            if (agg && strlen(agg) > out_before)
+                snprintf(step_out, sizeof(step_out), "%s", agg + out_before);
         } else if (exec) {
             executor_result *er = NULL;
             int erc = executor_execute(exec, r->actions[i].tool, r->actions[i].args_json, &er);
