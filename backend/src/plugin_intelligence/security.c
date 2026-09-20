@@ -12,9 +12,14 @@ typedef struct rule {
     const char *message;
 } rule;
 
+/* NOTE: rules are case-insensitive SUBSTRING matches. The former generic
+ * "exec" rule (severity 3) rejected legitimate generated shell scripts whose
+ * comments/names merely contained the word "execute"/"execution" — e.g. the
+ * remote-login (ssh) plugin from issue #23. It was removed; system()/popen()
+ * remain the real process-execution signals for C-style code. */
+
 static const rule RULES[] = {
     {"system(", 3, "direct shell execution via system()"},
-    {"exec", 3, "process execution"},
     {"popen(", 3, "piped shell execution"},
     {"eval", 2, "dynamic evaluation"},
     {"rm -rf", 3, "destructive recursive delete"},

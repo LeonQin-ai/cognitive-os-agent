@@ -2511,6 +2511,22 @@ static void test_chat_upload_evolve(void) {
         free(hb2);
         CHECK(reasoning_session_clear(ctx.reasoning, "no-such") == -1);
 
+        /* issue #24: delete removes the session entirely (registry + meta
+         * index + transcript); unknown ids fail, other sessions stay intact */
+        CHECK(reasoning_session_delete(ctx.reasoning, "tab-b") == 0);
+        char *ss2 = reasoning_sessions_json(ctx.reasoning);
+        CHECK(ss2 && strstr(ss2, "tab-b") == NULL && strstr(ss2, "\"default\"") != NULL);
+        free(ss2);
+        CHECK(reasoning_session_delete(ctx.reasoning, "tab-b") == -1); /* already gone */
+        CHECK(reasoning_session_delete(ctx.reasoning, "no-such") == -1);
+        /* history_json_ex lazily recreates an empty session -> no turns */
+        char *hdel = reasoning_history_json_ex(ctx.reasoning, "tab-b", 10);
+        CHECK(hdel && strstr(hdel, "天气怎么样") == NULL);
+        free(hdel);
+        char *hd2 = reasoning_history_json_ex(ctx.reasoning, "default", 10);
+        CHECK(hd2 && strstr(hd2, "第三个话题") != NULL);
+        free(hd2);
+
         runtime_shutdown(&ctx);
 
         /* restart replay: a fresh runtime over the same state root must load
@@ -2526,8 +2542,10 @@ static void test_chat_upload_evolve(void) {
             cfg2.http_port = 0;
             runtime_ctx ctx2;
             if (init(&ctx2, &cfg2) != 0) { CHECK(0); return; }
+            /* tab-b was DELETED above: its transcript must stay gone after a
+             * restart (deletion, unlike clearing, survives restarts) */
             char *ra = reasoning_history_json_ex(ctx2.reasoning, "tab-b", 10);
-            CHECK(ra && strstr(ra, "天气怎么样") != NULL);
+            CHECK(ra && strstr(ra, "天气怎么样") == NULL);
             free(ra);
             char *rd = reasoning_history_json_ex(ctx2.reasoning, "default", 10);
             CHECK(rd && strstr(rd, "第三个话题") != NULL);

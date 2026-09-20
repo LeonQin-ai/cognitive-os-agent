@@ -130,6 +130,7 @@ struct reasoning {
     struct session **sessions;
     size_t nsessions, scap;
     struct session *cur;
+    struct session *run_sess; /* session a run is currently executing on (NULL = idle) */
 
     /* session metadata index (chat/sessions.json): survives restarts so the
      * 最近 list keeps id/title/created/duration/shared-memory even for
@@ -198,17 +199,14 @@ struct reasoning {
     long long usage_base_in, usage_base_out, usage_base_reason;
 };
 
-static struct session *session_get(reasoning *r, const char *id) {
+/* Find-or-create the session with this id. Caller holds sess_mtx. */
+static struct session *session_get_locked(reasoning *r, const char *id) {
     const char *want = (id && *id) ? id : "default";
     struct session *s = NULL;
 
-    mutex_lock(&r->sess_mtx);
     for (size_t i = 0; i < r->nsessions; i++)
-        if (strcmp(r->sessions[i]->id, want) == 0) {
-            struct session *s = r->sessions[i];
-            mutex_unlock(&r->sess_mtx);
-            return s;
-        }
+        if (strcmp(r->sessions[i]->id, want) == 0)
+            return r->sessions[i];
 
     if (r->nsessions < SESSION_MAX) {
         s = session_new(want);
@@ -232,6 +230,14 @@ static struct session *session_get(reasoning *r, const char *id) {
             }
     }
 
+    return s;
+}
+
+static struct session *session_get(reasoning *r, const char *id) {
+    struct session *s;
+
+    mutex_lock(&r->sess_mtx);
+    s = session_get_locked(r, id);
     mutex_unlock(&r->sess_mtx);
     return s;
 }
@@ -1883,6 +1889,75 @@ int reasoning_session_clear(reasoning *r, const char *session_id) {
     return 0;
 }
 
+/* Delete a session entirely: unregister it, drop its meta index entry and
+ * remove the durable chat/<id>.jsonl transcript. Returns 0 ok, -1 unknown,
+ * -2 busy (a run is in flight on the session — cancelling first is safer). */
+int reasoning_session_delete(reasoning *r, const char *session_id) {
+    const char *want = (session_id && *session_id) ? session_id : "default";
+    struct session *s = NULL;
+    size_t idx = 0;
+
+    if (!r)
+        return -1;
+    mutex_lock(&r->sess_mtx);
+
+    for (size_t i = 0; i < r->nsessions; i++)
+        if (strcmp(r->sessions[i]->id, want) == 0) {
+            s = r->sessions[i];
+            idx = i;
+            break;
+        }
+
+    if (!s) {
+        /* not live in memory — still drop it from the persisted meta index */
+        int removed = 0;
+        for (size_t i = 0; i < r->nmeta; i++) {
+            if (strcmp(r->meta[i].id, want) == 0) {
+                memmove(&r->meta[i], &r->meta[i + 1], (r->nmeta - i - 1) * sizeof(r->meta[0]));
+                r->nmeta--;
+                removed = 1;
+                break;
+            }
+        }
+        meta_save_locked(r);
+        mutex_unlock(&r->sess_mtx);
+        if (removed && r->state_root) {
+            char fpath[700];
+            chat_file_path(fpath, sizeof(fpath), r->state_root, want);
+            fs_remove(fpath);
+        }
+        return removed ? 0 : -1;
+    }
+
+    if (r->run_sess == s) {
+        mutex_unlock(&r->sess_mtx);
+        return -2;
+    }
+
+    memmove(&r->sessions[idx], &r->sessions[idx + 1],
+            (r->nsessions - idx - 1) * sizeof(*r->sessions));
+    r->nsessions--;
+    if (r->cur == s)
+        r->cur = NULL;
+    for (size_t i = 0; i < r->nmeta; i++) {
+        if (strcmp(r->meta[i].id, want) == 0) {
+            memmove(&r->meta[i], &r->meta[i + 1], (r->nmeta - i - 1) * sizeof(r->meta[0]));
+            r->nmeta--;
+            break;
+        }
+    }
+    meta_save_locked(r);
+    mutex_unlock(&r->sess_mtx);
+
+    if (r->state_root) {
+        char fpath[700];
+        chat_file_path(fpath, sizeof(fpath), r->state_root, want);
+        fs_remove(fpath);
+    }
+    session_free(s);
+    return 0;
+}
+
 int reasoning_run(reasoning *r, const char *prompt, char **answer) {
     return reasoning_run_ex(r, NULL, prompt, answer);
 }
@@ -1908,8 +1983,13 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     run_t0 = (long long)time_now_ms();
 
     /* select (or create) the chat session this run belongs to; the ctx
-     * run-lock serializes runs, so swapping r->cur here is race-free */
-    r->cur = session_get(r, session_id);
+     * run-lock serializes runs, so swapping r->cur here is race-free.
+     * run_sess is published under sess_mtx so reasoning_session_delete can
+     * refuse to free a session that is executing. */
+    mutex_lock(&r->sess_mtx);
+    r->cur = session_get_locked(r, session_id);
+    r->run_sess = r->cur;
+    mutex_unlock(&r->sess_mtx);
     if (r->cur)
         r->cur->last_active_ms = (long long)time_now_ms();
     /* 会话可关闭共享记忆：关闭后本会话的运行不读写全局 Memory OS */
@@ -2029,6 +2109,16 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
             obs_log_append(r, result && *result ? result : "(run failed)");
             if (r->round_idx >= r->max_rounds)
                 break;
+            /* issue #25: a failed action (e.g. ssh login failure) must not end
+             * the task. Without an explicit recovery instruction the model
+             * tends to answer with an apology and the remaining steps of the
+             * plan never execute. Tell it to diagnose, retry/redirect, and
+             * carry on with the rest of the task. */
+            round_log_append(r, "[system] 上一轮有动作执行失败（失败原因和输出在上面）。"
+                                "失败的工具调用只是任务中的一个挫折，不是终止信号："
+                                "请分析失败原因（命令错误、路径不存在、网络/登录失败等），"
+                                "修正后重试或改用其他方法，并继续执行任务的剩余步骤；"
+                                "只有在确认任务确实无法完成时，才输出最终答案并如实说明失败环节。");
             continue;
         }
         if (!r->had_plan) { /* no actions planned → this is the final answer */
@@ -2239,6 +2329,9 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     }
 
     free(safe_prompt);
+    mutex_lock(&r->sess_mtx);
+    r->run_sess = NULL;
+    mutex_unlock(&r->sess_mtx);
     return ret;
 }
 

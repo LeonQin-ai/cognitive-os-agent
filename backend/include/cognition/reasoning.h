@@ -127,6 +127,11 @@ char *reasoning_history_json_ex(reasoning *r, const char *session_id, int max_tu
 char *reasoning_sessions_json(reasoning *r);
 int reasoning_session_clear(reasoning *r, const char *session_id);
 
+/* Delete a session entirely: unregister it, drop its meta index entry and
+ * remove the durable chat/<id>.jsonl transcript. Returns 0 ok, -1 unknown,
+ * -2 busy (a run is in flight on this session). */
+int reasoning_session_delete(reasoning *r, const char *session_id);
+
 /* Create a new session with a random UUID id (registered + persisted).
  * Returns a malloc'd id string, NULL on failure. */
 char *reasoning_session_new(reasoning *r);

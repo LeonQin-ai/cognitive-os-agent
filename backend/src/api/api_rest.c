@@ -532,8 +532,24 @@ static int h_chat_session_post(const http_request *req, http_response *resp, voi
         return 0;
     }
 
+    if (strcmp(action, "delete") == 0) {
+        int rc = reasoning_session_delete(ctx->reasoning, sid);
+        if (rc == -2) {
+            resp->status = 409;
+            http_resp_json(resp, "{\"error\":\"session is running; cancel or wait for the task\"}");
+            return 0;
+        }
+        if (rc != 0) {
+            resp->status = 404;
+            http_resp_json(resp, "{\"error\":\"session not found\"}");
+            return 0;
+        }
+        http_resp_json(resp, "{\"status\":\"deleted\"}");
+        return 0;
+    }
+
     resp->status = 404;
-    http_resp_json(resp, "{\"error\":\"unknown action (shared|resume)\"}");
+    http_resp_json(resp, "{\"error\":\"unknown action (shared|resume|delete)\"}");
     return 0;
 }
 
@@ -3732,52 +3748,90 @@ static int h_skill_install_remote(const http_request *req, http_response *resp, 
     return 0;
 }
 
-/* ================= skillhub.cn live skills ================= */
+/* ================= skillhub.cn / github live search (async, issue #20) =================
+ * Live listings from api.skillhub.cn / GitHub search API are blocking network
+ * I/O (seconds). On the single-threaded HTTP server they used to freeze every
+ * panel ("加载中" everywhere). Same fix as /v1/routes/models: the GET starts a
+ * background fetch thread and answers {"pending":true}; the client polls the
+ * same URL until the result is ready. */
 
-/* Live listing from api.skillhub.cn (first page of the skill-package
- * catalog). Blocking network I/O (~seconds) on the single-threaded server —
- * same tradeoff as /v1/skills/install-remote. */
-static int h_catalog_skillhub(const http_request *req, http_response *resp, void *ud) {
-    char *s;
+typedef struct {
+    volatile int phase; /* 0 = idle, 1 = running, 2 = result ready */
     char q[192];
+    char *result_json; /* malloc'd catalog JSON; NULL = fetch failed */
+} catalog_fetch;
 
-    (void)ud;
-    query_param(req, "q", q, sizeof(q));
-    s = catalog_skillhub_list_json(q);
-    if (!s) {
-        resp->status = 502;
-        http_resp_json(resp, "{\"error\":\"skillhub.cn list fetch failed (check network)\"}");
-        return 0;
-    }
+static catalog_fetch g_gh_search;  /* /v1/catalog/github-search */
+static catalog_fetch g_skh_search; /* /v1/catalog/skillhub */
 
-    http_resp_json(resp, s);
-    free(s);
-    return 0;
+static void catalog_fetch_thread(void *arg) {
+    catalog_fetch *f = (catalog_fetch *)arg;
+
+    f->result_json = (f == &g_gh_search) ? catalog_github_search_json(f->q)
+                                         : catalog_skillhub_list_json(f->q);
+    f->phase = 2; /* result written before the flag — display-grade accuracy */
 }
 
-/* GET /v1/catalog/github-search?q= — live GitHub repo search for skill
- * projects matching q (top 10 by stars). */
-static int h_catalog_github_search(const http_request *req, http_response *resp, void *ud) {
-    char *s;
+/* Shared start/poll/consume logic for the two async catalog endpoints. */
+static int catalog_async_reply(catalog_fetch *f, const http_request *req, http_response *resp,
+                               const char *fail_json) {
     char q[192];
 
-    (void)ud;
     query_param(req, "q", q, sizeof(q));
     if (!q[0]) {
         resp->status = 400;
         http_resp_json(resp, "{\"error\":\"need q\"}");
         return 0;
     }
-    s = catalog_github_search_json(q);
-    if (!s) {
-        resp->status = 502;
-        http_resp_json(resp, "{\"error\":\"github search failed (check network / rate limit)\"}");
+    if (f->phase == 1) { /* a fetch is already running — client keeps polling */
+        http_resp_json(resp, "{\"pending\":true}");
         return 0;
     }
-
-    http_resp_json(resp, s);
-    free(s);
+    if (f->phase == 2 && strcmp(q, f->q) == 0) { /* result ready for this query */
+        char *s = f->result_json;
+        f->result_json = NULL;
+        f->phase = 0;
+        if (!s) {
+            resp->status = 502;
+            http_resp_json(resp, fail_json);
+            return 0;
+        }
+        http_resp_json(resp, s);
+        free(s);
+        return 0;
+    }
+    /* fresh query (or stale result): free leftovers and start a fetch thread */
+    free(f->result_json);
+    f->result_json = NULL;
+    snprintf(f->q, sizeof(f->q), "%s", q);
+    f->phase = 1;
+    {
+        thread_t *th = thread_create(catalog_fetch_thread, f);
+        if (!th) {
+            f->phase = 0;
+            resp->status = 500;
+            http_resp_json(resp, "{\"error\":\"failed to start fetch thread\"}");
+            return 0;
+        }
+        thread_detach(th);
+    }
+    http_resp_json(resp, "{\"pending\":true}");
     return 0;
+}
+
+/* GET /v1/catalog/skillhub?q= — live listing from api.skillhub.cn. */
+static int h_catalog_skillhub(const http_request *req, http_response *resp, void *ud) {
+    (void)ud;
+    return catalog_async_reply(&g_skh_search, req, resp,
+                               "{\"error\":\"skillhub.cn list fetch failed (check network)\"}");
+}
+
+/* GET /v1/catalog/github-search?q= — live GitHub repo search for skill
+ * projects matching q (top 10 by stars). */
+static int h_catalog_github_search(const http_request *req, http_response *resp, void *ud) {
+    (void)ud;
+    return catalog_async_reply(&g_gh_search, req, resp,
+                               "{\"error\":\"github search failed (check network / rate limit)\"}");
 }
 
 /* Install a skillhub.cn skill: download SKILL.md for the given slug and

@@ -1773,7 +1773,19 @@ async function githubSearchOnline(){
   const q = skillQ();
   if(!q){ box.innerHTML = '<span class="muted">（输入关键字在线搜索 GitHub 技能仓库）</span>'; return; }
   box.innerHTML = '<span class="muted">🌐 正在 GitHub 全网搜索「' + esc(q) + '」…</span>';
-  const r = await call('GET', '/v1/catalog/github-search?q=' + encodeURIComponent(q));
+  /* issue #20: 后端把搜索放后台线程，这里轮询直到结果就绪，
+   * 不再长时间占住单线程服务器把其他面板全部卡成「加载中」 */
+  let r = null;
+  for(let i = 0; i < 60; i++){
+    r = await call('GET', '/v1/catalog/github-search?q=' + encodeURIComponent(q));
+    if(r.obj && r.obj.pending){ await new Promise(res => setTimeout(res, 700)); continue; }
+    break;
+  }
+  if(!r || (r.obj && r.obj.pending)){ box.innerHTML = '<span class="muted">（搜索超时，请重试）</span>'; return; }
+  if(r.status >= 400){
+    box.innerHTML = '<span class="muted">（搜索失败：' + esc((r.obj && r.obj.error) || ('HTTP ' + r.status)) + '）</span>';
+    return;
+  }
   const list = Array.isArray(r.obj) ? r.obj : [];
   GH_SEARCH_LAST = list;
   if(!list.length){
@@ -1849,7 +1861,18 @@ async function loadSkillhubList(){
   const q = skillQ();
   box.innerHTML = q ? '<span class="muted">🔍 正在 SkillHub 市场全量搜索「' + esc(q) + '」…</span>'
                     : '<span class="muted">加载中…（访问 api.skillhub.cn）</span>';
-  const r = await call('GET', '/v1/catalog/skillhub' + (q ? '?q=' + encodeURIComponent(q) : ''));
+  /* issue #20: 后台线程 + 轮询，搜索期间不再卡住整个 UI */
+  let r = null;
+  for(let i = 0; i < 60; i++){
+    r = await call('GET', '/v1/catalog/skillhub' + (q ? '?q=' + encodeURIComponent(q) : ''));
+    if(r.obj && r.obj.pending){ await new Promise(res => setTimeout(res, 700)); continue; }
+    break;
+  }
+  if(!r || (r.obj && r.obj.pending)){ box.innerHTML = '<span class="muted">（加载超时，请重试）</span>'; return; }
+  if(r.status >= 400){
+    box.innerHTML = '<span class="muted">（加载失败：' + esc((r.obj && r.obj.error) || ('HTTP ' + r.status)) + '）</span>';
+    return;
+  }
   SKH_SKILLS = Array.isArray(r.obj) ? r.obj : [];
   SKH_Q_LAST = q;
   renderSkhSkills();
@@ -2281,7 +2304,7 @@ function wsConnect(){
             else if(p.stage === 'done') line = '✓ [' + (p.node || '') + ':' + (p.agent || '') + '] ' + (p.detail || '完成');
             if(line) el.textContent += (el.textContent ? '\n' : '') + line;
           }
-        } else if(m.type === 'event' && CHAT_BUSY){
+        } else if(m.type === 'event' && chatIsBusy()){
           const st = $('chat-status');
           if(st && m.payload){
             if(m.payload.plan) st.textContent = '第 ' + (CHAT_ROUND = (CHAT_ROUND||0) + 1) + ' 轮：规划中…';
@@ -2325,6 +2348,12 @@ async function loadChat(){
   chatInitDrop(); /* 粘贴图片 / 拖拽文件支持 */
   chatAttachRender();
   chatGateCheck(); /* 进入新聊天先检查模型配置，未配置则禁用发送 */
+  /* issue #22: 切回对话面板时恢复本会话运行中任务的「取消」按钮与状态行 */
+  syncChatTaskId();
+  if(chatIsBusy()){
+    const st = $('chat-status');
+    if(st && !st.textContent) st.textContent = '任务执行中…';
+  }
 }
 
 /* 对话侧模型配置（issue #11）：下拉列出 Model routes，选中即把当前激活
@@ -2423,9 +2452,15 @@ function renderChatTabs(list){
       tab.appendChild(n);
     }
     const del = document.createElement('button');
-    del.className = 'del'; del.title = '清空该会话'; del.textContent = '×';
+    del.className = 'del'; del.title = '清空该会话（保留会话）'; del.textContent = '×';
     del.onclick = async (e) => { e.stopPropagation(); await chatClearSession(id); };
     tab.appendChild(del);
+    /* issue #24: 彻底删除会话（含聊天记录文件），与「×清空」区分 */
+    const rm = document.createElement('button');
+    rm.className = 'del'; rm.title = '删除该会话（含聊天记录，不可恢复）'; rm.textContent = '🗑';
+    rm.style.marginLeft = '2px';
+    rm.onclick = async (e) => { e.stopPropagation(); await chatDeleteSession(id); };
+    tab.appendChild(rm);
     tab.onclick = () => chatSwitchSession(id);
     bar.appendChild(tab);
   });
@@ -2535,21 +2570,24 @@ async function chatLoadHistory(){
 }
 
 async function chatSwitchSession(id){
-  if(CHAT_BUSY || id === CHAT_SESSION) return;
+  if(id === CHAT_SESSION) return;
   chatCacheStore(); // 保存当前会话消息，切回时即时回放
   CHAT_SESSION = id;
   CHAT_NEW_SESSION = false;
-  CHAT_TASK_ID = 0;
-  CHAT_RESUME_OK = false;
   CHAT_MSGS = [];
   renderChatTabs([]);
   await chatLoadHistory();
   loadChatSessions();
   chatGateCheck();
+  /* issue #22: 切回的会话若任务仍在执行，恢复「取消」按钮与状态行 */
+  syncChatTaskId();
+  if(chatIsBusy(id)){
+    const st = $('chat-status');
+    if(st) st.textContent = '任务执行中…';
+  }
 }
 
 async function chatNewSession(){
-  if(CHAT_BUSY) return;
   chatCacheStore(); // 保存当前会话消息（切回时即时回放）；旧会话自动归档到「最近」
   /* 生成随机 UUID 会话 id（后端创建并持久化），失败则回退到本地临时 id */
   const r = await call('POST', '/v1/chat/sessions');
@@ -2564,10 +2602,11 @@ async function chatNewSession(){
   const st = $('chat-status');
   if(st) st.textContent = ok ? ('新会话 ' + (id ? '' : '（临时）')) + '：已就绪' : '尚未配置模型，请在上方设置里先配置对话模型';
   fillChatModelSelect();
+  syncChatTaskId(); /* 新会话无任务，隐藏「取消」按钮 */
 }
 
 async function chatClearSession(id){
-  if(CHAT_BUSY) return;
+  if(chatIsBusy(id)){ toast('该会话任务执行中，请先取消或等待完成'); return; }
   await call('DELETE', '/v1/chat/sessions/' + encodeURIComponent(id));
   if(id === CHAT_SESSION){
     CHAT_MSGS = [];
@@ -2576,6 +2615,27 @@ async function chatClearSession(id){
   CHAT_NEW_SESSION = false;
   loadChatSessions();
   toast(id === 'default' ? '默认会话已清空' : ('会话 ' + id + ' 已清空'));
+}
+
+/* issue #24: 彻底删除会话（注册表 + 元数据索引 + 聊天记录文件），与「清空」不同 */
+async function chatDeleteSession(id){
+  const label = id === 'default' ? '默认会话' : ('会话 ' + id);
+  if(!confirm('删除' + label + '及其全部聊天记录？此操作不可恢复（「×」仅清空记录，会话保留）。')) return;
+  if(chatIsBusy(id)){ toast('该会话任务执行中，请先取消或等待完成'); return; }
+  const r = await call('POST', '/v1/chat/sessions/' + encodeURIComponent(id) + '/delete', {});
+  if(r.status >= 300){ toast('删除失败：' + ((r.obj && r.obj.error) || r.status)); return; }
+  delete CHAT_CACHE[id];
+  if(id === CHAT_SESSION){
+    CHAT_TABS_CACHE = CHAT_TABS_CACHE.filter(s => (s.id || 'default') !== id);
+    const rest = CHAT_TABS_CACHE;
+    const nid = rest.length ? (rest[rest.length - 1].id || 'default') : 'default';
+    await chatSwitchSession(nid);
+  } else {
+    CHAT_TABS_CACHE = CHAT_TABS_CACHE.filter(s => (s.id || 'default') !== id);
+    renderChatTabs([]);
+  }
+  loadChatSessions();
+  toast(label + '已删除');
 }
 
 function chatAddBubble(role, text, push = true){
@@ -2617,10 +2677,21 @@ function chatScroll(){
   if(box) box.scrollTop = box.scrollHeight;
 }
 
-let CHAT_BUSY = false;
 let CHAT_ROUND = 0;
-let CHAT_TASK_ID = 0; /* 当前运行中的任务 id（供「取消」按钮使用） */
+let CHAT_TASK_ID = 0; /* 当前会话运行中的任务 id（供「取消」按钮使用） */
 let CHAT_RESUME_OK = false; /* 最近一次任务以取消/失败/超时结束，可「恢复」 */
+/* issue #21/#22: 会话 → 运行中任务 的映射。执行任务不再全局锁死 UI：
+ * 切会话 / 切面板 / 新建会话随时可用，每个会话独立跟踪自己的任务；
+ * 任务终态时从映射中移除。 */
+const CHAT_TASKS = {}; /* sessionId → running taskId */
+function chatTaskOf(sess){ return CHAT_TASKS[sess] || 0; }
+function chatIsBusy(sess){ return !!chatTaskOf(sess === undefined ? CHAT_SESSION : sess); }
+/* 当前会话的任务状态同步到 CHAT_TASK_ID / 取消按钮（切会话、切回面板时调用） */
+function syncChatTaskId(){
+  CHAT_TASK_ID = chatTaskOf(CHAT_SESSION);
+  CHAT_RESUME_OK = false;
+  chatBusyUI(!!CHAT_TASK_ID);
+}
 
 function chatBusyUI(busy){
   const cancel = $('chat-cancel'), resume = $('chat-resume');
@@ -2667,7 +2738,8 @@ function taskProgressText(t){
 }
 
 async function chatSend(){
-  if(CHAT_BUSY) return;
+  if(chatIsBusy()){ toast('当前会话任务执行中，请先取消或等待完成'); return; }
+  const mySession = CHAT_SESSION; /* issue #21: 轮询期间用户可能切到别的会话 */
   const input = $('chat-input');
   /* 未配置模型时禁止发送（后端同样拦截） */
   if(input && input.disabled){ toast('尚未配置模型，请先在设置里配置对话模型'); return; }
@@ -2678,10 +2750,12 @@ async function chatSend(){
     ? ('[附件: ' + CHAT_ATTACH.map(a => a.name).join(', ') + ']' + (msg ? '\n' + msg : ''))
     : msg;
   /* 状态行每次现查：轮询期间对话面板可能被 innerHTML 重建，捕获的旧节点
-   * 已脱离文档；现查则切回面板后进度行继续实时刷新 */
-  const chatStatus = (text) => { const el = $('chat-status'); if(el) el.textContent = text; };
-  CHAT_BUSY = true;
-  CHAT_ROUND = 0;
+   * 已脱离文档；现查则切回面板后进度行继续实时刷新。仅当用户仍停留在
+   * 发起任务的会话时才写状态行，避免覆盖其他会话的状态。 */
+  const chatStatus = (text) => {
+    if(CHAT_SESSION !== mySession) return;
+    const el = $('chat-status'); if(el) el.textContent = text;
+  };
   input.value = '';
   chatAddBubble('user', fullMsg);
   const bot = chatAddBubble('bot', '…');
@@ -2723,24 +2797,21 @@ async function chatSend(){
     /* 后端 409 = 模型未配置等业务拦截 */
     setBot('提交失败: ' + ((c.obj && c.obj.error) || c.text || ('HTTP ' + c.status)));
     if(c.obj && c.obj.code === 'MODEL_NOT_CONFIGURED'){ chatGateCheck(); switchPanel('chat'); }
-    CHAT_BUSY = false;
     return;
   }
   CHAT_ATTACH = [];
   chatAttachRender();
   if(CHAT_NEW_SESSION){ CHAT_NEW_SESSION = false; renderChatTabs([]); loadChatSessions(); }
-  CHAT_TASK_ID = id;
-  CHAT_RESUME_OK = false;
-  chatBusyUI(true);
+  CHAT_TASKS[mySession] = id; /* issue #21: 按会话登记运行中的任务 */
+  if(CHAT_SESSION === mySession){ CHAT_TASK_ID = id; CHAT_RESUME_OK = false; chatBusyUI(true); }
   for(let i = 0; ; i++){
     const r = await call('GET', '/v1/tasks/' + id);
     if(r.status === 404){
       setBot('任务丢失（服务可能已重启），可点击「恢复」重跑上一条输入');
       toast('任务丢失（服务可能已重启）');
       chatStatus('');
-      CHAT_BUSY = false;
-      CHAT_TASK_ID = 0;
-      chatBusyUI(false);
+      delete CHAT_TASKS[mySession];
+      if(CHAT_SESSION === mySession){ CHAT_TASK_ID = 0; CHAT_RESUME_OK = true; chatBusyUI(false); }
       return;
     }
     const t = r.obj;
@@ -2751,13 +2822,14 @@ async function chatSend(){
       const zh = {FAILED: '失败', CANCELLED: '已取消', TIMEOUT: '超时'}[t.status];
       setBot((t.output && t.output.trim() && t.output !== '(no output)') ? t.output
         : ('任务' + (zh || t.status) + '，无输出'));
-      if(zh) toast('任务' + zh);
-      chatStatus('');
-      CHAT_BUSY = false;
-      CHAT_TASK_ID = 0;
-      CHAT_RESUME_OK = (t.status === 'CANCELLED' || t.status === 'FAILED' || t.status === 'TIMEOUT');
-      chatBusyUI(false);
-      chatScroll();
+      if(CHAT_SESSION === mySession) { if(zh) toast('任务' + zh); chatStatus(''); }
+      delete CHAT_TASKS[mySession];
+      if(CHAT_SESSION === mySession){
+        CHAT_TASK_ID = 0;
+        CHAT_RESUME_OK = (t.status === 'CANCELLED' || t.status === 'FAILED' || t.status === 'TIMEOUT');
+        chatBusyUI(false);
+        chatScroll();
+      }
       loadChatSessions();
       return;
     }
@@ -2775,8 +2847,9 @@ async function chatCancel(){
 
 /* 恢复（取消/失败后重跑本会话上一条输入）：POST /v1/chat/sessions/<id>/resume */
 async function chatResume(){
-  if(CHAT_BUSY) return;
-  const r = await call('POST', '/v1/chat/sessions/' + encodeURIComponent(CHAT_SESSION) + '/resume', {});
+  if(chatIsBusy()){ toast('当前会话任务执行中，请先取消或等待完成'); return; }
+  const mySession = CHAT_SESSION; /* issue #21: 轮询期间用户可能切到别的会话 */
+  const r = await call('POST', '/v1/chat/sessions/' + encodeURIComponent(mySession) + '/resume', {});
   const id = r.obj && r.obj.id;
   if(!id){
     toast('恢复失败：' + (r.obj && r.obj.error || r.status));
@@ -2784,44 +2857,56 @@ async function chatResume(){
   }
   toast('已恢复为新任务 #' + id);
   chatAddBubble('user', '（恢复）重跑上一条输入');
-  CHAT_BUSY = true;
-  CHAT_TASK_ID = id;
-  CHAT_RESUME_OK = false;
-  chatBusyUI(true);
   const bot = chatAddBubble('bot', '…');
-  const chatStatus = (text) => { const el = $('chat-status'); if(el) el.textContent = text; };
+  CHAT_TASKS[mySession] = id; /* issue #21: 按会话登记运行中的任务 */
+  if(CHAT_SESSION === mySession){ CHAT_TASK_ID = id; CHAT_RESUME_OK = false; chatBusyUI(true); }
+  /* 镜像中的待回复条目：切面板导致 DOM 重建后仍可恢复（同 chatSend） */
+  const entry = CHAT_MSGS[CHAT_MSGS.length - 1];
+  const live = () => (entry && entry.el && entry.el.isConnected) ? entry.el : (bot && bot.isConnected ? bot : null);
+  const setBot = (text) => {
+    if(entry){ entry.text = text; entry.pending = false; }
+    const el = live();
+    if(el){ const pre = el.querySelector('pre'); if(pre) pre.textContent = text; }
+  };
+  const chatStatus = (text) => {
+    if(CHAT_SESSION !== mySession) return;
+    const el = $('chat-status'); if(el) el.textContent = text;
+  };
   for(let i = 0; ; i++){
     const rr = await call('GET', '/v1/tasks/' + id);
     if(rr.status === 404){
-      if(bot){ const pre = bot.querySelector('pre'); if(pre) pre.textContent = '任务丢失（服务可能已重启），请重新恢复'; }
+      setBot('任务丢失（服务可能已重启），请重新恢复');
       toast('任务丢失（服务可能已重启）');
       chatStatus('');
-      CHAT_BUSY = false;
-      CHAT_TASK_ID = 0;
-      chatBusyUI(false);
+      delete CHAT_TASKS[mySession];
+      if(CHAT_SESSION === mySession){ CHAT_TASK_ID = 0; CHAT_RESUME_OK = true; chatBusyUI(false); }
       return;
     }
     const t = rr.obj;
     chatStatus((t && t.status && t.status !== 'DONE')
       ? ('状态: ' + t.status + (taskProgressText(t) ? ' · ' + taskProgressText(t) : '')) : '');
-    if(t && t.status === 'RUNNING' && t.process_log && bot){
-      const pre = bot.querySelector('pre');
-      if(pre) pre.textContent = t.process_log.split('\n').filter(l => l.trim()).slice(-25).join('\n');
-      chatScroll();
+    if(t && t.status === 'RUNNING' && t.process_log){
+      const el = live();
+      if(el){
+        const pre = el.querySelector('pre');
+        if(pre){
+          pre.textContent = t.process_log.split('\n').filter(l => l.trim()).slice(-25).join('\n');
+          pre.style.opacity = '0.7';
+          chatScroll();
+        }
+      }
     }
     if(t && (t.status === 'DONE' || t.status === 'FAILED' || t.status === 'CANCELLED' || t.status === 'TIMEOUT')){
       const zh = {FAILED: '失败', CANCELLED: '已取消', TIMEOUT: '超时'}[t.status];
-      if(bot){
-        const pre = bot.querySelector('pre');
-        if(pre) pre.textContent = (t.output && t.output.trim() && t.output !== '(no output)') ? t.output : ('任务' + (zh || t.status) + '，无输出');
+      setBot((t.output && t.output.trim() && t.output !== '(no output)') ? t.output : ('任务' + (zh || t.status) + '，无输出'));
+      if(CHAT_SESSION === mySession){ if(zh) toast('任务' + zh); chatStatus(''); }
+      delete CHAT_TASKS[mySession];
+      if(CHAT_SESSION === mySession){
+        CHAT_TASK_ID = 0;
+        CHAT_RESUME_OK = (t.status !== 'DONE');
+        chatBusyUI(false);
+        chatScroll();
       }
-      if(zh) toast('任务' + zh);
-      chatStatus('');
-      CHAT_BUSY = false;
-      CHAT_TASK_ID = 0;
-      CHAT_RESUME_OK = (t.status !== 'DONE');
-      chatBusyUI(false);
-      chatScroll();
       loadChatSessions();
       return;
     }
@@ -3691,7 +3776,7 @@ function switchPanel(p){
 
 document.querySelectorAll('#nav button').forEach(b => {
   b.addEventListener('click', () => {
-    if(b.id === 'nav-newchat' && !CHAT_BUSY) chatNewSession();
+    if(b.id === 'nav-newchat') chatNewSession();
     if(b.classList.contains('navgroup')){
       /* 分组头：再点一次收起（issue #11 折叠） */
       const sub = $(b.dataset.g);

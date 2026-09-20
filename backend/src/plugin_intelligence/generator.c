@@ -27,10 +27,10 @@ static const char *ARCH_PROMPT = "You are the plugin architect of a cognitive OS
                                  "Respond with ONLY valid JSON (no markdown, no prose):\n"
                                  "{\"name\":\"short-kebab-case-name\",\"description\":\"one-line summary\","
                                  "\"capabilities\":[\"fs.read\",\"fs.write\"],\"script\":\"#!/bin/sh\\n...\"}\n"
-                                 "Constraints for the script: pure POSIX shell, no network access, no "
-                                 "destructive commands (no rm -rf / rm -fr / mkfs / dd), idempotent, "
-                                 "operates only in the current directory, prints a short result, exits 0 "
-                                 "on success.";
+                                 "Constraints for the script: pure POSIX shell, avoid destructive commands "
+                                 "(no rm -rf / rm -fr / mkfs / dd), idempotent, prints a short result, "
+                                 "exits 0 on success. Network features the request explicitly asks for "
+                                 "(e.g. ssh remote login) are allowed; prefer read-only remote operations.";
 
 /* lowercase + replace invalid chars with '-', clamp to 48 chars */
 static void sanitize_name(const char *in, char *out, size_t cap) {
@@ -148,15 +148,27 @@ static int design_ok(const cJSON *root, char *name_out, size_t name_cap, char *s
 }
 
 /* 1 if the script passes the security review (no high-severity findings and
- * not on the sandbox forbidden list). */
-static int security_ok(const char *script) {
+ * not on the sandbox forbidden list). On failure, reason_out (if non-NULL)
+ * receives a short human-readable summary of the blocking findings so the
+ * caller can surface WHY the review rejected the script (issue #23). */
+static int security_ok(const char *script, char *reason_out, size_t reason_cap) {
     char *audit;
     cJSON *root;
     cJSON *findings;
     int ok = 1;
 
-    if (!script || sandbox_forbidden(script))
+    if (reason_out && reason_cap)
+        reason_out[0] = '\0';
+    if (!script) {
+        if (reason_out && reason_cap)
+            snprintf(reason_out, reason_cap, "empty script");
         return 0;
+    }
+    if (sandbox_forbidden(script)) {
+        if (reason_out && reason_cap)
+            snprintf(reason_out, reason_cap, "contains a sandbox-forbidden command");
+        return 0;
+    }
     audit = security_audit(script);
     if (!audit)
         return 0;
@@ -171,7 +183,16 @@ static int security_ok(const char *script) {
             cJSON *sev = cJSON_GetObjectItemCaseSensitive(it, "severity");
             if (sev && cJSON_IsNumber(sev) && sev->valuedouble >= 3) {
                 ok = 0;
-                break;
+                if (reason_out && reason_cap) {
+                    cJSON *pat = cJSON_GetObjectItemCaseSensitive(it, "pattern");
+                    cJSON *msg = cJSON_GetObjectItemCaseSensitive(it, "message");
+                    char one[160];
+                    snprintf(one, sizeof(one), "[%s] %s", (pat && cJSON_IsString(pat)) ? pat->valuestring : "?",
+                             (msg && cJSON_IsString(msg)) ? msg->valuestring : "high-severity finding");
+                    if (reason_out[0])
+                        strncat(reason_out, "; ", reason_cap - strlen(reason_out) - 1);
+                    strncat(reason_out, one, reason_cap - strlen(reason_out) - 1);
+                }
             }
         }
     }
@@ -339,7 +360,9 @@ char *plugin_generate_deps(const plugin_gen_deps *deps, const char *description)
     caps_j = cJSON_GetObjectItemCaseSensitive(design, "capabilities");
 
     /* --- stage 4: security review gate --- */
-    if (!security_ok(script)) {
+    char sec_reason[512];
+    if (!security_ok(script, sec_reason, sizeof(sec_reason))) {
+        char err[768];
         cJSON_Delete(design);
         free(analysis_s);
         free(arch_s);
@@ -347,7 +370,11 @@ char *plugin_generate_deps(const plugin_gen_deps *deps, const char *description)
             cJSON_Delete(analysis);
         if (arch)
             cJSON_Delete(arch);
-        return xstrdup("{\"ok\":false,\"error\":\"security review rejected the generated script\"}");
+        /* surface the blocking findings so the user sees WHY (issue #23) */
+        snprintf(err, sizeof(err),
+                 "{\"ok\":false,\"error\":\"security review rejected the generated script: %s\"}",
+                 sec_reason[0] ? sec_reason : "high-severity finding");
+        return xstrdup(err);
     }
 
     /* --- content signature --- */
