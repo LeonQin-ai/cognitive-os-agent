@@ -2389,6 +2389,27 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
                                     "请直接给出最终答案文本。");
                 continue;
             }
+            /* A raw JSON array as the "answer" is a malformed plan echo: the
+             * model meant to emit actions (e.g. a flat ["file_read","path",…]
+             * that the planner cannot parse) but the text fell through the
+             * no-plan path. Accepting it as the final answer produced garbage
+             * node results (a real reviewer run once ended with a bare tool
+             * list). Bounce it back with the correct format instead. */
+            {
+                const char *t2 = txt;
+                while (t2 && *t2 == ' ')
+                    t2++;
+                if (r->max_rounds > 1 && r->intent_nudged < 4 &&
+                    r->round_idx < r->max_rounds && t2 && *t2 == '[') {
+                    r->intent_nudged++;
+                    round_log_append(r, txt);
+                    round_log_append(r, "[system] 上一轮输出的是动作数组，但格式无法解析为计划。"
+                                        "如需执行工具动作，请输出 JSON 对象数组："
+                                        "[{\"tool\":\"文件工具名\",\"args\":{...}}]；"
+                                        "如果任务已完成，请直接输出纯文本的最终答案（不要输出 JSON）。");
+                    continue;
+                }
+            }
             final_text = xstrdup(txt ? txt : "");
             break;
         }
