@@ -105,10 +105,13 @@ static char *plan_for(const char *msg) {
         /* plain-text answer; contains "ok" so the e2e assertion keeps passing */
         return xstrdup("ok: task complete / 任务完成。");
     }
-    int want_write = strstr(msg, "文件") || strstr(msg, "file") ||
-                     strstr(msg, "写") || strstr(msg, "创建") || strstr(msg, "生成");
-    int want_read  = strstr(msg, "读取") || strstr(msg, "cat ") || strstr(msg, "read ");
-    char *path = find_path(msg);
+    /* Plan only from the explicit current request. Conversation history and
+     * retrieved context may contain old file instructions and must not be
+     * replayed by this deterministic test provider. */
+    int want_write = strstr(req, "文件") || strstr(req, "file") ||
+                     strstr(req, "写") || strstr(req, "创建") || strstr(req, "生成");
+    int want_read  = strstr(req, "读取") || strstr(req, "cat ") || strstr(req, "read ");
+    char *path = find_path(req);
     if (strstr(req, "分析")) {
         cJSON *arr = cJSON_CreateArray();
         cJSON *a = cJSON_CreateObject();
@@ -129,7 +132,7 @@ static char *plan_for(const char *msg) {
         if (want_write) {
             cJSON_AddStringToObject(a, "tool", "file_write");
             cJSON_AddStringToObject(args, "path", path ? path : "test/note.txt");
-            char *content = extract_content(msg);
+            char *content = extract_content(req);
             cJSON_AddStringToObject(args, "content", content ? content : "hello");
             free(content);
         } else {

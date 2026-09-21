@@ -385,7 +385,10 @@ int orchestrate(runtime_ctx *ctx, const char *task, char **answer, char **trace_
         }
     }
 
-    if (ctx->llm && merged) {
+    /* A one-node plan already has a single authoritative answer. Sending it
+     * through another model call only adds latency/cost and can dilute the
+     * worker's execution evidence. Multi-node plans still need synthesis. */
+    if (nsteps > 1 && ctx->llm && merged) {
         char sys2[] = "你是编排器。综合各 agent 的子任务结果，针对任务给出最终统一答案。"
                       "直接输出答案正文，不要罗列过程。\n"
                       "严格禁止虚构：答案中对文件、命令、测试结果的任何断言，"

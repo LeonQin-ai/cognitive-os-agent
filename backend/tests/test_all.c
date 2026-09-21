@@ -2738,9 +2738,9 @@ static void test_policy_rules(void) {
 static void test_orchestrate(void) {
     section("multi-agent orchestration");
 
-    /* full pipeline: mock decompose assigns to "alpha", the plan compiles to a
-     * Flow DAG, flow_run executes it (the worker writes the file), the merge
-     * synthesizes the final answer; the flow trace lands on the board */
+    /* Single-node pipeline: mock decompose assigns to "alpha", the plan
+     * compiles to a Flow DAG and executes it. No redundant merge LLM call is
+     * made for one authoritative result; the flow trace lands on the board. */
     {
         config cfg;
         memset(&cfg, 0, sizeof(cfg));
@@ -2754,7 +2754,7 @@ static void test_orchestrate(void) {
 
         char *ans = NULL, *trace = NULL;
         CHECK(orchestrate(&ctx, "创建 orch.txt 写入内容为 orch-ok", &ans, &trace) == 0);
-        CHECK(ans && strstr(ans, "综合完成") != NULL);
+        CHECK(ans && strstr(ans, "任务完成") != NULL);
         CHECK(trace && strstr(trace, "\"agent\":\"alpha\"") != NULL &&
               strstr(trace, "\"status\":\"ok\"") != NULL);
         free(ans); free(trace);
@@ -2767,7 +2767,7 @@ static void test_orchestrate(void) {
         CHECK(tr && strstr(tr, "alpha") != NULL);
         free(tr);
         char *fin = blackboard_get(ctx.blackboard, "flow/final");
-        CHECK(fin && strstr(fin, "综合完成") != NULL);
+        CHECK(fin && strstr(fin, "任务完成") != NULL);
         free(fin);
 
         /* per-agent blackboard keys don't collide between agents */

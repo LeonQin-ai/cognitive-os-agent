@@ -29,6 +29,8 @@ The document defines:
 
 This is an implementation baseline, not a claim that every component is already production-complete.
 
+Implementation status is tracked in Section 37. The roadmap describes target architecture; it must not be read as a completed-feature checklist.
+
 ---
 
 # 2. Background and Design Objectives
@@ -2705,6 +2707,27 @@ Next Task
 The architectural thesis is:
 
 > **Memory decides what the Agent can remember. Context MMU decides what the Agent should load now. The runtime decides what the Agent is allowed to execute. The LLM supplies reasoning where deterministic code is insufficient.**
+
+---
+
+# 37. Implementation Status (2026-09-21)
+
+This section separates the implemented MVP from the target architecture in the roadmap.
+
+| Roadmap phase | Current status | Remaining work |
+|---|---|---|
+| Phase 1 — Runtime Core | MVP implemented and tested | Continue stress testing and performance profiling under production workloads. |
+| Phase 2 — Agent + LLM | MVP implemented and tested | Broaden provider compatibility and production failure telemetry. |
+| Phase 3 — Memory + Context | MVP implemented | Validate long-running consolidation quality and the stated capacity/SLO targets with production-scale datasets. |
+| Phase 4 — Reliable Execution | MVP implemented | External side effects still require stronger idempotency and recovery guarantees. |
+| Phase 5 — Capability Evolution | MVP implemented | Generated native capabilities require stronger isolation, signing and supply-chain controls. |
+| Phase 6 — Multi-Agent | MVP implemented | Reduce model-call latency, add resource quotas and run sustained high-concurrency benchmarks. |
+| Phase 7 — Distributed / Enterprise | Partial | Full multi-tenant control plane, durable distributed scheduling, HA, fleet RBAC and cross-node recovery remain roadmap work. |
+| Phase 8 — Advanced Execution | Partial | WSL/VM/KVM backends, migration, GPU-aware scheduling and distributed memory remain roadmap work. |
+
+The Personal Edition currently has working local runtime, task and Agent state machines, model routing, memory/context components, transactions and snapshots, Skills/MCP/plugins, multi-Agent Flow execution, structured progress events, a Web console, and native macOS packaging. The 2026-09-21 CI gate passed Windows, Linux, Linux ASAN, macOS Apple Silicon and macOS Intel.
+
+The capacity and latency values in Section 3 remain engineering targets until a reproducible benchmark report demonstrates them. Enterprise and advanced execution items must not be presented as production-complete based only on interfaces or local stubs.
 
 ---
 

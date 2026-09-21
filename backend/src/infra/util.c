@@ -19,27 +19,33 @@ void strbuf_free(strbuf *sb) {
     sb->cap = 0;
 }
 
-static void strbuf_grow(strbuf *sb, size_t need) {
+static int strbuf_grow(strbuf *sb, size_t need) {
     size_t cap;
     char *nb;
 
     if (sb->cap >= need)
-        return;
+        return 0;
     cap = sb->cap ? sb->cap : 64;
-    while (cap < need)
+    while (cap < need) {
+        if (cap > SIZE_MAX / 2) {
+            cap = need;
+            break;
+        }
         cap *= 2;
-    nb = realloc(sb->buf, cap);
-    if (!nb) {
-        fprintf(stderr, "strbuf: out of memory\n");
-        exit(1);
     }
+    nb = realloc(sb->buf, cap);
+    if (!nb)
+        return -1;
 
     sb->buf = nb;
     sb->cap = cap;
+    return 0;
 }
 
 void strbuf_append_n(strbuf *sb, const char *s, size_t n) {
-    strbuf_grow(sb, sb->len + n + 1);
+    if (!sb || !s || n > SIZE_MAX - sb->len - 1 ||
+        strbuf_grow(sb, sb->len + n + 1) != 0)
+        return;
     memcpy(sb->buf + sb->len, s, n);
     sb->len += n;
     sb->buf[sb->len] = '\0';
@@ -63,7 +69,11 @@ void strbuf_appendf(strbuf *sb, const char *fmt, ...) {
         return;
     }
 
-    strbuf_grow(sb, sb->len + (size_t)n + 1);
+    if ((size_t)n > SIZE_MAX - sb->len - 1 ||
+        strbuf_grow(sb, sb->len + (size_t)n + 1) != 0) {
+        va_end(ap2);
+        return;
+    }
     vsnprintf(sb->buf + sb->len, (size_t)n + 1, fmt, ap2);
     va_end(ap2);
     sb->len += (size_t)n;
@@ -79,26 +89,42 @@ char *strbuf_detach(strbuf *sb) {
 
 /* ---------- string map ---------- */
 void strmap_set(strmap *m, const char *key, const char *val) {
+    char *newval;
+
+    if (!m || !key)
+        return;
     for (size_t i = 0; i < m->count; i++) {
         if (strcmp(m->items[i].key, key) == 0) {
+            newval = val ? xstrdup(val) : NULL;
+            if (val && !newval)
+                return;
             free(m->items[i].val);
-            m->items[i].val = val ? xstrdup(val) : NULL;
+            m->items[i].val = newval;
             return;
         }
     }
 
     if (m->count == m->cap) {
-        size_t cap = m->cap ? m->cap * 2 : 8;
-        m->items = realloc(m->items, cap * sizeof(kv));
-        if (!m->items) {
-            fprintf(stderr, "strmap: oom\n");
-            exit(1);
-        }
+        size_t cap;
+        kv *items;
+        if (m->cap > SIZE_MAX / 2 ||
+            (cap = m->cap ? m->cap * 2 : 8) > SIZE_MAX / sizeof(kv))
+            return;
+        items = realloc(m->items, cap * sizeof(kv));
+        if (!items)
+            return;
+        m->items = items;
         m->cap = cap;
     }
 
     m->items[m->count].key = xstrdup(key);
-    m->items[m->count].val = val ? xstrdup(val) : NULL;
+    newval = val ? xstrdup(val) : NULL;
+    if (!m->items[m->count].key || (val && !newval)) {
+        free(m->items[m->count].key);
+        free(newval);
+        return;
+    }
+    m->items[m->count].val = newval;
     m->count++;
 }
 
@@ -161,7 +187,6 @@ void path_join(char *out, size_t n, const char *a, const char *b) {
         else
             snprintf(tmp, n, "%s%s", a, b ? b : "");
     }
-
     snprintf(out, n, "%s", tmp);
     free(tmp);
 }
