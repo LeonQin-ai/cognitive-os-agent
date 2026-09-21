@@ -3741,7 +3741,7 @@ const CHAT_ENTRIES = new Map();
 const STAGE_LABELS = {
   steering:'已收到补充，等待当前操作结束', replanning:'正在根据补充调整任务',
   submitting:'已收到，正在准备', queued:'等待执行', analyzing:'正在分析需求',
-  planning:'思考中 · 正在规划下一步', executing:'正在执行',
+  preparing_context:'正在准备会话上下文', planning:'正在等待模型回复', executing:'正在执行',
   summarizing:'正在整理结果', completed:'执行完成', failed:'执行失败',
   cancelled:'已取消', timed_out:'执行超时', reconnecting:'连接中断，正在重试',
   cancelling:'正在取消，等待当前操作结束'
@@ -3749,6 +3749,9 @@ const STAGE_LABELS = {
 const TOOL_LABELS = {file:'处理文件', shell:'运行命令', git:'检查代码仓库',
   search:'检索资料', web_search:'搜索网页', mcp:'调用连接工具', skill:'执行技能'};
 function progressLabel(p){
+  if(p.stage === 'planning' || p.stage === 'preparing_context'){
+    return (p.round > 0 ? '第 ' + p.round + ' 轮 · ' : '') + STAGE_LABELS[p.stage];
+  }
   return p.stage === 'executing' && p.cur_tool
     ? (TOOL_LABELS[p.cur_tool] || '执行工具') + ' · ' + p.cur_tool
     : (STAGE_LABELS[p.stage] || '正在处理');
@@ -3796,7 +3799,7 @@ function renderChatEntry(entry){
     label.setAttribute('role','status'); label.setAttribute('aria-live','polite');
     const elapsed = document.createElement('span'); elapsed.className = 'run-time';
     const ms = entry.pending && p.started_ms ? Math.max(0,Date.now()-p.started_ms) : (p.elapsed_ms || 0);
-    elapsed.textContent = ms ? Math.floor(ms/1000) + ' 秒' : '';
+    elapsed.textContent = ms ? '总耗时 ' + Math.floor(ms/1000) + ' 秒' : '';
     summary.append(dot,label,elapsed); panel.append(summary);
     const list = document.createElement('ol'); list.className = 'run-steps';
     const steps = Array.isArray(p.steps) ? p.steps : [];
