@@ -71,6 +71,7 @@ const tool *tool_skill(void) {
         "\"required\":[\"name\"]}",
         1,
         skill_exec,
+        NULL,
     };
     return &t;
 }

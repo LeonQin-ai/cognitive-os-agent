@@ -68,6 +68,7 @@ const tool *tool_git(void) {
         "OMIT this property unless the user explicitly names one\"}}}",
         1,
         git_exec,
+        NULL,
     };
     return &t;
 }
