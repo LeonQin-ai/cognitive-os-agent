@@ -1902,6 +1902,33 @@ static int looks_like_intent(const char *text) {
     return 0;
 }
 
+/* A direct capability/help question is already answerable from the prompt and
+ * registered context. Some reasoning models preface a perfectly useful list
+ * with "我需要…" or "Let me…"; treating that as an unfinished tool plan made
+ * a simple "有哪些工具" question burn five model calls before accepting the
+ * same answer. Keep the narration recovery for work requests, but accept the
+ * first text response for unmistakably informational questions. */
+static int prompt_is_direct_information_request(const char *prompt) {
+    static const char *const questions[] = {
+        "有什么工具", "有哪些工具", "什么工具", "有什么技能", "有哪些技能", "什么技能",
+        "你会什么", "帮助", "help", "what tools", "what skills", "capabilities"
+    };
+    static const char *const actions[] = {
+        "修复", "修改", "创建", "写入", "执行", "运行", "检查", "分析", "搜索", "查找",
+        "安装", "部署", "删除", "fix ", "edit ", "create ", "write ", "run ", "execute ",
+        "analyze ", "search ", "install ", "deploy ", "delete "
+    };
+    if (!prompt)
+        return 0;
+    for (size_t i = 0; i < sizeof(actions) / sizeof(actions[0]); i++)
+        if (strstr(prompt, actions[i]))
+            return 0;
+    for (size_t i = 0; i < sizeof(questions) / sizeof(questions[0]); i++)
+        if (strstr(prompt, questions[i]))
+            return 1;
+    return 0;
+}
+
 /* The model sometimes echoes the injected "[system] …" nudge text at the
  * start of its reply. Strip that echo (up to the end of a known nudge
  * sentence) so it never lands in the round log / answer, and so the
@@ -2540,7 +2567,7 @@ restart_planning:
              * not recover. After the bound, the text is accepted as the
              * final answer. */
             const char *txt = strip_nudge_echo(result);
-            if (r->max_rounds > 1 && r->intent_nudged < 4 &&
+            if (!prompt_is_direct_information_request(prompt) && r->max_rounds > 1 && r->intent_nudged < 4 &&
                 r->round_idx < r->max_rounds && looks_like_intent(txt)) {
                 /* the model re-emitted the same narration after the nudge:
                  * it has now "answered" twice with nothing new to add — the

@@ -2480,6 +2480,29 @@ static void test_agent_loop(void) {
         runtime_shutdown(&ctx);
     }
 
+    /* A direct tools/capabilities question must not spend four narration
+     * recovery rounds merely because the model opens with "我需要…". */
+    {
+        config cfg;
+        memset(&cfg, 0, sizeof(cfg));
+        cfg.state_root = "state-test/loop-capabilities";
+        cfg.workspace = "state-test/loop-w";
+        cfg.provider = "mock";
+        cfg.http_port = 0;
+        runtime_ctx ctx;
+        if (init(&ctx, &cfg) != 0) { CHECK(0); return; }
+        char *ans = NULL;
+        CHECK(reasoning_run(ctx.reasoning, "工具清单意向回答：你有什么工具", &ans) == 0);
+        CHECK(ans && strstr(ans, "工具清单") != NULL);
+        long long el = 0, tin = 0, tout = 0;
+        int rnd = 0, tc = 0;
+        const char *cur_tool = NULL;
+        reasoning_progress(ctx.reasoning, &el, &rnd, &tc, &cur_tool, &tin, &tout);
+        CHECK(rnd == 1 && tc == 0);
+        free(ans);
+        runtime_shutdown(&ctx);
+    }
+
     /* The exact same failing action is attempted at most three times. This
      * prevents a planner from looping forever on an unreachable SSH target. */
     {

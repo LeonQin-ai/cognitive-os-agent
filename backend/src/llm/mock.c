@@ -231,6 +231,11 @@ static char *mock_respond(const char *msg) {
         return xstrdup("任务完成。"); /* plain text = final answer */
     }
 
+    /* Regression fixture: a capability answer can naturally begin with an
+     * intent phrase, but it is still the complete answer to a direct question. */
+    if (has_substr(msg, "工具清单意向回答"))
+        return xstrdup("我需要先整理工具清单：文件操作、命令执行。");
+
     /* forced final synthesis after budget exhaustion (reasoning.c): the user
      * message embeds the observation log tail — reply with a synthesis, not a
      * new plan */
