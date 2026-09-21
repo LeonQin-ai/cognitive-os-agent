@@ -213,6 +213,7 @@ int snapshot_capture(snapshot *s, const char *path) {
 const char *snapshot_commit(snapshot *s) {
     char id[32];
     char created[40];
+    unsigned collision = 0;
     /* persist manifest */
     cJSON *root;
     cJSON *files;
@@ -222,7 +223,25 @@ const char *snapshot_commit(snapshot *s) {
 
     if (s->pending_count == 0)
         return NULL;
-    snprintf(id, sizeof(id), "s%lld", (long long)time_now_ms());
+    /* A transaction can commit more than once in one millisecond.  IDs are
+     * used for targeted restores, so never let a faster platform overwrite
+     * or shadow an earlier manifest with the same timestamp. */
+    do {
+        int duplicate = 0;
+        if (collision == 0)
+            snprintf(id, sizeof(id), "s%lld", (long long)time_now_ms());
+        else
+            snprintf(id, sizeof(id), "s%lld-%u", (long long)time_now_ms(), collision);
+        for (size_t i = 0; i < s->committed_count; i++) {
+            if (strcmp(s->committed[i].id, id) == 0) {
+                duplicate = 1;
+                collision++;
+                break;
+            }
+        }
+        if (!duplicate)
+            break;
+    } while (1);
     time_now_iso(created, sizeof(created));
 
     /* persist manifest */
