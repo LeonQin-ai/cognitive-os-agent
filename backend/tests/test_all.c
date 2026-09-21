@@ -114,6 +114,21 @@ static void test_util(void) {
     path_join(p, sizeof(p), p, "z.txt");
     CHECK(strstr(p, "z.txt") != NULL);
 
+    /* The caller's capacity, not an internal 2048-byte limit, bounds paths. */
+    char long_path[4096] = {0};
+    memset(long_path, 'a', 3000);
+    long_path[3000] = '\0';
+    path_join(long_path, sizeof(long_path), long_path, "tail.txt");
+    CHECK(strlen(long_path) == 3009);
+    CHECK_STR(long_path + 3001, "tail.txt");
+    char small[5] = "tail";
+    path_join(small, sizeof(small), "a/", small);
+    CHECK_STR(small, "a/ta");
+    path_join(small, 0, "changed", NULL);
+    CHECK_STR(small, "a/ta");
+    path_join(small, 1, NULL, "tail");
+    CHECK_STR(small, "");
+
     /* resolve against a workspace */
     char r[256];
     path_resolve(r, sizeof(r), "w", "sub/f.txt");
