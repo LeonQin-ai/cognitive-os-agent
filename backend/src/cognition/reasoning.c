@@ -1629,38 +1629,8 @@ static int h_learn(state_machine *sm, void *ud, const char *input, char **out) {
 
     snprintf(r->cur->sn_state, sizeof(r->cur->sn_state), "%s",
              r->all_actions_ok ? "上一任务已完成" : "上一任务部分失败");
-    /* A planned round is still in progress: never export its graph/episode
-     * state into shared memory. Another session may retrieve graph facts by
-     * keyword, which used to make an unfinished task appear actionable. */
-    if (r->mem && (!r->cur || r->cur->shared_memory) && !r->had_plan) {
-        /* episode only on the final round: intermediate rounds would record
-         * raw tool output into episodic memory; KG edges stay per-round */
-        if (!r->had_plan || r->round_idx >= r->max_rounds) {
-            char *shaped = str_head(input, LEARN_RESULT_CAP);
-            memory_record_experience(r->mem, r->last_prompt ? r->last_prompt : "(task)", shaped ? shaped : input);
-            free(shaped);
-            /* consolidation automation: threshold+interval gated pass over the
-             * episodes (semantic themes + procedural tool facts) */
-            if (memory_maybe_consolidate(r->mem, 10, 60000) == 1 && r->metrics)
-                metrics_inc(r->metrics, "memory.consolidations");
-        }
-        /* knowledge-graph edges: task -used-> tool -touched-> file */
-        if (r->last_prompt && r->n_actions > 0) {
-            char *th = str_head(r->last_prompt, 80);
-            for (int i = 0; i < r->n_actions; i++) {
-                memory_record_edge(r->mem, th ? th : "(task)", r->actions[i].tool, "used_tool");
-                if (strncmp(r->actions[i].tool, "file_", 5) == 0 && r->actions[i].args_json) {
-                    cJSON *ao = cJSON_Parse(r->actions[i].args_json);
-                    cJSON *pj = ao ? cJSON_GetObjectItemCaseSensitive(ao, "path") : NULL;
-                    if (pj && cJSON_IsString(pj) && pj->valuestring)
-                        memory_record_edge(r->mem, r->actions[i].tool, pj->valuestring, "touched");
-                    cJSON_Delete(ao);
-                }
-            }
-            free(th);
-        }
-        memory_flush(r->mem);
-    }
+    /* Shared memory is committed only from the terminal success path below.
+     * A final LLM turn may still be superseded by a steering message. */
 
     if (r->metrics) {
         double q = evaluator_score(r->eval, r->n_actions, r->ok_actions, r->all_actions_ok, input);
@@ -1675,6 +1645,40 @@ static int h_learn(state_machine *sm, void *ud, const char *input, char **out) {
 
     *out = xstrdup(input);
     return 0;
+}
+
+/* Publish a completed run's distilled episode and action graph in one place.
+ * This runs only after task_close_messages() has linearized finalization, so
+ * another session can retrieve completed knowledge but never a live plan. */
+static void memory_record_completed_run(reasoning *r, const char *answer) {
+    char *task_head;
+    char *shaped;
+
+    if (!r || !r->mem || (r->cur && !r->cur->shared_memory))
+        return;
+    shaped = str_head(answer ? answer : "", LEARN_RESULT_CAP);
+    memory_record_experience(r->mem, r->last_prompt ? r->last_prompt : "(task)", shaped ? shaped : "");
+    free(shaped);
+    task_head = str_head(r->last_prompt ? r->last_prompt : "(task)", 80);
+    mutex_lock(&r->progress_mtx);
+    for (int i = 0; i < r->n_steps; i++) {
+        struct run_step *step = &r->steps[i];
+        if (step->ok != 1)
+            continue;
+        memory_record_edge(r->mem, task_head ? task_head : "(task)", step->tool, "used_tool");
+        if (strncmp(step->tool, "file_", 5) == 0 && step->args[0]) {
+            cJSON *ao = cJSON_Parse(step->args);
+            cJSON *pj = ao ? cJSON_GetObjectItemCaseSensitive(ao, "path") : NULL;
+            if (pj && cJSON_IsString(pj) && pj->valuestring)
+                memory_record_edge(r->mem, step->tool, pj->valuestring, "touched");
+            cJSON_Delete(ao);
+        }
+    }
+    mutex_unlock(&r->progress_mtx);
+    free(task_head);
+    if (memory_maybe_consolidate(r->mem, 10, 60000) == 1 && r->metrics)
+        metrics_inc(r->metrics, "memory.consolidations");
+    memory_flush(r->mem);
 }
 
 reasoning *reasoning_new(const reasoning_config *cfg) {
@@ -2723,6 +2727,7 @@ restart_planning:
         metrics_inc(r->metrics, st == ST_DONE ? "tasks.done" : "tasks.failed");
 
     if (st == ST_DONE) {
+        memory_record_completed_run(r, combined);
         if (r->mem && mem_shared)
             memory_working_push(r->mem, combined);
         record_turn(r, prompt, combined);
