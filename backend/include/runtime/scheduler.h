@@ -39,6 +39,9 @@ typedef struct task {
     char *output; /* set by runner */
     mutex_t progress_mtx;
     char *progress_json; /* immutable snapshot, protected by progress_mtx */
+    /* Sanitized execution timeline kept in memory while the task runs. It is
+     * written to the durable journal only after the terminal transition. */
+    char *trace_json;
     char *pending_input; /* steering messages, protected by progress_mtx */
     int updates_closed;
     unsigned update_count;
@@ -73,6 +76,11 @@ task *scheduler_get(scheduler *s, int64_t id);
 int scheduler_total(scheduler *s);
 void task_set_progress(task *t, const char *json);
 char *task_progress_copy(task *t);
+/* Append one safe, user-observable progress event to the in-memory timeline.
+ * Raw model plans, prompts, tool arguments, and tool output are deliberately
+ * excluded; callers own `json` and may free it after this call. */
+void task_trace_add(task *t, const char *json);
+char *task_trace_copy(task *t);
 int task_add_message(task *t, const char *message); /* >0 revision, -1 closed, -2 limit */
 char *task_take_messages(task *t, unsigned *revision);
 int task_has_messages(task *t);

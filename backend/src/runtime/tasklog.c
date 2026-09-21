@@ -11,6 +11,7 @@
 #include "cJSON.h"
 
 #define TASKLOG_OUT_CAP 4096   /* per-record output head cap */
+#define TASKLOG_TRACE_CAP 65536 /* bounded terminal execution timeline */
 #define TASKLOG_FILE_MAX 32u * 1024 * 1024
 
 struct tasklog {
@@ -44,12 +45,13 @@ void tasklog_free(tasklog *tl) {
 }
 
 void tasklog_record(tasklog *tl, int64_t id, const char *status, const char *session, const char *input,
-                    const char *output) {
+                    const char *output, const char *trace_json) {
     cJSON *o;
     char *line;
     FILE *f;
 
-    if (!tl || id <= 0)
+    /* Scheduler task ids begin at zero; only negative ids are invalid. */
+    if (!tl || id < 0)
         return;
     o = cJSON_CreateObject();
     if (!o)
@@ -62,6 +64,13 @@ void tasklog_record(tasklog *tl, int64_t id, const char *status, const char *ses
         char head[TASKLOG_OUT_CAP];
         snprintf(head, sizeof(head), "%s", output);
         cJSON_AddStringToObject(o, "output", head);
+    }
+    if (trace_json && *trace_json && strlen(trace_json) <= TASKLOG_TRACE_CAP) {
+        cJSON *trace = cJSON_Parse(trace_json);
+        if (trace && cJSON_IsArray(trace))
+            cJSON_AddItemToObject(o, "trace", trace);
+        else
+            cJSON_Delete(trace);
     }
     cJSON_AddNumberToObject(o, "ts", (double)time(NULL) * 1000);
     line = cJSON_PrintUnformatted(o);
@@ -123,7 +132,7 @@ static cJSON *journal_parse(const char *path, int limit, int64_t pick_id) {
         line = nl ? nl + 1 : NULL;
         if (!o)
             continue;
-        if (pick_id > 0) {
+        if (pick_id != INT64_MIN) {
             cJSON *id = cJSON_GetObjectItemCaseSensitive(o, "id");
             if (!id || !cJSON_IsNumber(id) || (int64_t)id->valuedouble != pick_id) {
                 cJSON_Delete(o);
@@ -152,7 +161,7 @@ char *tasklog_json(tasklog *tl, int limit) {
     if (!tl)
         return xstrdup("[]");
     mutex_lock(&tl->mtx);
-    arr = journal_parse(tl->path, limit > 0 ? limit : 0, 0);
+    arr = journal_parse(tl->path, limit > 0 ? limit : 0, INT64_MIN);
     mutex_unlock(&tl->mtx);
     if (!arr)
         return xstrdup("[]");
@@ -165,7 +174,7 @@ int tasklog_find(tasklog *tl, int64_t id, char **status, char **session, char **
     cJSON *arr = NULL, *hit = NULL, *it;
     int found = 0;
 
-    if (!tl || id <= 0)
+    if (!tl || id < 0)
         return 0;
     mutex_lock(&tl->mtx);
     arr = journal_parse(tl->path, 0, id);

@@ -60,7 +60,9 @@ static void task_done(task *t, void *ud) {
     state_store_task_set(ctx->state, t->id, st, t->input);
 
     /* durable journal: append the terminal transition for checkpoint/resume */
-    tasklog_record(ctx->tasklog, t->id, st, t->tag, t->input, t->output);
+    char *trace = task_trace_copy(t);
+    tasklog_record(ctx->tasklog, t->id, st, t->tag, t->input, t->output, trace);
+    free(trace);
     /* collaboration tasks: mirror terminal status into the persistent registry */
     if (ctx->flowstore)
         flow_store_mark(ctx->flowstore, t->id, st);
@@ -216,7 +218,7 @@ static void chat_progress(const char *json, void *ud) {
     cJSON_AddNumberToObject(o, "run_id", (double)b->t->id);
     cJSON_AddStringToObject(o, "session_id", b->t->tag ? b->t->tag : "default");
     char *text = cJSON_PrintUnformatted(o);
-    if (text) { task_set_progress(b->t, text); free(text); }
+    if (text) { task_set_progress(b->t, text); task_trace_add(b->t, text); free(text); }
     if (b->ctx->bus) event_bus_publish(b->ctx->bus, EV_MODEL, "task.progress", o);
     else cJSON_Delete(o);
 }

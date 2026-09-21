@@ -109,6 +109,16 @@ if __name__ == '__main__':
                 assert b.get('steps') == [], b
                 retained = request(f'/v1/tasks/{first}')
                 assert retained['steps'] == a['steps'], retained
+                saved = None
+                for _ in range(25):
+                    journal = request('/v1/tasks/journal?limit=20')
+                    saved = next((row for row in journal if row['id'] == first), None)
+                    if saved: break
+                    time.sleep(0.04)
+                assert saved, journal
+                assert saved.get('trace') and any(e.get('stage') == 'executing' for e in saved['trace']), saved
+                for event in saved['trace']:
+                    assert all('args' not in step and 'out' not in step for step in event.get('steps', [])), event
                 cancelled, _ = wait(submit('progress-c','SLOW_FIXTURE'),'progress-c',cancel=True)
                 assert cancelled['status'] == 'CANCELLED', cancelled
                 steering = submit('progress-s','SLOW_FIXTURE')
@@ -123,7 +133,7 @@ if __name__ == '__main__':
                 assert adjusted['applied_updates'] == 1 and adjusted['steps'], adjusted
                 failed, _ = wait(submit('progress-f','FAIL_FIXTURE'),'progress-f')
                 assert failed['status'] == 'FAILED' and failed.get('output'), failed
-                print('PASS: isolation, live tools, sequence, retained steps, cancellation, in-flight steering, failure output')
+                print('PASS: isolation, live tools, terminal trace, sequence, retained steps, cancellation, in-flight steering, failure output')
             finally:
                 server.terminate()
                 try: server.wait(timeout=5)

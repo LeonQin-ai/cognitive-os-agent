@@ -28,6 +28,7 @@ void task_free(task *t) {
     free(t->output);
     free(t->tag);
     free(t->progress_json);
+    free(t->trace_json);
     free(t->pending_input);
     mutex_destroy(&t->progress_mtx);
     free(t);
@@ -97,6 +98,71 @@ char *task_progress_copy(task *t) {
     if (!t) return NULL;
     mutex_lock(&t->progress_mtx);
     char *copy = t->progress_json ? xstrdup(t->progress_json) : NULL;
+    mutex_unlock(&t->progress_mtx);
+    return copy;
+}
+
+void task_trace_add(task *t, const char *json) {
+    cJSON *snapshot, *timeline, *event;
+    cJSON *field;
+    char *next;
+
+    if (!t || !json)
+        return;
+    snapshot = cJSON_Parse(json);
+    if (!snapshot || !cJSON_IsObject(snapshot)) { cJSON_Delete(snapshot); return; }
+    event = cJSON_CreateObject();
+    if (!event) { cJSON_Delete(snapshot); return; }
+    /* Keep only observable execution metadata. In particular, do not retain
+     * planner text or tool argument/output payloads in the trace. */
+    const char *names[] = {"stage", "seq", "elapsed_ms", "round", "tool_calls", "cur_tool",
+                           "llm_ms", "tool_ms", "llm_calls", "applied_updates"};
+    for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+        field = cJSON_GetObjectItemCaseSensitive(snapshot, names[i]);
+        if (field)
+            cJSON_AddItemToObject(event, names[i], cJSON_Duplicate(field, 1));
+    }
+    field = cJSON_GetObjectItemCaseSensitive(snapshot, "steps");
+    if (field && cJSON_IsArray(field)) {
+        cJSON *safe_steps = cJSON_CreateArray(), *step;
+        if (safe_steps) {
+            cJSON_ArrayForEach(step, field) {
+                cJSON *safe = cJSON_CreateObject();
+                cJSON *tool = cJSON_GetObjectItemCaseSensitive(step, "tool");
+                cJSON *ok = cJSON_GetObjectItemCaseSensitive(step, "ok");
+                cJSON *ms = cJSON_GetObjectItemCaseSensitive(step, "ms");
+                if (!safe) continue;
+                if (tool) cJSON_AddItemToObject(safe, "tool", cJSON_Duplicate(tool, 1));
+                if (ok) cJSON_AddItemToObject(safe, "ok", cJSON_Duplicate(ok, 1));
+                if (ms) cJSON_AddItemToObject(safe, "ms", cJSON_Duplicate(ms, 1));
+                cJSON_AddItemToArray(safe_steps, safe);
+            }
+            cJSON_AddItemToObject(event, "steps", safe_steps);
+        }
+    }
+    cJSON_Delete(snapshot);
+
+    mutex_lock(&t->progress_mtx);
+    timeline = t->trace_json ? cJSON_Parse(t->trace_json) : cJSON_CreateArray();
+    if (!timeline || !cJSON_IsArray(timeline)) {
+        cJSON_Delete(timeline); cJSON_Delete(event); mutex_unlock(&t->progress_mtx); return;
+    }
+    while (cJSON_GetArraySize(timeline) >= 128) {
+        cJSON *oldest = cJSON_DetachItemFromArray(timeline, 0);
+        cJSON_Delete(oldest);
+    }
+    cJSON_AddItemToArray(timeline, event);
+    next = cJSON_PrintUnformatted(timeline);
+    cJSON_Delete(timeline);
+    if (next) { free(t->trace_json); t->trace_json = next; }
+    mutex_unlock(&t->progress_mtx);
+}
+
+char *task_trace_copy(task *t) {
+    char *copy;
+    if (!t) return NULL;
+    mutex_lock(&t->progress_mtx);
+    copy = t->trace_json ? xstrdup(t->trace_json) : xstrdup("[]");
     mutex_unlock(&t->progress_mtx);
     return copy;
 }

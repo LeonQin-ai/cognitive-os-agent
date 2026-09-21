@@ -18,9 +18,10 @@ typedef struct tasklog tasklog;
 tasklog *tasklog_new(const char *state_root);
 void tasklog_free(tasklog *tl);
 
-/* Append a record (output truncated to a head cap). No-op when tl is NULL. */
+/* Append a terminal record (output and trace are capped). `trace_json` is a
+ * sanitized in-memory execution timeline, serialized only at completion. */
 void tasklog_record(tasklog *tl, int64_t id, const char *status, const char *session, const char *input,
-                    const char *output);
+                    const char *output, const char *trace_json);
 
 /* Last `limit` records as a JSON array (caller frees). NULL tl → "[]". */
 char *tasklog_json(tasklog *tl, int limit);

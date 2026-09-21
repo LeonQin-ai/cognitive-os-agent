@@ -366,17 +366,23 @@
 .chat-message:hover .chat-copy,.chat-copy:focus-visible{opacity:1}
 .chat-answer{font-family:var(--sans);font-size:14px;line-height:1.85;white-space:pre-wrap;overflow-wrap:anywhere;margin:18px 0 0}
 .run-card{border:1px solid var(--border);border-radius:14px;background:color-mix(in srgb,var(--card) 65%,transparent);overflow:hidden}
-.run-card summary{display:flex;align-items:center;gap:10px;padding:14px 16px;cursor:pointer;list-style:none;font-size:13px}
-.run-card summary::-webkit-details-marker{display:none}
-.run-card summary::after{content:'⌄';color:var(--muted);font-size:16px;transition:transform 150ms}
-.run-card[open] summary::after{transform:rotate(180deg)}
+.run-card>summary{display:flex;align-items:center;gap:10px;padding:14px 16px;cursor:pointer;list-style:none;font-size:13px}
+.run-card>summary::-webkit-details-marker{display:none}
+.run-card>summary::after{content:'⌄';color:var(--muted);font-size:16px;transition:transform 150ms}
+.run-card[open]>summary::after{transform:rotate(180deg)}
 .run-label{flex:1;font-weight:500}.run-time{color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums}
 .run-dot{width:7px;height:7px;border-radius:50%;background:var(--ok);flex-shrink:0}
 .run-dot.active{background:var(--accent);animation:run-breathe 1.8s ease-in-out infinite}.run-dot.error{background:var(--danger)}
+.run-context{margin:0 16px 12px;padding:11px 12px;border-radius:10px;background:var(--accent-soft);border:1px solid color-mix(in srgb,var(--accent) 18%,transparent);color:var(--fg);font-size:12.5px;line-height:1.65}
+.run-context b{font-weight:600}.run-metrics{display:flex;flex-wrap:wrap;gap:7px;margin:0 16px 13px}.run-metrics span{padding:3px 8px;border:1px solid var(--border);border-radius:99px;color:var(--muted);font-size:11px;font-variant-numeric:tabular-nums}
+.run-steps-title{margin:0 20px 4px 19px;color:var(--muted);font-size:11px;letter-spacing:.35px}
 .run-steps{list-style:none;margin:0 20px 16px 19px;padding:0 0 0 17px;border-left:1px solid var(--border)}
-.run-steps li{padding:9px 0;display:flex;gap:12px;justify-content:space-between;color:var(--muted);font-size:12px;overflow-wrap:anywhere}
+.run-steps li{position:relative;padding:9px 0;display:flex;gap:12px;justify-content:space-between;color:var(--muted);font-size:12px;overflow-wrap:anywhere}
+.run-steps li::before{content:'';position:absolute;left:-21px;top:14px;width:7px;height:7px;border-radius:50%;background:var(--muted);box-shadow:0 0 0 3px var(--card)}
+.run-steps li[data-state=done]::before{background:var(--ok)}.run-steps li[data-state=failed]::before{background:var(--danger)}.run-steps li[data-state=running]::before{background:var(--accent);animation:run-breathe 1.8s ease-in-out infinite}
 .run-steps li[data-state=running]{color:var(--fg)}.run-steps li[data-state=failed]{color:var(--danger)}
 .run-steps small{font-size:11px;white-space:nowrap;color:var(--muted)}
+.run-step-main{min-width:0;display:flex;flex-direction:column;gap:2px}.run-step-name{color:inherit}.run-step-detail{max-width:100%;color:var(--muted);font-family:var(--mono);font-size:11px;line-height:1.45;white-space:pre-wrap;overflow-wrap:anywhere;cursor:pointer}.run-step-detail>summary{display:list-item;padding:0;cursor:pointer}.run-step-detail>summary::marker{color:var(--muted)}
 .pillbar{border:1px solid var(--border);border-radius:22px!important;box-shadow:0 8px 28px #0000000c;padding:12px!important}
 .pillbar:focus-within{border-color:var(--accent-ring);box-shadow:0 0 0 3px var(--accent-soft)}
 #chat-input{font-size:14px;line-height:1.7;min-height:28px}
@@ -385,7 +391,7 @@
 .top .flow{display:none}button:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
 @keyframes run-breathe{50%{opacity:.35;box-shadow:0 0 0 4px var(--accent-soft)}}
 @media(prefers-reduced-motion:reduce){.run-dot.active{animation:none}*{scroll-behavior:auto!important}}
-@media(max-width:640px){.chat-wrap{padding:16px 12px}.run-card summary{padding:12px}.run-steps li{flex-wrap:wrap;gap:3px}.chat-message.user{max-width:92%}}
+@media(max-width:640px){.chat-wrap{padding:16px 12px}.run-card>summary{padding:12px}.run-context,.run-metrics{margin-left:12px;margin-right:12px}.run-steps-title{margin-left:15px}.run-steps{margin-left:15px;margin-right:12px}.run-steps li{flex-wrap:wrap;gap:3px}.chat-message.user{max-width:92%}}
 
 </style>
 </head>
@@ -3746,15 +3752,39 @@ const STAGE_LABELS = {
   cancelled:'已取消', timed_out:'执行超时', reconnecting:'连接中断，正在重试',
   cancelling:'正在取消，等待当前操作结束'
 };
-const TOOL_LABELS = {file:'处理文件', shell:'运行命令', git:'检查代码仓库',
+const STAGE_NOTES = {
+  submitting:'正在创建这次任务记录。', queued:'任务已进入队列，等待可用执行器。',
+  analyzing:'正在识别目标、约束和需要完成的工作。',
+  preparing_context:'正在整理本会话的已完成工作与相关上下文。',
+  planning:'正在请求模型生成下一步可执行计划。',
+  executing:'正在执行计划中的动作，完成后会记录结果。',
+  summarizing:'正在整理执行结果、验证状态和未完成项。',
+  replanning:'已收到新的补充要求，正在保留已完成工作并调整剩余计划。',
+  steering:'已收到补充，当前操作结束后会重新规划。',
+  cancelling:'正在安全停止当前任务。', reconnecting:'连接暂时中断，正在恢复任务状态。',
+  completed:'任务已完成，结果已整理。', failed:'任务未能完成，已保留执行记录。',
+  cancelled:'任务已取消。', timed_out:'任务执行超时。'
+};
+const TOOL_LABELS = {file_read:'读取文件', file_write:'写入文件', file_edit:'修改文件',
+  shell:'运行命令', ssh:'远程执行', git:'检查代码仓库', glob:'查找文件', grep:'搜索代码',
   search:'检索资料', web_search:'搜索网页', mcp:'调用连接工具', skill:'执行技能'};
+function toolLabel(name){ return TOOL_LABELS[name] || (name && name.startsWith('file_') ? '处理文件' : name || '执行操作'); }
+function durationLabel(ms){
+  const sec = Math.max(0, Math.floor((ms || 0) / 1000));
+  return sec >= 60 ? Math.floor(sec / 60) + ' 分 ' + sec % 60 + ' 秒' : sec + ' 秒';
+}
 function progressLabel(p){
   if(p.stage === 'planning' || p.stage === 'preparing_context'){
     return (p.round > 0 ? '第 ' + p.round + ' 轮 · ' : '') + STAGE_LABELS[p.stage];
   }
   return p.stage === 'executing' && p.cur_tool
-    ? (TOOL_LABELS[p.cur_tool] || '执行工具') + ' · ' + p.cur_tool
+    ? toolLabel(p.cur_tool) + ' · ' + p.cur_tool
     : (STAGE_LABELS[p.stage] || '正在处理');
+}
+function progressNarrative(p){
+  let note = STAGE_NOTES[p.stage] || '正在推进任务。';
+  if(p.stage === 'executing' && p.cur_tool) note = '正在' + toolLabel(p.cur_tool) + '（' + p.cur_tool + '），完成后会继续下一步。';
+  return note;
 }
 function chatPersist(){
   try {
@@ -3801,16 +3831,36 @@ function renderChatEntry(entry){
     const ms = entry.pending && p.started_ms ? Math.max(0,Date.now()-p.started_ms) : (p.elapsed_ms || 0);
     elapsed.textContent = ms ? '总耗时 ' + Math.floor(ms/1000) + ' 秒' : '';
     summary.append(dot,label,elapsed); panel.append(summary);
+    const context = document.createElement('div'); context.className = 'run-context';
+    const strong = document.createElement('b'); strong.textContent = entry.pending ? '正在处理：' : '执行摘要：';
+    context.append(strong, document.createTextNode(progressNarrative(p))); panel.append(context);
+    const metrics = document.createElement('div'); metrics.className = 'run-metrics';
+    if(p.round) { const m = document.createElement('span'); m.textContent = '第 ' + p.round + ' 轮'; metrics.append(m); }
+    if(p.tool_calls) { const m = document.createElement('span'); m.textContent = p.tool_calls + ' 个动作'; metrics.append(m); }
+    if(ms) { const m = document.createElement('span'); m.textContent = '用时 ' + durationLabel(ms); metrics.append(m); }
+    if(p.llm_ms) { const m = document.createElement('span'); m.textContent = '模型 ' + durationLabel(p.llm_ms); metrics.append(m); }
+    if(p.tool_ms) { const m = document.createElement('span'); m.textContent = '工具 ' + durationLabel(p.tool_ms); metrics.append(m); }
+    if(metrics.children.length) panel.append(metrics);
+    const stepsTitle = document.createElement('div'); stepsTitle.className = 'run-steps-title'; stepsTitle.textContent = '执行记录'; panel.append(stepsTitle);
     const list = document.createElement('ol'); list.className = 'run-steps';
     const steps = Array.isArray(p.steps) ? p.steps : [];
     for(const s of steps){
       const item = document.createElement('li');
       item.dataset.state = s.ok === 1 ? 'done' : s.ok === 0 ? 'failed' : 'skipped';
-      const title = document.createElement('span');
-      title.textContent = (s.ok === 1 ? '✓ ' : s.ok === 0 ? '× ' : '− ') + (TOOL_LABELS[s.tool] || s.tool || '操作');
+      const main = document.createElement('span'); main.className = 'run-step-main';
+      const title = document.createElement('span'); title.className = 'run-step-name';
+      title.textContent = (s.ok === 1 ? '已完成 · ' : s.ok === 0 ? '失败 · ' : '已跳过 · ') + toolLabel(s.tool);
+      main.append(title);
+      if(s.args || s.out){
+        const detail = document.createElement('details'); detail.className = 'run-step-detail';
+        const ds = document.createElement('summary'); ds.textContent = '查看参数与结果摘要'; detail.append(ds);
+        const body = document.createElement('div');
+        body.textContent = [s.args ? '参数：' + s.args : '', s.out ? '结果：' + s.out : ''].filter(Boolean).join('\n');
+        detail.append(body); main.append(detail);
+      }
       const meta = document.createElement('small');
       meta.textContent = (s.ok === 1 ? '已完成' : s.ok === 0 ? '失败' : '已跳过') + ' · ' + ((s.ms || 0)/1000).toFixed(1) + ' 秒';
-      item.append(title,meta); list.append(item);
+      item.append(main,meta); list.append(item);
     }
     if(entry.pending){
       const item = document.createElement('li'); item.dataset.state = 'running';

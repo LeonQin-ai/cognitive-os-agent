@@ -4440,9 +4440,10 @@ static void test_tasklog(void) {
     CHECK(tl != NULL);
     if (!tl) return;
 
-    tasklog_record(tl, 1, "DONE", "chat-tab-1", "input-1", "output-1");
-    tasklog_record(tl, 2, "FAILED", NULL, "input-2", NULL);
-    tasklog_record(tl, 1, "DONE", "chat-tab-1", "input-1 again", "out again");
+    tasklog_record(tl, 1, "DONE", "chat-tab-1", "input-1", "output-1", "[]");
+    tasklog_record(tl, 2, "FAILED", NULL, "input-2", NULL, "[]");
+    tasklog_record(tl, 1, "DONE", "chat-tab-1", "input-1 again", "out again", "[]");
+    tasklog_record(tl, 0, "DONE", "first-task", "input-0", "output-0", "[{\"stage\":\"completed\"}]");
 
     /* newest record wins for the same id */
     char *status = NULL, *session = NULL, *input = NULL, *output = NULL;
@@ -4457,13 +4458,19 @@ static void test_tasklog(void) {
     CHECK(tasklog_find(tl, 99, &status, &session, &input, &output) == 0);
     CHECK(status == NULL && session == NULL && input == NULL && output == NULL);
 
+    status = NULL;
+    CHECK(tasklog_find(tl, 0, &status, NULL, NULL, NULL) == 1);
+    CHECK_STR(status, "DONE");
+    free(status);
+
     /* limit keeps the newest N */
     char *j = tasklog_json(tl, 2);
-    CHECK(j && strstr(j, "input-2") != NULL && strstr(j, "input-1 again") != NULL &&
-          strstr(j, "input-1\"") == NULL);
+    CHECK(j && strstr(j, "input-1 again") != NULL && strstr(j, "input-0") != NULL &&
+          strstr(j, "input-2") == NULL);
     free(j);
     j = tasklog_json(tl, 0);
-    CHECK(j && strstr(j, "input-1\"") != NULL); /* 0 = all */
+    CHECK(j && strstr(j, "input-1\"") != NULL && strstr(j, "input-0") != NULL &&
+          strstr(j, "\"trace\"") != NULL); /* 0 = all */
     free(j);
 
     /* survive "restart": reopen from the same state_root */
