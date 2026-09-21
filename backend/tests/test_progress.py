@@ -63,6 +63,7 @@ def wait(task_id, session, cancel=False):
         if task.get('seq'):
             assert task['task_id'] == task_id and task['run_id'] == task_id
             assert task['seq'] >= seq
+            assert task.get('activity') and task.get('model'), task
             seq = task['seq']
         stages.add(task.get('stage'))
         assert 'process_log' not in task

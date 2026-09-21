@@ -226,6 +226,7 @@ struct reasoning {
     long long prog_llm_ms;   /* cumulative planner LLM latency (issue #6) */
     int prog_llm_calls;
     long long prog_tool_ms;  /* cumulative tool execution latency */
+    int prog_model_failures; /* consecutive/total request failures this run */
 
     /* per-model token ledger (borrowed; may be NULL). Deltas are computed
      * against the run-start snapshot of llm usage counters so per-round
@@ -236,9 +237,25 @@ struct reasoning {
 
 /* Only the worker constructs snapshots. Readers copy immutable JSON. */
 static void progress_emit(reasoning *r, const char *stage) {
+    char activity[256];
+    const char *model = (r && r->llm && r->llm->model && *r->llm->model) ? r->llm->model : "未配置模型";
     cJSON *o = cJSON_CreateObject();
     if (!o) return;
+    if (strcmp(stage, "planning") == 0)
+        snprintf(activity, sizeof(activity), "正在等待模型 %s 返回第 %d 次规划结果", model, r->prog_llm_calls + 1);
+    else if (strcmp(stage, "reconnecting") == 0)
+        snprintf(activity, sizeof(activity), "模型请求第 %d 次失败，正在重试", r->prog_model_failures);
+    else if (strcmp(stage, "preparing_context") == 0)
+        snprintf(activity, sizeof(activity), "正在整理会话上下文、已完成工作和可用工具");
+    else if (strcmp(stage, "executing") == 0 && r->prog_tool[0])
+        snprintf(activity, sizeof(activity), "正在执行工具 %s", r->prog_tool);
+    else if (strcmp(stage, "summarizing") == 0)
+        snprintf(activity, sizeof(activity), "正在由模型 %s 整理最终结果", model);
+    else
+        snprintf(activity, sizeof(activity), "正在推进任务阶段：%s", stage ? stage : "unknown");
     cJSON_AddStringToObject(o, "stage", stage);
+    cJSON_AddStringToObject(o, "activity", activity);
+    cJSON_AddStringToObject(o, "model", model);
     cJSON_AddNumberToObject(o, "seq", ++r->progress_seq);
     cJSON_AddNumberToObject(o, "applied_updates", r->applied_updates);
     cJSON_AddNumberToObject(o, "started_ms", (double)r->prog_started_ms);
@@ -249,6 +266,8 @@ static void progress_emit(reasoning *r, const char *stage) {
     cJSON_AddNumberToObject(o, "llm_ms", (double)r->prog_llm_ms);
     cJSON_AddNumberToObject(o, "tool_ms", (double)r->prog_tool_ms);
     cJSON_AddNumberToObject(o, "llm_calls", r->prog_llm_calls);
+    cJSON_AddNumberToObject(o, "model_call", r->prog_llm_calls + (strcmp(stage, "planning") == 0 ? 1 : 0));
+    cJSON_AddNumberToObject(o, "model_failures", r->prog_model_failures);
     long long tin = 0, tout = 0;
     if (r->llm) llm_usage_totals(r->llm, &tin, &tout);
     cJSON_AddNumberToObject(o, "tokens_in", (double)tin);
@@ -2368,7 +2387,7 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     r->applied_updates = 0;
     r->prog_started_ms = time_now_ms();
     r->prog_tool[0] = 0;
-    r->prog_tool_calls = r->prog_llm_calls = r->round_idx = 0;
+    r->prog_tool_calls = r->prog_llm_calls = r->round_idx = r->prog_model_failures = 0;
     r->prog_llm_ms = r->prog_tool_ms = 0;
     progress_emit(r, "analyzing");
     /* 会话可关闭共享记忆：关闭后本会话的运行不读写全局 Memory OS */
@@ -2526,8 +2545,10 @@ restart_planning:
              * retry with a fixed path). Terminal only when the budget is
              * exhausted, and the report stays in the answer either way. */
             consec_fail++;
+            r->prog_model_failures++;
             round_log_append(r, result && *result ? result : "(run failed)");
             obs_log_append(r, result && *result ? result : "(run failed)");
+            progress_emit(r, "reconnecting");
             if (r->round_idx >= r->max_rounds)
                 break;
             /* Circuit breaker: a PERSISTENT failure (LLM endpoint down /
