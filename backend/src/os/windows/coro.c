@@ -58,8 +58,11 @@ void coro_resume(coro *c) {
         return;
     if (!tls_main_fiber) {
         /* Convert this thread into a fiber; it becomes the "main" fiber. */
-        ConvertThreadToFiber(NULL);
-        tls_main_fiber = GetCurrentFiber();
+        tls_main_fiber = ConvertThreadToFiber(NULL);
+        if (!tls_main_fiber && GetLastError() == ERROR_ALREADY_FIBER)
+            tls_main_fiber = GetCurrentFiber();
+        if (!tls_main_fiber)
+            return;
     }
 
     SwitchToFiber(c->fiber);
@@ -73,4 +76,3 @@ void coro_yield(void) {
 int coro_done(const coro *c) {
     return c ? c->done : 1;
 }
-

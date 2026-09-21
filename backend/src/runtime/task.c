@@ -11,6 +11,7 @@ task *task_new(int64_t id, int priority, const char *input, int64_t timeout_ms) 
     task *t = (task *)calloc(1, sizeof(task));
     if (!t)
         return NULL;
+    if (mutex_init(&t->progress_mtx) != 0) { free(t); return NULL; }
     t->id = id;
     t->priority = priority;
     t->timeout_ms = timeout_ms;
@@ -25,6 +26,10 @@ void task_free(task *t) {
         return;
     free(t->input);
     free(t->output);
+    free(t->tag);
+    free(t->progress_json);
+    free(t->pending_input);
+    mutex_destroy(&t->progress_mtx);
     free(t);
 }
 
@@ -78,4 +83,64 @@ char *task_to_json(const task *t) {
     s = cJSON_PrintUnformatted(o);
     cJSON_Delete(o);
     return s ? s : xstrdup("{}");
+}
+
+void task_set_progress(task *t, const char *json) {
+    char *copy = json ? xstrdup(json) : NULL;
+    if (!t || !copy) { free(copy); return; }
+    mutex_lock(&t->progress_mtx);
+    free(t->progress_json);
+    t->progress_json = copy;
+    mutex_unlock(&t->progress_mtx);
+}
+char *task_progress_copy(task *t) {
+    if (!t) return NULL;
+    mutex_lock(&t->progress_mtx);
+    char *copy = t->progress_json ? xstrdup(t->progress_json) : NULL;
+    mutex_unlock(&t->progress_mtx);
+    return copy;
+}
+
+int task_add_message(task *t, const char *message) {
+    if (!t || !message || !*message) return -2;
+    mutex_lock(&t->progress_mtx);
+    if (t->updates_closed || t->status >= TS_DONE || t->cancel_flag) {
+        mutex_unlock(&t->progress_mtx); return -1;
+    }
+    size_t old = t->pending_input ? strlen(t->pending_input) : 0;
+    size_t len = strlen(message);
+    if (old + len > 16384 || t->update_count >= 32) {
+        mutex_unlock(&t->progress_mtx); return -2;
+    }
+    char *text = realloc(t->pending_input, old + len + 2);
+    if (!text) { mutex_unlock(&t->progress_mtx); return -2; }
+    if (old) text[old++] = '\n';
+    memcpy(text + old, message, len + 1);
+    t->pending_input = text;
+    int revision = (int)++t->update_count;
+    mutex_unlock(&t->progress_mtx);
+    return revision;
+}
+char *task_take_messages(task *t, unsigned *revision) {
+    if (!t) return NULL;
+    mutex_lock(&t->progress_mtx);
+    char *text = t->pending_input; t->pending_input = NULL;
+    if (revision) *revision = t->update_count;
+    mutex_unlock(&t->progress_mtx);
+    return text;
+}
+int task_has_messages(task *t) {
+    if (!t) return 0;
+    mutex_lock(&t->progress_mtx);
+    int pending = t->pending_input != NULL;
+    mutex_unlock(&t->progress_mtx);
+    return pending;
+}
+int task_close_messages(task *t) {
+    if (!t) return 1;
+    mutex_lock(&t->progress_mtx);
+    int ready = t->pending_input == NULL;
+    if (ready) t->updates_closed = 1;
+    mutex_unlock(&t->progress_mtx);
+    return ready;
 }

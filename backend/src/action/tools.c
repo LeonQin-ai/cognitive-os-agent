@@ -100,6 +100,7 @@ void tool_register_builtins(tool_registry *reg) {
     tool_register(reg, tool_file_write());
     tool_register(reg, tool_file_edit());
     tool_register(reg, tool_shell());
+    tool_register(reg, tool_ssh());
     tool_register(reg, tool_git());
     tool_register(reg, tool_mcp());
     tool_register(reg, tool_skill());

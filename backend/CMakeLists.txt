@@ -8,120 +8,56 @@ if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release)
 endif()
 
-# per-OS platform backends register as hooks (see include/os/platform.h):
-# compile exactly one platform directory
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
+add_custom_command(OUTPUT ${CMAKE_CURRENT_SOURCE_DIR}/include/api/web_ui.h
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/gen_web_ui.py
+  DEPENDS apps/web/index.html tools/gen_web_ui.py VERBATIM)
+add_custom_target(web-ui DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/include/api/web_ui.h)
+file(GLOB_RECURSE CAGENT_SOURCES CONFIGURE_DEPENDS src/*.c)
+list(FILTER CAGENT_SOURCES EXCLUDE REGEX "/os/(windows|linux|macos|posix)/")
 if(WIN32)
-  file(GLOB PLATFORM_SRCS ${CMAKE_CURRENT_SOURCE_DIR}/src/os/windows/*.c)
+  file(GLOB PLATFORM_SRCS CONFIGURE_DEPENDS src/os/windows/*.c)
+  set(PLATFORM_LIBS ws2_32 winhttp bcrypt m)
 else()
-  file(GLOB PLATFORM_SRCS ${CMAKE_CURRENT_SOURCE_DIR}/src/os/linux/*.c)
+  file(GLOB PLATFORM_SRCS CONFIGURE_DEPENDS src/os/posix/*.c)
+  if(APPLE)
+    list(APPEND PLATFORM_SRCS src/os/macos/http.c)
+  else()
+    list(APPEND PLATFORM_SRCS src/os/linux/http.c)
+  endif()
+  find_package(Threads REQUIRED)
+  set(PLATFORM_LIBS Threads::Threads ${CMAKE_DL_LIBS} m)
 endif()
+list(APPEND CAGENT_SOURCES ${PLATFORM_SRCS} third_party/cJSON/cJSON.c third_party/wasm3/wasm3_all.c)
+add_library(cagent STATIC ${CAGENT_SOURCES})
+add_dependencies(cagent web-ui)
+target_include_directories(cagent PUBLIC include third_party/cJSON third_party/wasm3)
+target_link_libraries(cagent PUBLIC ${PLATFORM_LIBS})
 
-set(CAGENT_SOURCES
-  src/cognitive-os-agent.c
-  src/runtime/event_bus.c
-  src/runtime/scheduler.c
-  src/runtime/state_machine.c
-  src/runtime/policy_engine.c
-  src/runtime/agent.c
-  src/runtime/task.c
-  src/cognition/reasoning.c
-  src/cognition/planner.c
-  src/cognition/evaluator.c
-  src/cognition/blackboard.c
-  src/cognition/attention.c
-  src/memory/memory.c
-  src/memory/kv.c
-  src/memory/episode.c
-  src/memory/vector.c
-  src/memory/graph.c
-  src/retrieval/engine.c
-  src/retrieval/embedding.c
-  src/retrieval/context_builder.c
-  src/plugin_runtime/manager.c
-  src/plugin_runtime/sandbox.c
-  src/plugin_runtime/capability.c
-  src/plugin_runtime/registry.c
-  src/plugin_runtime/wasm_runner.c
-  src/plugin_intelligence/analyzer.c
-  src/plugin_intelligence/architect.c
-  src/plugin_intelligence/codegen.c
-  src/plugin_intelligence/generator.c
-  src/plugin_intelligence/testing.c
-  src/plugin_intelligence/security.c
-  src/llm/llm.c
-  src/llm/openai.c
-  src/llm/anthropic.c
-  src/llm/mock.c
-  src/llm/sse.c
-  src/llm/router.c
-  src/llm/usage.c
-  src/security/secret_detector.c
-  src/security/secret_boundary.c
-  src/action/tools.c
-  src/action/tool_file.c
-  src/action/tool_shell.c
-  src/action/tool_git.c
-  src/action/tool_mcp.c
-  src/action/skill.c
-  src/action/mcp_conn.c
-  src/cluster/node.c
-  src/tx/tx.c
-  src/snapshot/snapshot.c
-  src/snapshot/cow.c
-  src/os/os_thread.c
-  src/os/os_coro.c
-  src/os/os_socket.c
-  src/os/os_fs.c
-  src/os/os_proc.c
-  src/os/os_time.c
-  ${PLATFORM_SRCS}
-  src/os/http_dispatch.c
-  src/infra/logging.c
-  src/infra/config.c
-  src/infra/util.c
-  src/infra/metrics.c
-  src/infra/audit.c
-  src/infra/persist.c
-  src/infra/trace.c
-  src/infra/ringbuf.c
-  src/infra/catalog.c
-  src/api/http_server.c
-  src/api/api_rest.c
-  src/api/market_remote.c
-  src/api/auth.c
-  src/api/websocket.c
-  src/api/ws_server.c
-  src/im/channel.c
-  src/im/im.c
-  third_party/cJSON/cJSON.c
-  third_party/wasm3/wasm3_all.c
-)
+add_executable(cognitive-os-agent cli/main.c)
+target_link_libraries(cognitive-os-agent cagent)
 
-include_directories(include third_party/cJSON third_party/wasm3)
+add_executable(cognitive-os-agent-test tests/test_all.c)
+target_link_libraries(cognitive-os-agent-test cagent)
 
-if(WIN32)
-  set(PLATFORM_LIBS ws2_32 winhttp m)
-else()
-  set(PLATFORM_LIBS pthread dl m)
-endif()
+add_executable(mock-llm-server tools/mock_llm_server.c)
+target_link_libraries(mock-llm-server cagent)
 
-add_executable(cognitive-os-agent ${CAGENT_SOURCES} cli/main.c)
-target_link_libraries(cognitive-os-agent ${PLATFORM_LIBS})
+add_executable(test-adapters tests/test_adapters.c)
+target_link_libraries(test-adapters cagent)
 
-add_executable(cognitive-os-agent-test ${CAGENT_SOURCES} tests/test_all.c)
-target_link_libraries(cognitive-os-agent-test ${PLATFORM_LIBS})
+add_executable(cognitive-os-agent-e2e tests/test_e2e.c)
+target_link_libraries(cognitive-os-agent-e2e cagent)
 
-add_executable(mock-llm-server ${CAGENT_SOURCES} tools/mock_llm_server.c)
-target_link_libraries(mock-llm-server ${PLATFORM_LIBS})
+add_executable(cognitive-os-agent-bench tests/bench_agent.c)
+target_link_libraries(cognitive-os-agent-bench cagent)
 
-add_executable(test-adapters ${CAGENT_SOURCES} tests/test_adapters.c)
-target_link_libraries(test-adapters ${PLATFORM_LIBS})
+add_executable(cognitive-os-agent-bench-real tests/bench_real.c)
+target_link_libraries(cognitive-os-agent-bench-real cagent)
 
-add_executable(cognitive-os-agent-e2e ${CAGENT_SOURCES} tests/test_e2e.c)
-target_link_libraries(cognitive-os-agent-e2e ${PLATFORM_LIBS})
-
-add_executable(cognitive-os-agent-bench ${CAGENT_SOURCES} tests/bench_agent.c)
-target_link_libraries(cognitive-os-agent-bench ${PLATFORM_LIBS})
-
-add_executable(cognitive-os-agent-bench-real ${CAGENT_SOURCES} tests/bench_real.c)
-target_link_libraries(cognitive-os-agent-bench-real ${PLATFORM_LIBS})
+add_executable(cognitive-os-agent-scenario tests/test_scenario.c)
+target_link_libraries(cognitive-os-agent-scenario cagent)
+enable_testing()
+add_test(NAME unit COMMAND cognitive-os-agent-test)
+add_test(NAME scenario COMMAND cognitive-os-agent-scenario)
+add_test(NAME benchmark COMMAND cognitive-os-agent-bench --mock)

@@ -4,6 +4,13 @@
 #pragma once
 #include <stdint.h>
 #include <stddef.h>
+#include "os/os_thread.h"
+#ifndef __cplusplus
+#include <stdatomic.h>
+#define TASK_ATOMIC(T) _Atomic(T)
+#else
+#define TASK_ATOMIC(T) T
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -25,17 +32,23 @@ typedef struct task {
     int64_t created_ms;
     int64_t started_ms;
     int64_t finished_ms;
-    volatile int cancel_flag; /* set by cancel() */
+    TASK_ATOMIC(int) cancel_flag; /* set by cancel() */
     int timed_out;            /* set when deadline passed */
-    task_status status;
+    TASK_ATOMIC(task_status) status;
     char *input;  /* task description / prompt */
     char *output; /* set by runner */
+    mutex_t progress_mtx;
+    char *progress_json; /* immutable snapshot, protected by progress_mtx */
+    char *pending_input; /* steering messages, protected by progress_mtx */
+    int updates_closed;
+    unsigned update_count;
     char *tag;    /* optional routing tag (e.g. chat session id) */
     void *userdata;
     /* internal (managed by scheduler.c): coroutine handle + owning scheduler */
     void *coro;  /* coro* running this task, or NULL */
     void *sched; /* scheduler* back-pointer for the trampoline */
 } task;
+#undef TASK_ATOMIC
 
 typedef struct scheduler scheduler;
 
@@ -58,6 +71,12 @@ int64_t scheduler_submit_tag(scheduler *s, int priority, const char *input, void
 task *scheduler_get(scheduler *s, int64_t id);
 
 int scheduler_total(scheduler *s);
+void task_set_progress(task *t, const char *json);
+char *task_progress_copy(task *t);
+int task_add_message(task *t, const char *message); /* >0 revision, -1 closed, -2 limit */
+char *task_take_messages(task *t, unsigned *revision);
+int task_has_messages(task *t);
+int task_close_messages(task *t); /* false if accepted messages still need processing */
 
 void scheduler_set_completion_cb(scheduler *s, task_completion cb, void *ud);
 

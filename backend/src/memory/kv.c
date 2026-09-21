@@ -83,19 +83,23 @@ void kvstore_set(kvstore *k, const char *key, const char *val) {
 }
 
 const char *kvstore_get(kvstore *k, const char *key) {
-    const char *v = NULL;
+    static _Thread_local char *copy = NULL;
+    char *next = NULL;
 
     if (!k || !key)
         return NULL;
+    free(copy);
+    copy = NULL;
     mutex_lock(&k->mtx);
     for (size_t i = 0; i < k->count; i++)
         if (strcmp(k->items[i].key, key) == 0) {
-            v = k->items[i].val;
+            next = xstrdup(k->items[i].val);
             break;
         }
 
     mutex_unlock(&k->mtx);
-    return v;
+    copy = next;
+    return copy;
 }
 
 int kvstore_remove(kvstore *k, const char *key) {

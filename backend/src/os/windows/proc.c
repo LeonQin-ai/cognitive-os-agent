@@ -179,7 +179,7 @@ proc_result *proc_run_in(const char *cmd, int timeout_ms, const char *cwd) {
         return NULL;
     SetHandleInformation(rd, HANDLE_FLAG_INHERIT, 0);
 
-    STARTUPINFOA si;
+    STARTUPINFOW si;
     PROCESS_INFORMATION pi;
     memset(&si, 0, sizeof(si));
     memset(&pi, 0, sizeof(pi));
@@ -321,7 +321,7 @@ int proc_spawn_detached(const char *cmd) {
     wchar_t *wfull = utf8_to_wide(full);
     if (!wfull)
         return -1;
-    STARTUPINFOA si;
+    STARTUPINFOW si;
     PROCESS_INFORMATION pi;
     memset(&si, 0, sizeof(si));
     memset(&pi, 0, sizeof(pi));
@@ -430,7 +430,7 @@ proc_popen *proc_popen_new_ex(char *const argv[], int merge_stderr) {
     /* child stderr -> NUL so server logs never pollute the JSON stream */
     HANDLE nul = CreateFileA("NUL", GENERIC_WRITE, FILE_SHARE_WRITE, &sa, OPEN_EXISTING, 0, NULL);
 
-    STARTUPINFOA si;
+    STARTUPINFOW si;
     PROCESS_INFORMATION pi;
     memset(&si, 0, sizeof(si));
     memset(&pi, 0, sizeof(pi));

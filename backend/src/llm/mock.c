@@ -167,6 +167,13 @@ static char *mock_respond(const char *msg) {
     if (!msg)
         return xstrdup("[]");
 
+    /* Provider compatibility fixture: some OpenAI-compatible gateways put
+     * the tool name immediately after a <tool_call> tag instead of inside
+     * the JSON object. Keep this deterministic form covered by unit tests. */
+    if (has_substr(msg, "标签工具计划"))
+        return xstrdup("<tool_call>file_write{\"path\":\"tag-a.txt\",\"content\":\"a\"}"
+                       "<tool_call>file_read{\"path\":\"tag-a.txt\"}");
+
     /* multi-agent orchestration: the decompose prompt lists the roster under
      * "可用 agent"; the merge prompt aggregates under "各 agent 结果" */
     if (has_substr(msg, "可用 agent") || has_substr(msg, "可用agent")) {

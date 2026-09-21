@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <ctype.h>
 #include "cJSON.h"
 
 #if defined(_WIN32)
@@ -72,6 +73,10 @@ static tool_result *shell_exec(const tool *self, const tool_ctx *ctx, const char
     t_j = cJSON_GetObjectItemCaseSensitive(args, "timeout_ms");
     if (t_j && cJSON_IsNumber(t_j))
         timeout_ms = (int)t_j->valuedouble;
+    if (timeout_ms < 100)
+        timeout_ms = 100;
+    if (timeout_ms > 60000)
+        timeout_ms = 60000;
 
     pr = proc_run_in(cmd_j->valuestring, timeout_ms, ctx ? ctx->workspace : NULL);
     cJSON_Delete(args);
@@ -122,6 +127,96 @@ const tool *tool_shell(void) {
         "}",
         1,
         shell_exec,
+        NULL,
+    };
+    return &t;
+}
+
+static int ssh_host_valid(const char *s) {
+    if (!s || !*s)
+        return 0;
+    for (; *s; s++) {
+        unsigned char c = (unsigned char)*s;
+        if (!isalnum(c) && c != '.' && c != '-' && c != '_' && c != '@' && c != ':' && c != '[' && c != ']')
+            return 0;
+    }
+    return 1;
+}
+
+static char *ssh_quote_command(const char *s) {
+    strbuf out;
+    strbuf_init(&out);
+    strbuf_append(&out, "\"");
+    for (; s && *s; s++) {
+        if (*s == '\r' || *s == '\n') {
+            strbuf_free(&out);
+            return NULL;
+        }
+        if (*s == '\\' || *s == '\"')
+            strbuf_append(&out, "\\");
+        char one[2] = {*s, '\0'};
+        strbuf_append(&out, one);
+    }
+    strbuf_append(&out, "\"");
+    return strbuf_detach(&out);
+}
+
+static tool_result *ssh_exec(const tool *self, const tool_ctx *ctx, const char *args_json) {
+    cJSON *args = cJSON_Parse(args_json);
+    cJSON *host = args ? cJSON_GetObjectItemCaseSensitive(args, "host") : NULL;
+    cJSON *command = args ? cJSON_GetObjectItemCaseSensitive(args, "command") : NULL;
+    cJSON *port = args ? cJSON_GetObjectItemCaseSensitive(args, "port") : NULL;
+    cJSON *timeout = args ? cJSON_GetObjectItemCaseSensitive(args, "timeout_ms") : NULL;
+    int timeout_ms = timeout && cJSON_IsNumber(timeout) ? (int)timeout->valuedouble : 15000;
+    int port_no = port && cJSON_IsNumber(port) ? (int)port->valuedouble : 22;
+    char *quoted = NULL;
+    char *shell_args = NULL;
+    tool_result *result;
+    strbuf cmd;
+    (void)self;
+
+    if (!host || !cJSON_IsString(host) || !ssh_host_valid(host->valuestring) ||
+        !command || !cJSON_IsString(command) || port_no < 1 || port_no > 65535) {
+        cJSON_Delete(args);
+        return tool_result_new(0, "ssh: host, command or port is invalid");
+    }
+    quoted = ssh_quote_command(command->valuestring);
+    if (!quoted) {
+        cJSON_Delete(args);
+        return tool_result_new(0, "ssh: command must be a single line");
+    }
+    if (timeout_ms < 100)
+        timeout_ms = 100;
+    if (timeout_ms > 60000)
+        timeout_ms = 60000;
+    strbuf_init(&cmd);
+    strbuf_appendf(&cmd, "ssh -o BatchMode=yes -o ConnectTimeout=5 -p %d -- %s %s", port_no,
+                   host->valuestring, quoted);
+    cJSON *wrapped = cJSON_CreateObject();
+    cJSON_AddStringToObject(wrapped, "command", cmd.buf);
+    cJSON_AddNumberToObject(wrapped, "timeout_ms", timeout_ms);
+    shell_args = cJSON_PrintUnformatted(wrapped);
+    cJSON_Delete(wrapped);
+    strbuf_free(&cmd);
+    free(quoted);
+    cJSON_Delete(args);
+    if (!shell_args)
+        return tool_result_new(0, "ssh: out of memory");
+    result = shell_exec(NULL, ctx, shell_args);
+    free(shell_args);
+    return result;
+}
+
+const tool *tool_ssh(void) {
+    static const tool t = {
+        "ssh",
+        "Run one non-interactive command on an SSH host using keys or an SSH agent.",
+        "{\"type\":\"object\",\"properties\":{\"host\":{\"type\":\"string\"},"
+        "\"command\":{\"type\":\"string\"},\"port\":{\"type\":\"integer\"},"
+        "\"timeout_ms\":{\"type\":\"integer\"}},\"required\":[\"host\",\"command\"]}",
+        1,
+        ssh_exec,
+        NULL,
     };
     return &t;
 }

@@ -15,12 +15,19 @@ POSIX :=
 else ifeq (Darwin,$(shell uname -s))
 PLAT  := src/os/macos
 POSIX := src/os/posix
+LDLIBS := -lpthread -lm
 else
 PLAT  := src/os/linux
 POSIX := src/os/posix
 endif
 
 SRCS := $(shell find src third_party/cJSON -name '*.c' | grep -v -E '^src/os/(linux|macos|windows|posix)/' | sort) $(wildcard $(POSIX)/*.c) $(wildcard $(PLAT)/*.c) third_party/wasm3/wasm3_all.c
+
+include/api/web_ui.h: apps/web/index.html tools/gen_web_ui.py
+	python3 tools/gen_web_ui.py
+
+$(SRCS): | include/api/web_ui.h
+.DEFAULT_GOAL := all
 
 all: build/cognitive-os-agent build/cognitive-os-agent-test build/cognitive-os-agent-scenario build/mock-llm-server build/test-adapters build/cognitive-os-agent-e2e build/cognitive-os-agent-bench
 

@@ -207,9 +207,23 @@ static void lane_sess_lock_release(lane_sess_lock *e) {
         mutex_unlock(&e->m);
 }
 
+typedef struct progress_binding { runtime_ctx *ctx; task *t; } progress_binding;
+static void chat_progress(const char *json, void *ud) {
+    progress_binding *b = ud;
+    cJSON *o = cJSON_Parse(json);
+    if (!o) return;
+    cJSON_AddNumberToObject(o, "task_id", (double)b->t->id);
+    cJSON_AddNumberToObject(o, "run_id", (double)b->t->id);
+    cJSON_AddStringToObject(o, "session_id", b->t->tag ? b->t->tag : "default");
+    char *text = cJSON_PrintUnformatted(o);
+    if (text) { task_set_progress(b->t, text); free(text); }
+    if (b->ctx->bus) event_bus_publish(b->ctx->bus, EV_MODEL, "task.progress", o);
+    else cJSON_Delete(o);
+}
+
 /* Pick an idle chat lane (try-lock in order) and run the prompt on it; when
  * all lanes are busy, block on lane 0 (bounded concurrency, overflow waits). */
-static void chat_lane_run(runtime_ctx *ctx, const char *session_id, int64_t task_id, const char *prompt,
+static int chat_lane_run(runtime_ctx *ctx, const char *session_id, int64_t task_id, const char *prompt,
                           char **answer) {
     lane_sess_lock *se = lane_sess_lock_acquire(session_id);
     int lane = -1;
@@ -225,10 +239,16 @@ static void chat_lane_run(runtime_ctx *ctx, const char *session_id, int64_t task
         lane = 0;
     }
     ctx->lane_task[lane] = task_id;
-    reasoning_run_ex(ctx->chat_lanes[lane], session_id, prompt, answer);
+    progress_binding binding = {ctx, scheduler_get(ctx->scheduler, task_id)};
+    reasoning_set_task(ctx->chat_lanes[lane], binding.t);
+    reasoning_set_observer(ctx->chat_lanes[lane], chat_progress, &binding);
+    int rc = reasoning_run_ex(ctx->chat_lanes[lane], session_id, prompt, answer);
+    reasoning_set_observer(ctx->chat_lanes[lane], NULL, NULL);
+    reasoning_set_task(ctx->chat_lanes[lane], NULL);
     ctx->lane_task[lane] = 0;
     mutex_unlock(&ctx->lane_mtx[lane]);
     lane_sess_lock_release(se);
+    return rc;
 }
 
 /* Scheduler task runner: run the prompt through the reasoning pipeline and
@@ -237,6 +257,7 @@ static void chat_lane_run(runtime_ctx *ctx, const char *session_id, int64_t task
 static void sched_trampoline(task *t, scheduler *s, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
     char *answer = NULL;
+    int run_rc = 0;
 
     (void)s;
     if (task_should_abort(t)) {
@@ -253,11 +274,11 @@ static void sched_trampoline(task *t, scheduler *s, void *ud) {
         else
             orchestrate(ctx, t->input, &answer, NULL);
     } else {
-        chat_lane_run(ctx, t->tag, t->id, t->input, &answer);
+        run_rc = chat_lane_run(ctx, t->tag, t->id, t->input, &answer);
     }
 
     t->output = answer ? answer : xstrdup("(no output)");
-    if (!answer)
+    if (!answer || run_rc != 0)
         t->status = TS_FAILED;
 }
 

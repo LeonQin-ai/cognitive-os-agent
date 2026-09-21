@@ -5,9 +5,9 @@
 **C 原生的自主智能体运行时 —— LLM 是加速器，不是操作系统。**
 
 [![Language](https://img.shields.io/badge/language-C11-blue.svg)](https://en.wikipedia.org/wiki/C11_(C_standard_revision))
-[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey.svg)](#快速开始)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)](#快速开始)
 [![Dependencies](https://img.shields.io/badge/external%20deps-0-green.svg)](#项目结构)
-[![Tests](https://img.shields.io/badge/tests-1541%20passing-brightgreen.svg)](#测试与验证)
+[![Tests](https://img.shields.io/badge/tests-1609%20passing-brightgreen.svg)](#测试与验证)
 [![CI](https://github.com/LeonQin-ai/cognitive-os-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/LeonQin-ai/cognitive-os-agent/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
 
@@ -372,8 +372,13 @@ cd cognitive-os-agent/backend
 # Linux
 make
 
-# Windows（MSYS2 / Git Bash）—— 捆绑 Zig 工具链，无需系统编译器
-./build.sh
+# macOS（Apple Silicon / Intel，需要 Xcode Command Line Tools）
+make
+bash package-macos.sh       # 生成原生 .app 与当前架构 ZIP
+
+# Windows——捆绑 Zig 工具链，无需系统编译器
+.\build.ps1 all             # PowerShell
+# 也可使用 build.bat / ./build.sh
 
 # 运行交互式 CLI
 ./build/cognitive-os-agent
@@ -384,7 +389,9 @@ make
 ```
 
 内嵌 Web 控制台为 ChatGPT 风格暗色 UI：多会话聊天，**聊天记录按会话持久化、重启不丢**
-（JSONL 存于 state 目录）、运行过程实时可见、对话侧栏可随时切换模型、定时任务
+（JSONL 存于 state 目录）；执行时展示分析、规划、工具执行与总结阶段，以及步骤、耗时和 token。
+任务运行中仍可继续发送要求，运行时会在安全检查点接收新指令、重新规划，并保留已经完成的证据。
+控制台还支持随时切换模型、定时任务
 （间隔/每日 cron）执行结果直接展示，以及持久化任务日志支持一键**检查点恢复**
 （`POST /v1/tasks/<id>/resume`）。
 
@@ -416,7 +423,7 @@ curl localhost:8080/metrics       # 指标：context.bytes_*、memory.*、tx.*
 质量门槛：**每次改动都在 Windows（zig cc）与 Linux（gcc 12）双平台验证，包含 AddressSanitizer 无报错运行。**
 
 ```
-unit:      1541 passed, 0 failed   （44 个模块，0 外部依赖；Linux/gcc 1517）
+unit:      1609 passed, 0 failed   （Windows/zig cc，0 外部运行时依赖）
 scenario:  91 checks, 0 failed     （HTTP 服务器、插件、MCP stdio、Flow）
 e2e:       E2E PASS                （真实 HTTP，双协议）
 adapters:  ADAPTER PASS            （chat + SSE 流式，openai + anthropic）
@@ -428,12 +435,12 @@ ASAN:      0 内存错误
 
 所有测试套件自包含，**不需要 API key、不需要外网、不需要任何外部服务**（LLM 用 mock）。所有测试二进制失败时都以非零码退出。
 
-**Linux（gcc）：**
+**Linux / macOS：**
 
 ```bash
 cd backend
 make                # 构建全部测试二进制（或 make test / make scenario 构建并运行单项）
-make test           # 单元测试            → "1541 passed, 0 failed"
+make test           # 单元测试            → "1609 passed, 0 failed"
 make scenario       # 场景检查            → "SCENARIO PASS"
 ./build/test-adapters            # 适配器检查          → "ADAPTER PASS"
 ./build/cognitive-os-agent-bench --mock   # 基准 sanity（离线 mock）
@@ -452,6 +459,9 @@ cd backend
 ./build/cognitive-os-agent-bench.exe --mock
 ./build/mock-llm-server.exe 9000 & ./build/cognitive-os-agent-e2e.exe
 ```
+
+macOS 可运行 `bash package-macos.sh`，在 `dist/Cognitive OS.app` 生成原生 Cocoa/WebKit
+应用，并输出当前架构的 ZIP。设置 `MACOS_SIGN_IDENTITY` 可使用 Developer ID 签名；默认使用临时签名。
 
 | 套件 | 二进制 | 验证内容 |
 |---|---|---|

@@ -15,6 +15,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdatomic.h>
+
+#define MAX_WS_PAYLOAD (1024u * 1024u)
 
 typedef struct ws_client {
     int id;
@@ -22,7 +25,7 @@ typedef struct ws_client {
     struct ws_server *server;
     mutex_t send_mtx;
     strbuf queue; /* pending outbound messages, '\n'-separated */
-    volatile int closed;
+    _Atomic int closed;
 } ws_client;
 
 struct ws_server {
@@ -56,6 +59,8 @@ static size_t ws_frame_len(const unsigned char *b, size_t len, size_t *payload_l
         off += 8;
     }
 
+    if (plen > MAX_WS_PAYLOAD || plen > SIZE_MAX - off - 4)
+        return SIZE_MAX;
     if (b[1] & 0x80)
         off += 4; /* masked client frames */
     if (len < off + plen)
@@ -83,21 +88,20 @@ static void ws_send_frame(ws_client *c, int opcode, const unsigned char *payload
 
 /* Send all complete queued messages (those ending with '\n') as text frames. */
 static void ws_client_flush(ws_client *c) {
-    char local[16384];
+    char *local = NULL;
     size_t local_len = 0;
     size_t start = 0;
 
     mutex_lock(&c->send_mtx);
     if (c->queue.len) {
-        size_t take = c->queue.len > sizeof(local) ? sizeof(local) : c->queue.len;
-        /* only consume up to the last complete '\n' so no partial message is lost */
-        size_t keep = take;
-        while (keep > 0 && c->queue.buf[keep - 1] != '\n')
-            keep--;
+        size_t keep = c->queue.len;
+        while (keep > 0 && c->queue.buf[keep - 1] != '\n') keep--;
         if (keep == 0) {
             mutex_unlock(&c->send_mtx);
             return;
         }
+        local = malloc(keep);
+        if (!local) { mutex_unlock(&c->send_mtx); return; }
         memcpy(local, c->queue.buf, keep);
         memmove(c->queue.buf, c->queue.buf + keep, c->queue.len - keep);
         c->queue.len -= keep;
@@ -111,6 +115,7 @@ static void ws_client_flush(ws_client *c) {
             start = i + 1;
         }
     }
+    free(local);
 }
 
 static void ws_server_remove(ws_server *s, ws_client *c) {
@@ -145,6 +150,7 @@ static void ws_client_loop(void *arg) {
         while (off < (size_t)n) {
             size_t plen = 0;
             size_t total = ws_frame_len(rbuf + off, (size_t)n - off, &plen);
+            if (total == SIZE_MAX) { c->closed = 1; break; }
             if (total == 0)
                 break;
             unsigned char payload[8192];

@@ -67,6 +67,11 @@ typedef struct reasoning_config {
  * (caller frees), or NULL (bad args / LLM error). */
 char *hyde_passage(llm *llm, const char *query);
 
+typedef void (*reasoning_observer)(const char *json, void *ud);
+/* Set only while the lane is idle; callback runs on its worker. */
+void reasoning_set_observer(reasoning *r, reasoning_observer cb, void *ud);
+struct task;
+void reasoning_set_task(reasoning *r, struct task *task);
 reasoning *reasoning_new(const reasoning_config *cfg);
 void reasoning_free(reasoning *r);
 

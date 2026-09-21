@@ -16,13 +16,14 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdatomic.h>
 
-#define GUARD_TAIL 96 /* bytes held back between stream deltas */
+#define GUARD_TAIL 256 /* covers long credentials split across stream deltas */
 
 /* --- module state --------------------------------------------------------- */
 
 static mutex_t g_mtx;
-static int g_mtx_init = 0;
+static _Atomic int g_mtx_init = 0;
 static int g_mode_strict = 0;     /* 0 = passthrough (default), 1 = strict */
 static audit *g_audit = NULL;     /* owned (secret_audit_open) */
 static metrics *g_metrics = NULL; /* borrowed */
@@ -31,9 +32,15 @@ static metrics *g_metrics = NULL; /* borrowed */
 static long long g_scans, g_low, g_medium, g_high, g_redactions, g_blocked;
 
 static void lock_init_once(void) {
-    if (!g_mtx_init) {
+    int state = atomic_load_explicit(&g_mtx_init, memory_order_acquire);
+    if (state == 2) return;
+    int expected = 0;
+    if (atomic_compare_exchange_strong_explicit(&g_mtx_init, &expected, 1,
+                                                memory_order_acq_rel, memory_order_acquire)) {
         mutex_init(&g_mtx);
-        g_mtx_init = 1;
+        atomic_store_explicit(&g_mtx_init, 2, memory_order_release);
+    } else {
+        while (atomic_load_explicit(&g_mtx_init, memory_order_acquire) != 2) { }
     }
 }
 

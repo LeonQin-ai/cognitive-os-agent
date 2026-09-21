@@ -26,6 +26,7 @@
 #include "infra/util.h"
 #include "infra/logging.h"
 #include "infra/metrics.h"
+#include "security/secret.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -132,6 +133,13 @@ struct run_step {
  * after struct reasoning — see below.) */
 
 struct reasoning {
+    mutex_t progress_mtx;
+    char *progress_json;
+    unsigned long progress_seq;
+    reasoning_observer observer;
+    void *observer_ud;
+    task *run_task;
+    unsigned applied_updates;
     llm *llm;
     tool_registry *tools;
     memory *mem;
@@ -222,6 +230,49 @@ struct reasoning {
     usage *usage_acc;
     long long usage_base_in, usage_base_out, usage_base_reason;
 };
+
+/* Only the worker constructs snapshots. Readers copy immutable JSON. */
+static void progress_emit(reasoning *r, const char *stage) {
+    cJSON *o = cJSON_CreateObject();
+    if (!o) return;
+    cJSON_AddStringToObject(o, "stage", stage);
+    cJSON_AddNumberToObject(o, "seq", ++r->progress_seq);
+    cJSON_AddNumberToObject(o, "applied_updates", r->applied_updates);
+    cJSON_AddNumberToObject(o, "started_ms", (double)r->prog_started_ms);
+    cJSON_AddNumberToObject(o, "elapsed_ms", (double)(time_now_ms() - r->prog_started_ms));
+    cJSON_AddNumberToObject(o, "round", r->round_idx);
+    cJSON_AddNumberToObject(o, "tool_calls", r->prog_tool_calls);
+    cJSON_AddStringToObject(o, "cur_tool", r->prog_tool);
+    cJSON_AddNumberToObject(o, "llm_ms", (double)r->prog_llm_ms);
+    cJSON_AddNumberToObject(o, "tool_ms", (double)r->prog_tool_ms);
+    cJSON_AddNumberToObject(o, "llm_calls", r->prog_llm_calls);
+    long long tin = 0, tout = 0;
+    if (r->llm) llm_usage_totals(r->llm, &tin, &tout);
+    cJSON_AddNumberToObject(o, "tokens_in", (double)tin);
+    cJSON_AddNumberToObject(o, "tokens_out", (double)tout);
+    char *steps = reasoning_steps_json(r);
+    cJSON *arr = steps ? cJSON_Parse(steps) : NULL;
+    free(steps);
+    if (arr) cJSON_AddItemToObject(o, "steps", arr);
+    char *json = cJSON_PrintUnformatted(o);
+    cJSON_Delete(o);
+    if (!json) return;
+    mutex_lock(&r->progress_mtx);
+    free(r->progress_json);
+    r->progress_json = xstrdup(json);
+    mutex_unlock(&r->progress_mtx);
+    if (r->observer) r->observer(json, r->observer_ud);
+    free(json);
+}
+void reasoning_set_observer(reasoning *r, reasoning_observer cb, void *ud) {
+    if (r) { r->observer = cb; r->observer_ud = ud; }
+}
+void reasoning_set_task(reasoning *r, task *t) { if (r) r->run_task = t; }
+static int run_aborted(reasoning *r) {
+    if (!r->run_task || !task_should_abort(r->run_task)) return 0;
+    if (!r->run_task->cancel_flag) r->run_task->timed_out = 1;
+    return 1;
+}
 
 /* Find-or-create the session with this id. Caller holds sess_mtx. */
 static struct session *session_get_locked(reasoning *r, const char *id) {
@@ -354,6 +405,7 @@ static void meta_save_locked(reasoning *r) {
         cJSON_AddBoolToObject(o, "shared_memory", m->shared_memory ? 1 : 0);
         cJSON_AddItemToArray(arr, o);
     }
+
     js = cJSON_PrintUnformatted(arr);
     cJSON_Delete(arr);
     if (!js)
@@ -844,7 +896,9 @@ static void log_append(char **buf, size_t *blen, size_t *bcap, const char *text)
 /* Model-facing log: everything the next planning round must see (action
  * results, narrations, system nudges). */
 static void round_log_append(reasoning *r, const char *text) {
+    mutex_lock(&r->progress_mtx);
     log_append(&r->round_log, &r->round_log_len, &r->round_log_cap, text);
+    mutex_unlock(&r->progress_mtx);
 }
 
 /* User-facing observation log: only rounds that actually executed something
@@ -856,12 +910,14 @@ static void obs_log_append(reasoning *r, const char *text) {
 }
 
 static void round_log_reset(reasoning *r) {
+    mutex_lock(&r->progress_mtx);
     if (r->round_log)
         r->round_log[0] = '\0';
     r->round_log_len = 0;
     if (r->obs_log)
         r->obs_log[0] = '\0';
     r->obs_log_len = 0;
+    mutex_unlock(&r->progress_mtx);
 }
 
 /* session notes: append "line\n" to a fixed-size buffer, keeping the TAIL
@@ -1177,6 +1233,8 @@ static int h_reason(state_machine *sm, void *ud, const char *input, char **out) 
     clear_actions(r);
     r->ok_actions = 0;
     r->denied_actions = 0;
+    r->prog_tool[0] = 0;
+    progress_emit(r, "planning");
     aug = build_context(r, input);
     if (!r->llm) {
         free(aug);
@@ -1189,6 +1247,7 @@ static int h_reason(state_machine *sm, void *ud, const char *input, char **out) 
                                  &raw, &plan_err);
     r->prog_llm_ms += time_now_ms() - t_llm0;
     r->prog_llm_calls++;
+    progress_emit(r, r->n_actions ? "planning" : "summarizing");
     free(aug);
     if (rc != 0 || !raw) {
         free(raw);
@@ -1228,6 +1287,23 @@ static int h_plan(state_machine *sm, void *ud, const char *input, char **out) {
 }
 
 /* ACT: execute the planned actions, wrapped in a transaction. */
+static void utf8_head_copy(char *dst, size_t cap, const char *src) {
+    size_t n;
+    if (!dst || cap == 0)
+        return;
+    if (!src) {
+        dst[0] = '\0';
+        return;
+    }
+    n = strlen(src);
+    if (n >= cap)
+        n = cap - 1;
+    while (n > 0 && !str_utf8_valid_n(src, (long long)n))
+        n--;
+    memcpy(dst, src, n);
+    dst[n] = '\0';
+}
+
 /* Record one executed action in the step registry (Claude-Code style
  * "● Tool(args) ⎿ out-head" display; args/out are truncated heads). */
 static void run_step_add(reasoning *r, const char *tool, const char *args, const char *out, int ok, int ms) {
@@ -1235,21 +1311,28 @@ static void run_step_add(reasoning *r, const char *tool, const char *args, const
 
     if (!r)
         return;
+    mutex_lock(&r->progress_mtx);
+    if (r->n_steps >= 256) {
+        memmove(r->steps, r->steps + 1, 255 * sizeof(*r->steps));
+        r->n_steps = 255;
+    }
     if (r->n_steps == r->steps_cap) {
         int ncap = r->steps_cap ? r->steps_cap * 2 : 16;
         struct run_step *ns = realloc(r->steps, (size_t)ncap * sizeof(*ns));
-        if (!ns)
-            return;
+        if (!ns) { mutex_unlock(&r->progress_mtx); return; }
         r->steps = ns;
         r->steps_cap = ncap;
     }
     st = &r->steps[r->n_steps++];
     memset(st, 0, sizeof(*st));
-    snprintf(st->tool, sizeof(st->tool), "%s", tool ? tool : "?");
-    snprintf(st->args, sizeof(st->args), "%s", args ? args : "");
-    snprintf(st->out, sizeof(st->out), "%s", out ? out : "");
+    utf8_head_copy(st->tool, sizeof(st->tool), tool ? tool : "?");
+    utf8_head_copy(st->args, sizeof(st->args), args ? args : "");
+    utf8_head_copy(st->out, sizeof(st->out), out ? out : "");
     st->ok = ok;
     st->ms = ms;
+    mutex_unlock(&r->progress_mtx);
+    r->prog_tool[0] = 0;
+    progress_emit(r, "executing");
 }
 
 static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
@@ -1297,8 +1380,11 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
     }
 
     for (int i = 0; i < r->n_actions; i++) {
-        scheduler_yield(); /* cooperative checkpoint between tool actions */
+        /* A lane holds a pthread mutex: never migrate its coroutine to
+         * another worker while the lane is locked. The pool provides fairness. */
+        if (run_aborted(r) || task_has_messages(r->run_task)) break;
         snprintf(r->prog_tool, sizeof(r->prog_tool), "%s", r->actions[i].tool);
+        progress_emit(r, "executing");
         /* policy hard-block: a denied action is intentionally NOT executed.
          * Record the refusal and keep going — a policy refusal is a legitimate
          * outcome, not an infrastructure failure, so it must not fail the
@@ -1574,6 +1660,7 @@ reasoning *reasoning_new(const reasoning_config *cfg) {
     r = calloc(1, sizeof(reasoning));
     if (!r)
         return NULL;
+    if (mutex_init(&r->progress_mtx) != 0) { free(r); return NULL; }
     r->ss = &r->own_store_; /* embedded store until a shared one is attached */
     mutex_init(&r->own_store_.sess_mtx);
     r->cur = session_get(r, NULL); /* default session, always present */
@@ -1637,6 +1724,8 @@ void reasoning_free(reasoning *r) {
         mutex_destroy(&r->own_store_.sess_mtx);
     }
     free(r->steps);
+    free(r->progress_json);
+    mutex_destroy(&r->progress_mtx);
     free(r->last_plan_raw);
     free(r->prev_plan);
     free(r->round_log);
@@ -2207,7 +2296,16 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
         r->cur->last_active_ms = (long long)time_now_ms();
 
     /* fresh step registry for this run (keep the buffer) */
+    mutex_lock(&r->progress_mtx);
     r->n_steps = 0;
+    mutex_unlock(&r->progress_mtx);
+    r->progress_seq = 0;
+    r->applied_updates = 0;
+    r->prog_started_ms = time_now_ms();
+    r->prog_tool[0] = 0;
+    r->prog_tool_calls = r->prog_llm_calls = r->round_idx = 0;
+    r->prog_llm_ms = r->prog_tool_ms = 0;
+    progress_emit(r, "analyzing");
     /* 会话可关闭共享记忆：关闭后本会话的运行不读写全局 Memory OS */
     mem_shared = !r->cur || r->cur->shared_memory;
 
@@ -2278,7 +2376,6 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     r->prev_plan = NULL;
     r->stall_nudged = 0;
     r->intent_nudged = 0;
-    r->prog_started_ms = (long long)time_now_ms();
     r->prog_tool_calls = 0;
     r->prog_llm_ms = 0;
     r->prog_llm_calls = 0;
@@ -2290,10 +2387,37 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     state st = ST_FAILED;
     int consec_fail = 0; /* consecutive stage failures → circuit breaker */
     int fail_aborted = 0;
+restart_planning:
     for (r->round_idx = 1; r->round_idx <= r->max_rounds; r->round_idx++) {
+        if (run_aborted(r)) { st = ST_FAILED; break; }
+        char *messages = task_take_messages(r->run_task, &r->applied_updates);
+        if (messages) {
+            const char *separator = "\n\n## 用户执行中补充（最新要求优先，保留已完成工作，重新规划剩余步骤）\n";
+            size_t size = strlen(prompt) + strlen(separator) + strlen(messages) + 1;
+            char *updated = malloc(size);
+            if (!updated) { free(messages); st = ST_FAILED; break; }
+            snprintf(updated, size, "%s%s%s", prompt, separator, messages);
+            free(messages); free(safe_prompt); safe_prompt = updated; prompt = updated;
+            r->stall_nudged = r->intent_nudged = 0;
+            free(r->prev_plan); r->prev_plan = NULL;
+            /* A steering message defines a revised task and needs a fresh
+             * planning budget. Without resetting the per-plan counter, an
+             * update accepted near the end of a long run reaches the forced
+             * tool-free final round before its requested actions can run. */
+            r->round_idx = 0;
+            progress_emit(r, "replanning");
+        }
         free(result);
         result = NULL;
         st = state_machine_run(r->sm, prompt, &result);
+        if (run_aborted(r)) { st = ST_FAILED; break; }
+        if (task_has_messages(r->run_task)) {
+            /* Preserve real completed observations, discard unexecuted plans. */
+            if (r->had_plan && result) {
+                round_log_append(r, result); obs_log_append(r, result);
+            }
+            continue;
+        }
         /* per-round token accounting into the global per-model ledger
          * (deltas vs the previous snapshot; a mid-run llm swap would produce
          * a bogus negative delta, hence the guard) */
@@ -2444,7 +2568,9 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
      * transcript. Without this, a stage failure on the LAST round skipped
      * synthesis entirely (the old `st == ST_DONE` guard) and the caller
      * received the raw round log with no answer at all. */
-    if (!final_text && r->round_log_len > 0 && r->llm) {
+    if (!run_aborted(r) && !final_text && r->round_log_len > 0 && r->llm) {
+        r->prog_tool[0] = 0;
+        progress_emit(r, "summarizing");
         char sys[320];
         snprintf(sys, sizeof(sys),
                  "You are finalizing an agent run. Based on the original request and the "
@@ -2474,6 +2600,15 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
         }
     }
 
+    /* Linearize finalization with message acceptance. A message accepted
+     * during synthesis always gets another planning pass. */
+    if (!run_aborted(r) && !task_close_messages(r->run_task)) {
+        free(final_text); final_text = NULL;
+        free(result); result = NULL;
+        free(last_narration); last_narration = NULL;
+        stalled = consec_fail = fail_aborted = 0;
+        goto restart_planning;
+    }
     strbuf_init(&out);
     /* user-visible answer = the model's final text ONLY. Raw tool output and
      * [tool]/action logs are execution details (visible live via
@@ -2590,6 +2725,7 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     if (r->cur && r->cur->in_run > 0)
         r->cur->in_run--;
     mutex_unlock(&r->ss->sess_mtx);
+    progress_emit(r, ret == 0 ? "completed" : "failed");
     return ret;
 }
 
@@ -2607,46 +2743,43 @@ void reasoning_progress(reasoning *r, long long *elapsed_ms, int *round, int *to
 void reasoning_progress_ex(reasoning *r, long long *elapsed_ms, int *round, int *tool_calls,
                            const char **cur_tool, long long *tokens_in, long long *tokens_out,
                            long long *llm_ms, long long *tool_ms, int *llm_calls) {
-    long long tin = 0, tout = 0;
-
-    if (elapsed_ms)
-        *elapsed_ms = (r && r->prog_started_ms) ? (long long)time_now_ms() - r->prog_started_ms : 0;
-    if (round)
-        *round = r ? r->round_idx : 0;
-    if (tool_calls)
-        *tool_calls = r ? r->prog_tool_calls : 0;
-    if (cur_tool)
-        *cur_tool = (r && r->prog_tool[0]) ? r->prog_tool : "";
-    if (r && r->llm)
-        llm_usage_totals(r->llm, &tin, &tout);
-    if (tokens_in)
-        *tokens_in = tin;
-    if (tokens_out)
-        *tokens_out = tout;
-    if (llm_ms)
-        *llm_ms = r ? r->prog_llm_ms : 0;
-    if (tool_ms)
-        *tool_ms = r ? r->prog_tool_ms : 0;
-    if (llm_calls)
-        *llm_calls = r ? r->prog_llm_calls : 0;
+    static _Thread_local char tool_copy[64];
+    cJSON *o = NULL;
+    if (r) {
+        mutex_lock(&r->progress_mtx);
+        if (r->progress_json) o = cJSON_Parse(r->progress_json);
+        mutex_unlock(&r->progress_mtx);
+    }
+#define READ_NUM(key) (cJSON_GetNumberValue(cJSON_GetObjectItemCaseSensitive(o, key)))
+#define NUM(key) (cJSON_IsNumber(cJSON_GetObjectItemCaseSensitive(o, key)) ? READ_NUM(key) : 0)
+    long long started = (long long)NUM("started_ms");
+    if (elapsed_ms) *elapsed_ms = started ? time_now_ms() - started : 0;
+    if (round) *round = (int)NUM("round");
+    if (tool_calls) *tool_calls = (int)NUM("tool_calls");
+    const char *tool = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(o, "cur_tool"));
+    snprintf(tool_copy, sizeof(tool_copy), "%s", tool ? tool : "");
+    if (cur_tool) *cur_tool = tool_copy;
+    if (tokens_in) *tokens_in = (long long)NUM("tokens_in");
+    if (tokens_out) *tokens_out = (long long)NUM("tokens_out");
+    if (llm_ms) *llm_ms = (long long)NUM("llm_ms");
+    if (tool_ms) *tool_ms = (long long)NUM("tool_ms");
+    if (llm_calls) *llm_calls = (int)NUM("llm_calls");
+#undef NUM
+#undef READ_NUM
+    cJSON_Delete(o);
 }
 
 char *reasoning_round_log_tail(reasoning *r, size_t max_bytes) {
-    size_t start;
-
-    if (!r || !r->round_log || r->round_log_len == 0 || max_bytes == 0)
-        return NULL;
-    start = 0;
-    if (r->round_log_len > max_bytes) {
-        start = r->round_log_len - max_bytes;
-        /* snap forward to the next line boundary so a cut never lands
-         * mid-line; a leading partial line is display noise */
-        while (start < r->round_log_len && r->round_log[start] != '\n')
-            start++;
-        if (start < r->round_log_len)
-            start++;
+    if (!r || !max_bytes) return NULL;
+    mutex_lock(&r->progress_mtx);
+    size_t start = r->round_log_len > max_bytes ? r->round_log_len - max_bytes : 0;
+    if (start) {
+        while (start < r->round_log_len && r->round_log[start] != '\n') start++;
+        if (start < r->round_log_len) start++;
     }
-    return xstrdup(r->round_log + start);
+    char *copy = r->round_log && r->round_log_len ? xstrdup(r->round_log + start) : NULL;
+    mutex_unlock(&r->progress_mtx);
+    return copy;
 }
 
 /* Steps of the current/most recent run as a JSON array of
@@ -2660,18 +2793,23 @@ char *reasoning_steps_json(reasoning *r) {
     arr = cJSON_CreateArray();
     if (!arr)
         return NULL;
+    mutex_lock(&r->progress_mtx);
     for (int i = 0; i < r->n_steps; i++) {
         const struct run_step *st = &r->steps[i];
         cJSON *o = cJSON_CreateObject();
         if (!o)
             break;
         cJSON_AddStringToObject(o, "tool", st->tool);
-        cJSON_AddStringToObject(o, "args", st->args);
-        cJSON_AddStringToObject(o, "out", st->out);
+        char *args = secret_redact_text(st->args, strlen(st->args), NULL);
+        char *output = secret_redact_text(st->out, strlen(st->out), NULL);
+        cJSON_AddStringToObject(o, "args", args ? args : "");
+        cJSON_AddStringToObject(o, "out", output ? output : "");
+        free(args); free(output);
         cJSON_AddNumberToObject(o, "ok", st->ok);
         cJSON_AddNumberToObject(o, "ms", st->ms);
         cJSON_AddItemToArray(arr, o);
     }
+    mutex_unlock(&r->progress_mtx);
     js = cJSON_PrintUnformatted(arr);
     cJSON_Delete(arr);
     return js;

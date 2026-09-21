@@ -339,6 +339,76 @@ static int parse_plan_actions(const char *plan, planned_action **actions, int *n
     return 1;
 }
 
+/* Some OpenAI-compatible providers serialize tool calls as
+ *   <tool_call>shell{"command":"..."}<tool_call>file_read{"path":"..."}
+ * instead of putting the tool name inside the JSON object. Parse every such
+ * block locally; otherwise the reply is mistaken for prose and the model can
+ * repeat it forever without executing anything. */
+static int parse_tagged_tool_calls(const char *plan, planned_action **actions, int *n_actions) {
+    const char *p = plan;
+    planned_action *out = NULL;
+    int count = 0;
+
+    while ((p = strstr(p, "<tool_call>")) != NULL) {
+        const char *name = p + strlen("<tool_call>");
+        const char *json = name;
+        while (*json && *json != '{' && *json != '[' && *json != '<')
+            json++;
+        const char *name_end = json;
+        while (name_end > name && (name_end[-1] == ' ' || name_end[-1] == '\t' || name_end[-1] == '\r' || name_end[-1] == '\n'))
+            name_end--;
+        if (json == name || (*json != '{' && *json != '[')) {
+            p = name;
+            continue;
+        }
+
+        char *body = extract_json_span(json);
+        if (!body)
+            break; /* incomplete trailing call: let the normal repair path handle it */
+        cJSON *args = cJSON_Parse(body);
+        free(body);
+        if (!args || !cJSON_IsObject(args)) {
+            cJSON_Delete(args);
+            p = json + 1;
+            continue;
+        }
+
+        planned_action *grown = realloc(out, (size_t)(count + 1) * sizeof(*out));
+        if (!grown) {
+            cJSON_Delete(args);
+            break;
+        }
+        out = grown;
+        size_t tool_len = (size_t)(name_end - name);
+        out[count].tool = (char *)malloc(tool_len + 1);
+        if (out[count].tool) {
+            memcpy(out[count].tool, name, tool_len);
+            out[count].tool[tool_len] = '\0';
+        }
+        out[count].args_json = cJSON_PrintUnformatted(args);
+        cJSON_Delete(args);
+        if (!out[count].tool || !out[count].args_json) {
+            free(out[count].tool);
+            free(out[count].args_json);
+            break;
+        }
+        count++;
+
+        /* Advance past the balanced JSON object, including nested braces and
+         * braces inside strings, by locating the next tag after this object. */
+        const char *next = strstr(json + 1, "<tool_call>");
+        p = next ? next : json + strlen(json);
+    }
+
+    if (count == 0) {
+        free(out);
+        return 0;
+    }
+    *actions = out;
+    *n_actions = count;
+    return 1;
+}
+
 /* Shared planning core. Takes ownership of nothing; frees sys_prompt. */
 static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_action **actions, int *n_actions,
                      char **raw_out, char **err_out) {
@@ -409,8 +479,11 @@ static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_act
      * prose, and sometimes emit structurally invalid JSON (mis-ordered
      * brackets), which used to silently demote a real plan to a plain-text
      * answer — the agent then "answered" instead of acting. */
-    looks_like_plan = strstr(plan, "\"tool\"") != NULL || strstr(plan, "'tool'") != NULL;
-    have = parse_plan_actions(plan, actions, n_actions);
+    looks_like_plan = strstr(plan, "\"tool\"") != NULL || strstr(plan, "'tool'") != NULL ||
+                      strstr(plan, "<tool_call>") != NULL;
+    have = parse_tagged_tool_calls(plan, actions, n_actions);
+    if (!have)
+        have = parse_plan_actions(plan, actions, n_actions);
     if (!have && looks_like_plan) {
         const char *epos = cJSON_GetErrorPtr();
         size_t off = (epos && epos >= plan && epos < plan + strlen(plan)) ? (size_t)(epos - plan) : 0;

@@ -9,7 +9,8 @@ cd "$(dirname "$0")"
 
 OS="$(uname -s)"
 ZIG=""
-if   [ -x tools/zig/zig.exe ]; then ZIG="tools/zig/zig.exe"
+if   [[ "$OS" == Darwin* ]]; then ZIG=""
+elif [ -x tools/zig/zig.exe ]; then ZIG="tools/zig/zig.exe"
 elif [ -x tools/zig/zig     ]; then ZIG="tools/zig/zig"
 elif command -v zig >/dev/null 2>&1; then ZIG="zig"
 else
@@ -17,13 +18,17 @@ else
   exit 1
 fi
 
-CC="$ZIG cc"
+if [[ "$OS" == Darwin* ]]; then
+  CC="$(xcrun --find clang)"
+else
+  CC="$ZIG cc"
+fi
 CFLAGS="-std=c11 -Wall -Wextra -O1 -g -Iinclude -Ithird_party/cJSON -Ithird_party/wasm3"
 LIBS=""
 EXE=""
 case "$OS" in
-  MINGW*|MSYS*|CYGWIN*) LIBS="-lws2_32 -lwinhttp -lm"; EXE=".exe"; PLAT="src/os/windows"; POSIX="" ;;
-  Darwin*)              LIBS="-lpthread -ldl -lm";    EXE="";      PLAT="src/os/macos";  POSIX="src/os/posix" ;;
+  MINGW*|MSYS*|CYGWIN*) LIBS="-lws2_32 -lwinhttp -lbcrypt -lm"; EXE=".exe"; PLAT="src/os/windows"; POSIX="" ;;
+  Darwin*)              LIBS="-lpthread -lm";        EXE="";      PLAT="src/os/macos";  POSIX="src/os/posix" ;;
   *)                    LIBS="-lpthread -ldl -lm";    EXE="";      PLAT="src/os/linux";  POSIX="src/os/posix" ;;
 esac
 
@@ -35,7 +40,7 @@ mkdir -p build
 # Regenerate the embedded web UI (include/api/web_ui.h) from
 # apps/web/index.html whenever the page or the generator script is newer.
 if [ -f apps/web/index.html ] && { [ apps/web/index.html -nt include/api/web_ui.h ] || [ tools/gen_web_ui.py -nt include/api/web_ui.h ]; }; then
-  python tools/gen_web_ui.py
+  python3 tools/gen_web_ui.py
 fi
 
 TARGET="${1:-all}"

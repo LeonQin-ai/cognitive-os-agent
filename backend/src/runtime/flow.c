@@ -282,12 +282,10 @@ static flow_prog *flow_prog_slot(int64_t task_id) {
 
 static void flow_prog_begin(int64_t task_id, const flow_dag *d) {
     flow_prog *p;
-    int64_t now;
 
     if (task_id < 0)
         return;
     flow_prog_init_once();
-    now = time_now_ms();
     mutex_lock(&flow_prog_mtx);
     p = flow_prog_slot(task_id);
     if (!p) {

@@ -163,6 +163,24 @@ static size_t count_occurrences(const char *hay, const char *needle) {
     return n;
 }
 
+static char *with_crlf(const char *text) {
+    size_t extra = 0;
+    for (const char *p = text; *p; p++)
+        if (*p == '\n' && (p == text || p[-1] != '\r'))
+            extra++;
+    char *out = malloc(strlen(text) + extra + 1);
+    if (!out)
+        return NULL;
+    char *w = out;
+    for (const char *p = text; *p; p++) {
+        if (*p == '\n' && (p == text || p[-1] != '\r'))
+            *w++ = '\r';
+        *w++ = *p;
+    }
+    *w = '\0';
+    return out;
+}
+
 static tool_result *file_edit_exec(const tool *self, const tool_ctx *ctx, const char *args_json) {
     cJSON *args;
     cJSON *path_j;
@@ -214,6 +232,20 @@ static tool_result *file_edit_exec(const tool *self, const tool_ctx *ctx, const 
 
     old_len = strlen(old_s);
     occ = count_occurrences(content, old_s);
+    /* LLM JSON conventionally uses LF while files read on Windows often keep
+     * CRLF. Exact edit semantics still apply after adapting only line endings. */
+    if (occ == 0 && strchr(old_s, '\n') && strstr(content, "\r\n")) {
+        char *crlf_old = with_crlf(old_s);
+        char *crlf_new = with_crlf(new_s);
+        if (crlf_old && crlf_new && count_occurrences(content, crlf_old) > 0) {
+            free(old_s); free(new_s);
+            old_s = crlf_old; new_s = crlf_new;
+            old_len = strlen(old_s);
+            occ = count_occurrences(content, old_s);
+        } else {
+            free(crlf_old); free(crlf_new);
+        }
+    }
     if (occ == 0) {
         char msg[1200];
         snprintf(msg, sizeof(msg),

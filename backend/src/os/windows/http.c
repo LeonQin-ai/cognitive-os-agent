@@ -200,20 +200,18 @@ static http_response *do_request(const char *method, const char *base_url, const
     WinHttpQueryHeaders(hReq, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, NULL, &dwStatus, &dwSize, NULL);
 
     strbuf_init(&body_buf);
-    DWORD available = 0;
-    do {
-        if (WinHttpQueryDataAvailable(hReq, &available) == FALSE)
-            break;
-        if (available == 0)
-            break;
-        char *tmp = (char *)malloc((size_t)available + 1);
-        if (!tmp)
-            break;
+    /* ReadData obeys the receive timeout configured above. QueryDataAvailable
+     * may block indefinitely while a reasoning model is silent, which used to
+     * leave Flow nodes RUNNING forever. */
+    for (;;) {
+        char tmp[16384];
         DWORD downloaded = 0;
-        if (WinHttpReadData(hReq, tmp, available, &downloaded) && downloaded > 0)
-            strbuf_append_n(&body_buf, tmp, (size_t)downloaded);
-        free(tmp);
-    } while (available > 0);
+        if (!WinHttpReadData(hReq, tmp, sizeof(tmp), &downloaded))
+            break;
+        if (downloaded == 0)
+            break;
+        strbuf_append_n(&body_buf, tmp, (size_t)downloaded);
+    }
 
     r = (http_response *)calloc(1, sizeof(*r));
     r->status = (int)dwStatus;

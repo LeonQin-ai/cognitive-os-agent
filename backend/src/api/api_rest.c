@@ -187,7 +187,7 @@ static int h_task_get(const http_request *req, http_response *resp, void *ud) {
     cJSON_AddStringToObject(o, "status", task_status_str(t->status));
     if (t->input)
         cJSON_AddStringToObject(o, "input", t->input);
-    if (t->output)
+    if (t->status >= TS_DONE && t->output)
         cJSON_AddStringToObject(o, "output", t->output);
     /* live progress of the running agent loop (runs are serialized, so the
      * reasoning engine's progress IS this task's progress). Polled without
@@ -203,48 +203,20 @@ static int h_task_get(const http_request *req, http_response *resp, void *ud) {
                 cJSON_AddItemToObject(o, "flow_nodes", arr);
             free(fnodes);
         }
-    } else if (t->status == TS_RUNNING && ctx->reasoning) {
-        /* chat lanes: this task may run on any lane; route progress polling
-         * to the lane currently executing it (falls back to lane 0). */
-        reasoning *lane = ctx->reasoning;
-        for (int i = 0; i < CHAT_LANE_MAX; i++) {
-            if (ctx->lane_task[i] == (long long)t->id) {
-                lane = ctx->chat_lanes[i];
-                break;
+    } else if (!t->userdata) {
+        char *snapshot = task_progress_copy(t);
+        cJSON *progress = snapshot ? cJSON_Parse(snapshot) : NULL;
+        free(snapshot);
+        if (progress) {
+            cJSON *field;
+            cJSON_ArrayForEach(field, progress) {
+                if (field->string) cJSON_AddItemToObject(o, field->string, cJSON_Duplicate(field, 1));
             }
+            cJSON_Delete(progress);
+        } else {
+            cJSON_AddStringToObject(o, "stage", "queued");
         }
-        long long elapsed_ms = 0, tin = 0, tout = 0, llm_ms = 0, tool_ms = 0;
-        int round = 0, tool_calls = 0, llm_calls = 0;
-        const char *cur_tool = "";
-        reasoning_progress_ex(lane, &elapsed_ms, &round, &tool_calls, &cur_tool, &tin, &tout, &llm_ms, &tool_ms,
-                              &llm_calls);
-        cJSON_AddNumberToObject(o, "elapsed_ms", (double)elapsed_ms);
-        cJSON_AddNumberToObject(o, "round", (double)round);
-        cJSON_AddNumberToObject(o, "tool_calls", (double)tool_calls);
-        if (cur_tool && *cur_tool)
-            cJSON_AddStringToObject(o, "cur_tool", cur_tool);
-        cJSON_AddNumberToObject(o, "tokens_in", (double)tin);
-        cJSON_AddNumberToObject(o, "tokens_out", (double)tout);
-        /* issue #6: where the wall-clock time went */
-        cJSON_AddNumberToObject(o, "llm_ms", (double)llm_ms);
-        cJSON_AddNumberToObject(o, "llm_calls", (double)llm_calls);
-        cJSON_AddNumberToObject(o, "tool_ms", (double)tool_ms);
-        /* issue #5: live tail of the agent loop's narration/action log so the
-         * UI can show thinking + tool chain while the run is in flight */
-        char *tail = reasoning_round_log_tail(lane, 8192);
-        if (tail) {
-            cJSON_AddStringToObject(o, "process_log", tail);
-            free(tail);
-        }
-        /* Claude-Code style steps: executed actions as {tool,args,out,ok,ms}
-         * (rendered as "● Tool(args) ⎿ out-head" by the UI) */
-        char *steps = reasoning_steps_json(lane);
-        if (steps) {
-            cJSON *arr = cJSON_Parse(steps);
-            if (arr)
-                cJSON_AddItemToObject(o, "steps", arr);
-            free(steps);
-        }
+        cJSON_AddStringToObject(o, "session_id", t->tag ? t->tag : "default");
     }
     s = cJSON_PrintUnformatted(o);
     cJSON_Delete(o);
@@ -259,6 +231,39 @@ static int h_task_get(const http_request *req, http_response *resp, void *ud) {
 /* DELETE /v1/tasks/<id> — request cancellation of a queued/running task.
  * Sets the scheduler's cancel flag; the worker aborts at the next round
  * boundary and the task transitions to CANCELLED. */
+static int h_task_message(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = ud;
+    if (!authz_ok(ctx, req, resp)) return 0;
+    const char *suffix = req->path + strlen("/v1/tasks/");
+    char *end = NULL;
+    long long id = strtoll(suffix, &end, 10);
+    if (end == suffix || id < 0 || strcmp(end, "/messages") != 0) {
+        resp->status = 404; http_resp_json(resp, "{\"error\":\"unknown task route\"}"); return 0;
+    }
+    task *t = scheduler_get(ctx->scheduler, id);
+    if (!t) { resp->status = 404; http_resp_json(resp, "{\"error\":\"task not found\"}"); return 0; }
+    if (t->userdata) { resp->status = 409; http_resp_json(resp, "{\"error\":\"only chat tasks accept messages\"}"); return 0; }
+    char *body = body_str(req);
+    cJSON *o = body ? cJSON_Parse(body) : NULL;
+    free(body);
+    const char *message = o ? json_str(o, "message") : NULL;
+    const char *session = o ? json_str(o, "session") : NULL;
+    if (!message || !*message || !session || strcmp(session, t->tag ? t->tag : "default") != 0) {
+        cJSON_Delete(o); resp->status = 400;
+        http_resp_json(resp, "{\"error\":\"message and matching session required\"}"); return 0;
+    }
+    int revision = task_add_message(t, message);
+    cJSON_Delete(o);
+    if (revision < 0) {
+        resp->status = revision == -1 ? 409 : 413;
+        http_resp_json(resp, revision == -1 ? "{\"error\":\"task is finishing; send a new message\"}" : "{\"error\":\"message queue limit exceeded\"}");
+    } else {
+        resp->status = 202;
+        http_resp_appendf(resp, "{\"id\":%lld,\"revision\":%d,\"status\":\"accepted\"}", id, revision);
+    }
+    return 0;
+}
+
 static int h_task_cancel(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
     int64_t id;
@@ -318,6 +323,7 @@ static int h_task_journal(const http_request *req, http_response *resp, void *ud
  * a new task (checkpoint resume). Reads the newest journal record for the id;
  * only DONE/FAILED/CANCELLED/TIMEOUT tasks are resumable. */
 static int h_task_resume(const http_request *req, http_response *resp, void *ud) {
+    if (strstr(req->path, "/messages")) return h_task_message(req, resp, ud);
     runtime_ctx *ctx = (runtime_ctx *)ud;
     const char *suffix;
     const char *slash;
@@ -3931,7 +3937,7 @@ static int h_skill_install_github(const http_request *req, http_response *resp, 
     int rc;
     cJSON *o;
     char *s;
-    char name[192], desc[384];
+    char desc[384];
     char nm[160];
     size_t w = 0;
 

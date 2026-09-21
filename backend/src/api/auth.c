@@ -5,7 +5,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
-#include <time.h>
+#include <stdio.h>
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include <bcrypt.h>
+#endif
 
 struct auth {
     char **keys;
@@ -101,38 +106,27 @@ int auth_check_header(auth *a, const char *authorization) {
     return auth_check(a, tok);
 }
 
-/* Small xorshift64 PRNG seeded once per process from wall clock + stack
- * address. Not cryptographically strong; adequate for demo session tokens. */
-static unsigned long long xorshift64(unsigned long long *s) {
-    unsigned long long x = *s;
-    x ^= x << 13;
-    x ^= x >> 7;
-    x ^= x << 17;
-    *s = x;
-    return x;
-}
-
 void auth_generate_token(char *out, size_t bytes) {
-    static int seeded = 0;
     static const char hexc[] = "0123456789abcdef";
+    unsigned char *random;
+    int ok = 0;
 
     if (!out || bytes == 0)
         return;
-    static unsigned long long state;
-    if (!seeded) {
-        unsigned long long a = (unsigned long long)time(NULL);
-        unsigned long long b = (unsigned long long)(uintptr_t)&state;
-        state = (a << 32) ^ b ^ 0x9E3779B97F4A7C15ULL;
-        if (state == 0)
-            state = 1;
-        seeded = 1;
-    }
+    random = malloc(bytes);
+    if (!random) { out[0] = '\0'; return; }
+#if defined(_WIN32)
+    ok = BCryptGenRandom(NULL, random, (ULONG)bytes, BCRYPT_USE_SYSTEM_PREFERRED_RNG) == 0;
+#else
+    FILE *f = fopen("/dev/urandom", "rb");
+    if (f) { ok = fread(random, 1, bytes, f) == bytes; fclose(f); }
+#endif
+    if (!ok) { free(random); out[0] = '\0'; return; }
 
     for (size_t i = 0; i < bytes; i++) {
-        unsigned long long r = xorshift64(&state);
-        out[i * 2] = hexc[(r >> 4) & 0xF];
-        out[i * 2 + 1] = hexc[r & 0xF];
+        out[i * 2] = hexc[random[i] >> 4];
+        out[i * 2 + 1] = hexc[random[i] & 0xF];
     }
-
+    free(random);
     out[bytes * 2] = '\0';
 }

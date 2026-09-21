@@ -24,6 +24,12 @@ typedef struct {
     void *arg;
 } PosixBoot;
 
+_Static_assert(sizeof(PosixMutex) <= sizeof(mutex_t), "mutex storage too small");
+_Static_assert(sizeof(PosixCond) <= sizeof(cond), "condition storage too small");
+_Static_assert(sizeof(PosixThread) <= sizeof(thread_t), "thread storage too small");
+_Static_assert(_Alignof(PosixMutex) <= _Alignof(mutex_t), "mutex alignment");
+_Static_assert(_Alignof(PosixCond) <= _Alignof(cond), "condition alignment");
+
 int mutex_init(mutex_t *m) {
     return pthread_mutex_init(&((PosixMutex *)m)->m, NULL) == 0 ? 0 : -1;
 }
@@ -116,4 +122,3 @@ void thread_detach(thread_t *t) {
     pthread_detach(pt->t);
     free(t);
 }
-

@@ -198,6 +198,9 @@ void scheduler_free(scheduler *s) {
     for (size_t i = 0; i < s->alen; i++) {
         free(s->all[i]->input);
         free(s->all[i]->output);
+        free(s->all[i]->progress_json);
+        free(s->all[i]->pending_input);
+        mutex_destroy(&s->all[i]->progress_mtx);
         free(s->all[i]->tag);
         free(s->all[i]);
     }
@@ -221,6 +224,7 @@ int64_t scheduler_submit_tag(scheduler *s, int priority, const char *input, void
 
     if (!t)
         return -1;
+    if (mutex_init(&t->progress_mtx) != 0) { free(t); return -1; }
     mutex_lock(&s->mtx);
     t->id = s->next_id++;
     t->priority = priority;

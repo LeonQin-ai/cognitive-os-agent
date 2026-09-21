@@ -5,9 +5,9 @@
 **A C-native runtime for autonomous AI agents — LLM is the accelerator, not the OS.**
 
 [![Language](https://img.shields.io/badge/language-C11-blue.svg)](https://en.wikipedia.org/wiki/C11_(C_standard_revision))
-[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey.svg)](#quick-start)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)](#quick-start)
 [![Dependencies](https://img.shields.io/badge/external%20deps-0-green.svg)](#project-structure)
-[![Tests](https://img.shields.io/badge/tests-1541%20passing-brightgreen.svg)](#testing)
+[![Tests](https://img.shields.io/badge/tests-1609%20passing-brightgreen.svg)](#testing)
 [![CI](https://github.com/LeonQin-ai/cognitive-os-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/LeonQin-ai/cognitive-os-agent/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
 
@@ -372,8 +372,13 @@ cd cognitive-os-agent/backend
 # Linux
 make
 
-# Windows (MSYS2 / Git Bash) — bundled Zig toolchain, no system compiler needed
-./build.sh
+# macOS (Apple Silicon or Intel; Xcode command-line tools required)
+make
+bash package-macos.sh       # native .app + architecture-specific ZIP
+
+# Windows — bundled Zig toolchain, no system compiler needed
+.\build.ps1 all             # PowerShell
+# or: build.bat / ./build.sh
 
 # Run the interactive CLI
 ./build/cognitive-os-agent
@@ -385,7 +390,10 @@ make
 
 The embedded web console ships a ChatGPT-style dark UI: multi-session chat with
 **per-session history that survives restarts** (persisted as JSONL under the
-state root), live process log during runs, a model picker in the chat sidebar,
+state root), structured live stages and tool steps, elapsed time and token usage.
+You can send another message while a task is running; the runtime accepts it as
+steering, updates the plan at the next safe checkpoint, and continues with the
+completed evidence intact. It also includes a model picker in the chat sidebar,
 scheduled jobs (cron, interval or daily) with visible run results, and a
 durable task journal with one-click **checkpoint resume** (`POST /v1/tasks/<id>/resume`).
 
@@ -417,7 +425,7 @@ Point it at a real LLM (or run fully offline with the mock provider):
 Quality gate: **every change is verified on both Windows (zig cc) and Linux (gcc 12), including an AddressSanitizer-clean run.**
 
 ```
-unit:      1541 passed, 0 failed   (44 modules, 0 external deps; 1517 on Linux/gcc)
+unit:      1609 passed, 0 failed   (Windows/zig cc, 0 external runtime deps)
 scenario:  91 checks, 0 failed     (HTTP server, plugins, MCP stdio, flows)
 e2e:       E2E PASS                (real HTTP, both protocols)
 adapters:  ADAPTER PASS            (chat + SSE stream, openai + anthropic)
@@ -429,12 +437,12 @@ ASAN:      0 memory errors
 
 All suites are self-contained and need **no API key, no network, no external services** (the LLM is mocked). Every binary exits non-zero on failure.
 
-**Linux / macOS (gcc):**
+**Linux / macOS:**
 
 ```bash
 cd backend
 make                # builds all test binaries (or: make test/scenario to build+run one)
-make test           # unit tests          → "1391 passed, 0 failed"
+make test           # unit tests          → "1609 passed, 0 failed"
 make scenario       # scenario checks     → "SCENARIO PASS"
 ./build/test-adapters            # adapter checks      → "ADAPTER PASS"
 ./build/cognitive-os-agent-bench --mock   # benchmark sanity (offline mock)
@@ -453,6 +461,10 @@ cd backend
 ./build/cognitive-os-agent-bench.exe --mock
 ./build/mock-llm-server.exe 9000 & ./build/cognitive-os-agent-e2e.exe
 ```
+
+On macOS, `bash package-macos.sh` creates a native Cocoa/WebKit app in
+`dist/Cognitive OS.app` and a ZIP for the current architecture. Set
+`MACOS_SIGN_IDENTITY` for Developer ID signing; the default is an ad-hoc signature.
 
 | Suite | Binary | What it verifies |
 |---|---|---|

@@ -6,6 +6,37 @@ on:
   pull_request:
 
 jobs:
+  macos:
+    name: macOS (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, macos-15-intel]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v5
+      - name: Configure and build
+        run: cmake -S . -B build-macos && cmake --build build-macos -j 3
+      - name: Unit, scenario and benchmark tests
+        run: ctest --test-dir build-macos --output-on-failure
+      - name: Adapter and end-to-end tests
+        run: |
+          ./build-macos/mock-llm-server 9000 &
+          MOCK_PID=$!
+          trap 'kill "$MOCK_PID" 2>/dev/null || true' EXIT
+          sleep 1
+          ./build-macos/test-adapters
+          ./build-macos/cognitive-os-agent-e2e
+      - name: Package native desktop
+        run: bash package-macos.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cognitive-os-${{ matrix.runner }}
+          path: backend/dist/Cognitive-OS-macos-*.zip
   linux:
     name: Linux (gcc)
     runs-on: ubuntu-latest

@@ -415,8 +415,12 @@ static void test_snapshot_tx(void) {
 
     tool_registry *reg = tool_registry_new();
     tool_register_builtins(reg);
-    CHECK(tool_registry_count(reg) == 9);  /* file_read/write/edit, shell, git, mcp, skill, glob, grep */
+    CHECK(tool_registry_count(reg) == 10); /* file_read/write/edit, shell, ssh, git, mcp, skill, glob, grep */
     CHECK(tool_find(reg, "file_read") != NULL);
+    CHECK(tool_find(reg, "ssh") != NULL);
+    tool_result *bad_ssh = tool_execute(reg, "ssh", "{\"host\":\"bad host\",\"command\":\"uname\"}", NULL);
+    CHECK(bad_ssh != NULL && bad_ssh->ok == 0);
+    tool_result_free(bad_ssh);
 
     tx_manager *tm = tx_manager_new();
     tool_ctx ctx;
@@ -1487,6 +1491,21 @@ static void test_planner(void) {
     CHECK(actions != NULL);
     if (n >= 1 && actions) CHECK_STR(actions[0].tool, "file_write");
     CHECK(raw != NULL);
+    planner_actions_free(actions, n);
+    free(raw);
+
+    /* regression: provider-specific tagged calls retain the tool name and
+     * support multiple adjacent calls (issue #34) */
+    actions = NULL;
+    n = -1;
+    raw = NULL;
+    CHECK(planner_plan(llm, "标签工具计划", &actions, &n, &raw, NULL) == 0);
+    CHECK(n == 2);
+    if (n == 2 && actions) {
+        CHECK_STR(actions[0].tool, "file_write");
+        CHECK_STR(actions[1].tool, "file_read");
+        CHECK(strstr(actions[0].args_json, "tag-a.txt") != NULL);
+    }
     planner_actions_free(actions, n);
     free(raw);
 

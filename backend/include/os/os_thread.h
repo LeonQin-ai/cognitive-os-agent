@@ -10,7 +10,7 @@ extern "C" {
 #endif
 
 /* 64-byte opaque storage (pthread_cond_t is 48B on glibc/x86_64). */
-#define OPAQUE64 _Alignas(16) unsigned char _d[64]
+#define OPAQUE64 _Alignas(16) unsigned char _d[128]
 
 typedef struct mutex_t {
     OPAQUE64;

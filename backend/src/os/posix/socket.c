@@ -52,6 +52,15 @@ static void set_nonblock(int fd, int nb) {
     fcntl(fd, F_SETFL, nb ? (fl | O_NONBLOCK) : (fl & ~O_NONBLOCK));
 }
 
+static void suppress_sigpipe(int fd) {
+#ifdef SO_NOSIGPIPE
+    int yes = 1;
+    setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &yes, sizeof(yes));
+#else
+    (void)fd;
+#endif
+}
+
 sock *sock_connect(const char *host, uint16_t port, int timeout_ms) {
     char portstr[16];
     struct addrinfo *res = NULL;
@@ -81,6 +90,7 @@ sock *sock_connect(const char *host, uint16_t port, int timeout_ms) {
         fd = (int)socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
         if (fd < 0)
             continue;
+        suppress_sigpipe(fd);
         set_nonblock(fd, 1);
         int r = connect(fd, ai->ai_addr, (socklen_t)ai->ai_addrlen);
         if (r == 0) {
@@ -162,7 +172,11 @@ int sock_send(sock *s, const void *data, size_t len) {
     size_t off = 0;
     const char *p = (const char *)data;
     while (off < len) {
-        int n = (int)send(s->fd, p + off, (int)(len - off), 0);
+        int flags = 0;
+#ifdef MSG_NOSIGNAL
+        flags = MSG_NOSIGNAL;
+#endif
+        int n = (int)send(s->fd, p + off, (int)(len - off), flags);
         if (n <= 0) {
             if (errno == EINTR)
                 continue;
@@ -285,6 +299,7 @@ sock *sock_accept(listener *l, int timeout_ms) {
         set_err("accept failed");
         return NULL;
     }
+    suppress_sigpipe(fd);
 
     s = malloc(sizeof(sock));
     if (!s) {

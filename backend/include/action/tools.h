@@ -83,6 +83,7 @@ const tool *tool_file_read(void);
 const tool *tool_file_write(void);
 const tool *tool_file_edit(void);
 const tool *tool_shell(void);
+const tool *tool_ssh(void);
 const tool *tool_git(void);
 const tool *tool_mcp(void);
 const tool *tool_skill(void);

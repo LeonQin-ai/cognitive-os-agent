@@ -41,8 +41,8 @@ Infrastructure      logging · config · metrics · audit (JSONL) · persistence
 The repo bundles a portable **Zig** toolchain under `tools/zig/` so `zig cc` acts as a
 gcc-compatible C compiler with no system compiler required.
 
-- **Windows / MSYS2-Git-Bash**: `./build.sh` (or `build.bat`)
-- **Linux**: `gcc -D_GNU_SOURCE -std=c11 -Wall -Wextra -O1 -g -Iinclude -Ithird_party/cJSON $(find src third_party/cJSON -name "*.c") cli/main.c -lpthread -ldl -lm -o build/cognitive-os-agent`
+- **Windows**: `.\build.ps1 all` (or `build.bat` / `./build.sh`)
+- **Linux / macOS**: `make`; macOS can additionally run `bash package-macos.sh`
 - `CMakeLists.txt` is provided as an alternative if you have CMake.
 
 `build.sh` targets: `all` (default), `cli`, `test`, `mock`, `e2e`, `bench`, `clean`.
@@ -76,6 +76,7 @@ help / exit
 ```
 curl -X POST localhost:8080/v1/tasks -d '{"prompt":"创建 a.txt 写入 hi"}'
 curl localhost:8080/v1/tasks/0
+curl -X POST localhost:8080/v1/tasks/0/messages -d '{"message":"Add tests, then continue"}'
 curl localhost:8080/v1/tools
 curl localhost:8080/v1/memory
 curl localhost:8080/v1/blackboard        # shared blackboard snapshot
@@ -177,10 +178,10 @@ POST /v1/local/start             # body {"engine":"ollama"} 或 {"engine":"llama
 ./build/cognitive-os-agent-e2e                   # full pipeline, both providers
 ```
 
-Current results (verified on Windows + Linux):
+Current unit result (verified locally on Windows):
 
 ```
-unit:       622 passed, 0 failed
+unit:       1609 passed, 0 failed
 adapters:   ADAPTER PASS (openai + anthropic, chat + stream)
 e2e:        E2E PASS (openai + anthropic)
 bench:      --mock tool-selection accuracy 100%
@@ -234,12 +235,12 @@ src/im/              IM channels · telegram poll bridge
 src/tx/ src/snapshot/  transactions + COW snapshots
 src/api/             http server · REST · auth · websocket framing · ws_server hub
 src/os/              threads · coroutines (ucontext/Fiber) · sockets · files · processes
-                     · time · HTTP clients (WinHTTP on Windows / plain-TCP on Linux)
+                     · time · HTTP clients (WinHTTP on Windows / POSIX on Linux and macOS)
 src/infra/           logging · config · metrics · audit · persist · ringbuf · catalog
 cli/main.c           interactive CLI
 tests/               unit + adapter + e2e + benchmark
 tools/               mock-llm-server · desktop shell (WebView2) · cov_rt/cov_resolve/coverage.sh
-apps/web/            embedded web UI (regenerated into include/cognitive-os-agent/api/web_ui.h)
+apps/web/            embedded web UI (regenerated into include/api/web_ui.h)
 third_party/         cJSON (MIT) · wasm3 (MIT)
 state/               runtime data (generated): logs, memory, snapshots, audit, skills, plugins
 ```
