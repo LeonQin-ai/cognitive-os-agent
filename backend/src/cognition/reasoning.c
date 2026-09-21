@@ -213,6 +213,9 @@ struct reasoning {
     size_t round_log_len, round_log_cap;
     char *obs_log;       /* user-facing executed-action log (no narrations/nudges) */
     size_t obs_log_len, obs_log_cap;
+    uint64_t last_failed_action_sig;
+    int same_action_failures;
+    int tool_fail_aborted;
 
     /* live run progress for status display (polled via reasoning_progress):
      * run start time, executed tool-call count, tool currently running.
@@ -1469,6 +1472,9 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
         }
         r->prog_tool_calls++;
         int rc;
+        uint64_t action_sig = hash64(r->actions[i].tool, strlen(r->actions[i].tool));
+        action_sig ^= hash64(r->actions[i].args_json ? r->actions[i].args_json : "",
+                             r->actions[i].args_json ? strlen(r->actions[i].args_json) : 0);
         long long t_tool0 = time_now_ms();
         char step_out[240] = ""; /* output head for the step registry */
         if (tx) {
@@ -1498,9 +1504,23 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
             r->all_actions_ok = 0;
             strbuf_appendf(&b, "[%s] FAILED\n", r->actions[i].tool);
             log_warn("reasoning: action '%s' failed", r->actions[i].tool);
+            if (r->last_failed_action_sig == action_sig)
+                r->same_action_failures++;
+            else {
+                r->last_failed_action_sig = action_sig;
+                r->same_action_failures = 1;
+            }
+            if (r->same_action_failures >= 3) {
+                strbuf_appendf(&b, "[system] 相同的 %s 调用已连续失败 3 次，停止重试；"
+                                   "请报告最后一次真实错误并继续处理不依赖它的步骤。\n",
+                               r->actions[i].tool);
+                r->tool_fail_aborted = 1;
+            }
             if (r->hooks)
                 hook_dispatch(r->hooks, "exec.on_failure", r->actions[i].tool);
         } else {
+            r->last_failed_action_sig = 0;
+            r->same_action_failures = 0;
             r->ok_actions++;
             strbuf_appendf(&b, "[%s] ok\n", r->actions[i].tool);
             if (r->hooks)
@@ -2382,6 +2402,9 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     r->prog_llm_calls = 0;
     r->prog_tool_ms = 0;
     r->prog_tool[0] = '\0';
+    r->last_failed_action_sig = 0;
+    r->same_action_failures = 0;
+    r->tool_fail_aborted = 0;
 
      /* LLM's plain-text answer (had_plan == 0) */
          /* per-round pipeline output */
@@ -2412,6 +2435,11 @@ restart_planning:
         result = NULL;
         st = state_machine_run(r->sm, prompt, &result);
         if (run_aborted(r)) { st = ST_FAILED; break; }
+        if (r->tool_fail_aborted) {
+            round_log_append(r, result && *result ? result : "(tool failed repeatedly)");
+            obs_log_append(r, result && *result ? result : "(tool failed repeatedly)");
+            break;
+        }
         if (task_has_messages(r->run_task)) {
             /* Preserve real completed observations, discard unexecuted plans. */
             if (r->had_plan && result) {

@@ -2464,6 +2464,29 @@ static void test_agent_loop(void) {
         free(ans);
         runtime_shutdown(&ctx);
     }
+
+    /* The exact same failing action is attempted at most three times. This
+     * prevents a planner from looping forever on an unreachable SSH target. */
+    {
+        config cfg;
+        memset(&cfg, 0, sizeof(cfg));
+        cfg.state_root = "state-test/loop-ssh-breaker";
+        cfg.workspace = "state-test/loop-w";
+        cfg.provider = "mock";
+        cfg.http_port = 0;
+        runtime_ctx ctx;
+        if (init(&ctx, &cfg) != 0) { CHECK(0); return; }
+        char *ans = NULL;
+        CHECK(reasoning_run(ctx.reasoning, "SSH连续失败测试", &ans) == 0);
+        long long el = 0, tin = 0, tout = 0;
+        int rnd = 0, tc = 0;
+        const char *cur_tool = NULL;
+        reasoning_progress(ctx.reasoning, &el, &rnd, &tc, &cur_tool, &tin, &tout);
+        CHECK(tc == 3);
+        CHECK(rnd == 3);
+        free(ans);
+        runtime_shutdown(&ctx);
+    }
 }
 
 /* ---------- chat history + upload RAG + self-evolution restart rebind ---------- */
@@ -4957,6 +4980,22 @@ static void test_ws_roundtrip(void) {
         }
         for (int i = 0; i < 20 && g_ws_recv[0] == '\0'; i++) time_sleep_ms(100);
         CHECK_STR(g_ws_recv, "hello");
+
+        /* fragmented text: first frame FIN=0, second is a continuation */
+        g_ws_recv[0] = '\0';
+        size_t f1len = 0, f2len = 0;
+        char *f1 = ws_build_frame(WS_OP_TEXT, (const unsigned char *)"frag-", 5, 1, &f1len);
+        char *f2 = ws_build_frame(WS_OP_TEXT, (const unsigned char *)"ok", 2, 1, &f2len);
+        CHECK(f1 != NULL && f2 != NULL);
+        if (f1 && f2) {
+            f1[0] = (char)(f1[0] & 0x7F); /* FIN off */
+            f2[0] = (char)(f2[0] & 0xF0); /* opcode = continuation */
+            CHECK(sock_send(c, f1, f1len) == (int)f1len);
+            CHECK(sock_send(c, f2, f2len) == (int)f2len);
+        }
+        free(f1); free(f2);
+        for (int i = 0; i < 20 && g_ws_recv[0] == '\0'; i++) time_sleep_ms(100);
+        CHECK_STR(g_ws_recv, "frag-ok");
 
         /* server broadcast -> client receives a text frame */
         http_server_ws_broadcast(s, "{\"x\":1}");

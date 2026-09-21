@@ -113,6 +113,12 @@ sandbox_result *sandbox_run(sandbox *sb, const char *cmd) {
     r->ok = (pr->exit_code == 0 && !pr->timed_out) ? 1 : 0;
     r->output = pr->output ? xstrdup(pr->output) : xstrdup("");
     proc_result_free(pr);
+    if (!r->output) {
+        if (snap)
+            filetracker_snapshot_free(snap);
+        free(r);
+        return NULL;
+    }
     if (snap && sb->ft) {
         filetracker_dir_diff(sb->ft, snap, sb->workspace);
         r->files_json = filetracker_json(sb->ft);

@@ -200,6 +200,11 @@ static char *mock_respond(const char *msg) {
     if (cur)
         msg = cur + strlen("## Current request\n");
 
+    /* Regression fixture for the per-action circuit breaker: deliberately
+     * repeat the exact same invalid SSH call across planning rounds. */
+    if (has_substr(msg, "SSH连续失败测试"))
+        return xstrdup("[{\"tool\":\"ssh\",\"args\":{\"host\":\"bad host\",\"command\":\"uname\"}}]");
+
     if (in_loop) {
         char *path = find_path(msg);
         /* fix marker checked only inside this run's results section — the

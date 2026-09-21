@@ -135,6 +135,12 @@ the `/v1/*` routes require `Authorization: Bearer <secret>`. Without a key the
 API is open (the default). The `coa_auth` module also provides standalone
 `coa_auth_check` / `coa_auth_check_header` for use outside the HTTP layer.
 
+The server binds to `127.0.0.1` by default. Keep that loopback boundary for
+local use. If the API must be exposed to another machine, terminate HTTPS at a
+reverse proxy such as Caddy or Nginx, configure an auth key, and proxy only to
+the loopback listener. The embedded server intentionally does not advertise
+plain HTTP plus bearer tokens as a secure remote deployment mode.
+
 ## LLM providers
 
 Configure via JSON config (`state/<name>/cognitive-os-agent.json`), CLI flags, or env vars with a

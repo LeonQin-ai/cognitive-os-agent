@@ -93,7 +93,7 @@ int ringbuf_pop(ringbuf *r, void **out) {
         if (diff == 0) {
             if (atomic_compare_exchange_weak_explicit(&r->dequeue_pos, &pos, pos + 1, memory_order_relaxed,
                                                       memory_order_relaxed)) {
-                *out = atomic_load_explicit(&r->data[cell], memory_order_relaxed);
+                *out = atomic_load_explicit(&r->data[cell], memory_order_acquire);
                 atomic_store_explicit(&r->seq[cell], pos + mask + 1, memory_order_release);
                 return 1;
             }

@@ -121,6 +121,8 @@ static void dispatch_one(event_bus *b, event *ev) {
 /* Drain the ring and dispatch every event. One thread wins the draining flag;
  * late producers re-check the flag so no event is stranded. */
 static void drain(event_bus *b) {
+    size_t dispatched = 0;
+    const size_t max_dispatch = 4096;
     for (;;) {
         int expected = 0;
         if (!atomic_compare_exchange_strong_explicit(&b->draining, &expected, 1, memory_order_acq_rel,
@@ -134,8 +136,12 @@ static void drain(event_bus *b) {
             if (ev->payload)
                 cJSON_Delete(ev->payload);
             free(ev);
+            if (++dispatched >= max_dispatch)
+                break;
         }
         atomic_store_explicit(&b->draining, 0, memory_order_release);
+        if (dispatched >= max_dispatch)
+            break; /* bound publisher latency under a sustained producer flood */
         /* A producer may have enqueued between our last pop and clearing the
          * flag. Re-check once; if something arrived, loop and drain again. */
         if (ringbuf_pop(b->queue, &it) != 1)

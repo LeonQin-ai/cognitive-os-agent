@@ -25,6 +25,8 @@ typedef struct ws_client {
     struct ws_server *server;
     mutex_t send_mtx;
     strbuf queue; /* pending outbound messages, '\n'-separated */
+    strbuf fragment; /* fragmented inbound text message */
+    int fragment_opcode;
     _Atomic int closed;
 } ws_client;
 
@@ -133,7 +135,9 @@ static void ws_server_remove(ws_server *s, ws_client *c) {
 
 static void ws_client_loop(void *arg) {
     ws_client *c = (ws_client *)arg;
-    unsigned char rbuf[8192];
+    unsigned char chunk[8192];
+    unsigned char *rbuf = NULL;
+    size_t rlen = 0, rcap = 0;
     while (!c->closed) {
         ws_client_flush(c);
         if (c->closed)
@@ -143,49 +147,107 @@ static void ws_client_loop(void *arg) {
             break;
         if (rd == 0)
             continue;
-        int n = sock_recv(c->sock, rbuf, sizeof(rbuf));
+        int n = sock_recv(c->sock, chunk, sizeof(chunk));
         if (n <= 0)
             break;
+        if (rlen + (size_t)n > MAX_WS_PAYLOAD + 14) {
+            c->closed = 1;
+            break;
+        }
+        if (rlen + (size_t)n > rcap) {
+            size_t cap = rcap ? rcap : 8192;
+            while (cap < rlen + (size_t)n)
+                cap *= 2;
+            unsigned char *nb = realloc(rbuf, cap);
+            if (!nb) { c->closed = 1; break; }
+            rbuf = nb;
+            rcap = cap;
+        }
+        memcpy(rbuf + rlen, chunk, (size_t)n);
+        rlen += (size_t)n;
         size_t off = 0;
-        while (off < (size_t)n) {
+        while (off < rlen) {
             size_t plen = 0;
-            size_t total = ws_frame_len(rbuf + off, (size_t)n - off, &plen);
+            size_t total = ws_frame_len(rbuf + off, rlen - off, &plen);
             if (total == SIZE_MAX) { c->closed = 1; break; }
             if (total == 0)
                 break;
-            unsigned char payload[8192];
+            unsigned char *payload = malloc(plen + 1);
+            if (!payload) { c->closed = 1; break; }
             size_t parsed = 0;
             int opcode = 0, fin = 0;
-            if (ws_parse_frame(rbuf + off, total, payload, &parsed, &opcode, &fin) != 0)
+            if (ws_parse_frame(rbuf + off, total, payload, &parsed, &opcode, &fin) != 0) {
+                free(payload);
+                c->closed = 1;
                 break;
+            }
             off += total;
             switch (opcode) {
             case 0x1: /* text */
-                if (parsed >= sizeof(payload))
-                    parsed = sizeof(payload) - 1;
                 payload[parsed] = '\0';
-                if (c->server->on_msg)
+                if (fin && c->fragment_opcode == 0 && c->server->on_msg)
                     c->server->on_msg((const char *)payload, c->server->ud);
+                else if (!fin && c->fragment_opcode == 0) {
+                    c->fragment_opcode = opcode;
+                    strbuf_append_n(&c->fragment, (const char *)payload, parsed);
+                } else {
+                    c->closed = 1; /* nested fragmented message */
+                }
+                break;
+            case 0x0: /* continuation */
+                if (c->fragment_opcode == 0) {
+                    c->closed = 1;
+                    break;
+                }
+                {
+                    size_t before = c->fragment.len;
+                    if (parsed > MAX_WS_PAYLOAD - before) {
+                        c->closed = 1;
+                        break;
+                    }
+                    strbuf_append_n(&c->fragment, (const char *)payload, parsed);
+                    if (c->fragment.len != before + parsed) {
+                        c->closed = 1;
+                        break;
+                    }
+                }
+                if (fin) {
+                    if (c->server->on_msg)
+                        c->server->on_msg(c->fragment.buf ? c->fragment.buf : "", c->server->ud);
+                    strbuf_free(&c->fragment);
+                    strbuf_init(&c->fragment);
+                    c->fragment_opcode = 0;
+                }
                 break;
             case 0x9:                                   /* ping */
-                ws_send_frame(c, 0xA, payload, parsed); /* pong */
+                if (!fin || parsed > 125) c->closed = 1;
+                else ws_send_frame(c, 0xA, payload, parsed); /* pong */
                 break;
             case 0x8: /* close */
-                ws_send_frame(c, 0x8, payload, parsed);
+                if (fin && parsed <= 125)
+                    ws_send_frame(c, 0x8, payload, parsed);
                 c->closed = 1;
                 break;
             default:
+                c->closed = 1;
                 break;
             }
+            free(payload);
             if (c->closed)
                 break;
         }
+        if (off > 0 && off <= rlen) {
+            memmove(rbuf, rbuf + off, rlen - off);
+            rlen -= off;
+        }
     }
 
+    free(rbuf);
     if (c->sock)
         sock_close(c->sock);
     ws_server_remove(c->server, c);
     strbuf_free(&c->queue);
+    strbuf_free(&c->fragment);
     mutex_destroy(&c->send_mtx);
     free(c);
 }
@@ -236,6 +298,7 @@ int ws_server_accept(ws_server *s, sock *sock, const char *sec_ws_key) {
     c->server = s;
     mutex_init(&c->send_mtx);
     strbuf_init(&c->queue);
+    strbuf_init(&c->fragment);
 
     mutex_lock(&s->mtx);
     if (s->count == s->cap) {
