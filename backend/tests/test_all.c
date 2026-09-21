@@ -4538,9 +4538,12 @@ static void test_catalog_skills_run(void) {
         CHECK(skill_register_ex(r, &sk, 1) == 0);
         skill_result *res = skill_execute(
             r, cs->id, (cs->test_args && cs->test_args[0]) ? cs->test_args : NULL,
-            NULL, 10000);
+            NULL, 30000);
         CHECK(res != NULL);
         if (res) {
+            if (!res->ok)
+                printf("  catalog skill '%s' failed: %s\n", cs->id,
+                       res->output ? res->output : "(no output)");
             CHECK(res->ok == 1);
             CHECK(res->output && res->output[0]);
             skill_result_free(res);

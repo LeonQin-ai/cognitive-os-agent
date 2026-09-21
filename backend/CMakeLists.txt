@@ -61,3 +61,8 @@ enable_testing()
 add_test(NAME unit COMMAND cognitive-os-agent-test)
 add_test(NAME scenario COMMAND cognitive-os-agent-scenario)
 add_test(NAME benchmark COMMAND cognitive-os-agent-bench --mock)
+# Tests spawn repository fixtures such as tools/mock_mcp_server.js and use
+# source-relative state paths. Multi-config/out-of-tree builds (including the
+# macOS CI build-macos directory) must therefore run from the source root.
+set_tests_properties(unit scenario benchmark PROPERTIES
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
