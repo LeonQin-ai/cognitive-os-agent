@@ -149,6 +149,10 @@
     background:var(--accent); border:0; color:#fff; font-size:16px; cursor:pointer; line-height:1;
   }
   .pillbar .pill-send:hover{filter:brightness(1.12)}
+  .thinking-toggle{height:34px;display:flex;align-items:center;gap:6px;flex-shrink:0;padding:0 11px;border:1px solid var(--border);border-radius:18px;background:color-mix(in srgb,var(--card) 82%,var(--accent-soft));color:var(--muted);font-size:12px;font-weight:600;cursor:pointer;transition:background var(--tr-dur),color var(--tr-dur),border-color var(--tr-dur),box-shadow var(--tr-dur)}
+  .thinking-toggle:hover{color:var(--fg);border-color:color-mix(in srgb,var(--accent) 45%,var(--border));background:var(--accent-soft)}
+  .thinking-toggle.on{color:#fff;border-color:transparent;background:linear-gradient(135deg,#7c3aed,#4f46e5);box-shadow:0 4px 14px rgba(99,102,241,.28)}
+  .thinking-toggle svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}.thinking-toggle .chevron{width:12px;height:12px;stroke-width:2}
   .brand{display:flex; align-items:center; gap:10px; padding:16px 14px 14px; border-bottom:1px solid var(--border)}
   .logo{
     width:34px; height:34px; border-radius:9px; flex-shrink:0; display:grid; place-items:center;
@@ -156,6 +160,7 @@
     color:#fff; font-size:17px; font-weight:800; letter-spacing:-1px; user-select:none;
     box-shadow:inset 0 1px 0 rgba(255,255,255,.18), 0 2px 6px color-mix(in srgb, var(--accent) 35%, transparent);
   }
+  .brain-mark{width:100%;height:100%;display:block;stroke:currentColor;fill:none;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}.logo .brain-mark{padding:6px}.avatar .brain-mark{padding:5px}
   .brand h1{margin:0; font-size:15px; font-weight:700; letter-spacing:.2px}
   .brand .sub{color:var(--muted); font-size:11px; margin-top:1px}
   nav{flex:1; overflow-y:auto; padding:8px 0}
@@ -398,7 +403,7 @@
 <body>
 <aside id="sidebar">
   <div class="brand">
-    <div class="logo" aria-hidden="true">c</div>
+    <div class="logo" aria-hidden="true"><svg class="brain-mark" viewBox="0 0 24 24"><path d="M12 6.1A3.5 3.5 0 0 0 5.7 8.2 3.8 3.8 0 0 0 4.2 15a3.5 3.5 0 0 0 4.4 5.3A4.1 4.1 0 0 0 12 22"/><path d="M12 6.1a3.5 3.5 0 0 1 6.3 2.1 3.8 3.8 0 0 1 1.5 6.8 3.5 3.5 0 0 1-4.4 5.3A4.1 4.1 0 0 1 12 22"/><path d="M12 6v16M8 10l4 2 4-2M7.5 15l4.5 2 4.5-2"/><circle cx="8" cy="10" r=".8" fill="currentColor" stroke="none"/><circle cx="16" cy="10" r=".8" fill="currentColor" stroke="none"/><circle cx="12" cy="18" r=".8" fill="currentColor" stroke="none"/></svg></div>
     <div>
       <h1>cognitive-os-agent</h1>
       <div class="sub">Cognitive OS Runtime</div>
@@ -448,7 +453,7 @@
   </nav>
   <div class="side-foot">
     <div class="usercard">
-      <div class="avatar" aria-hidden="true">C</div>
+      <div class="avatar" aria-hidden="true"><svg class="brain-mark" viewBox="0 0 24 24"><path d="M12 6.1A3.5 3.5 0 0 0 5.7 8.2 3.8 3.8 0 0 0 4.2 15a3.5 3.5 0 0 0 4.4 5.3A4.1 4.1 0 0 0 12 22"/><path d="M12 6.1a3.5 3.5 0 0 1 6.3 2.1 3.8 3.8 0 0 1 1.5 6.8 3.5 3.5 0 0 1-4.4 5.3A4.1 4.1 0 0 1 12 22"/><path d="M12 6v16M8 10l4 2 4-2M7.5 15l4.5 2 4.5-2"/></svg></div>
       <div>
         <div class="uname">cognitive-os-agent</div>
         <div class="usub"><span class="dot warn pulse" id="connDot"></span><span id="connText">连接中…</span></div>
@@ -629,10 +634,6 @@ panels.chat = `
           <input type="checkbox" id="chat-shared" onchange="chatSharedToggle(this.checked)">
           共享记忆（关闭后本会话使用私有 Memory OS）
         </label>
-        <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
-          <input type="checkbox" id="chat-thinking" onchange="chatThinkingToggle(this.checked)">
-          深度思考（允许额外规划轮次，适合复杂问题）
-        </label>
         <span class="muted" id="chat-session-meta"></span>
       </div>
       <div class="hint" style="margin-top:6px">对话模型在上方下拉切换（来自 Model routes）；新增路由请到 <a href="#" onclick="switchPanel('models');return false">Models</a> 页配置。会话支持 取消 / 恢复：运行中点「取消」，取消或失败后点「恢复」重跑上一条输入。</div>
@@ -643,6 +644,10 @@ panels.chat = `
     <div class="pillbar">
       <button class="pill-ic" onclick="$('chat-file').click()" title="上传文件（RAG）">＋</button>
       <textarea id="chat-input" placeholder="描述目标，或在执行中补充要求…" aria-label="消息" rows="1"></textarea>
+      <button class="thinking-toggle" id="chat-thinking-toggle" onclick="chatThinkingToggle(!chatThinkingEnabled())" aria-pressed="false" title="深度思考：允许额外规划轮次，适合复杂问题">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20v-8M10.7 5.2A4.4 4.4 0 0 0 4 9c0 .5.1 1 .3 1.5A3.8 3.8 0 0 0 6 17.6c.6 1.8 2.5 2.8 4.3 2.4M13.3 5.2A4.4 4.4 0 0 1 20 9c0 .5-.1 1-.3 1.5a3.8 3.8 0 0 1-1.7 7.1c-.6 1.8-2.5 2.8-4.3 2.4M7.2 8.2c.9.1 1.6.6 2 1.4M16.8 8.2c-.9.1-1.6.6-2 1.4M7.4 14c.8 0 1.5.4 1.9 1M16.6 14c-.8 0-1.5.4-1.9 1"/></svg>
+        <span>深度思考</span><svg class="chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg>
+      </button>
       <button class="sec" id="chat-cancel" onclick="chatCancel()" style="display:none;padding:6px 10px" title="取消当前运行中的任务">取消</button>
       <button class="sec" id="chat-resume" onclick="chatResume()" style="display:none;padding:6px 10px" title="恢复：重跑本会话上一条输入">恢复</button>
       <button class="pill-send" id="chat-send" onclick="chatSend()" title="发送">↑</button>
@@ -1041,9 +1046,10 @@ panels.plugins = `
 panels.snapshots = `
   <div class="card">
     <h2>Execution snapshots</h2>
-    <div class="hint">事务 + COW 快照：任务执行前记录文件状态，失败自动回滚。</div>
+    <div class="hint">事务 + COW 快照：任务执行前记录文件状态，失败自动回滚。勾选文件可精确回滚，支持跨快照多选。</div>
     <div class="row">
-      <button onclick="load('snapshots')">Refresh</button>
+      <button onclick="loadSnapshots()">Refresh latest</button>
+      <button class="sec" id="snap-selected" onclick="rollbackSelected()" disabled>Rollback selected (0)</button>
       <button class="sec danger" onclick="rollback()">Rollback latest</button>
     </div>
   </div>
@@ -1061,10 +1067,13 @@ panels.snapshots = `
   </div>
   <div class="card">
     <div class="card-head">
-      <h2>快照列表</h2>
+      <h2>快照文件</h2>
       <button class="sec sm" onclick="copyPre('snapshots-out')">Copy</button>
     </div>
+    <div id="snapshots-list" class="stack">加载中…</div>
+    <details style="margin-top:12px"><summary class="hint">原始快照数据</summary>
     <pre id="snapshots-out">加载中…</pre>
+    </details>
   </div>
   <div class="card">
     <div class="card-head">
@@ -1265,8 +1274,37 @@ async function load(panel){
 async function loadSnapshots(){
   const r = await call('GET', '/v1/snapshots');
   const el = $('snapshots-out'); if(el) renderJSON(r.obj, el);
+  renderSnapshotFiles(Array.isArray(r.obj) ? r.obj : []);
   await loadSnapshotCfg();
   loadJournal();
+}
+
+function renderSnapshotFiles(snapshots){
+  const box = $('snapshots-list'); if(!box) return;
+  box.replaceChildren();
+  if(!snapshots.length){ box.textContent = '暂无已提交的快照。'; updateSnapshotSelection(); return; }
+  snapshots.slice().reverse().forEach((snap, index) => {
+    const card = document.createElement('section'); card.className = 'card'; card.style.margin = '0';
+    const head = document.createElement('div'); head.className = 'card-head';
+    const title = document.createElement('b'); title.textContent = (index === 0 ? '最新 · ' : '') + (snap.id || 'snapshot');
+    const when = document.createElement('span'); when.className = 'muted'; when.textContent = snap.created || '';
+    head.append(title, when); card.append(head);
+    const paths = Array.isArray(snap.paths) ? snap.paths : [];
+    if(!paths.length){ const none = document.createElement('span'); none.className = 'muted'; none.textContent = '此快照没有文件记录。'; card.append(none); }
+    paths.forEach(path => {
+      const label = document.createElement('label'); label.className = 'row'; label.style.cssText = 'gap:8px;margin:6px 0;cursor:pointer;align-items:flex-start';
+      const cb = document.createElement('input'); cb.type = 'checkbox'; cb.className = 'snapshot-file'; cb.dataset.snapshot = snap.id || ''; cb.dataset.path = path; cb.onchange = updateSnapshotSelection;
+      const text = document.createElement('code'); text.textContent = path; text.style.overflowWrap = 'anywhere';
+      label.append(cb,text); card.append(label);
+    });
+    box.append(card);
+  });
+  updateSnapshotSelection();
+}
+function selectedSnapshotFiles(){ return [...document.querySelectorAll('.snapshot-file:checked')]; }
+function updateSnapshotSelection(){
+  const selected = selectedSnapshotFiles(), btn = $('snap-selected');
+  if(btn){ btn.disabled = !selected.length; btn.textContent = 'Rollback selected (' + selected.length + ')'; }
 }
 
 /* 任务历史（journal/checkpoint）：列出最近的任务终态记录，支持一键恢复 */
@@ -1711,6 +1749,17 @@ async function rollback(){
   const r = await call('POST', '/v1/snapshots/rollback');
   renderJSON(r.obj, $('snapshots-out'));
   load('snapshots');
+}
+async function rollbackSelected(){
+  const selected = selectedSnapshotFiles(); if(!selected.length) return;
+  const groups = new Map();
+  selected.forEach(cb => { const id = cb.dataset.snapshot; if(!groups.has(id)) groups.set(id, []); groups.get(id).push(cb.dataset.path); });
+  for(const [id,paths] of groups){
+    const r = await call('POST', '/v1/snapshots/rollback', {id,paths});
+    if(r.status !== 200 || !r.obj?.ok){ toast('回滚失败：' + (r.obj?.error || r.status)); return; }
+  }
+  toast('已回滚 ' + selected.length + ' 个已选文件');
+  await loadSnapshots();
 }
 
 async function runSkill(){
@@ -2561,8 +2610,7 @@ function syncChatSettings(){
   const info = CHAT_TABS_CACHE.find(s => (s.id || 'default') === CHAT_SESSION);
   const cb = $('chat-shared');
   if(cb) cb.checked = !(info && info.shared_memory === false);
-  const thinking = $('chat-thinking');
-  if(thinking) thinking.checked = localStorage.getItem('cognitive-thinking-mode') === '1';
+  syncChatThinkingToggle();
   const meta = $('chat-session-meta');
   if(meta){
     const bits = [];
@@ -2572,9 +2620,20 @@ function syncChatSettings(){
   }
 }
 
-function chatThinkingEnabled(){ return localStorage.getItem('cognitive-thinking-mode') === '1'; }
+function chatThinkingEnabled(){
+  try { return localStorage.getItem('cognitive-thinking-mode') === '1'; } catch(e) { return false; }
+}
+function syncChatThinkingToggle(){
+  const btn = $('chat-thinking-toggle');
+  if(!btn) return;
+  const enabled = chatThinkingEnabled();
+  btn.classList.toggle('on', enabled);
+  btn.setAttribute('aria-pressed', String(enabled));
+  btn.title = enabled ? '深度思考已开启：允许额外规划轮次' : '深度思考：允许额外规划轮次，适合复杂问题';
+}
 function chatThinkingToggle(enabled){
   try { localStorage.setItem('cognitive-thinking-mode', enabled ? '1' : '0'); } catch(e) {}
+  syncChatThinkingToggle();
   toast(enabled ? '已开启深度思考：复杂问题可进行额外规划。' : '已关闭深度思考：优先直接回答或执行必要工具。');
 }
 

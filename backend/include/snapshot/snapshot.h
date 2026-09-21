@@ -37,6 +37,9 @@ char *snapshot_list(snapshot *s);
 int snapshot_restore_latest(snapshot *s);
 /* Restore a specific snapshot by id. */
 int snapshot_restore(snapshot *s, const char *id);
+/* Restore only selected paths from one snapshot (id NULL = latest). Paths
+ * must occur in that snapshot manifest; returns restored file count or -1. */
+int snapshot_restore_files(snapshot *s, const char *id, const char *const *paths, size_t count);
 /* Restore the in-progress (uncommitted) captures and clear them. Used by ROLLBACK. */
 int snapshot_restore_pending(snapshot *s);
 

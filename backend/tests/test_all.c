@@ -493,6 +493,23 @@ static void test_snapshot_tx(void) {
     CHECK(list && strstr(list, "f.txt") != NULL);
     free(list);
 
+    /* Selective restore changes only explicitly chosen manifest paths. */
+    const char *sa = "state-test/w/select-a.txt", *sb = "state-test/w/select-b.txt";
+    fs_write_file(sa, "a-original", 10); fs_write_file(sb, "b-original", 10);
+    CHECK(snapshot_capture(snap, sa) == 0 && snapshot_capture(snap, sb) == 0);
+    const char *sid = snapshot_commit(snap);
+    CHECK(sid != NULL);
+    char sid_copy[32]; snprintf(sid_copy, sizeof(sid_copy), "%s", sid ? sid : "");
+    fs_write_file(sa, "a-modified", 10); fs_write_file(sb, "b-modified", 10);
+    const char *only_a[] = {sa};
+    CHECK(snapshot_restore_files(snap, sid_copy, only_a, 1) == 1);
+    data = fs_read_file(sa); CHECK_STR(data, "a-original"); free(data);
+    data = fs_read_file(sb); CHECK_STR(data, "b-modified"); free(data);
+    const char *both[] = {sa, sb};
+    CHECK(snapshot_restore_files(snap, sid_copy, both, 2) == 2);
+    data = fs_read_file(sb); CHECK_STR(data, "b-original"); free(data);
+    fs_remove(sa); fs_remove(sb);
+
     tx_free(tx2);
     tx_free(tx);
     tx_manager_free(tm);

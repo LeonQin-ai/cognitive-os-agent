@@ -11,7 +11,9 @@ if [[ ! -x "$BACKEND_BINARY" ]]; then
 fi
 APP="dist/Cognitive OS.app"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+python3 tools/gen_icon.py
 cp "$BACKEND_BINARY" "$APP/Contents/MacOS/cognitive-os-agent"
+cp dist/CognitiveOS.icns "$APP/Contents/Resources/CognitiveOS.icns"
 xcrun clang -fobjc-arc -Wall -Wextra -framework Cocoa -framework WebKit \
   tools/desktop_macos.m -o "$APP/Contents/MacOS/CognitiveOS"
 cat > "$APP/Contents/Info.plist" <<'PLIST'
@@ -22,6 +24,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <key>CFBundleName</key><string>Cognitive OS</string>
 <key>CFBundleDisplayName</key><string>Cognitive OS</string>
 <key>CFBundleExecutable</key><string>CognitiveOS</string>
+<key>CFBundleIconFile</key><string>CognitiveOS.icns</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>0.1.0</string>
 <key>CFBundleVersion</key><string>1</string>

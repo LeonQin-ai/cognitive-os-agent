@@ -1327,6 +1327,28 @@ static int h_snapshot_rollback(const http_request *req, http_response *resp, voi
 
     if (!authz_ok(ctx, req, resp))
         return 0;
+    char *body = body_str(req);
+    cJSON *root = body ? cJSON_Parse(body) : NULL;
+    free(body);
+    cJSON *items = root ? cJSON_GetObjectItemCaseSensitive(root, "paths") : NULL;
+    const char *id = root ? json_str(root, "id") : NULL;
+    if (items && cJSON_IsArray(items) && cJSON_GetArraySize(items) > 0) {
+        int n = cJSON_GetArraySize(items);
+        const char **paths = calloc((size_t)n, sizeof(*paths));
+        cJSON *it; int i = 0;
+        cJSON_ArrayForEach(it, items) {
+            if (!cJSON_IsString(it) || !it->valuestring) { free(paths); cJSON_Delete(root); resp->status = 400;
+                http_resp_json(resp, "{\"error\":\"paths must be strings\"}"); return 0; }
+            paths[i++] = it->valuestring;
+        }
+        rc = ctx->snapshot ? snapshot_restore_files(ctx->snapshot, id, paths, (size_t)n) : -1;
+        free(paths);
+        cJSON_Delete(root);
+        if (rc < 0) { resp->status = 400; http_resp_json(resp, "{\"ok\":false,\"error\":\"snapshot or selected paths unavailable\"}"); return 0; }
+        http_resp_appendf(resp, "{\"ok\":true,\"restored\":%d}", rc);
+        return 0;
+    }
+    cJSON_Delete(root);
     rc = ctx->snapshot ? snapshot_restore_latest(ctx->snapshot) : -1;
     http_resp_appendf(resp, "{\"ok\":%s}", rc == 0 ? "true" : "false");
     return 0;

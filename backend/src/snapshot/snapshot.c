@@ -339,6 +339,50 @@ int snapshot_restore(snapshot *s, const char *id) {
     return -1;
 }
 
+int snapshot_restore_files(snapshot *s, const char *id, const char *const *paths, size_t count) {
+    snapshot_entry *entry = NULL;
+    int restored = 0;
+
+    if (!s || !paths || count == 0)
+        return -1;
+    if (id && *id) {
+        for (size_t i = 0; i < s->committed_count; i++)
+            if (strcmp(s->committed[i].id, id) == 0) { entry = &s->committed[i]; break; }
+    } else if (s->committed_count) {
+        entry = &s->committed[s->committed_count - 1];
+    }
+    if (!entry)
+        return -1;
+    for (size_t p = 0; p < count; p++) {
+        captured *match = NULL;
+        if (!paths[p] || !*paths[p])
+            return -1;
+        for (size_t i = 0; i < entry->nfiles; i++)
+            if (strcmp(entry->files[i].path, paths[p]) == 0) { match = &entry->files[i]; break; }
+        /* Reject unknown or skipped paths atomically before changing files. */
+        if (!match || (match->existed && match->skipped))
+            return -1;
+    }
+    for (size_t p = 0; p < count; p++) {
+        for (size_t i = 0; i < entry->nfiles; i++) {
+            captured *cap = &entry->files[i];
+            if (strcmp(cap->path, paths[p]) != 0)
+                continue;
+            if (cap->existed && cap->hash[0]) {
+                size_t blen = 0;
+                char *blob = cow_get(s->cow, cap->hash, &blen);
+                if (!blob || fs_write_file(cap->path, blob, blen) != 0) { free(blob); return -1; }
+                free(blob);
+            } else if (fs_remove(cap->path) != 0) {
+                return -1;
+            }
+            restored++;
+            break;
+        }
+    }
+    return restored;
+}
+
 int snapshot_restore_pending(snapshot *s) {
     int rc;
 
