@@ -46,6 +46,7 @@ typedef struct task {
     int updates_closed;
     unsigned update_count;
     char *tag;    /* optional routing tag (e.g. chat session id) */
+    int thinking_mode; /* user-selected deep-thinking preference for this chat task */
     void *userdata;
     /* internal (managed by scheduler.c): coroutine handle + owning scheduler */
     void *coro;  /* coro* running this task, or NULL */
@@ -69,6 +70,10 @@ int64_t scheduler_submit(scheduler *s, int priority, const char *input, void *us
  * task; runners read it as t->tag. */
 int64_t scheduler_submit_tag(scheduler *s, int priority, const char *input, void *userdata, int64_t timeout_ms,
                                  const char *tag);
+/* Tagged submission with a task-local reasoning preference. Existing task
+ * submitters keep the default (normal) mode through scheduler_submit_tag. */
+int64_t scheduler_submit_tag_mode(scheduler *s, int priority, const char *input, void *userdata, int64_t timeout_ms,
+                                  const char *tag, int thinking_mode);
 
 /* Look up a task by id (borrowed pointer, valid until scheduler_free). */
 task *scheduler_get(scheduler *s, int64_t id);

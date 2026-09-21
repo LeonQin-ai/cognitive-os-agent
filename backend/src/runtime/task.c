@@ -115,7 +115,7 @@ void task_trace_add(task *t, const char *json) {
     if (!event) { cJSON_Delete(snapshot); return; }
     /* Keep only observable execution metadata. In particular, do not retain
      * planner text or tool argument/output payloads in the trace. */
-    const char *names[] = {"stage", "activity", "model", "model_call", "model_failures", "seq",
+    const char *names[] = {"stage", "activity", "model", "thinking", "model_call", "model_failures", "seq",
                            "elapsed_ms", "round", "tool_calls", "cur_tool", "llm_ms", "tool_ms",
                            "llm_calls", "applied_updates"};
     for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {

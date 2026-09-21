@@ -216,6 +216,7 @@ struct reasoning {
     uint64_t last_failed_action_sig;
     int same_action_failures;
     int tool_fail_aborted;
+    int thinking_mode; /* task-local preference; set by the chat lane */
 
     /* live run progress for status display (polled via reasoning_progress):
      * run start time, executed tool-call count, tool currently running.
@@ -256,6 +257,7 @@ static void progress_emit(reasoning *r, const char *stage) {
     cJSON_AddStringToObject(o, "stage", stage);
     cJSON_AddStringToObject(o, "activity", activity);
     cJSON_AddStringToObject(o, "model", model);
+    cJSON_AddBoolToObject(o, "thinking", r->thinking_mode);
     cJSON_AddNumberToObject(o, "seq", ++r->progress_seq);
     cJSON_AddNumberToObject(o, "applied_updates", r->applied_updates);
     cJSON_AddNumberToObject(o, "started_ms", (double)r->prog_started_ms);
@@ -289,6 +291,7 @@ static void progress_emit(reasoning *r, const char *stage) {
 void reasoning_set_observer(reasoning *r, reasoning_observer cb, void *ud) {
     if (r) { r->observer = cb; r->observer_ud = ud; }
 }
+void reasoning_set_thinking_mode(reasoning *r, int enabled) { if (r) r->thinking_mode = enabled != 0; }
 void reasoning_set_task(reasoning *r, task *t) { if (r) r->run_task = t; }
 static int run_aborted(reasoning *r) {
     if (!r->run_task || !task_should_abort(r->run_task)) return 0;
@@ -2588,7 +2591,7 @@ restart_planning:
              * not recover. After the bound, the text is accepted as the
              * final answer. */
             const char *txt = strip_nudge_echo(result);
-            if (!prompt_is_direct_information_request(prompt) && r->max_rounds > 1 && r->intent_nudged < 4 &&
+            if ((r->thinking_mode || !prompt_is_direct_information_request(prompt)) && r->max_rounds > 1 && r->intent_nudged < 4 &&
                 r->round_idx < r->max_rounds && looks_like_intent(txt)) {
                 /* the model re-emitted the same narration after the nudge:
                  * it has now "answered" twice with nothing new to add — the

@@ -405,6 +405,7 @@ static int h_chat(const http_request *req, http_response *resp, void *ud) {
     cJSON *root;
     const char *msg = NULL;
     const char *session = NULL;
+    int thinking = 0;
     int64_t id;
 
     if (!authz_ok(ctx, req, resp))
@@ -419,6 +420,8 @@ static int h_chat(const http_request *req, http_response *resp, void *ud) {
         cJSON *s = cJSON_GetObjectItemCaseSensitive(root, "session");
         if (s && cJSON_IsString(s) && s->valuestring[0])
             session = s->valuestring;
+        cJSON *th = cJSON_GetObjectItemCaseSensitive(root, "thinking");
+        thinking = th && cJSON_IsBool(th) && cJSON_IsTrue(th);
     }
 
     if (!msg || !*msg) {
@@ -438,7 +441,7 @@ static int h_chat(const http_request *req, http_response *resp, void *ud) {
         return 0;
     }
 
-    id = scheduler_submit_tag(ctx->scheduler, 0, msg, NULL, 0, session);
+    id = scheduler_submit_tag_mode(ctx->scheduler, 0, msg, NULL, 0, session, thinking);
     cJSON_Delete(root);
     if (id < 0) {
         resp->status = 500;
@@ -446,7 +449,8 @@ static int h_chat(const http_request *req, http_response *resp, void *ud) {
         return 0;
     }
 
-    http_resp_appendf(resp, "{\"id\":%lld,\"status\":\"queued\"}", (long long)id);
+    http_resp_appendf(resp, "{\"id\":%lld,\"status\":\"queued\",\"thinking\":%s}", (long long)id,
+                      thinking ? "true" : "false");
     return 0;
 }
 

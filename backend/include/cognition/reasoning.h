@@ -93,6 +93,10 @@ void reasoning_set_llm(reasoning *r, llm *llm);
  * to the single configured LLM. The router is borrowed (owned by the caller). */
 void reasoning_set_router(reasoning *r, router *router);
 
+/* Select normal or user-requested deep-thinking behavior for the next run.
+ * Callers serialize this with the reasoning instance's run lock. */
+void reasoning_set_thinking_mode(reasoning *r, int enabled);
+
 /* Session-memory snapshot as JSON: session notes (task/state/files/errors/
  * worklog), the rolling compaction summary and history size. Caller frees. */
 char *reasoning_session_json(reasoning *r);

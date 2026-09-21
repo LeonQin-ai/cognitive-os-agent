@@ -629,6 +629,10 @@ panels.chat = `
           <input type="checkbox" id="chat-shared" onchange="chatSharedToggle(this.checked)">
           共享记忆（关闭后本会话使用私有 Memory OS）
         </label>
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+          <input type="checkbox" id="chat-thinking" onchange="chatThinkingToggle(this.checked)">
+          深度思考（允许额外规划轮次，适合复杂问题）
+        </label>
         <span class="muted" id="chat-session-meta"></span>
       </div>
       <div class="hint" style="margin-top:6px">对话模型在上方下拉切换（来自 Model routes）；新增路由请到 <a href="#" onclick="switchPanel('models');return false">Models</a> 页配置。会话支持 取消 / 恢复：运行中点「取消」，取消或失败后点「恢复」重跑上一条输入。</div>
@@ -2557,6 +2561,8 @@ function syncChatSettings(){
   const info = CHAT_TABS_CACHE.find(s => (s.id || 'default') === CHAT_SESSION);
   const cb = $('chat-shared');
   if(cb) cb.checked = !(info && info.shared_memory === false);
+  const thinking = $('chat-thinking');
+  if(thinking) thinking.checked = localStorage.getItem('cognitive-thinking-mode') === '1';
   const meta = $('chat-session-meta');
   if(meta){
     const bits = [];
@@ -2564,6 +2570,12 @@ function syncChatSettings(){
     if(info && info.total_ms) bits.push('累计执行 ' + fmtDur(info.total_ms));
     meta.textContent = bits.length ? bits.join(' · ') : '新会话';
   }
+}
+
+function chatThinkingEnabled(){ return localStorage.getItem('cognitive-thinking-mode') === '1'; }
+function chatThinkingToggle(enabled){
+  try { localStorage.setItem('cognitive-thinking-mode', enabled ? '1' : '0'); } catch(e) {}
+  toast(enabled ? '已开启深度思考：复杂问题可进行额外规划。' : '已关闭深度思考：优先直接回答或执行必要工具。');
 }
 
 /* 共享记忆开关 → POST /v1/chat/sessions/<id>/shared */
@@ -3842,6 +3854,7 @@ function renderChatEntry(entry){
     if(ms) { const m = document.createElement('span'); m.textContent = '用时 ' + durationLabel(ms); metrics.append(m); }
     if(p.llm_ms) { const m = document.createElement('span'); m.textContent = '模型 ' + durationLabel(p.llm_ms); metrics.append(m); }
     if(p.model) { const m = document.createElement('span'); m.textContent = '模型 ' + p.model; metrics.append(m); }
+    if(p.thinking) { const m = document.createElement('span'); m.textContent = '深度思考'; metrics.append(m); }
     if(p.model_call) { const m = document.createElement('span'); m.textContent = '模型请求 ' + p.model_call + ' 次'; metrics.append(m); }
     if(p.model_failures) { const m = document.createElement('span'); m.textContent = '请求失败 ' + p.model_failures + ' 次'; metrics.append(m); }
     if(p.tool_ms) { const m = document.createElement('span'); m.textContent = '工具 ' + durationLabel(p.tool_ms); metrics.append(m); }
@@ -3908,7 +3921,7 @@ function chatApplyProgress(session,id,p){
   if(p.seq && entry.progress?.seq > p.seq) return;
   if(p.seq && (!entry.progressEvents?.length || entry.progressEvents[entry.progressEvents.length-1].seq !== p.seq)){
     entry.progressEvents = [...(entry.progressEvents || []), {
-      seq:p.seq, stage:p.stage, activity:p.activity, round:p.round, model:p.model,
+      seq:p.seq, stage:p.stage, activity:p.activity, round:p.round, model:p.model, thinking:p.thinking,
       model_call:p.model_call, model_failures:p.model_failures
     }].slice(-24);
   }
@@ -3980,7 +3993,7 @@ async function chatSubmit(resume = false){
   entry.pending = true; entry.progress = {stage:'submitting'};
   CHAT_CACHE[session] = CHAT_MSGS; renderChatEntry(entry);
   const r = await call('POST',resume ? '/v1/chat/sessions/' + encodeURIComponent(session) + '/resume' : '/v1/chat',
-    resume ? {} : {message:full,session});
+    resume ? {thinking:chatThinkingEnabled()} : {message:full,session,thinking:chatThinkingEnabled()});
   CHAT_SUBMITTING.delete(session);
   if(!Number.isInteger(r.obj?.id)){
     entry.pending = false; entry.progress.stage = 'failed';

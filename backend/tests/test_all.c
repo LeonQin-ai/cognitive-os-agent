@@ -2500,6 +2500,15 @@ static void test_agent_loop(void) {
         reasoning_progress(ctx.reasoning, &el, &rnd, &tc, &cur_tool, &tin, &tout);
         CHECK(rnd == 1 && tc == 0);
         free(ans);
+        /* The same intent-style response may take a second planning pass only
+         * when the caller explicitly requests deep-thinking mode. */
+        reasoning_set_thinking_mode(ctx.reasoning, 1);
+        ans = NULL;
+        CHECK(reasoning_run(ctx.reasoning, "工具清单意向回答：你有什么工具", &ans) == 0);
+        reasoning_progress(ctx.reasoning, &el, &rnd, &tc, &cur_tool, &tin, &tout);
+        CHECK(ans && strstr(ans, "任务完成") != NULL);
+        CHECK(rnd == 2 && tc == 0);
+        free(ans);
         runtime_shutdown(&ctx);
     }
 

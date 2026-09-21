@@ -219,6 +219,11 @@ int64_t scheduler_submit(scheduler *s, int priority, const char *input, void *us
 
 int64_t scheduler_submit_tag(scheduler *s, int priority, const char *input, void *userdata, int64_t timeout_ms,
                                  const char *tag) {
+    return scheduler_submit_tag_mode(s, priority, input, userdata, timeout_ms, tag, 0);
+}
+
+int64_t scheduler_submit_tag_mode(scheduler *s, int priority, const char *input, void *userdata, int64_t timeout_ms,
+                                  const char *tag, int thinking_mode) {
     task *t = calloc(1, sizeof(task));
     int64_t id;
 
@@ -233,6 +238,7 @@ int64_t scheduler_submit_tag(scheduler *s, int priority, const char *input, void
     t->status = TS_QUEUED;
     t->input = input ? xstrdup(input) : xstrdup("");
     t->tag = tag ? xstrdup(tag) : NULL;
+    t->thinking_mode = thinking_mode != 0;
     t->userdata = userdata;
     t->sched = s;
     queue_insert(s, t);
