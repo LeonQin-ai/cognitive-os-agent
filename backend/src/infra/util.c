@@ -139,7 +139,13 @@ char *xstrdup(const char *s) {
 void path_join(char *out, size_t n, const char *a, const char *b) {
     /* Build in a temp buffer first so `out` may safely alias `a` (snprintf
      * with overlapping src/dst is undefined behavior). */
-    char tmp[2048];
+    if (n == 0)
+        return;
+    char *tmp = malloc(n);
+    if (!tmp) {
+        out[0] = '\0';
+        return;
+    }
     const char sep =
 #if defined(_WIN32)
         '\\';
@@ -147,16 +153,17 @@ void path_join(char *out, size_t n, const char *a, const char *b) {
         '/';
 #endif
     if (!a || !*a) {
-        snprintf(tmp, sizeof(tmp), "%s", b ? b : "");
+        snprintf(tmp, n, "%s", b ? b : "");
     } else {
         size_t la = strlen(a);
         if (la > 0 && a[la - 1] != '/' && a[la - 1] != '\\')
-            snprintf(tmp, sizeof(tmp), "%s%c%s", a, sep, b ? b : "");
+            snprintf(tmp, n, "%s%c%s", a, sep, b ? b : "");
         else
-            snprintf(tmp, sizeof(tmp), "%s%s", a, b ? b : "");
+            snprintf(tmp, n, "%s%s", a, b ? b : "");
     }
 
     snprintf(out, n, "%s", tmp);
+    free(tmp);
 }
 
 void path_resolve(char *out, size_t n, const char *workspace, const char *path) {
