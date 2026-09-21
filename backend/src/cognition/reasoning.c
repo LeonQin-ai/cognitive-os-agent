@@ -1234,7 +1234,7 @@ static int h_reason(state_machine *sm, void *ud, const char *input, char **out) 
     r->ok_actions = 0;
     r->denied_actions = 0;
     r->prog_tool[0] = 0;
-    progress_emit(r, "planning");
+    progress_emit(r, "preparing_context");
     aug = build_context(r, input);
     if (!r->llm) {
         free(aug);
@@ -1243,6 +1243,7 @@ static int h_reason(state_machine *sm, void *ud, const char *input, char **out) 
     }
 
     long long t_llm0 = time_now_ms();
+    progress_emit(r, "planning");
     int rc = planner_plan_ex(r->llm, r->tools, r->skills, r->policy, aug ? aug : input, &r->actions, &r->n_actions,
                                  &raw, &plan_err);
     r->prog_llm_ms += time_now_ms() - t_llm0;
