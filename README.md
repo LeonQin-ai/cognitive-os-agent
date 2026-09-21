@@ -7,7 +7,7 @@
 [![Language](https://img.shields.io/badge/language-C11-blue.svg)](https://en.wikipedia.org/wiki/C11_(C_standard_revision))
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)](#quick-start)
 [![Dependencies](https://img.shields.io/badge/external%20deps-0-green.svg)](#project-structure)
-[![Tests](https://img.shields.io/badge/tests-1609%20passing-brightgreen.svg)](#testing)
+[![Tests](https://img.shields.io/badge/tests-1622%20passing-brightgreen.svg)](#testing)
 [![CI](https://github.com/LeonQin-ai/cognitive-os-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/LeonQin-ai/cognitive-os-agent/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
 

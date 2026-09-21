@@ -1362,6 +1362,7 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
     tctx.snapshot = r->snap;
     tctx.bus = r->bus;
     tctx.workspace = r->workspace;
+    tctx.state_root = r->state_root;
     tctx.metrics = r->metrics;
     tctx.skills = r->skills;
     tctx.mcp = r->mcp;
@@ -1628,7 +1629,10 @@ static int h_learn(state_machine *sm, void *ud, const char *input, char **out) {
 
     snprintf(r->cur->sn_state, sizeof(r->cur->sn_state), "%s",
              r->all_actions_ok ? "上一任务已完成" : "上一任务部分失败");
-    if (r->mem && (!r->cur || r->cur->shared_memory)) {
+    /* A planned round is still in progress: never export its graph/episode
+     * state into shared memory. Another session may retrieve graph facts by
+     * keyword, which used to make an unfinished task appear actionable. */
+    if (r->mem && (!r->cur || r->cur->shared_memory) && !r->had_plan) {
         /* episode only on the final round: intermediate rounds would record
          * raw tool output into episodic memory; KG edges stay per-round */
         if (!r->had_plan || r->round_idx >= r->max_rounds) {
@@ -2310,8 +2314,17 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
      * executing (across lanes via the shared store). */
     mutex_lock(&r->ss->sess_mtx);
     r->cur = session_get_locked(r, session_id);
+    /* A session is a sequential conversation. Different sessions may run on
+     * different lanes, but accepting two runs for the same session lets their
+     * histories, summaries and steering messages interleave. */
+    if (r->cur && r->cur->in_run) {
+        mutex_unlock(&r->ss->sess_mtx);
+        if (answer)
+            *answer = xstrdup("(this session already has a running task)");
+        return -2;
+    }
     if (r->cur)
-        r->cur->in_run++;
+        r->cur->in_run = 1;
     mutex_unlock(&r->ss->sess_mtx);
     if (r->cur)
         r->cur->last_active_ms = (long long)time_now_ms();
@@ -2361,8 +2374,9 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     free(r->last_prompt);
     r->last_prompt = xstrdup(prompt);
     r->gen_attempted = 0; /* one auto-generation attempt per run */
-    if (r->mem && mem_shared)
-        memory_working_push(r->mem, prompt);
+    /* Do not publish an in-flight prompt into shared retrieval. A different
+     * session must only see completed knowledge, never an unfinished task it
+     * could accidentally continue or execute. */
 
     /* lifecycle hook: a blocking before_run skips the whole run (a legitimate
      * refusal, like a policy denial — surfaced as the answer, not a failure) */
@@ -2382,6 +2396,10 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
             if (answer)
                 *answer = xstrdup("(run blocked by hook)");
             free(safe_prompt);
+            mutex_lock(&r->ss->sess_mtx);
+            if (r->cur)
+                r->cur->in_run = 0;
+            mutex_unlock(&r->ss->sess_mtx);
             return 0;
         }
     }
@@ -2751,8 +2769,8 @@ restart_planning:
 
     free(safe_prompt);
     mutex_lock(&r->ss->sess_mtx);
-    if (r->cur && r->cur->in_run > 0)
-        r->cur->in_run--;
+    if (r->cur)
+        r->cur->in_run = 0;
     mutex_unlock(&r->ss->sess_mtx);
     progress_emit(r, ret == 0 ? "completed" : "failed");
     return ret;

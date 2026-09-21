@@ -44,6 +44,7 @@ typedef struct tool_ctx {
     tx *tx;                        /* active transaction (may be NULL) */
     event_bus *bus;                /* event publisher (may be NULL) */
     const char *workspace;             /* base dir for relative paths */
+    const char *state_root;        /* runtime state dir (SSH environment profiles) */
     metrics *metrics;              /* metrics sink (may be NULL) */
     struct skill_registry *skills; /* for the skill tool (may be NULL) */
     struct mcp_manager *mcp;       /* for MCP tools (may be NULL) */

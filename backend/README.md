@@ -141,6 +141,34 @@ reverse proxy such as Caddy or Nginx, configure an auth key, and proxy only to
 the loopback listener. The embedded server intentionally does not advertise
 plain HTTP plus bearer tokens as a secure remote deployment mode.
 
+### SSH environments
+
+The `ssh` tool accepts either a one-off `host` (with optional `user`, `port`)
+or a named `environment`. Environment profiles keep non-secret connection
+settings out of prompts and support separate development, staging and
+production hosts:
+
+```json
+// <state_root>/ssh/environments.json
+{
+  "environments": {
+    "staging": {
+      "host": "10.0.0.8",
+      "user": "deploy",
+      "port": 22,
+      "identity_file": "C:/keys/staging_ed25519",
+      "proxy_jump": "jump.example.com",
+      "known_hosts": "C:/keys/known_hosts"
+    }
+  }
+}
+```
+
+Then invoke `ssh` with `{"environment":"staging","command":"uname -a"}`.
+The tool uses non-interactive key/agent authentication, requires host-key
+verification, bounds the command timeout to 60 seconds, and never publishes an
+in-flight session task into shared memory.
+
 ## LLM providers
 
 Configure via JSON config (`state/<name>/cognitive-os-agent.json`), CLI flags, or env vars with a
@@ -187,7 +215,7 @@ POST /v1/local/start             # body {"engine":"ollama"} 或 {"engine":"llama
 Current unit result (verified locally on Windows):
 
 ```
-unit:       1609 passed, 0 failed
+unit:       1622 passed, 0 failed
 adapters:   ADAPTER PASS (openai + anthropic, chat + stream)
 e2e:        E2E PASS (openai + anthropic)
 bench:      --mock tool-selection accuracy 100%

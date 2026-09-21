@@ -437,6 +437,21 @@ static void test_snapshot_tx(void) {
     CHECK(bad_ssh != NULL && bad_ssh->ok == 0);
     tool_result_free(bad_ssh);
 
+    /* SSH environment profiles are resolved from the runtime state directory;
+     * an invalid profile must fail before spawning a local shell/ssh process. */
+    fs_mkdirs("state-test/snapshot/ssh");
+    static const char profile_json[] =
+        "{\"environments\":{\"staging\":{\"host\":\"bad host\",\"user\":\"deploy\"}}}";
+    fs_write_file("state-test/snapshot/ssh/environments.json", profile_json, strlen(profile_json));
+    tool_ctx ssh_ctx = {0};
+    ssh_ctx.reg = reg;
+    ssh_ctx.state_root = "state-test/snapshot";
+    tool_result *bad_profile = tool_execute(reg, "ssh",
+        "{\"environment\":\"staging\",\"command\":\"uname\"}", &ssh_ctx);
+    CHECK(bad_profile != NULL && bad_profile->ok == 0 &&
+          strstr(bad_profile->output, "invalid") != NULL);
+    tool_result_free(bad_profile);
+
     tx_manager *tm = tx_manager_new();
     tool_ctx ctx;
     memset(&ctx, 0, sizeof(ctx));
