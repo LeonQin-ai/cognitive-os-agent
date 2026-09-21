@@ -3,10 +3,15 @@ set -euo pipefail
 cd "$(dirname "$0")"
 [[ "$(uname -s)" == Darwin ]] || { echo 'Run this script on macOS.' >&2; exit 1; }
 export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-12.0}"
-bash build.sh cli
+BUILD_DIR="${MACOS_BUILD_DIR:-build-macos}"
+BACKEND_BINARY="$BUILD_DIR/cognitive-os-agent"
+if [[ ! -x "$BACKEND_BINARY" ]]; then
+  cmake -S . -B "$BUILD_DIR"
+  cmake --build "$BUILD_DIR" --target cognitive-os-agent -j "${JOBS:-3}"
+fi
 APP="dist/Cognitive OS.app"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp build/cognitive-os-agent "$APP/Contents/MacOS/cognitive-os-agent"
+cp "$BACKEND_BINARY" "$APP/Contents/MacOS/cognitive-os-agent"
 xcrun clang -fobjc-arc -Wall -Wextra -framework Cocoa -framework WebKit \
   tools/desktop_macos.m -o "$APP/Contents/MacOS/CognitiveOS"
 cat > "$APP/Contents/Info.plist" <<'PLIST'
