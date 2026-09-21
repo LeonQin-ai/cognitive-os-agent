@@ -477,7 +477,7 @@ function fallbackCopy(t){
   const ta = document.createElement('textarea');
   ta.value = t; ta.style.position = 'fixed'; ta.style.opacity = '0';
   document.body.appendChild(ta); ta.select();
-  try { document.execCommand('copy'); toast('已复制'); } catch(e) { toast('复制失败'); }
+  try { toast(document.execCommand('copy') ? '已复制' : '复制失败'); } catch(e) { toast('复制失败'); }
   ta.remove();
 }
 function copyPre(id){ const el = $(id); if(el) copyText(el.textContent); }
@@ -2644,14 +2644,19 @@ function chatAddBubble(role, text, push = true){
   wrap.style.cssText = role === 'user'
     ? 'align-self:flex-end;max-width:85%;background:var(--accent,#3b82f6);color:#fff;border-radius:12px 12px 2px 12px;padding:8px 12px;white-space:pre-wrap;word-break:break-word'
     : 'align-self:flex-start;max-width:92%;background:var(--card2,#1f2430);border:1px solid var(--border,#333);border-radius:12px 12px 12px 2px;padding:8px 12px';
-  if(role === 'bot'){
-    const pre = document.createElement('pre');
-    pre.style.cssText = 'margin:0;white-space:pre-wrap;word-break:break-word;font-size:12.5px';
-    pre.textContent = text;
-    wrap.appendChild(pre);
-  } else {
-    wrap.textContent = text;
-  }
+  const content = document.createElement(role === 'bot' ? 'pre' : 'div');
+  content.style.cssText = 'margin:0;white-space:pre-wrap;word-break:break-word;user-select:text;-webkit-user-select:text';
+  if(role === 'bot') content.style.fontSize = '12.5px';
+  content.textContent = text;
+  wrap.appendChild(content);
+  const copy = document.createElement('button');
+  copy.type = 'button';
+  copy.className = 'sec sm';
+  copy.textContent = '复制';
+  copy.setAttribute('aria-label', role === 'user' ? '复制输入内容' : '复制输出内容');
+  copy.style.cssText = 'display:block;margin-top:6px';
+  copy.onclick = () => copyText(content.textContent);
+  wrap.appendChild(copy);
   box.appendChild(wrap);
   if(push) CHAT_MSGS.push({role, text, pending:false, el:wrap});
   updateChatHero();
