@@ -1,0 +1,96 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  linux:
+    name: Linux x64 package
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build release binary
+        run: make -j"$(nproc)" build/cognitive-os-agent
+      - name: Create portable package
+        run: |
+          mkdir -p release/cognitive-os-agent-linux-x64
+          cp build/cognitive-os-agent release/cognitive-os-agent-linux-x64/
+          cp README.md release/cognitive-os-agent-linux-x64/
+          tar -C release -czf cognitive-os-agent-linux-x64.tar.gz cognitive-os-agent-linux-x64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-x64
+          path: backend/cognitive-os-agent-linux-x64.tar.gz
+
+  windows:
+    name: Windows installer
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: backend
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+      - name: Set up Zig
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "https://ziglang.org/download/0.14.1/zig-x86_64-windows-0.14.1.zip" -OutFile "$env:RUNNER_TEMP\zig.zip"
+          Expand-Archive -Path "$env:RUNNER_TEMP\zig.zip" -DestinationPath "$env:RUNNER_TEMP\zig" -Force
+          "$env:RUNNER_TEMP\zig\zig-x86_64-windows-0.14.1" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --no-progress --yes
+      - name: Create installer
+        run: bash package.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64
+          path: backend/dist/cognitive-os-agent-setup.exe
+
+  macos:
+    name: macOS ${{ matrix.arch }} package
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x64
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v5
+      - name: Create native app package
+        run: bash package-macos.sh
+      - name: Normalize archive name
+        run: mv dist/Cognitive-OS-macos-${{ matrix.arch }}.zip dist/cognitive-os-agent-macos-${{ matrix.arch }}.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-${{ matrix.arch }}
+          path: backend/dist/cognitive-os-agent-macos-${{ matrix.arch }}.zip
+
+  publish:
+    name: Publish GitHub Release
+    needs: [linux, windows, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          path: release-assets
+          merge-multiple: true
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" release-assets/* \
+            --title "${GITHUB_REF_NAME}" \
+            --notes "## ${GITHUB_REF_NAME}\n\n- 可观测、可插话的 Agent 执行过程与每轮模型调用状态\n- 每个聊天框可选深度思考模式\n- 事务 COW 快照支持刷新、最新回滚和多文件精确回滚\n- 全新的 Cognitive OS 大脑图标与 macOS 原生应用包\n\n### 安装包\n- Windows：`cognitive-os-agent-setup.exe`\n- Linux：`cognitive-os-agent-linux-x64.tar.gz`\n- macOS Apple Silicon：`cognitive-os-agent-macos-arm64.zip`\n- macOS Intel：`cognitive-os-agent-macos-x64.zip`"

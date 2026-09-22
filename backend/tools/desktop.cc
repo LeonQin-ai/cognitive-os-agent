@@ -29,6 +29,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <winsock2.h>
 #include <windows.h>
+#include <windowsx.h>
 #include <shlwapi.h>
 #include <unknwn.h>
 
@@ -419,6 +420,31 @@ static DWORD WINAPI boot_waiter(LPVOID) {
 
 static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
+    case WM_NCHITTEST: {
+        /* The desktop shell is intentionally frameless. Keep the familiar
+         * native interactions: resize on every edge and drag/maximize from
+         * the non-interactive brand area in the web application's sidebar. */
+        POINT pt = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+        RECT wr;
+        GetWindowRect(hwnd, &wr);
+        const int edge = 8;
+        const bool left = pt.x < wr.left + edge, right = pt.x >= wr.right - edge;
+        const bool top = pt.y < wr.top + edge, bottom = pt.y >= wr.bottom - edge;
+        if (!IsZoomed(hwnd)) {
+            if (top && left) return HTTOPLEFT;
+            if (top && right) return HTTOPRIGHT;
+            if (bottom && left) return HTBOTTOMLEFT;
+            if (bottom && right) return HTBOTTOMRIGHT;
+            if (left) return HTLEFT;
+            if (right) return HTRIGHT;
+            if (top) return HTTOP;
+            if (bottom) return HTBOTTOM;
+        }
+        ScreenToClient(hwnd, &pt);
+        if (pt.x < 345 && pt.y < 120)
+            return HTCAPTION;
+        return HTCLIENT;
+    }
     case WM_APP_NAV:
         if (wp == 1)
             navigate_main();
@@ -473,7 +499,9 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
     wc.lpszClassName = "cognitive-os-agent";
     RegisterClassA(&wc);
     g_hwnd = CreateWindowA("cognitive-os-agent", "cognitive-os-agent",
-                           WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
+                           WS_POPUP | WS_THICKFRAME | WS_MINIMIZEBOX |
+                           WS_MAXIMIZEBOX | WS_SYSMENU,
+                           CW_USEDEFAULT, CW_USEDEFAULT,
                            1280, 800, nullptr, nullptr, wc.hInstance, nullptr);
     if (!g_hwnd) {
         MessageBoxW(nullptr, L"Failed to create the main window.",
