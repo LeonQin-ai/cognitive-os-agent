@@ -15,6 +15,7 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <signal.h>
+#include <pthread.h>
 
 proc_result *proc_run_in(const char *cmd, int timeout_ms, const char *cwd) {
     int pfd[2];
@@ -252,20 +253,50 @@ proc_popen *proc_popen_new_ex(char *const argv[], int merge_stderr) {
 
 int proc_popen_write(proc_popen *p, const char *data, size_t len) {
     size_t off = 0;
+    sigset_t blocked, previous, pending;
+    int had_sigpipe, saved_errno = 0, rc = 0;
 
     if (!p || !data)
         return -1;
+    /* A dead stdio MCP child must not terminate the host. Block SIGPIPE
+     * only in this writer, preserving the caller's disposition and mask. */
+    sigemptyset(&blocked);
+    sigaddset(&blocked, SIGPIPE);
+    int mask_rc = pthread_sigmask(SIG_BLOCK, &blocked, &previous);
+    if (mask_rc != 0) {
+        errno = mask_rc;
+        return -1;
+    }
+    if (sigpending(&pending) != 0) {
+        saved_errno = errno;
+        pthread_sigmask(SIG_SETMASK, &previous, NULL);
+        errno = saved_errno;
+        return -1;
+    }
+    had_sigpipe = sigismember(&pending, SIGPIPE);
     while (off < len) {
         ssize_t w = write(p->in_wr, data + off, len - off);
         if (w <= 0) {
             if (w < 0 && (errno == EINTR))
                 continue;
-            return -1;
+            saved_errno = w < 0 ? errno : EIO;
+            rc = -1;
+            break;
         }
         off += (size_t)w;
     }
 
-    return 0;
+    /* Consume only a newly pending signal from our broken-pipe write.
+     * Ignored SIGPIPE need not become pending; never wait in that case. */
+    if (saved_errno == EPIPE && !had_sigpipe &&
+        sigpending(&pending) == 0 && sigismember(&pending, SIGPIPE)) {
+        int signo;
+        sigwait(&blocked, &signo);
+    }
+    pthread_sigmask(SIG_SETMASK, &previous, NULL);
+    if (rc != 0)
+        errno = saved_errno;
+    return rc;
 }
 
 size_t proc_popen_read(proc_popen *p, int timeout_ms) {
@@ -371,4 +402,3 @@ void proc_popen_free(proc_popen *p) {
     free(p->buf);
     free(p);
 }
-
