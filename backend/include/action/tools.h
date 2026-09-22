@@ -45,6 +45,7 @@ typedef struct tool_ctx {
     event_bus *bus;                /* event publisher (may be NULL) */
     const char *workspace;             /* base dir for relative paths */
     const char *state_root;        /* runtime state dir (SSH environment profiles) */
+    const char *task_input;        /* original local task text; never sent to an LLM */
     metrics *metrics;              /* metrics sink (may be NULL) */
     struct skill_registry *skills; /* for the skill tool (may be NULL) */
     struct mcp_manager *mcp;       /* for MCP tools (may be NULL) */

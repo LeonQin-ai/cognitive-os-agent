@@ -2,6 +2,7 @@
 #include "action/tools.h"
 #include "os/os_proc.h"
 #include "os/os_fs.h"
+#include "os/os_time.h"
 #include "infra/util.h"
 
 #include <stdlib.h>
@@ -252,48 +253,126 @@ static cJSON *ssh_profile_load(const tool_ctx *ctx, const char *name, ssh_profil
     return root;
 }
 
-/* Password authentication must not depend on a separately installed sshpass.
- * Python is shipped with the supported desktop developer environments; when
- * paramiko is present it provides the same non-interactive SSH transport from
- * inside the built-in ssh tool. Arguments are individually shell-quoted, so
- * passwords and remote commands are never interpreted by the local shell. */
-static int ssh_append_paramiko(strbuf *out, const char *host, const char *user,
-                               const char *password, const char *command,
-                               int port, int timeout_ms) {
-    static const char script[] =
-        "import sys;"
-        "try: import paramiko\n"
-        "except ImportError: sys.stderr.write('ssh: password login needs Python paramiko; run python -m pip install paramiko\\n');sys.exit(127)\n"
-        "c=paramiko.SSHClient();c.set_missing_host_key_policy(paramiko.AutoAddPolicy());"
-        "c.connect(sys.argv[1],port=int(sys.argv[2]),username=sys.argv[3],password=sys.argv[4],"
-        "timeout=float(sys.argv[6])/1000,look_for_keys=False,allow_agent=False);"
-        "i,o,e=c.exec_command(sys.argv[5],timeout=float(sys.argv[6])/1000);"
-        "sys.stdout.write(o.read().decode('utf-8','replace'));sys.stderr.write(e.read().decode('utf-8','replace'));"
-        "rc=o.channel.recv_exit_status();c.close();sys.exit(rc)";
-    char port_s[16], timeout_s[16];
-    char *qscript = ssh_quote_arg(script), *qhost = ssh_quote_arg(host), *qport,
-         *quser = ssh_quote_arg(user ? user : ""), *qpass = ssh_quote_arg(password),
-         *qcommand = ssh_quote_arg(command), *qtimeout;
-    int ok = qscript && qhost && quser && qpass && qcommand;
-    snprintf(port_s, sizeof(port_s), "%d", port);
-    snprintf(timeout_s, sizeof(timeout_s), "%d", timeout_ms);
-    qport = ssh_quote_arg(port_s);
-    qtimeout = ssh_quote_arg(timeout_s);
-    ok = ok && qport && qtimeout;
-    if (ok) {
-#if defined(_WIN32)
-        strbuf_appendf(out, "where python >nul 2>nul || (echo ssh: password login needs Python with paramiko & exit /b 127) & python -c %s %s %s %s %s %s %s",
-                       qscript, qhost, qport, quser, qpass, qcommand, qtimeout);
-#else
-        strbuf_appendf(out, "if command -v python3 >/dev/null 2>&1; then python3 -c %s %s %s %s %s %s %s; "
-                            "elif command -v python >/dev/null 2>&1; then python -c %s %s %s %s %s %s %s; "
-                            "else echo 'ssh: password login needs Python with paramiko'; exit 127; fi",
-                       qscript, qhost, qport, quser, qpass, qcommand, qtimeout,
-                       qscript, qhost, qport, quser, qpass, qcommand, qtimeout);
-#endif
+/* Extract a password only from the locally retained task text.  The planner
+ * never receives this text verbatim (llm.c redacts secrets before egress), so
+ * an ssh action can omit password while the built-in tool still authenticates. */
+static char *ssh_password_from_task(const char *task) {
+    const char *keys[] = {"password", "Password", "密码"};
+    if (!task) return NULL;
+    for (size_t k = 0; k < sizeof(keys) / sizeof(keys[0]); k++) {
+        const char *p = strstr(task, keys[k]);
+        if (!p) continue;
+        p += strlen(keys[k]);
+        while (*p == ' ' || *p == '\t' || *p == ':' || *p == '=' ||
+               ((unsigned char)p[0] == 0xef && (unsigned char)p[1] == 0xbc &&
+                (unsigned char)p[2] == 0x9a)) { /* UTF-8 full-width colon */
+            if ((unsigned char)p[0] == 0xef) p += 3;
+            else p++;
+        }
+        const char *e = p;
+        while (*e && !isspace((unsigned char)*e) && *e != ',' &&
+               !((unsigned char)e[0] == 0xef && (unsigned char)e[1] == 0xbc &&
+                 (unsigned char)e[2] == 0x8c)) e++; /* UTF-8 full-width comma */
+        if (e > p) {
+            size_t n = (size_t)(e - p);
+            char *out = malloc(n + 1);
+            if (out) { memcpy(out, p, n); out[n] = '\0'; }
+            return out;
+        }
     }
-    free(qscript); free(qhost); free(qport); free(quser); free(qpass); free(qcommand); free(qtimeout);
-    return ok ? 0 : -1;
+    return NULL;
+}
+
+static void ssh_secret_free(char *secret) {
+    if (secret) {
+        memset(secret, 0, strlen(secret));
+        free(secret);
+    }
+}
+
+static int ssh_append_options(strbuf *out, const ssh_profile *profile, int has_profile,
+                              const char *host, const char *user, const char *quoted_command,
+                              int port, int batch_mode) {
+    char *q;
+    strbuf_appendf(out, "ssh -o BatchMode=%s -o ConnectTimeout=5 -o StrictHostKeyChecking=yes -p %d",
+                   batch_mode ? "yes" : "no", port);
+    if (has_profile && profile->identity_file) {
+        q = ssh_quote_arg(profile->identity_file); if (!q) return -1;
+        strbuf_appendf(out, " -i %s", q); free(q);
+    }
+    if (has_profile && profile->known_hosts) {
+        q = ssh_quote_arg(profile->known_hosts); if (!q) return -1;
+        strbuf_appendf(out, " -o UserKnownHostsFile=%s", q); free(q);
+    }
+    if (has_profile && profile->proxy_jump) {
+        q = ssh_quote_arg(profile->proxy_jump); if (!q) return -1;
+        strbuf_appendf(out, " -J %s", q); free(q);
+    }
+    if (user) strbuf_appendf(out, " -- %s@%s", user, host);
+    else strbuf_appendf(out, " -- %s", host);
+    strbuf_appendf(out, " %s", quoted_command);
+    return 0;
+}
+
+/* OpenSSH's documented SSH_ASKPASS mechanism lets the built-in tool supply a
+ * password without sshpass, Python or Paramiko.  The one-shot helper and its
+ * secret file stay local under state/ssh and are removed after the command;
+ * neither the password nor the original task text is included in the plan. */
+static int ssh_append_askpass(strbuf *out, const tool_ctx *ctx, const ssh_profile *profile,
+                              int has_profile, const char *host, const char *user,
+                              const char *password, const char *quoted_command,
+                              int port) {
+    char dir[1024], helper[1200], secret[1200], helper_name[96], secret_name[96];
+    char *qhelper, *qsecret;
+    strbuf data;
+    int64_t stamp;
+    if (!ctx || !ctx->state_root || !*ctx->state_root || !password) return -1;
+    path_join(dir, sizeof(dir), ctx->state_root, "ssh");
+    if (fs_mkdirs(dir) != 0) return -1;
+    stamp = time_now_ms();
+#if defined(_WIN32)
+    snprintf(helper_name, sizeof(helper_name), "askpass-%lld.cmd", (long long)stamp);
+    snprintf(secret_name, sizeof(secret_name), "askpass-%lld.secret", (long long)stamp);
+#else
+    snprintf(helper_name, sizeof(helper_name), "askpass-%lld.sh", (long long)stamp);
+    snprintf(secret_name, sizeof(secret_name), "askpass-%lld.secret", (long long)stamp);
+#endif
+    path_join(helper, sizeof(helper), dir, helper_name);
+    path_join(secret, sizeof(secret), dir, secret_name);
+    strbuf_init(&data);
+#if defined(_WIN32)
+    strbuf_append(&data, "@echo off\r\nsetlocal DisableDelayedExpansion\r\nset /p _COA_SSH_PASS=<\"%~dp0");
+    strbuf_append(&data, secret_name);
+    strbuf_append(&data, "\"\r\n<nul set /p \"=%_COA_SSH_PASS%\"\r\n");
+#else
+    strbuf_append(&data, "#!/bin/sh\ncat \"$(dirname \"$0\")/");
+    strbuf_append(&data, secret_name);
+    strbuf_append(&data, "\"\n");
+#endif
+    if (fs_write_file(helper, data.buf, data.len) != 0 ||
+        fs_write_file(secret, password, strlen(password)) != 0) {
+        strbuf_free(&data); fs_remove(helper); fs_remove(secret); return -1;
+    }
+    strbuf_free(&data);
+    qhelper = ssh_quote_arg(helper); qsecret = ssh_quote_arg(secret);
+    if (!qhelper || !qsecret) { free(qhelper); free(qsecret); fs_remove(helper); fs_remove(secret); return -1; }
+#if defined(_WIN32)
+    /* set \"name=value\" protects spaces in state_root; do not put the
+     * shell-quoted form inside the value because OpenSSH expects a raw path. */
+    strbuf_appendf(out, "set \"SSH_ASKPASS=%s\" & set \"SSH_ASKPASS_REQUIRE=force\" & set \"DISPLAY=1\" & ", helper);
+#else
+    strbuf_appendf(out, "chmod 700 %s && SSH_ASKPASS=%s SSH_ASKPASS_REQUIRE=force DISPLAY=1 ", qhelper, qhelper);
+#endif
+    if (ssh_append_options(out, profile, has_profile, host, user, quoted_command, port, 0) != 0) {
+        free(qhelper); free(qsecret); fs_remove(helper); fs_remove(secret); return -1;
+    }
+#if defined(_WIN32)
+    strbuf_appendf(out, " & set \"_COA_SSH_RC=%%ERRORLEVEL%%\" & del /q %s %s >nul 2>nul & exit /b %%_COA_SSH_RC%%", qhelper, qsecret);
+#else
+    strbuf_appendf(out, "; _coa_ssh_rc=$?; rm -f %s %s; exit $_coa_ssh_rc", qhelper, qsecret);
+#endif
+    free(qhelper); free(qsecret);
+    return 0;
 }
 
 static tool_result *ssh_exec(const tool *self, const tool_ctx *ctx, const char *args_json) {
@@ -312,6 +391,7 @@ static tool_result *ssh_exec(const tool *self, const tool_ctx *ctx, const char *
     const char *host_text = host && cJSON_IsString(host) ? host->valuestring : NULL;
     const char *user_text = user && cJSON_IsString(user) ? user->valuestring : NULL;
     const char *password_text = password && cJSON_IsString(password) ? password->valuestring : NULL;
+    char *task_password = NULL;
     char *quoted = NULL;
     char *shell_args = NULL;
     tool_result *result;
@@ -328,20 +408,24 @@ static tool_result *ssh_exec(const tool *self, const tool_ctx *ctx, const char *
         user_text = profile.user;
         port_no = profile.port;
     }
+    /* A planner only sees [REDACTED:secret]; resolve that marker from the
+     * locally retained task instead of ever treating it as a credential. */
+    if ((!password_text || strstr(password_text, "[REDACTED:secret]")) && ctx)
+        password_text = task_password = ssh_password_from_task(ctx->task_input);
     if (!host_text || !ssh_host_valid(host_text) ||
         (user_text && !ssh_name_valid(user_text)) ||
-        (password && (!password_text || strchr(password_text, '\n') || strchr(password_text, '\r'))) ||
+        (password_text && (strchr(password_text, '\n') || strchr(password_text, '\r'))) ||
         !command || !cJSON_IsString(command) || port_no < 1 || port_no > 65535 ||
         (profile_root && ((profile.identity_file && !ssh_path_valid(profile.identity_file)) ||
                           (profile.known_hosts && !ssh_path_valid(profile.known_hosts)) ||
                           (profile.proxy_jump && !ssh_host_valid(profile.proxy_jump))))) {
-        cJSON_Delete(profile_root);
+        ssh_secret_free(task_password); cJSON_Delete(profile_root);
         cJSON_Delete(args);
         return tool_result_new(0, "ssh: host, command or port is invalid");
     }
     quoted = ssh_quote_arg(command->valuestring);
     if (!quoted) {
-        cJSON_Delete(profile_root); cJSON_Delete(args);
+        ssh_secret_free(task_password); cJSON_Delete(profile_root); cJSON_Delete(args);
         return tool_result_new(0, "ssh: command must be a single line");
     }
     if (timeout_ms < 100)
@@ -350,20 +434,17 @@ static tool_result *ssh_exec(const tool *self, const tool_ctx *ctx, const char *
         timeout_ms = 60000;
     strbuf_init(&cmd);
     if (password_text) {
-        if (ssh_append_paramiko(&cmd, host_text, user_text, password_text,
-                                command->valuestring, port_no, timeout_ms) != 0) {
-            cJSON_Delete(profile_root); cJSON_Delete(args); free(quoted); strbuf_free(&cmd);
+        if (ssh_append_askpass(&cmd, ctx, &profile, profile_root != NULL, host_text, user_text,
+                               password_text, quoted, port_no) != 0) {
+            ssh_secret_free(task_password); cJSON_Delete(profile_root); cJSON_Delete(args); free(quoted); strbuf_free(&cmd);
             return tool_result_new(0, "ssh: password arguments are invalid");
         }
     } else {
-        strbuf_append(&cmd, "ssh -o BatchMode=yes");
-        strbuf_appendf(&cmd, " -o ConnectTimeout=5 -o StrictHostKeyChecking=yes -p %d", port_no);
-        if (profile_root && profile.identity_file) { char *q = ssh_quote_arg(profile.identity_file); if (q) { strbuf_appendf(&cmd, " -i %s", q); free(q); } }
-        if (profile_root && profile.known_hosts) { char *q = ssh_quote_arg(profile.known_hosts); if (q) { strbuf_appendf(&cmd, " -o UserKnownHostsFile=%s", q); free(q); } }
-        if (profile_root && profile.proxy_jump) { char *q = ssh_quote_arg(profile.proxy_jump); if (q) { strbuf_appendf(&cmd, " -J %s", q); free(q); } }
-        if (user_text) strbuf_appendf(&cmd, " -- %s@%s", user_text, host_text);
-        else strbuf_appendf(&cmd, " -- %s", host_text);
-        strbuf_appendf(&cmd, " %s", quoted);
+        if (ssh_append_options(&cmd, &profile, profile_root != NULL, host_text, user_text,
+                               quoted, port_no, 1) != 0) {
+            ssh_secret_free(task_password); cJSON_Delete(profile_root); cJSON_Delete(args); free(quoted); strbuf_free(&cmd);
+            return tool_result_new(0, "ssh: profile arguments are invalid");
+        }
     }
     cJSON *wrapped = cJSON_CreateObject();
     cJSON_AddStringToObject(wrapped, "command", cmd.buf);
@@ -372,6 +453,7 @@ static tool_result *ssh_exec(const tool *self, const tool_ctx *ctx, const char *
     cJSON_Delete(wrapped);
     strbuf_free(&cmd);
     free(quoted);
+    ssh_secret_free(task_password);
     cJSON_Delete(profile_root);
     cJSON_Delete(args);
     if (!shell_args)
@@ -384,7 +466,7 @@ static tool_result *ssh_exec(const tool *self, const tool_ctx *ctx, const char *
 const tool *tool_ssh(void) {
     static const tool t = {
         "ssh",
-        "Run one remote SSH command. Always use this tool for SSH work instead of shell. Supports named environments, keys/agent, and password authentication through Python paramiko without sshpass.",
+        "Run one remote SSH command. Always use this tool for SSH work instead of shell. Supports named environments, keys/agent, and password authentication through the local system OpenSSH client without sshpass or Python.",
         "{\"type\":\"object\",\"properties\":{\"host\":{\"type\":\"string\"},\"environment\":{\"type\":\"string\"},\"user\":{\"type\":\"string\"},"
         "\"command\":{\"type\":\"string\"},\"password\":{\"type\":\"string\"},\"port\":{\"type\":\"integer\"},"
         "\"timeout_ms\":{\"type\":\"integer\"}},\"required\":[\"command\"]}",

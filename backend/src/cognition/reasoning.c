@@ -1385,6 +1385,7 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
     tctx.bus = r->bus;
     tctx.workspace = r->workspace;
     tctx.state_root = r->state_root;
+    tctx.task_input = r->last_prompt;
     tctx.metrics = r->metrics;
     tctx.skills = r->skills;
     tctx.mcp = r->mcp;

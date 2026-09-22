@@ -3977,6 +3977,29 @@ static void test_security(void) {
     CHECK(secret_set_mode("passthrough") == 0);
     CHECK(secret_set_mode("bogus") == -1);
 
+    /* The provider-facing copy must be redacted even in passthrough mode.
+     * Mock echoes its received prompt, so this verifies the LLM boundary
+     * rather than only the standalone secret utility. */
+    {
+        llm *local = llm_create("mock", NULL, NULL, "mock");
+        llm_message msg[] = {{.role = "user", .content = "SSH password=Tr0ub4dor&3"}};
+        llm_request req;
+        llm_response response;
+        memset(&req, 0, sizeof(req));
+        memset(&response, 0, sizeof(response));
+        req.messages = msg;
+        req.num_messages = 1;
+        CHECK(local != NULL);
+        if (local) {
+            CHECK(llm_chat(local, &req, &response) == 0);
+            CHECK(response.content != NULL && strstr(response.content, "Tr0ub4dor&3") == NULL);
+            CHECK(response.content != NULL && strstr(response.content, "[REDACTED:secret]") != NULL);
+            free(response.content);
+            free(response.error);
+            llm_destroy(local);
+        }
+    }
+
     /* streaming guard: redacts matches spanning delta boundaries */
     {
         char acc[512];

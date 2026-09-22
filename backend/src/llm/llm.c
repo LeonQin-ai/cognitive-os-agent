@@ -75,24 +75,27 @@ static int llm_guard_input(const llm_request *req) {
     return rc;
 }
 
-/* Only user-authored request text is eligible for the narrowly scoped output
- * exemption. System prompts and assistant history must never whitelist a
- * credential, otherwise a previous model leak could become self-trusting. */
-static const char **llm_user_contents(const llm_request *req, size_t *out_n) {
-    const char **items;
-    size_t n = 0;
-    if (out_n) *out_n = 0;
-    if (!req || !req->messages || req->num_messages == 0)
-        return NULL;
-    items = (const char **)calloc(req->num_messages, sizeof(*items));
-    if (!items)
-        return NULL;
-    for (size_t i = 0; i < req->num_messages; i++)
-        if (req->messages[i].role && strcmp(req->messages[i].role, "user") == 0)
-            items[n++] = req->messages[i].content;
-    if (out_n) *out_n = n;
-    return items;
+static void llm_redacted_messages_free(llm_message *m, size_t n);
+
+/* Create an egress-safe request copy.  Credentials never cross the local
+ * provider boundary, including in prior conversation history. */
+static llm_message *llm_redacted_messages(const llm_request *req) {
+    llm_message *out;
+    if (!req || !req->messages) return NULL;
+    out = calloc(req->num_messages, sizeof(*out));
+    if (!out) return NULL;
+    for (size_t i = 0; i < req->num_messages; i++) {
+        out[i] = req->messages[i];
+        out[i].content = secret_redact_text(req->messages[i].content ? req->messages[i].content : "",
+                                            strlen(req->messages[i].content ? req->messages[i].content : ""), NULL);
+        if (!out[i].content) {
+            llm_redacted_messages_free(out, i);
+            return NULL;
+        }
+    }
+    return out;
 }
+static void llm_redacted_messages_free(llm_message *m, size_t n) { if (m) { for(size_t i=0;i<n;i++) free((char *)m[i].content); free(m); } }
 
 int llm_chat(llm *llm, const llm_request *req, llm_response *resp) {
     if (!llm || !llm->vt || !llm->vt->chat)
@@ -106,13 +109,18 @@ int llm_chat(llm *llm, const llm_request *req, llm_response *resp) {
         return -1;
     }
     {
-        int rc = llm->vt->chat(llm, req, resp);
-        if (rc == 0 && resp) {
-            size_t trusted_n = 0;
-            const char **trusted = llm_user_contents(req, &trusted_n);
-            secret_guard_llm_output_trusted(&resp->content, trusted, trusted_n);
-            free(trusted);
+        llm_message *safe = llm_redacted_messages(req);
+        llm_request safe_req = *req;
+        int rc;
+        if (!safe) {
+            if (resp) resp->error = xstrdup("blocked: unable to apply local secret redaction");
+            return -1;
         }
+        safe_req.messages = safe;
+        rc = llm->vt->chat(llm, &safe_req, resp);
+        llm_redacted_messages_free(safe, req->num_messages);
+        if (rc == 0 && resp)
+            secret_guard_llm_output(&resp->content);
         return rc;
     }
 }
@@ -120,6 +128,8 @@ int llm_chat(llm *llm, const llm_request *req, llm_response *resp) {
 int llm_stream(llm *llm, const llm_request *req, llm_stream_cb cb, void *ud) {
     int rc;
     void *guard;
+    llm_message *safe;
+    llm_request safe_req;
 
     if (!llm || !llm->vt || !llm->vt->stream)
         return -1;
@@ -127,14 +137,22 @@ int llm_stream(llm *llm, const llm_request *req, llm_stream_cb cb, void *ud) {
         llm->cancel = 0;
         return -1;
     }
+    safe = llm_redacted_messages(req);
+    if (!safe) {
+        llm->cancel = 0;
+        return -1;
+    }
+    safe_req = *req;
+    safe_req.messages = safe;
     /* egress filter: deltas pass through the streaming secret guard */
     guard = secret_stream_guard_new(cb, ud);
     if (guard)
-        rc = llm->vt->stream(llm, req, secret_stream_guard_cb, guard);
+        rc = llm->vt->stream(llm, &safe_req, secret_stream_guard_cb, guard);
     else
-        rc = llm->vt->stream(llm, req, cb, ud); /* fail open on OOM */
+        rc = llm->vt->stream(llm, &safe_req, cb, ud); /* request is still redacted */
     if (guard)
         secret_stream_guard_free(guard); /* flushes the held tail */
+    llm_redacted_messages_free(safe, req->num_messages);
     llm->cancel = 0; /* consumed: the next stream starts uncancelled */
     return rc;
 }
