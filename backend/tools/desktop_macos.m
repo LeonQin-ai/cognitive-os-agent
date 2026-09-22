@@ -31,6 +31,10 @@
     NSMenu *appMenu = [NSMenu new];
     [appMenu addItemWithTitle:@"退出 Cognitive OS" action:@selector(terminate:) keyEquivalent:@"q"];
     app.submenu = appMenu;
+    NSMenuItem *file = [NSMenuItem new]; file.title = @"文件"; [menu addItem:file];
+    NSMenu *fileMenu = [NSMenu new];
+    [fileMenu addItemWithTitle:@"新建会话" action:nil keyEquivalent:@"n"];
+    file.submenu = fileMenu;
     NSMenuItem *edit = [NSMenuItem new]; edit.title = @"编辑"; [menu addItem:edit];
     NSMenu *editMenu = [NSMenu new];
     [editMenu addItemWithTitle:@"撤销" action:@selector(undo:) keyEquivalent:@"z"];
@@ -38,7 +42,12 @@
     [editMenu addItemWithTitle:@"复制" action:@selector(copy:) keyEquivalent:@"c"];
     [editMenu addItemWithTitle:@"粘贴" action:@selector(paste:) keyEquivalent:@"v"];
     [editMenu addItemWithTitle:@"全选" action:@selector(selectAll:) keyEquivalent:@"a"];
-    edit.submenu = editMenu; NSApp.mainMenu = menu;
+    edit.submenu = editMenu;
+    NSMenuItem *view = [NSMenuItem new]; view.title = @"视图"; [menu addItem:view];
+    view.submenu = [NSMenu new];
+    NSMenuItem *help = [NSMenuItem new]; help.title = @"帮助"; [menu addItem:help];
+    help.submenu = [NSMenu new];
+    NSApp.mainMenu = menu;
 
     self.window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0,0,1180,800)
         styleMask:NSWindowStyleMaskTitled|NSWindowStyleMaskClosable|NSWindowStyleMaskMiniaturizable|NSWindowStyleMaskResizable

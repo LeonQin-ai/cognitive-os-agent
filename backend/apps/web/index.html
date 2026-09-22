@@ -211,6 +211,10 @@
   .icon-btn:focus-visible{outline:2px solid var(--accent-ring); outline-offset:2px}
   #navToggle{display:none}
   .content{flex:1; padding:20px; overflow-y:auto; scrollbar-gutter:stable}
+  /* The native desktop host provides the global menu bar. Browser access
+     keeps the console header, while ?desktop=1 removes the duplicate row. */
+  body.desktop-shell .top{display:none}
+  body.desktop-shell .content{padding-top:12px}
 
   .card{background:var(--card); border:1px solid var(--border); border-radius:var(--radius); padding:16px; margin-bottom:14px; box-shadow:var(--shadow-sm)}
   .card h2{margin:0 0 4px; font-size:13px; font-weight:650}
@@ -499,6 +503,7 @@
 <script>
 'use strict';
 const $ = id => document.getElementById(id);
+if(new URLSearchParams(location.search).has('desktop')) document.body.classList.add('desktop-shell');
 
 /* ================= 基础工具 ================= */
 
