@@ -40,7 +40,7 @@
 #include "WebView2.h"
 
 static const int kPort = 18300;
-static const int kChromeHeight = 48;
+static const int kChromeHeight = 40;
 static const UINT WM_APP_NAV = WM_APP + 1; /* wParam 1 = console, 2 = error page */
 
 static HWND g_hwnd = nullptr;
@@ -51,12 +51,6 @@ static HICON g_icon_big = nullptr;
 static HICON g_icon_small = nullptr;
 static std::wstring g_url_main;
 static std::wstring g_url_error;
-
-static bool chrome_button_at(int x, int width) {
-    return (x >= 8 && x < 36) || (x >= 46 && x < 88) ||
-           (x >= 92 && x < 134) || (x >= 148 && x < 390) ||
-           x >= width - 132;
-}
 
 /* ---- ICoreWebView2EnvironmentOptions: pass --disable-features to the
  * browser process.  The WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS env var is
@@ -430,9 +424,8 @@ static DWORD WINAPI boot_waiter(LPVOID) {
 static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
     case WM_NCHITTEST: {
-        /* The desktop shell is intentionally frameless. Keep the familiar
-         * native interactions: resize on every edge and drag/maximize from
-         * the non-interactive brand area in the web application's sidebar. */
+        /* The desktop shell is frameless. Only the native window controls
+         * consume clicks; the rest of this strip is a drag target. */
         POINT pt = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
         RECT wr;
         GetWindowRect(hwnd, &wr);
@@ -450,15 +443,11 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (bottom) return HTBOTTOM;
         }
         ScreenToClient(hwnd, &pt);
-        /* A quiet desktop menu bar: controls are client hit targets, while
-         * the remaining surface still drags the frameless window. */
         if (pt.y >= 0 && pt.y < kChromeHeight) {
             RECT cr;
             GetClientRect(hwnd, &cr);
-            return chrome_button_at(pt.x, cr.right) ? HTCLIENT : HTCAPTION;
+            return pt.x >= cr.right - 132 ? HTCLIENT : HTCAPTION;
         }
-        if (pt.x < 345 && pt.y < 120)
-            return HTCAPTION;
         return HTCLIENT;
     }
     case WM_LBUTTONUP: {
@@ -472,10 +461,6 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 ShowWindow(hwnd, IsZoomed(hwnd) ? SW_RESTORE : SW_MAXIMIZE);
             else if (pt.x >= cr.right - 132)
                 ShowWindow(hwnd, SW_MINIMIZE);
-            else if (pt.x >= 46 && pt.x < 88 && g_web)
-                g_web->GoBack();
-            else if (pt.x >= 92 && pt.x < 134 && g_web)
-                g_web->GoForward();
             return 0;
         }
         break;
@@ -493,25 +478,8 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         SetTextColor(dc, RGB(103, 100, 96));
         HFONT font = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
         HGDIOBJ old = SelectObject(dc, font);
-        RECT sidebar = { 9, 0, 35, kChromeHeight };
-        RECT back = { 46, 0, 88, kChromeHeight };
-        RECT forward = { 92, 0, 134, kChromeHeight };
-        RECT file = { 158, 0, 206, kChromeHeight };
-        RECT edit = { 236, 0, 284, kChromeHeight };
-        RECT view = { 314, 0, 362, kChromeHeight };
-        RECT help = { 392, 0, 440, kChromeHeight };
-        HBRUSH active = CreateSolidBrush(RGB(241, 237, 231));
-        FillRect(dc, &back, active);
-        DeleteObject(active);
-        DrawTextW(dc, L"▯", -1, &sidebar, DT_SINGLELINE | DT_VCENTER | DT_CENTER);
-        DrawTextW(dc, L"←", -1, &back, DT_SINGLELINE | DT_VCENTER | DT_CENTER);
-        SetTextColor(dc, RGB(180, 177, 172));
-        DrawTextW(dc, L"→", -1, &forward, DT_SINGLELINE | DT_VCENTER | DT_CENTER);
-        SetTextColor(dc, RGB(103, 100, 96));
-        DrawTextW(dc, L"文件", -1, &file, DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_NOPREFIX);
-        DrawTextW(dc, L"编辑", -1, &edit, DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_NOPREFIX);
-        DrawTextW(dc, L"视图", -1, &view, DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_NOPREFIX);
-        DrawTextW(dc, L"帮助", -1, &help, DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_NOPREFIX);
+        RECT title = { 16, 0, cr.right - 140, kChromeHeight };
+        DrawTextW(dc, L"Cognitive OS", -1, &title, DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_NOPREFIX);
         RECT min = { cr.right - 132, 0, cr.right - 88, kChromeHeight };
         RECT max = { cr.right - 88, 0, cr.right - 44, kChromeHeight };
         RECT close = { cr.right - 44, 0, cr.right, kChromeHeight };
@@ -606,8 +574,8 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
     ShowWindow(g_hwnd, SW_SHOW);
     UpdateWindow(g_hwnd);
 
-    /* Desktop uses native global navigation, so do not duplicate the web
-     * console's title / refresh / theme strip inside the content viewport. */
+    /* The desktop shell has its own compact window chrome, so do not
+     * duplicate the web console header inside the content viewport. */
     g_url_main = L"http://localhost:" + std::to_wstring(kPort) + L"/?desktop=1";
     {
         std::string err8 = data_url(kErrorHtml);
