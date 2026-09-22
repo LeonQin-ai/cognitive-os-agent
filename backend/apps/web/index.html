@@ -123,8 +123,11 @@
   }
   .usercard .uname{font-size:13px; font-weight:600}
   .usercard .usub{font-size:11px; color:var(--muted); display:flex; align-items:center; gap:6px}
-  .chat-wrap{max-width:768px; margin:0 auto; width:100%; flex:1; display:flex; flex-direction:column; padding:24px 16px 12px}
-  #chat-hero{margin:auto 0; text-align:center; display:flex; flex-direction:column; gap:22px; align-items:center}
+  .chat-wrap{max-width:820px; min-height:calc(100vh - 76px); margin:0 auto; width:100%; flex:1; display:flex; flex-direction:column; padding:12px 20px 16px}
+  .chat-toolbar{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:10px 0 14px;border-bottom:1px solid var(--border)}
+  .chat-toolbar-copy{display:flex;flex-direction:column;gap:1px;min-width:0}.chat-toolbar-label{font-size:12px;font-weight:650;color:var(--fg)}.chat-toolbar-hint{font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .chat-toolbar-actions{display:flex;align-items:center;gap:7px;flex-shrink:0}.chat-toolbar #chat-model{width:min(270px,35vw);height:32px;min-width:0;font-size:12px;padding:0 29px 0 10px;background:var(--card)}.chat-toolbar .sec{height:32px;padding:0 10px;white-space:nowrap}
+  #chat-hero{flex:1;min-height:280px;margin:0;text-align:center;display:flex;justify-content:center;flex-direction:column;gap:22px;align-items:center}
   #chat-hero .hero-title{font-size:30px; font-weight:600; letter-spacing:.3px}
   #chat-hero .hero-subs{display:flex; gap:10px; flex-wrap:wrap; justify-content:center}
   #chat-hero .chip{
@@ -400,7 +403,8 @@
 .top .flow{display:none}button:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
 @keyframes run-breathe{50%{opacity:.35;box-shadow:0 0 0 4px var(--accent-soft)}}
 @media(prefers-reduced-motion:reduce){.run-dot.active{animation:none}*{scroll-behavior:auto!important}}
-@media(max-width:640px){.chat-wrap{padding:16px 12px}.run-card>summary{padding:12px}.run-context,.run-metrics{margin-left:12px;margin-right:12px}.run-steps-title{margin-left:15px}.run-steps{margin-left:15px;margin-right:12px}.run-steps li{flex-wrap:wrap;gap:3px}.chat-message.user{max-width:92%}}
+  @media(max-width:640px){.chat-wrap{padding:16px 12px}.run-card>summary{padding:12px}.run-context,.run-metrics{margin-left:12px;margin-right:12px}.run-steps-title{margin-left:15px}.run-steps{margin-left:15px;margin-right:12px}.run-steps li{flex-wrap:wrap;gap:3px}.chat-message.user{max-width:92%}}
+  @media(max-width:640px){.chat-toolbar{align-items:flex-start;flex-direction:column;gap:9px}.chat-toolbar-actions{width:100%}.chat-toolbar #chat-model{flex:1;width:auto}.chat-toolbar .sec{flex-shrink:0}}
 
 </style>
 </head>
@@ -621,17 +625,23 @@ panels.chat = `
         <button class="chip" onclick="chatSuggest('统计当前的 token 用量')">Token 用量</button>
       </div>
     </div>
-    <div id="chat-gate" style="display:none;max-width:768px;margin:0 auto 10px;width:100%;padding:12px 14px;border:1px solid var(--warn,#fbbf24);border-radius:10px;background:color-mix(in srgb,var(--warn,#fbbf24) 8%,transparent)">
+    <div id="chat-gate" style="display:none;width:100%;margin:0 0 12px;padding:12px 14px;border:1px solid var(--warn,#fbbf24);border-radius:10px;background:color-mix(in srgb,var(--warn,#fbbf24) 8%,transparent)">
       <b>⚠ 尚未配置模型</b>
       <div class="hint" style="margin:4px 0 8px">新聊天需要先配置对话模型（provider / model / api_key），否则无法发送消息。可在下方设置里选择 Model routes，或到 Models 页添加路由。</div>
       <button onclick="switchPanel('models')">前往 Models 配置 →</button>
     </div>
-    <div style="display:flex;align-items:center;gap:8px;max-width:768px;margin:0 auto;width:100%;justify-content:flex-end">
+    <div class="chat-toolbar">
+      <div class="chat-toolbar-copy">
+        <span class="chat-toolbar-label">当前对话</span>
+        <span class="chat-toolbar-hint">在这里选择本次会话使用的模型</span>
+      </div>
+      <div class="chat-toolbar-actions">
       <select id="chat-model" onchange="chatModelSwitch()" title="对话模型（点击切换）"
-              style="max-width:200px;font-size:12px;padding:5px 8px;border-radius:8px"></select>
-      <button class="sec sm" onclick="chatToggleSettings()" title="新聊天设置（模型配置 / 共享记忆）" style="padding:5px 10px">⚙ 设置</button>
+              aria-label="对话模型"></select>
+      <button class="sec sm" onclick="chatToggleSettings()" title="会话设置（共享记忆）">会话设置</button>
+      </div>
     </div>
-    <div id="chat-settings" style="display:none;max-width:768px;margin:8px auto 0;width:100%;padding:10px 14px;border:1px solid var(--border);border-radius:10px;font-size:12.5px">
+    <div id="chat-settings" style="display:none;width:100%;margin:10px 0 0;padding:10px 14px;border:1px solid var(--border);border-radius:10px;font-size:12.5px;background:var(--card)">
       <div class="row" style="align-items:center;gap:10px">
         <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
           <input type="checkbox" id="chat-shared" onchange="chatSharedToggle(this.checked)">
