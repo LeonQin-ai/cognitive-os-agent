@@ -85,6 +85,7 @@ jobs:
     needs: [linux, windows, macos]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v5
       - uses: actions/download-artifact@v5
         with:
           path: release-assets
@@ -93,6 +94,21 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          cat > release-notes.md <<'EOF'
+          ## v0.6.0
+
+          - 可观测、可插话的 Agent 执行过程与每轮模型调用状态
+          - 每个聊天框可选深度思考模式
+          - 事务 COW 快照支持刷新、最新回滚和多文件精确回滚
+          - 全新的 Cognitive OS 大脑图标与 macOS 原生应用包
+
+          ### 安装包
+          - Windows：`cognitive-os-agent-setup.exe`
+          - Linux：`cognitive-os-agent-linux-x64.tar.gz`
+          - macOS Apple Silicon：`cognitive-os-agent-macos-arm64.zip`
+          - macOS Intel：`cognitive-os-agent-macos-x64.zip`
+          EOF
           gh release create "${GITHUB_REF_NAME}" release-assets/* \
+            --repo "${GITHUB_REPOSITORY}" \
             --title "${GITHUB_REF_NAME}" \
-            --notes "## ${GITHUB_REF_NAME}\n\n- 可观测、可插话的 Agent 执行过程与每轮模型调用状态\n- 每个聊天框可选深度思考模式\n- 事务 COW 快照支持刷新、最新回滚和多文件精确回滚\n- 全新的 Cognitive OS 大脑图标与 macOS 原生应用包\n\n### 安装包\n- Windows：`cognitive-os-agent-setup.exe`\n- Linux：`cognitive-os-agent-linux-x64.tar.gz`\n- macOS Apple Silicon：`cognitive-os-agent-macos-arm64.zip`\n- macOS Intel：`cognitive-os-agent-macos-x64.zip`"
+            --notes-file release-notes.md
