@@ -85,6 +85,24 @@ typedef struct generated_tool_ud {
     char *skill_name;
 } generated_tool_ud;
 
+/* A malformed model field such as "file_writeargs:" must never become a
+ * persisted tool name.  Keep generated names compatible with normal tool
+ * lookup and reject separators / JSON fragments outright. */
+static int generated_tool_name_valid(const char *name) {
+    size_t n;
+    if (!name || !*name)
+        return 0;
+    n = strlen(name);
+    if (n > 96 || !((name[0] >= 'a' && name[0] <= 'z') ||
+                    (name[0] >= 'A' && name[0] <= 'Z') || name[0] == '_'))
+        return 0;
+    for (size_t i = 1; i < n; i++)
+        if (!((name[i] >= 'a' && name[i] <= 'z') || (name[i] >= 'A' && name[i] <= 'Z') ||
+              (name[i] >= '0' && name[i] <= '9') || name[i] == '_' || name[i] == '-' || name[i] == '.'))
+            return 0;
+    return 1;
+}
+
 static tool_result *generated_tool_exec(const tool *self, const tool_ctx *ctx, const char *args_json) {
     tool_result *tr;
 
@@ -106,7 +124,7 @@ int tool_register_generated(tool_registry *reg, struct skill_registry *skills, c
     tool *t;
     char desc[512];
 
-    if (!reg || !skills || !tool_name || !skill_name)
+    if (!reg || !skills || !generated_tool_name_valid(tool_name) || !skill_name)
         return -1;
     if (!skill_find(skills, skill_name))
         return -1; /* skill must exist */
@@ -148,7 +166,7 @@ int tool_generated_save_mapping(const char *state_root, const char *tool, const 
     char *js;
     int rc;
 
-    if (!state_root || !*state_root || !tool || !*tool || !skill || !*skill)
+    if (!state_root || !*state_root || !generated_tool_name_valid(tool) || !skill || !*skill)
         return -1;
     snprintf(path, sizeof(path), "%s/generated_tools.json", state_root);
     old = fs_read_file(path);

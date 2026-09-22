@@ -16,6 +16,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <signal.h>
 
 struct sock {
     int fd;
@@ -37,6 +38,12 @@ static void set_err(const char *msg) {
 }
 
 int sock_init(void) {
+    /* MSG_NOSIGNAL is unavailable on macOS and SO_NOSIGPIPE only protects
+     * sockets created by this module.  A process-wide ignore is the final
+     * safety net for a peer closing an HTTP/SSE connection while a worker is
+     * writing its response; callers receive EPIPE instead of the test or
+     * server process being terminated by SIGPIPE. */
+    signal(SIGPIPE, SIG_IGN);
     return 0;
 }
 

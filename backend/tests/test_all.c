@@ -3954,6 +3954,20 @@ static void test_security(void) {
         CHECK(out != NULL && strstr(out, "[REDACTED:secret]") != NULL);
         free(out);
     }
+    /* A credential explicitly present in the current user task must survive
+     * long enough to reach an authorized tool plan.  Similar credentials from
+     * any other source remain redacted. */
+    {
+        const char *trusted[] = { "login password=ghp_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN" };
+        char *out = xstrdup("password ghp_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN");
+        secret_guard_llm_output_trusted(&out, trusted, 1);
+        CHECK(out != NULL && strstr(out, "ghp_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN") != NULL);
+        free(out);
+        out = xstrdup("password ghp_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN");
+        secret_guard_llm_output_trusted(&out, NULL, 0);
+        CHECK(out != NULL && strstr(out, "[REDACTED:secret]") != NULL);
+        free(out);
+    }
 
     /* strict mode: HIGH-confidence input blocked, clean passes */
     CHECK(secret_set_mode("strict") == 0);

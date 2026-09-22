@@ -40,6 +40,7 @@
 #include "WebView2.h"
 
 static const int kPort = 18300;
+static const int kChromeHeight = 32;
 static const UINT WM_APP_NAV = WM_APP + 1; /* wParam 1 = console, 2 = error page */
 
 static HWND g_hwnd = nullptr;
@@ -441,9 +442,57 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (bottom) return HTBOTTOM;
         }
         ScreenToClient(hwnd, &pt);
+        /* Compact custom chrome keeps the native title bar hidden while
+         * retaining discoverable move/minimize/maximize/close controls. */
+        if (pt.y >= 0 && pt.y < kChromeHeight) {
+            RECT cr;
+            GetClientRect(hwnd, &cr);
+            if (pt.x < cr.right - 132)
+                return HTCAPTION;
+            return HTCLIENT;
+        }
         if (pt.x < 345 && pt.y < 120)
             return HTCAPTION;
         return HTCLIENT;
+    }
+    case WM_LBUTTONUP: {
+        POINT pt = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+        RECT cr;
+        GetClientRect(hwnd, &cr);
+        if (pt.y >= 0 && pt.y < kChromeHeight) {
+            if (pt.x >= cr.right - 44)
+                PostMessageA(hwnd, WM_CLOSE, 0, 0);
+            else if (pt.x >= cr.right - 88)
+                ShowWindow(hwnd, IsZoomed(hwnd) ? SW_RESTORE : SW_MAXIMIZE);
+            else if (pt.x >= cr.right - 132)
+                ShowWindow(hwnd, SW_MINIMIZE);
+            return 0;
+        }
+        break;
+    }
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        HDC dc = BeginPaint(hwnd, &ps);
+        RECT cr;
+        GetClientRect(hwnd, &cr);
+        HBRUSH bg = CreateSolidBrush(RGB(248, 250, 252));
+        RECT bar = { 0, 0, cr.right, kChromeHeight };
+        FillRect(dc, &bar, bg);
+        DeleteObject(bg);
+        SetBkMode(dc, TRANSPARENT);
+        SetTextColor(dc, RGB(71, 85, 105));
+        HFONT font = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
+        HGDIOBJ old = SelectObject(dc, font);
+        DrawTextA(dc, "cognitive-os-agent", -1, &bar, DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_NOPREFIX);
+        RECT min = { cr.right - 132, 0, cr.right - 88, kChromeHeight };
+        RECT max = { cr.right - 88, 0, cr.right - 44, kChromeHeight };
+        RECT close = { cr.right - 44, 0, cr.right, kChromeHeight };
+        DrawTextA(dc, "\xE2\x88\x92", -1, &min, DT_SINGLELINE | DT_VCENTER | DT_CENTER);
+        DrawTextA(dc, IsZoomed(hwnd) ? "\xE2\x96\xa3" : "\xe2\x96\xa1", -1, &max, DT_SINGLELINE | DT_VCENTER | DT_CENTER);
+        DrawTextA(dc, "\xc3\x97", -1, &close, DT_SINGLELINE | DT_VCENTER | DT_CENTER);
+        SelectObject(dc, old);
+        EndPaint(hwnd, &ps);
+        return 0;
     }
     case WM_APP_NAV:
         if (wp == 1)
@@ -455,6 +504,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (g_ctrl && wp != SIZE_MINIMIZED) {
             RECT rc;
             GetClientRect(hwnd, &rc);
+            rc.top += kChromeHeight;
             g_ctrl->put_Bounds(rc);
         }
         return 0;
@@ -589,6 +639,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 
     RECT rc;
     GetClientRect(g_hwnd, &rc);
+    rc.top += kChromeHeight;
     g_ctrl->put_Bounds(rc);
 
     /* Starting page first, then the boot watcher takes over. */

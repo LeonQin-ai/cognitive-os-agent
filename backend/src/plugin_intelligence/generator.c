@@ -30,7 +30,10 @@ static const char *ARCH_PROMPT = "You are the plugin architect of a cognitive OS
                                  "Constraints for the script: pure POSIX shell, avoid destructive commands "
                                  "(no rm -rf / rm -fr / mkfs / dd), idempotent, prints a short result, "
                                  "exits 0 on success. Network features the request explicitly asks for "
-                                 "(e.g. ssh remote login) are allowed; prefer read-only remote operations.";
+                                 "(e.g. ssh remote login) are allowed; prefer read-only remote operations. "
+                                 "For SSH password authentication, first check sshpass availability and provide a "
+                                 "Python paramiko fallback; declare net.ssh, shell, fs.read and fs.write because the "
+                                 "fallback may create a temporary helper. Never emit malformed tool names or JSON fragments.";
 
 /* lowercase + replace invalid chars with '-', clamp to 48 chars */
 static void sanitize_name(const char *in, char *out, size_t cap) {

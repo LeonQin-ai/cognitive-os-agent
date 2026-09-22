@@ -159,7 +159,52 @@ int secret_guard_llm_input(const char *const *contents, size_t n) {
     return 0;
 }
 
-void secret_guard_llm_output(char **content) {
+static int match_is_trusted(const char *text, const secret_match *m,
+                            const char *const *trusted, size_t trusted_n) {
+    size_t n;
+    if (!text || !m || !trusted || m->end <= m->start)
+        return 0;
+    n = m->end - m->start;
+    for (size_t i = 0; i < trusted_n; i++) {
+        const char *p = trusted[i];
+        if (!p || !*p)
+            continue;
+        for (; *p; p++)
+            if (strncmp(p, text + m->start, n) == 0)
+                return 1;
+    }
+    return 0;
+}
+
+static char *redact_untrusted_matches(const char *text, const secret_match *ms, int cnt,
+                                      const char *const *trusted, size_t trusted_n) {
+    strbuf out;
+    size_t pos = 0;
+    int changed = 0;
+
+    strbuf_init(&out);
+    for (int i = 0; i < cnt; i++) {
+        if (ms[i].end <= ms[i].start || ms[i].start < pos)
+            continue;
+        strbuf_append_n(&out, text + pos, ms[i].start - pos);
+        if (ms[i].severity >= SECRET_SEV_MEDIUM &&
+            !match_is_trusted(text, &ms[i], trusted, trusted_n)) {
+            strbuf_append(&out, "[REDACTED:secret]");
+            changed = 1;
+        } else {
+            strbuf_append_n(&out, text + ms[i].start, ms[i].end - ms[i].start);
+        }
+        pos = ms[i].end;
+    }
+    strbuf_append(&out, text + pos);
+    if (!changed) {
+        strbuf_free(&out);
+        return NULL;
+    }
+    return strbuf_detach(&out);
+}
+
+void secret_guard_llm_output_trusted(char **content, const char *const *trusted, size_t trusted_n) {
     secret_match *ms = NULL;
     int cnt;
     char *clean;
@@ -172,7 +217,7 @@ void secret_guard_llm_output(char **content) {
         audit_scan("llm_output", ms, cnt);
         counter_add(1, s >= SECRET_SEV_LOW, s >= SECRET_SEV_MEDIUM,
                     s >= SECRET_SEV_HIGH, 0, 0);
-        clean = secret_redact_text(*content, strlen(*content), NULL);
+        clean = redact_untrusted_matches(*content, ms, cnt, trusted, trusted_n);
         if (clean) {
             free(*content);
             *content = clean;
@@ -182,6 +227,10 @@ void secret_guard_llm_output(char **content) {
         }
     }
     secret_matches_free(ms);
+}
+
+void secret_guard_llm_output(char **content) {
+    secret_guard_llm_output_trusted(content, NULL, 0);
 }
 
 /* --- streaming egress filter -------------------------------------------------- */

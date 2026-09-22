@@ -69,6 +69,12 @@ int secret_guard_llm_input(const char *const *contents, size_t n);
  * is freed and replaced when anything matched). */
 void secret_guard_llm_output(char **content);
 
+/* Same egress guard, except an exact credential value that originated in a
+ * user message of the current request is preserved.  This lets an explicitly
+ * supplied task credential reach a tool plan while still redacting secrets
+ * invented by the model or recovered from another source. */
+void secret_guard_llm_output_trusted(char **content, const char *const *trusted, size_t trusted_n);
+
 /* Streaming egress filter. Wrap the consumer callback:
  *   - create with secret_stream_guard_new(inner_cb, inner_ud);
  *   - pass secret_stream_guard_cb / the guard to the provider;

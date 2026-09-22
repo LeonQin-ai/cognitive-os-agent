@@ -260,12 +260,14 @@ static tool_result *ssh_exec(const tool *self, const tool_ctx *ctx, const char *
     cJSON *command = args ? cJSON_GetObjectItemCaseSensitive(args, "command") : NULL;
     cJSON *port = args ? cJSON_GetObjectItemCaseSensitive(args, "port") : NULL;
     cJSON *timeout = args ? cJSON_GetObjectItemCaseSensitive(args, "timeout_ms") : NULL;
+    cJSON *password = args ? cJSON_GetObjectItemCaseSensitive(args, "password") : NULL;
     int timeout_ms = timeout && cJSON_IsNumber(timeout) ? (int)timeout->valuedouble : 15000;
     int port_no = port && cJSON_IsNumber(port) ? (int)port->valuedouble : 22;
     ssh_profile profile;
     cJSON *profile_root = NULL;
     const char *host_text = host && cJSON_IsString(host) ? host->valuestring : NULL;
     const char *user_text = user && cJSON_IsString(user) ? user->valuestring : NULL;
+    const char *password_text = password && cJSON_IsString(password) ? password->valuestring : NULL;
     char *quoted = NULL;
     char *shell_args = NULL;
     tool_result *result;
@@ -284,6 +286,7 @@ static tool_result *ssh_exec(const tool *self, const tool_ctx *ctx, const char *
     }
     if (!host_text || !ssh_host_valid(host_text) ||
         (user_text && !ssh_name_valid(user_text)) ||
+        (password && (!password_text || strchr(password_text, '\n') || strchr(password_text, '\r'))) ||
         !command || !cJSON_IsString(command) || port_no < 1 || port_no > 65535 ||
         (profile_root && ((profile.identity_file && !ssh_path_valid(profile.identity_file)) ||
                           (profile.known_hosts && !ssh_path_valid(profile.known_hosts)) ||
@@ -302,7 +305,22 @@ static tool_result *ssh_exec(const tool *self, const tool_ctx *ctx, const char *
     if (timeout_ms > 60000)
         timeout_ms = 60000;
     strbuf_init(&cmd);
-    strbuf_appendf(&cmd, "ssh -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=yes -p %d", port_no);
+    if (password_text) {
+        char *qpass = ssh_quote_arg(password_text);
+        if (!qpass) {
+            cJSON_Delete(profile_root); cJSON_Delete(args); free(quoted);
+            return tool_result_new(0, "ssh: password must be a single line");
+        }
+#if defined(_WIN32)
+        strbuf_appendf(&cmd, "where sshpass >nul 2>nul || (echo ssh: password authentication requires sshpass on PATH & exit /b 127) & sshpass -p %s ssh", qpass);
+#else
+        strbuf_appendf(&cmd, "command -v sshpass >/dev/null 2>&1 || { echo 'ssh: password authentication requires sshpass (or configure an identity_file)'; exit 127; }; sshpass -p %s ssh", qpass);
+#endif
+        free(qpass);
+    } else {
+        strbuf_append(&cmd, "ssh -o BatchMode=yes");
+    }
+    strbuf_appendf(&cmd, " -o ConnectTimeout=5 -o StrictHostKeyChecking=yes -p %d", port_no);
     if (profile_root && profile.identity_file) { char *q = ssh_quote_arg(profile.identity_file); if (q) { strbuf_appendf(&cmd, " -i %s", q); free(q); } }
     if (profile_root && profile.known_hosts) { char *q = ssh_quote_arg(profile.known_hosts); if (q) { strbuf_appendf(&cmd, " -o UserKnownHostsFile=%s", q); free(q); } }
     if (profile_root && profile.proxy_jump) { char *q = ssh_quote_arg(profile.proxy_jump); if (q) { strbuf_appendf(&cmd, " -J %s", q); free(q); } }
@@ -328,9 +346,9 @@ static tool_result *ssh_exec(const tool *self, const tool_ctx *ctx, const char *
 const tool *tool_ssh(void) {
     static const tool t = {
         "ssh",
-        "Run one non-interactive command on an SSH host or named environment using keys or an SSH agent.",
+        "Run one remote SSH command. Always use this tool for SSH work instead of shell. Supports named environments, keys/agent, and an explicit password when sshpass is installed.",
         "{\"type\":\"object\",\"properties\":{\"host\":{\"type\":\"string\"},\"environment\":{\"type\":\"string\"},\"user\":{\"type\":\"string\"},"
-        "\"command\":{\"type\":\"string\"},\"port\":{\"type\":\"integer\"},"
+        "\"command\":{\"type\":\"string\"},\"password\":{\"type\":\"string\"},\"port\":{\"type\":\"integer\"},"
         "\"timeout_ms\":{\"type\":\"integer\"}},\"required\":[\"command\"]}",
         1,
         ssh_exec,

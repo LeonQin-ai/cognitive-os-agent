@@ -15,10 +15,6 @@
 
 /* --- helpers -------------------------------------------------------------- */
 
-static int is_word(char c) {
-    return isalnum((unsigned char)c) || c == '_' || c == '-';
-}
-
 static int is_b64ish(char c) {
     return isalnum((unsigned char)c) || c == '_' || c == '-' || c == '=' ||
            c == '+' || c == '/';
@@ -354,7 +350,7 @@ static void scan_entropy(const char *text, size_t len, matchvec *mv) {
 
 int secret_scan_text(const char *text, size_t len, secret_match **out) {
     matchvec mv;
-    int i, n;
+    int n;
 
     if (out)
         *out = NULL;

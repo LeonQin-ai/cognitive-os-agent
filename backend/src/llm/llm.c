@@ -75,6 +75,25 @@ static int llm_guard_input(const llm_request *req) {
     return rc;
 }
 
+/* Only user-authored request text is eligible for the narrowly scoped output
+ * exemption. System prompts and assistant history must never whitelist a
+ * credential, otherwise a previous model leak could become self-trusting. */
+static const char **llm_user_contents(const llm_request *req, size_t *out_n) {
+    const char **items;
+    size_t n = 0;
+    if (out_n) *out_n = 0;
+    if (!req || !req->messages || req->num_messages == 0)
+        return NULL;
+    items = (const char **)calloc(req->num_messages, sizeof(*items));
+    if (!items)
+        return NULL;
+    for (size_t i = 0; i < req->num_messages; i++)
+        if (req->messages[i].role && strcmp(req->messages[i].role, "user") == 0)
+            items[n++] = req->messages[i].content;
+    if (out_n) *out_n = n;
+    return items;
+}
+
 int llm_chat(llm *llm, const llm_request *req, llm_response *resp) {
     if (!llm || !llm->vt || !llm->vt->chat)
         return -1;
@@ -88,8 +107,12 @@ int llm_chat(llm *llm, const llm_request *req, llm_response *resp) {
     }
     {
         int rc = llm->vt->chat(llm, req, resp);
-        if (rc == 0 && resp)
-            secret_guard_llm_output(&resp->content); /* egress redaction (§8.2) */
+        if (rc == 0 && resp) {
+            size_t trusted_n = 0;
+            const char **trusted = llm_user_contents(req, &trusted_n);
+            secret_guard_llm_output_trusted(&resp->content, trusted, trusted_n);
+            free(trusted);
+        }
         return rc;
     }
 }

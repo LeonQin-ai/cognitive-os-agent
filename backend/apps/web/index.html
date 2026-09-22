@@ -104,6 +104,8 @@
     color:var(--muted); font-size:11px; padding:14px 20px 4px; letter-spacing:.4px;
   }
   #side-recent{padding:0 8px 8px}
+  .side-recent-row{display:flex;align-items:center;gap:2px;border-radius:8px}
+  .side-recent-row:has(button.on){background:var(--nav-on)}
   #side-recent button{
     display:flex; align-items:center; gap:8px; width:100%;
     background:none; border:0; border-radius:8px; color:var(--muted);
@@ -112,6 +114,9 @@
   }
   #side-recent button:hover{background:var(--nav-hover); color:var(--fg)}
   #side-recent button.on{background:var(--nav-on); color:var(--fg)}
+  #side-recent .side-recent-delete{display:none;width:26px;min-width:26px;padding:5px 0;justify-content:center;color:var(--muted);font-size:16px;line-height:1}
+  .side-recent-row:hover .side-recent-delete,.side-recent-row:focus-within .side-recent-delete{display:flex}
+  #side-recent .side-recent-delete:hover{color:var(--danger);background:transparent}
   .newchat svg{flex-shrink:0}
   .usercard{display:flex; align-items:center; gap:10px; padding:4px 2px}
   .usercard .avatar{
@@ -315,7 +320,7 @@
   @media (max-width:760px){.im-layout{grid-template-columns:1fr}}
 
   /* ---------- 对话：多会话标签页 ---------- */
-  .chat-tabs{display:flex; gap:6px; flex-wrap:wrap; margin:8px 0 4px}
+  .chat-tabs{display:none}
   .chat-tab{display:inline-flex; align-items:center; gap:6px; padding:5px 10px; border:1px solid var(--border); border-radius:var(--radius-sm); cursor:pointer; font-size:12px; background:var(--bg); transition:all var(--tr-dur)}
   .chat-tab:hover{border-color:var(--accent)}
   .chat-tab.on{background:var(--accent-soft); border-color:var(--accent)}
@@ -622,8 +627,7 @@ panels.chat = `
       <div class="hint" style="margin:4px 0 8px">新聊天需要先配置对话模型（provider / model / api_key），否则无法发送消息。可在下方设置里选择 Model routes，或到 Models 页添加路由。</div>
       <button onclick="switchPanel('models')">前往 Models 配置 →</button>
     </div>
-    <div style="display:flex;align-items:center;gap:8px;max-width:768px;margin:0 auto;width:100%">
-      <div class="chat-tabs" id="chat-tabs" style="flex:1"></div>
+    <div style="display:flex;align-items:center;gap:8px;max-width:768px;margin:0 auto;width:100%;justify-content:flex-end">
       <select id="chat-model" onchange="chatModelSwitch()" title="对话模型（点击切换）"
               style="max-width:200px;font-size:12px;padding:5px 8px;border-radius:8px"></select>
       <button class="sec sm" onclick="chatToggleSettings()" title="新聊天设置（模型配置 / 共享记忆）" style="padding:5px 10px">⚙ 设置</button>
@@ -2522,8 +2526,8 @@ function fmtDur(ms){
 let CHAT_TABS_CACHE = [];
 
 function renderChatTabs(list){
-  const bar = $('chat-tabs'); if(!bar) return;
-  bar.innerHTML = '';
+  const bar = $('chat-tabs');
+  if(bar) bar.innerHTML = '';
   if(list.length) CHAT_TABS_CACHE = list;
   else if(CHAT_TABS_CACHE.length) list = CHAT_TABS_CACHE;
   const ids = list.map(s => s.id || 'default');
@@ -2531,7 +2535,7 @@ function renderChatTabs(list){
    * 的刷新空档，服务端列表都还不含它——缺失即补上，否则标签会被列表
    * 重绘"覆盖"掉（新会话闪现后消失，或旧标签全被清空只剩新的）。 */
   if(!ids.includes(CHAT_SESSION)) ids.push(CHAT_SESSION);
-  ids.forEach(id => {
+  if(bar) ids.forEach(id => {
     const info = list.find(s => (s.id || 'default') === id);
     const tab = document.createElement('span');
     tab.className = 'chat-tab' + (id === CHAT_SESSION ? ' on' : '');
@@ -2560,11 +2564,13 @@ function renderChatTabs(list){
     tab.onclick = () => chatSwitchSession(id);
     bar.appendChild(tab);
   });
-  const plus = document.createElement('span');
-  plus.className = 'chat-tab new';
-  plus.textContent = '＋ 新会话';
-  plus.onclick = chatNewSession;
-  bar.appendChild(plus);
+  if(bar){
+    const plus = document.createElement('span');
+    plus.className = 'chat-tab new';
+    plus.textContent = '＋ 新会话';
+    plus.onclick = chatNewSession;
+    bar.appendChild(plus);
+  }
   sideRecent(list);
   syncChatSettings();
 }
@@ -2586,15 +2592,25 @@ function sideRecent(list){
   box.innerHTML = '';
   const ids = list.map(s => s.id || 'default');
   if(!ids.includes(CHAT_SESSION)) ids.push(CHAT_SESSION);
-  ids.slice(-12).forEach(id => {
+  ids.slice(-12).reverse().forEach(id => {
     const info = list.find(s => (s.id || 'default') === id);
+    const row = document.createElement('div');
+    row.className = 'side-recent-row';
     const b = document.createElement('button');
     b.className = id === CHAT_SESSION ? 'on' : '';
     const label = (info && info.title) ? info.title : (id === 'default' ? '默认会话' : id);
     b.textContent = label.length > 16 ? label.slice(0, 16) + '…' : label;
     b.title = chatSessionTip(info, id);
     b.onclick = () => { if(id !== CHAT_SESSION){ chatSwitchSession(id); } else { switchPanel('chat'); } };
-    box.appendChild(b);
+    row.appendChild(b);
+    const del = document.createElement('button');
+    del.className = 'side-recent-delete';
+    del.title = '删除该会话及聊天记录';
+    del.setAttribute('aria-label', del.title);
+    del.textContent = '×';
+    del.onclick = async (e) => { e.stopPropagation(); await chatDeleteSession(id); };
+    row.appendChild(del);
+    box.appendChild(row);
   });
 }
 
@@ -2670,6 +2686,8 @@ async function chatGateCheck(){
 
 async function chatLoadHistory(){
   const box = $('chat-box'); if(!box) return;
+  if(!chatLoadHistory._seq) chatLoadHistory._seq = 0;
+  const seq = ++chatLoadHistory._seq;
   // 先回放本地缓存（切页/切会话不闪空），再让服务端历史兜底刷新
   const cached = CHAT_CACHE[CHAT_SESSION];
   if(cached && cached.length && !CHAT_MSGS.length){ CHAT_MSGS = cached; chatRedraw(); }
@@ -2680,6 +2698,10 @@ async function chatLoadHistory(){
   if(session !== CHAT_SESSION || chatIsBusy(session)) return;
   if(r.status !== 200 || !r.obj || !Array.isArray(r.obj.turns)) return;
   const turns = r.obj.turns;
+  /* The request may finish after the user has switched away and back again.
+     Keep a monotonically increasing per-load token so only the newest fetch
+     * for this session can replace its local view. */
+  if(session !== CHAT_SESSION || seq !== chatLoadHistory._seq) return;
   CHAT_MSGS = [];
   turns.forEach(t => { if(t.q) CHAT_MSGS.push({role:'user', text:t.q, pending:false, el:null});
                        if(t.a) CHAT_MSGS.push({role:'bot',  text:t.a, pending:false, el:null}); });
@@ -2687,7 +2709,7 @@ async function chatLoadHistory(){
 }
 
 async function chatSwitchSession(id){
-  if(id === CHAT_SESSION) return;
+  if(id === CHAT_SESSION){ switchPanel('chat'); return; }
   chatCacheStore(); // 保存当前会话消息，切回时即时回放
   CHAT_SESSION = id;
   CHAT_NEW_SESSION = false;
