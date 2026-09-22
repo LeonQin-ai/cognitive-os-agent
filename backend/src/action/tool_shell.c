@@ -252,6 +252,50 @@ static cJSON *ssh_profile_load(const tool_ctx *ctx, const char *name, ssh_profil
     return root;
 }
 
+/* Password authentication must not depend on a separately installed sshpass.
+ * Python is shipped with the supported desktop developer environments; when
+ * paramiko is present it provides the same non-interactive SSH transport from
+ * inside the built-in ssh tool. Arguments are individually shell-quoted, so
+ * passwords and remote commands are never interpreted by the local shell. */
+static int ssh_append_paramiko(strbuf *out, const char *host, const char *user,
+                               const char *password, const char *command,
+                               int port, int timeout_ms) {
+    static const char script[] =
+        "import sys;"
+        "try: import paramiko\n"
+        "except ImportError: sys.stderr.write('ssh: password login needs Python paramiko; run python -m pip install paramiko\\n');sys.exit(127)\n"
+        "c=paramiko.SSHClient();c.set_missing_host_key_policy(paramiko.AutoAddPolicy());"
+        "c.connect(sys.argv[1],port=int(sys.argv[2]),username=sys.argv[3],password=sys.argv[4],"
+        "timeout=float(sys.argv[6])/1000,look_for_keys=False,allow_agent=False);"
+        "i,o,e=c.exec_command(sys.argv[5],timeout=float(sys.argv[6])/1000);"
+        "sys.stdout.write(o.read().decode('utf-8','replace'));sys.stderr.write(e.read().decode('utf-8','replace'));"
+        "rc=o.channel.recv_exit_status();c.close();sys.exit(rc)";
+    char port_s[16], timeout_s[16];
+    char *qscript = ssh_quote_arg(script), *qhost = ssh_quote_arg(host), *qport,
+         *quser = ssh_quote_arg(user ? user : ""), *qpass = ssh_quote_arg(password),
+         *qcommand = ssh_quote_arg(command), *qtimeout;
+    int ok = qscript && qhost && quser && qpass && qcommand;
+    snprintf(port_s, sizeof(port_s), "%d", port);
+    snprintf(timeout_s, sizeof(timeout_s), "%d", timeout_ms);
+    qport = ssh_quote_arg(port_s);
+    qtimeout = ssh_quote_arg(timeout_s);
+    ok = ok && qport && qtimeout;
+    if (ok) {
+#if defined(_WIN32)
+        strbuf_appendf(out, "where python >nul 2>nul || (echo ssh: password login needs Python with paramiko & exit /b 127) & python -c %s %s %s %s %s %s %s",
+                       qscript, qhost, qport, quser, qpass, qcommand, qtimeout);
+#else
+        strbuf_appendf(out, "if command -v python3 >/dev/null 2>&1; then python3 -c %s %s %s %s %s %s %s; "
+                            "elif command -v python >/dev/null 2>&1; then python -c %s %s %s %s %s %s %s; "
+                            "else echo 'ssh: password login needs Python with paramiko'; exit 127; fi",
+                       qscript, qhost, qport, quser, qpass, qcommand, qtimeout,
+                       qscript, qhost, qport, quser, qpass, qcommand, qtimeout);
+#endif
+    }
+    free(qscript); free(qhost); free(qport); free(quser); free(qpass); free(qcommand); free(qtimeout);
+    return ok ? 0 : -1;
+}
+
 static tool_result *ssh_exec(const tool *self, const tool_ctx *ctx, const char *args_json) {
     cJSON *args = cJSON_Parse(args_json);
     cJSON *host = args ? cJSON_GetObjectItemCaseSensitive(args, "host") : NULL;
@@ -306,27 +350,21 @@ static tool_result *ssh_exec(const tool *self, const tool_ctx *ctx, const char *
         timeout_ms = 60000;
     strbuf_init(&cmd);
     if (password_text) {
-        char *qpass = ssh_quote_arg(password_text);
-        if (!qpass) {
-            cJSON_Delete(profile_root); cJSON_Delete(args); free(quoted);
-            return tool_result_new(0, "ssh: password must be a single line");
+        if (ssh_append_paramiko(&cmd, host_text, user_text, password_text,
+                                command->valuestring, port_no, timeout_ms) != 0) {
+            cJSON_Delete(profile_root); cJSON_Delete(args); free(quoted); strbuf_free(&cmd);
+            return tool_result_new(0, "ssh: password arguments are invalid");
         }
-#if defined(_WIN32)
-        strbuf_appendf(&cmd, "where sshpass >nul 2>nul || (echo ssh: password authentication requires sshpass on PATH & exit /b 127) & sshpass -p %s ssh", qpass);
-#else
-        strbuf_appendf(&cmd, "command -v sshpass >/dev/null 2>&1 || { echo 'ssh: password authentication requires sshpass (or configure an identity_file)'; exit 127; }; sshpass -p %s ssh", qpass);
-#endif
-        free(qpass);
     } else {
         strbuf_append(&cmd, "ssh -o BatchMode=yes");
+        strbuf_appendf(&cmd, " -o ConnectTimeout=5 -o StrictHostKeyChecking=yes -p %d", port_no);
+        if (profile_root && profile.identity_file) { char *q = ssh_quote_arg(profile.identity_file); if (q) { strbuf_appendf(&cmd, " -i %s", q); free(q); } }
+        if (profile_root && profile.known_hosts) { char *q = ssh_quote_arg(profile.known_hosts); if (q) { strbuf_appendf(&cmd, " -o UserKnownHostsFile=%s", q); free(q); } }
+        if (profile_root && profile.proxy_jump) { char *q = ssh_quote_arg(profile.proxy_jump); if (q) { strbuf_appendf(&cmd, " -J %s", q); free(q); } }
+        if (user_text) strbuf_appendf(&cmd, " -- %s@%s", user_text, host_text);
+        else strbuf_appendf(&cmd, " -- %s", host_text);
+        strbuf_appendf(&cmd, " %s", quoted);
     }
-    strbuf_appendf(&cmd, " -o ConnectTimeout=5 -o StrictHostKeyChecking=yes -p %d", port_no);
-    if (profile_root && profile.identity_file) { char *q = ssh_quote_arg(profile.identity_file); if (q) { strbuf_appendf(&cmd, " -i %s", q); free(q); } }
-    if (profile_root && profile.known_hosts) { char *q = ssh_quote_arg(profile.known_hosts); if (q) { strbuf_appendf(&cmd, " -o UserKnownHostsFile=%s", q); free(q); } }
-    if (profile_root && profile.proxy_jump) { char *q = ssh_quote_arg(profile.proxy_jump); if (q) { strbuf_appendf(&cmd, " -J %s", q); free(q); } }
-    if (user_text) strbuf_appendf(&cmd, " -- %s@%s", user_text, host_text);
-    else strbuf_appendf(&cmd, " -- %s", host_text);
-    strbuf_appendf(&cmd, " %s", quoted);
     cJSON *wrapped = cJSON_CreateObject();
     cJSON_AddStringToObject(wrapped, "command", cmd.buf);
     cJSON_AddNumberToObject(wrapped, "timeout_ms", timeout_ms);
@@ -346,7 +384,7 @@ static tool_result *ssh_exec(const tool *self, const tool_ctx *ctx, const char *
 const tool *tool_ssh(void) {
     static const tool t = {
         "ssh",
-        "Run one remote SSH command. Always use this tool for SSH work instead of shell. Supports named environments, keys/agent, and an explicit password when sshpass is installed.",
+        "Run one remote SSH command. Always use this tool for SSH work instead of shell. Supports named environments, keys/agent, and password authentication through Python paramiko without sshpass.",
         "{\"type\":\"object\",\"properties\":{\"host\":{\"type\":\"string\"},\"environment\":{\"type\":\"string\"},\"user\":{\"type\":\"string\"},"
         "\"command\":{\"type\":\"string\"},\"password\":{\"type\":\"string\"},\"port\":{\"type\":\"integer\"},"
         "\"timeout_ms\":{\"type\":\"integer\"}},\"required\":[\"command\"]}",

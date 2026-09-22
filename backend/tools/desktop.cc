@@ -483,13 +483,15 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         SetTextColor(dc, RGB(71, 85, 105));
         HFONT font = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
         HGDIOBJ old = SelectObject(dc, font);
-        DrawTextA(dc, "cognitive-os-agent", -1, &bar, DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_NOPREFIX);
+        DrawTextW(dc, L"cognitive-os-agent", -1, &bar, DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_NOPREFIX);
         RECT min = { cr.right - 132, 0, cr.right - 88, kChromeHeight };
         RECT max = { cr.right - 88, 0, cr.right - 44, kChromeHeight };
         RECT close = { cr.right - 44, 0, cr.right, kChromeHeight };
-        DrawTextA(dc, "\xE2\x88\x92", -1, &min, DT_SINGLELINE | DT_VCENTER | DT_CENTER);
-        DrawTextA(dc, IsZoomed(hwnd) ? "\xE2\x96\xa3" : "\xe2\x96\xa1", -1, &max, DT_SINGLELINE | DT_VCENTER | DT_CENTER);
-        DrawTextA(dc, "\xc3\x97", -1, &close, DT_SINGLELINE | DT_VCENTER | DT_CENTER);
+        /* Use the Unicode entry point throughout: DrawTextA interprets UTF-8
+         * bytes with the current ANSI code page and produced mojibake here. */
+        DrawTextW(dc, L"−", -1, &min, DT_SINGLELINE | DT_VCENTER | DT_CENTER);
+        DrawTextW(dc, IsZoomed(hwnd) ? L"▣" : L"□", -1, &max, DT_SINGLELINE | DT_VCENTER | DT_CENTER);
+        DrawTextW(dc, L"×", -1, &close, DT_SINGLELINE | DT_VCENTER | DT_CENTER);
         SelectObject(dc, old);
         EndPaint(hwnd, &ps);
         return 0;

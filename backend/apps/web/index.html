@@ -105,7 +105,6 @@
   }
   #side-recent{padding:0 8px 8px}
   .side-recent-row{display:flex;align-items:center;gap:2px;border-radius:8px}
-  .side-recent-row:has(button.on){background:var(--nav-on)}
   #side-recent button{
     display:flex; align-items:center; gap:8px; width:100%;
     background:none; border:0; border-radius:8px; color:var(--muted);
@@ -114,8 +113,7 @@
   }
   #side-recent button:hover{background:var(--nav-hover); color:var(--fg)}
   #side-recent button.on{background:var(--nav-on); color:var(--fg)}
-  #side-recent .side-recent-delete{display:none;width:26px;min-width:26px;padding:5px 0;justify-content:center;color:var(--muted);font-size:16px;line-height:1}
-  .side-recent-row:hover .side-recent-delete,.side-recent-row:focus-within .side-recent-delete{display:flex}
+  #side-recent .side-recent-delete{display:flex;width:28px;min-width:28px;padding:5px 0;justify-content:center;color:var(--muted);font-size:16px;line-height:1}
   #side-recent .side-recent-delete:hover{color:var(--danger);background:transparent}
   .newchat svg{flex-shrink:0}
   .usercard{display:flex; align-items:center; gap:10px; padding:4px 2px}
@@ -2607,7 +2605,7 @@ function sideRecent(list){
     del.className = 'side-recent-delete';
     del.title = '删除该会话及聊天记录';
     del.setAttribute('aria-label', del.title);
-    del.textContent = '×';
+    del.textContent = '🗑';
     del.onclick = async (e) => { e.stopPropagation(); await chatDeleteSession(id); };
     row.appendChild(del);
     box.appendChild(row);
