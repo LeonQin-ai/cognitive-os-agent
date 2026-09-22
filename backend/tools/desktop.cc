@@ -47,6 +47,8 @@ static HWND g_hwnd = nullptr;
 static ICoreWebView2 *g_web = nullptr;
 static ICoreWebView2Controller *g_ctrl = nullptr;
 static HANDLE g_server = nullptr;
+static HICON g_icon_big = nullptr;
+static HICON g_icon_small = nullptr;
 static std::wstring g_url_main;
 static std::wstring g_url_error;
 
@@ -551,8 +553,11 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
     /* Keep the native title/taskbar mark aligned with the web console and
      * installer shortcut. The ICO is installed next to the desktop shell. */
     std::wstring icon = dir + L"\\cognitive-os-agent.ico";
-    wc.hIcon = (HICON)LoadImageW(nullptr, icon.c_str(), IMAGE_ICON, 32, 32,
-                                 LR_LOADFROMFILE);
+    g_icon_big = (HICON)LoadImageW(nullptr, icon.c_str(), IMAGE_ICON, 256, 256,
+                                   LR_LOADFROMFILE);
+    g_icon_small = (HICON)LoadImageW(nullptr, icon.c_str(), IMAGE_ICON, 32, 32,
+                                     LR_LOADFROMFILE);
+    wc.hIcon = g_icon_big ? g_icon_big : g_icon_small;
     wc.lpszClassName = "cognitive-os-agent";
     RegisterClassA(&wc);
     g_hwnd = CreateWindowA("cognitive-os-agent", "cognitive-os-agent",
@@ -565,6 +570,13 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
                     L"cognitive-os-agent", MB_ICONERROR);
         return 1;
     }
+    /* WNDCLASS only supplies a fallback icon. Set both window slots
+     * explicitly so the installed app, taskbar and Alt+Tab use the same
+     * generated brain ICO as setup and its shortcuts. */
+    if (g_icon_big)
+        SendMessageW(g_hwnd, WM_SETICON, ICON_BIG, (LPARAM)g_icon_big);
+    if (g_icon_small)
+        SendMessageW(g_hwnd, WM_SETICON, ICON_SMALL, (LPARAM)g_icon_small);
     ShowWindow(g_hwnd, SW_SHOW);
     UpdateWindow(g_hwnd);
 
@@ -666,6 +678,10 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
         TerminateProcess(g_server, 0);
         CloseHandle(g_server);
     }
+    if (g_icon_big)
+        DestroyIcon(g_icon_big);
+    if (g_icon_small && g_icon_small != g_icon_big)
+        DestroyIcon(g_icon_small);
     CoUninitialize();
     return 0;
 }
