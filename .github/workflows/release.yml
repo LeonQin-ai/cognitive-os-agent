@@ -95,7 +95,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           cat > release-notes.md <<'EOF'
-          ## v0.6.0
+          ## Release
 
           - 可观测、可插话的 Agent 执行过程与每轮模型调用状态
           - 每个聊天框可选深度思考模式
