@@ -501,8 +501,6 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
     std::wstring icon = dir + L"\\cognitive-os-agent.ico";
     wc.hIcon = (HICON)LoadImageW(nullptr, icon.c_str(), IMAGE_ICON, 32, 32,
                                  LR_LOADFROMFILE);
-    wc.hIconSm = (HICON)LoadImageW(nullptr, icon.c_str(), IMAGE_ICON, 16, 16,
-                                   LR_LOADFROMFILE);
     wc.lpszClassName = "cognitive-os-agent";
     RegisterClassA(&wc);
     g_hwnd = CreateWindowA("cognitive-os-agent", "cognitive-os-agent",
