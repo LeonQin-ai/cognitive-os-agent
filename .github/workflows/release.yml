@@ -62,8 +62,10 @@ jobs:
         include:
           - runner: macos-15
             arch: arm64
+            source_arch: arm64
           - runner: macos-15-intel
             arch: x64
+            source_arch: x86_64
     defaults:
       run:
         working-directory: backend
@@ -72,7 +74,7 @@ jobs:
       - name: Create native app package
         run: bash package-macos.sh
       - name: Normalize archive name
-        run: mv dist/Cognitive-OS-macos-${{ matrix.arch }}.zip dist/cognitive-os-agent-macos-${{ matrix.arch }}.zip
+        run: mv dist/Cognitive-OS-macos-${{ matrix.source_arch }}.zip dist/cognitive-os-agent-macos-${{ matrix.arch }}.zip
       - uses: actions/upload-artifact@v4
         with:
           name: macos-${{ matrix.arch }}
