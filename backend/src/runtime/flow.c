@@ -18,7 +18,8 @@
 #include <stdatomic.h>
 #include "cJSON.h"
 
-#define FLOW_MAX_NODES 16
+#define FLOW_MAX_NODES 64
+#define FLOW_MAX_PARALLEL 8
 #define FLOW_MAX_TASKLEN                                                                                               \
     8192                    /* after {{ref}} substitution — a distilled                                                \
                              * upstream answer + the node instruction must                                             \
@@ -554,14 +555,22 @@ int flow_validate(const char *dag_json, char **err) {
         return -1;
     }
 
-    flow_dag d;
-    if (flow_parse(dag_json, &d, err) != 0)
+    flow_dag *d = (flow_dag *)calloc(1, sizeof(*d));
+    if (!d) {
+        flow_err(err, "out of memory");
         return -1;
-    if (flow_layer(&d) < d.n) {
+    }
+    if (flow_parse(dag_json, d, err) != 0) {
+        free(d);
+        return -1;
+    }
+    if (flow_layer(d) < d->n) {
         flow_err(err, "cycle detected in flow graph");
+        free(d);
         return -1;
     }
 
+    free(d);
     return 0;
 }
 
@@ -582,90 +591,101 @@ int flow_run(runtime_ctx *ctx, const char *dag_json, int64_t task_id, char **ans
     if (!ctx || !dag_json || !*dag_json || !answer)
         return -1;
 
-    flow_dag d;
-    if (flow_parse(dag_json, &d, &err) != 0) {
+    flow_dag *d = (flow_dag *)calloc(1, sizeof(*d));
+    if (!d)
+        return -1;
+    if (flow_parse(dag_json, d, &err) != 0) {
         log_warn("flow: parse failed: %s", err ? err : "?");
         free(err);
+        free(d);
         return -1;
     }
 
-    if (flow_layer(&d) < d.n) {
+    if (flow_layer(d) < d->n) {
         log_warn("flow: cycle detected");
+        free(d);
         return -1;
     }
 
     /* every node's agent must be registered */
-    for (int i = 0; i < d.n; i++) {
-        if (agent_pool_find(ctx->agents, d.nodes[i].agent) < 0) {
-            log_warn("flow: node '%s' references unregistered agent '%s'", d.nodes[i].id, d.nodes[i].agent);
+    for (int i = 0; i < d->n; i++) {
+        if (agent_pool_find(ctx->agents, d->nodes[i].agent) < 0) {
+            log_warn("flow: node '%s' references unregistered agent '%s'", d->nodes[i].id, d->nodes[i].agent);
+            free(d);
             return -1;
         }
     }
 
-    for (int i = 0; i < d.n; i++)
-        if (d.nodes[i].layer > maxlayer)
-            maxlayer = d.nodes[i].layer;
+    for (int i = 0; i < d->n; i++)
+        if (d->nodes[i].layer > maxlayer)
+            maxlayer = d->nodes[i].layer;
 
-    flow_prog_begin(task_id, &d);
+    flow_prog_begin(task_id, d);
 
-    results = (char **)calloc((size_t)d.n, sizeof(char *));
-    tasks = (char **)calloc((size_t)d.n, sizeof(char *));
-    flow_job *jobs = (flow_job *)calloc((size_t)d.n, sizeof(flow_job));
+    results = (char **)calloc((size_t)d->n, sizeof(char *));
+    tasks = (char **)calloc((size_t)d->n, sizeof(char *));
+    flow_job *jobs = (flow_job *)calloc((size_t)d->n, sizeof(flow_job));
     if (!results || !tasks || !jobs) {
         free(results);
         free(tasks);
         free(jobs);
+        flow_prog_end(task_id);
+        free(d);
         return -1;
     }
 
     for (int L = 0; L <= maxlayer; L++) {
         int layern = 0, runidx[FLOW_MAX_NODES];
-        for (int i = 0; i < d.n; i++)
-            if (d.nodes[i].layer == L)
+        for (int i = 0; i < d->n; i++)
+            if (d->nodes[i].layer == L)
                 runidx[layern++] = i;
         /* substitute upstream results into task templates, set up jobs */
         for (int k = 0; k < layern; k++) {
             int i = runidx[k];
             tasks[i] = (char *)malloc(FLOW_MAX_TASKLEN);
             if (tasks[i])
-                flow_substitute(&d, &d.nodes[i], results, tasks[i], FLOW_MAX_TASKLEN);
+                flow_substitute(d, &d->nodes[i], results, tasks[i], FLOW_MAX_TASKLEN);
             else
-                tasks[i] = xstrdup(d.nodes[i].task);
+                tasks[i] = xstrdup(d->nodes[i].task);
             jobs[i].ctx = ctx;
             jobs[i].task_id = task_id;
-            jobs[i].nd = &d.nodes[i];
-            snprintf(jobs[i].task, FLOW_MAX_TASKLEN, "%s", tasks[i] ? tasks[i] : d.nodes[i].task);
+            jobs[i].nd = &d->nodes[i];
+            snprintf(jobs[i].task, FLOW_MAX_TASKLEN, "%s", tasks[i] ? tasks[i] : d->nodes[i].task);
             jobs[i].out = NULL;
             jobs[i].rc = -1;
         }
-        /* parallel within the layer */
-        thread_t *threads[FLOW_MAX_NODES];
-        memset(threads, 0, sizeof(threads));
-        for (int k = 0; k < layern; k++) {
-            int i = runidx[k];
-            threads[k] = thread_create(flow_worker, &jobs[i]);
-            if (!threads[k])
-                flow_worker(&jobs[i]); /* spawn failed → inline */
-        }
-        for (int k = 0; k < layern; k++) {
-            int i = runidx[k];
-            if (threads[k])
-                thread_join(threads[k]);
-            results[i] = jobs[i].out; /* may be NULL on failure */
+        /* Keep per-layer concurrency bounded as the graph grows. */
+        for (int base = 0; base < layern; base += FLOW_MAX_PARALLEL) {
+            thread_t *threads[FLOW_MAX_PARALLEL] = {0};
+            int batch = layern - base;
+            if (batch > FLOW_MAX_PARALLEL)
+                batch = FLOW_MAX_PARALLEL;
+            for (int k = 0; k < batch; k++) {
+                int i = runidx[base + k];
+                threads[k] = thread_create(flow_worker, &jobs[i]);
+                if (!threads[k])
+                    flow_worker(&jobs[i]); /* spawn failed → inline */
+            }
+            for (int k = 0; k < batch; k++) {
+                int i = runidx[base + k];
+                if (threads[k])
+                    thread_join(threads[k]);
+                results[i] = jobs[i].out; /* may be NULL on failure */
+            }
         }
     }
 
     /* trace + answer (sink nodes = no outgoing edges) */
     trace = cJSON_CreateArray();
     strbuf_init(&fin);
-    for (int i = 0; i < d.n; i++) {
+    for (int i = 0; i < d->n; i++) {
         const char *result = results[i] ? results[i] : "";
         cJSON *st = cJSON_CreateObject();
         if (st) {
-            cJSON_AddStringToObject(st, "id", d.nodes[i].id);
-            cJSON_AddStringToObject(st, "agent", d.nodes[i].agent);
-            cJSON_AddStringToObject(st, "task", tasks[i] ? tasks[i] : d.nodes[i].task);
-            cJSON_AddNumberToObject(st, "layer", (double)d.nodes[i].layer);
+            cJSON_AddStringToObject(st, "id", d->nodes[i].id);
+            cJSON_AddStringToObject(st, "agent", d->nodes[i].agent);
+            cJSON_AddStringToObject(st, "task", tasks[i] ? tasks[i] : d->nodes[i].task);
+            cJSON_AddNumberToObject(st, "layer", (double)d->nodes[i].layer);
             cJSON_AddStringToObject(st, "status", jobs[i].rc == 0 ? "ok" : "error");
             cJSON_AddStringToObject(st, "result", result);
             cJSON_AddItemToArray(trace, st);
@@ -673,17 +693,17 @@ int flow_run(runtime_ctx *ctx, const char *dag_json, int64_t task_id, char **ans
         if (jobs[i].rc != 0) {
             /* failed node: surface the failure explicitly so the merge LLM
              * reports it instead of inventing content around an empty slot */
-            strbuf_appendf(&fin, "%s: [节点执行失败] %s\n", d.nodes[i].id,
+            strbuf_appendf(&fin, "%s: [节点执行失败] %s\n", d->nodes[i].id,
                                result && *result ? result : "(agent run failed)");
             continue;
         }
-        if (d.nodes[i].nadj == 0 && *result)
-            strbuf_appendf(&fin, "%s: %s\n", d.nodes[i].id, result);
+        if (d->nodes[i].nadj == 0 && *result)
+            strbuf_appendf(&fin, "%s: %s\n", d->nodes[i].id, result);
         /* publish per-node result to the agent pool like agent runs do */
         if (jobs[i].rc == 0 && results[i] && *results[i]) {
             char rk[160];
-            snprintf(rk, sizeof(rk), "result:%s", d.nodes[i].agent);
-            agent_post(ctx->agents, d.nodes[i].agent, rk, results[i]);
+            snprintf(rk, sizeof(rk), "result:%s", d->nodes[i].agent);
+            agent_post(ctx->agents, d->nodes[i].agent, rk, results[i]);
         }
     }
 
@@ -697,13 +717,14 @@ int flow_run(runtime_ctx *ctx, const char *dag_json, int64_t task_id, char **ans
 
     flow_prog_end(task_id);
     cJSON_Delete(trace);
-    for (int i = 0; i < d.n; i++)
+    for (int i = 0; i < d->n; i++)
         free(results[i]);
-    for (int i = 0; i < d.n; i++)
+    for (int i = 0; i < d->n; i++)
         free(tasks[i]);
     free(results);
     free(tasks);
     free(jobs);
+    free(d);
 
     *answer = fin.len > 0 ? fin.buf : xstrdup("(flow produced no output)");
     return 0;

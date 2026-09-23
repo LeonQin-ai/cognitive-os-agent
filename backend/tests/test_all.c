@@ -3136,6 +3136,27 @@ static void test_flow_decompose(void) {
 static void test_flow(void) {
     section("flow compiler (DAG)");
 
+    /* Large valid graphs stay off the caller's stack; reject one past the cap. */
+    {
+        char dag[8192];
+        size_t used = (size_t)snprintf(dag, sizeof(dag), "{\"nodes\":[");
+        for (int i = 0; i < 64; i++)
+            used += (size_t)snprintf(dag + used, sizeof(dag) - used,
+                                     "%s{\"id\":\"n%d\",\"agent\":\"x\",\"task\":\"t\"}",
+                                     i ? "," : "", i);
+        snprintf(dag + used, sizeof(dag) - used, "]}");
+        char *err = NULL;
+        CHECK(flow_validate(dag, &err) == 0);
+        free(err);
+        used = strlen(dag) - 2;
+        snprintf(dag + used, sizeof(dag) - used,
+                 ",{\"id\":\"extra\",\"agent\":\"x\",\"task\":\"t\"}]}");
+        err = NULL;
+        CHECK(flow_validate(dag, &err) == -1);
+        CHECK(err && strstr(err, "too many nodes") != NULL);
+        free(err);
+    }
+
     /* validation: cycle detection, duplicate ids, unknown edge endpoints */
     {
         char *err = NULL;
@@ -3218,6 +3239,28 @@ static void test_flow(void) {
         char *tr = blackboard_get(ctx.blackboard, "flow/trace");
         CHECK(tr && strstr(tr, "beta") != NULL);
         free(tr);
+
+        /* Execute beyond the former 16-node limit, including the final sink. */
+        {
+            char large_dag[4096];
+            size_t used = (size_t)snprintf(large_dag, sizeof(large_dag), "{\"nodes\":[");
+            for (int i = 0; i < 17; i++)
+                used += (size_t)snprintf(large_dag + used, sizeof(large_dag) - used,
+                                         "%s{\"id\":\"n%d\",\"agent\":\"alpha\",\"task\":\"回答 ok\"}",
+                                         i ? "," : "", i);
+            used += (size_t)snprintf(large_dag + used, sizeof(large_dag) - used, "],\"edges\":[");
+            for (int i = 0; i < 16; i++)
+                used += (size_t)snprintf(large_dag + used, sizeof(large_dag) - used,
+                                         "%s{\"from\":\"n%d\",\"to\":\"n%d\"}",
+                                         i ? "," : "", i, i + 1);
+            snprintf(large_dag + used, sizeof(large_dag) - used, "]}");
+            ans = trace = NULL;
+            CHECK(flow_run(&ctx, large_dag, 778, &ans, &trace) == 0);
+            CHECK(ans && strstr(ans, "n16:") != NULL);
+            CHECK(trace && strstr(trace, "\"id\":\"n16\"") != NULL);
+            free(ans);
+            free(trace);
+        }
         runtime_shutdown(&ctx);
     }
 

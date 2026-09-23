@@ -11,7 +11,7 @@ behavior from remaining design work.
 | Attention | Candidate ranking now blends lexical matching with deterministic local vector similarity, including CJK bigrams. This is a lightweight reranker, not a learned attention model. |
 | WASM text/linear memory | Numeric arguments remain the supported path; typed text/host memory ABI needs a separate design and tests. |
 | Policy risk analysis | Keyword checks remain; a parsed command policy is still needed. |
-| Flow size | The compiler still has a 16-node fixed limit. Raising the constant alone would increase stack/thread pressure; dynamic storage and bounded concurrency are needed. |
+| Flow size | The compiler accepts up to 64 nodes. DAG storage is heap allocated and each layer runs at most eight worker threads at once. The per-node task template remains limited to 8192 bytes; arbitrarily large graphs still need a dynamic representation. |
 | Context MMU | Existing token budgeting and hot/warm/cold context logic works, but full page eviction and prefetch are not implemented. |
 | Cluster | Node registry/heartbeat exists; distributed task ownership and failure recovery are not implemented. |
 | Embedding | A deterministic local 256-dimensional hashing provider exists, so the report's “external service only” concern is outdated. Learned local model support remains an enhancement. |
