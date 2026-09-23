@@ -288,6 +288,10 @@ static void scan_patterns(const char *text, size_t len, matchvec *mv) {
             const char *hit = find_ci(p, end, keys[k]);
             while (hit) {
                 const char *c = hit + strlen(keys[k]);
+                /* JSON and quoted shell keys: "password":"value". */
+                if (hit > text && c < end && (hit[-1] == '"' || hit[-1] == '\'') &&
+                    *c == hit[-1])
+                    c++;
                 /* separator: = or : (optionally around spaces) */
                 while (c < end && (*c == ' ' || *c == '\t'))
                     c++;

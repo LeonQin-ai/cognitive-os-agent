@@ -69,6 +69,7 @@
 #include "api/http_server.h"
 #include "infra/catalog.h"
 #include "infra/audit.h"
+#include "infra/logging.h"
 #include "llm/sse.h"
 
 #include <stdio.h>
@@ -77,6 +78,7 @@
 #include <stdatomic.h>
 #ifdef _WIN32
 #include <windows.h>
+#include <io.h>
 #else
 #include <unistd.h>
 #endif
@@ -97,6 +99,72 @@ static int g_pass = 0, g_fail = 0;
 } while (0)
 
 static void section(const char *name) { printf("\n== %s ==\n", name); }
+
+static void logging_worker(void *arg) {
+    (void)arg;
+    for (int i = 0; i < 20; i++)
+        log_info("concurrent log marker password=V7m9!qZ2rP");
+}
+
+static void test_logging(void) {
+    section("logging redaction and concurrent initialization");
+    FILE *capture = tmpfile();
+    CHECK(capture != NULL);
+    if (!capture) return;
+    fflush(stderr);
+#ifdef _WIN32
+    int saved = _dup(_fileno(stderr));
+    int redirected = saved >= 0 ? _dup2(_fileno(capture), _fileno(stderr)) : -1;
+#else
+    int saved = dup(fileno(stderr));
+    int redirected = saved >= 0 ? dup2(fileno(capture), fileno(stderr)) : -1;
+#endif
+    CHECK(redirected >= 0);
+    if (redirected >= 0) {
+        thread_t *threads[8] = {0};
+        for (int i = 0; i < 8; i++) {
+            threads[i] = thread_create(logging_worker, NULL);
+            CHECK(threads[i] != NULL);
+        }
+        for (int i = 0; i < 8; i++)
+            if (threads[i]) thread_join(threads[i]);
+        log_info("JSON credential: {\"password\":\"V7m9!qZ2rP\"}");
+        char *long_text = malloc(20001);
+        CHECK(long_text != NULL);
+        if (long_text) {
+            memset(long_text, ' ', 20000);
+            long_text[20000] = '\0';
+            memcpy(long_text + 16375, "sk-ABCDEFGHIJKLMNOPQRSTUV123456",
+                   strlen("sk-ABCDEFGHIJKLMNOPQRSTUV123456"));
+            log_info("%s long-log-tail", long_text);
+            free(long_text);
+        }
+        log_set_level(LOG_ERROR);
+        log_info("filtered-level-marker");
+        log_set_level(LOG_INFO);
+        log_write((loglevel)-1, "invalid-level-marker");
+        fflush(stderr);
+    }
+#ifdef _WIN32
+    if (saved >= 0) { _dup2(saved, _fileno(stderr)); _close(saved); }
+#else
+    if (saved >= 0) { dup2(saved, fileno(stderr)); close(saved); }
+#endif
+    rewind(capture);
+    char output[40000];
+    size_t n = fread(output, 1, sizeof(output) - 1, capture);
+    output[n] = '\0';
+    fclose(capture);
+    CHECK(strstr(output, "V7m9!qZ2rP") == NULL);
+    CHECK(strstr(output, "sk-ABCDEFGHIJKLMNOPQRSTUV123456") == NULL);
+    CHECK(strstr(output, "[REDACTED:secret]") != NULL);
+    CHECK(strstr(output, "long-log-tail") != NULL);
+    CHECK(strstr(output, "filtered-level-marker") == NULL);
+    CHECK(strstr(output, "invalid-level-marker") == NULL);
+    int lines = 0;
+    for (const char *p = output; (p = strstr(p, "concurrent log marker")) != NULL; p++) lines++;
+    CHECK(lines == 160);
+}
 
 /* ---------- infra: util ---------- */
 static void test_util(void) {
@@ -5578,6 +5646,7 @@ int main(void) {
     if (askpass_rc >= 0) return askpass_rc;
     setvbuf(stdout, NULL, _IONBF, 0); /* unbuffered: survive crashes mid-run */
     printf("cognitive-os-agent unit tests\n");
+    test_logging();
     test_util();
     test_event_bus();
     test_ringbuf();
