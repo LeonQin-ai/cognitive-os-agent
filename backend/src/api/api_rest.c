@@ -4053,12 +4053,8 @@ static void im_push(runtime_ctx *ctx, int64_t session_id, int64_t msg_id, const 
         free(js);
     }
 
-    if (ctx->memory) {
-        char buf[384];
-        snprintf(buf, sizeof(buf), "im session %lld (%s%s%s)", (long long)session_id, role ? role : "user",
-                 (sender && *sender) ? " by " : "", (sender && *sender) ? sender : "");
-        memory_record_experience(ctx->memory, buf, content);
-    }
+    /* An IM message can arrive during an unfinished task. Only the completed
+     * reasoning run may promote its result into shared long-term memory. */
 }
 
 /* Fire-and-forget forward a console-originated message to its linked external

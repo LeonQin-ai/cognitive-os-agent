@@ -320,11 +320,8 @@ static void channel_ingest(const char *channel_name, const char *sender, const c
         free(js);
     }
 
-    if (ctx->memory) {
-        char buf[384];
-        snprintf(buf, sizeof(buf), "im channel %s (%s)", channel_name, sender ? sender : "phone");
-        memory_record_experience(ctx->memory, buf, text);
-    }
+    /* Inbound IM messages are session input, not completed task evidence.
+     * Reasoning commits the episode through Memory Service on completion. */
 }
 
 /* Poll every telegram channel for inbound messages (~5s tick, checks the stop

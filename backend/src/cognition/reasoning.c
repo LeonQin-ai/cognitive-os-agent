@@ -2542,6 +2542,7 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     int consec_fail = 0; /* consecutive stage failures → circuit breaker */
     int fail_aborted = 0;
     int search_only_rounds = 0;
+    int synthesized = 0; /* fallback answer may describe an incomplete run */
 restart_planning:
     for (r->round_idx = 1; r->round_idx <= r->max_rounds; r->round_idx++) {
         if (run_aborted(r)) { st = ST_FAILED; break; }
@@ -2773,11 +2774,7 @@ restart_planning:
             char *ans = llm_chat_simple(r->llm, sys, user);
             if (ans && *ans) {
                 final_text = ans;
-                /* a synthesized final answer completes the run even when the
-                 * last stage failed: the caller gets a usable result instead
-                 * of a failure status with no answer text */
-                if (st != ST_DONE)
-                    st = ST_DONE;
+                synthesized = 1;
             } else {
                 free(ans);
             }
@@ -2791,7 +2788,7 @@ restart_planning:
         free(final_text); final_text = NULL;
         free(result); result = NULL;
         free(last_narration); last_narration = NULL;
-        stalled = consec_fail = fail_aborted = 0;
+        stalled = consec_fail = fail_aborted = synthesized = 0;
         goto restart_planning;
     }
     strbuf_init(&out);
@@ -2861,10 +2858,15 @@ restart_planning:
         metrics_inc(r->metrics, st == ST_DONE ? "tasks.done" : "tasks.failed");
 
     if (st == ST_DONE) {
-        memory_record_completed_run(r, combined);
-        if (r->mem && atomic_load(&r->ss->shared_memory_global)) {
-            if (r->memsvc) memory_service_remember(r->memsvc, MEM_WORKING, NULL, combined);
-            else memory_working_push(r->mem, combined);
+        /* A forced summary or a stalled loop is useful to the user, but it
+         * does not prove that the task completed. Keep it out of shared
+         * memory so another session cannot inherit unfinished work. */
+        if (!synthesized && !stalled && !fail_aborted && !r->tool_fail_aborted) {
+            memory_record_completed_run(r, combined);
+            if (r->mem && atomic_load(&r->ss->shared_memory_global)) {
+                if (r->memsvc) memory_service_remember(r->memsvc, MEM_WORKING, NULL, combined);
+                else memory_working_push(r->mem, combined);
+            }
         }
         record_turn(r, prompt, combined);
         if (r->hooks) {

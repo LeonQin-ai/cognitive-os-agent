@@ -632,6 +632,30 @@ static void test_llm_mock(void) {
     llm_destroy(llm);
 }
 
+/* A synthesized failure report must not turn a failed run into shared memory. */
+static void test_incomplete_run_memory_gate(void) {
+    section("incomplete_run_memory_gate");
+    config cfg;
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.state_root = "state-test/incomplete-memory";
+    cfg.workspace = "state-test/incomplete-memory";
+    cfg.provider = "mock";
+    cfg.http_port = 0;
+    const char *settings = "{\"reasoning.max_rounds\":1}";
+    fs_mkdirs(cfg.state_root);
+    CHECK(fs_write_file("state-test/incomplete-memory/cognitive-os-agent.json",
+                        settings, strlen(settings)) == 0);
+    runtime_ctx ctx;
+    if (init(&ctx, &cfg) != 0) { CHECK(0); return; }
+    int before = memory_working_count(ctx.memory);
+    char *answer = NULL;
+    CHECK(reasoning_run_ex(ctx.reasoning, "failed-shell", "执行命令 exit 1", &answer) != 0);
+    CHECK(answer != NULL);
+    CHECK(memory_working_count(ctx.memory) == before);
+    free(answer);
+    runtime_shutdown(&ctx);
+}
+
 /* ---------- llm bridge: capabilities + cancel ---------- */
 static void nop_stream_cb(const char *delta, void *ud) { (void)delta; (void)ud; }
 
@@ -2626,7 +2650,7 @@ static void test_agent_loop(void) {
         runtime_ctx ctx;
         if (init(&ctx, &cfg) != 0) { CHECK(0); return; }
         char *ans = NULL;
-        CHECK(reasoning_run(ctx.reasoning, "SSH连续失败测试", &ans) == 0);
+        CHECK(reasoning_run(ctx.reasoning, "SSH连续失败测试", &ans) != 0);
         long long el = 0, tin = 0, tout = 0;
         int rnd = 0, tc = 0;
         const char *cur_tool = NULL;
@@ -5427,6 +5451,7 @@ int main(void) {
     test_memory();
     test_snapshot_tx();
     test_llm_mock();
+    test_incomplete_run_memory_gate();
     test_llm_caps_cancel();
     test_retrieval_upgrade();
     test_state_store();
