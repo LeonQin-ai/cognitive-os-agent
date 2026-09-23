@@ -15,6 +15,8 @@ typedef struct worker_slot {
 struct scheduler {
     int workers;
     int max_workers;
+    int max_active;
+    uint64_t rejected;
     task_runner runner;
     void *worker_ud;
 
@@ -194,15 +196,22 @@ static void worker_main(void *arg) {
 }
 
 scheduler *scheduler_new(int workers, task_runner runner, void *worker_ud) {
+    if (workers < 1) workers = 1;
+    return scheduler_new_limited(workers, workers >= 32 ? workers : 32, 0, runner, worker_ud);
+}
+
+scheduler *scheduler_new_limited(int workers, int max_workers, int max_active,
+                                 task_runner runner, void *worker_ud) {
     scheduler *s;
 
-    if (workers < 1)
-        workers = 1;
+    if (workers < 1 || max_workers < workers || max_workers > 256 || max_active < 0)
+        return NULL;
     s = calloc(1, sizeof(scheduler));
     if (!s)
         return NULL;
     s->workers = workers;
-    s->max_workers = workers >= 32 ? workers : 32;
+    s->max_workers = max_workers;
+    s->max_active = max_active;
     s->runner = runner;
     s->worker_ud = worker_ud;
     mutex_init(&s->mtx);
@@ -242,6 +251,20 @@ scheduler *scheduler_new(int workers, task_runner runner, void *worker_ud) {
     }
 
     return s;
+}
+
+void scheduler_get_stats(scheduler *s, scheduler_stats *out) {
+    if (!out) return;
+    memset(out, 0, sizeof(*out));
+    if (!s) return;
+    mutex_lock(&s->mtx);
+    out->workers = s->workers;
+    out->max_workers = s->max_workers;
+    out->active = s->active;
+    out->max_active = s->max_active;
+    out->queued = s->qlen;
+    out->rejected = s->rejected;
+    mutex_unlock(&s->mtx);
 }
 
 void scheduler_free(scheduler *s) {
@@ -291,6 +314,13 @@ int64_t scheduler_submit_tag_mode(scheduler *s, int priority, const char *input,
         mutex_destroy(&t->progress_mtx);
         free(t);
         return -1;
+    }
+    if (s->max_active > 0 && s->active >= s->max_active) {
+        s->rejected++;
+        mutex_unlock(&s->mtx);
+        mutex_destroy(&t->progress_mtx);
+        free(t);
+        return SCHEDULER_FULL;
     }
     t->id = s->next_id;
     t->priority = priority;

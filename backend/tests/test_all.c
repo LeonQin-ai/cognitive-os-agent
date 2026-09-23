@@ -7,6 +7,7 @@
 #include "runtime/event_bus.h"
 #include "runtime/flow.h"
 #include "runtime/scheduler.h"
+#include "runtime/cron.h"
 #include "runtime/tasklog.h"
 #include "runtime/state_machine.h"
 #include "runtime/policy_engine.h"
@@ -67,6 +68,7 @@
 #include "os/os_thread.h"
 #include "os/os_proc.h"
 #include "api/http_server.h"
+#include "api/api_rest.h"
 #include "infra/catalog.h"
 #include "infra/audit.h"
 #include "infra/logging.h"
@@ -318,6 +320,58 @@ static void test_scheduler_elastic(void) {
     }
     CHECK(scheduler_shutdown(s, 3000) == 0);
     CHECK(scheduler_submit(s, 0, "after shutdown", NULL, 0) < 0);
+    scheduler_free(s);
+}
+
+static atomic_int capacity_release;
+static void run_capacity(task *t, scheduler *s, void *ud) {
+    (void)s; (void)ud;
+    int64_t deadline = time_now_ms() + 10000;
+    while (!atomic_load(&capacity_release) && time_now_ms() < deadline)
+        time_sleep_ms(1);
+    t->status = TS_DONE;
+}
+
+static void test_scheduler_limits(void) {
+    section("scheduler admission and cron retry");
+    CHECK(scheduler_new_limited(2, 1, 10, run_capacity, NULL) == NULL);
+    CHECK(scheduler_new_limited(1, 257, 10, run_capacity, NULL) == NULL);
+    atomic_store(&capacity_release, 0);
+    scheduler *s = scheduler_new_limited(1, 4, 8, run_capacity, NULL);
+    CHECK(s != NULL);
+    if (!s) return;
+    for (int i = 0; i < 8; i++) CHECK(scheduler_submit(s, 0, "hold", NULL, 0) == i);
+    CHECK(scheduler_submit(s, 0, "excess", NULL, 0) == SCHEDULER_FULL);
+    scheduler_stats stats;
+    scheduler_get_stats(s, &stats);
+    CHECK(stats.workers == 4 && stats.max_workers == 4 && stats.active == 8);
+    CHECK(stats.max_active == 8 && stats.rejected == 1 && scheduler_total(s) == 8);
+
+    fs_mkdirs("state-test/cron-limits");
+    fs_remove("state-test/cron-limits/cron.json");
+    cron_mgr *cron = cron_new(s, "state-test/cron-limits");
+    CHECK(cron != NULL);
+    if (cron) {
+        CHECK(cron_add(cron, "retry", "scheduled", "cron", 1, NULL) >= 0);
+        CHECK(cron_tick(cron) == 0);
+        time_sleep_ms(1100);
+        CHECK(cron_tick(cron) == 0);
+        char *jobs = cron_json(cron);
+        CHECK(jobs && strstr(jobs, "\"last_run_ms\":0"));
+        free(jobs);
+    }
+    atomic_store(&capacity_release, 1);
+    CHECK(scheduler_wait_idle(s, 3000) == 0);
+    CHECK(scheduler_submit(s, 0, "accepted again", NULL, 0) == 8);
+    CHECK(scheduler_wait_idle(s, 3000) == 0);
+    if (cron) {
+        time_sleep_ms(1100);
+        CHECK(cron_tick(cron) == 1);
+        CHECK(scheduler_wait_idle(s, 3000) == 0);
+        CHECK(scheduler_total(s) == 10);
+        cron_free(cron);
+    }
+    CHECK(scheduler_shutdown(s, 3000) == 0);
     scheduler_free(s);
 }
 
@@ -5297,10 +5351,56 @@ static int raw_http_request(uint16_t port, const char *method, const char *path,
     return 0;
 }
 
+static void test_http_capacity(void) {
+    section("http admission backpressure");
+    runtime_ctx ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.http_port = 18219;
+    ctx.http_bind = "127.0.0.1";
+    atomic_store(&capacity_release, 0);
+    ctx.scheduler = scheduler_new_limited(1, 1, 1, run_capacity, NULL);
+    CHECK(ctx.scheduler != NULL);
+    if (!ctx.scheduler) return;
+    ctx.config = config_new();
+    config_apply_json(ctx.config, "{\"llm.provider\":\"openai\",\"llm.api_key\":\"test-key\"}");
+    int attached = api_attach(&ctx);
+    CHECK(attached == 0);
+    thread_t *server = attached == 0 ? thread_create(th_serve_http, ctx.http) : NULL;
+    CHECK(server != NULL);
+    if (server) {
+        raw_http r;
+        CHECK(raw_http_request(18219, "POST", "/v1/tasks", "{\"prompt\":\"hold\"}", &r) == 0 && r.status == 200);
+        CHECK(strstr(r.body, "\"id\":0") != NULL);
+        CHECK(raw_http_request(18219, "POST", "/v1/tasks", "{\"prompt\":\"excess\"}", &r) == 0 && r.status == 429);
+        CHECK(strstr(r.body, "SCHEDULER_FULL") != NULL);
+        CHECK(raw_http_request(18219, "POST", "/v1/chat", "{\"message\":\"excess\"}", &r) == 0 && r.status == 429);
+        CHECK(raw_http_request(18219, "POST", "/v1/orchestrate", "{\"task\":\"excess\"}", &r) == 0 && r.status == 429);
+        CHECK(raw_http_request(18219, "POST", "/v1/flows",
+              "{\"nodes\":[{\"id\":\"a\",\"agent\":\"x\",\"task\":\"t\"}]}", &r) == 0 && r.status == 429);
+        CHECK(raw_http_request(18219, "GET", "/v1/scheduler", NULL, &r) == 0 && r.status == 200);
+        CHECK(strstr(r.body, "\"active\":1") && strstr(r.body, "\"rejected\":4"));
+        atomic_store(&capacity_release, 1);
+        CHECK(scheduler_wait_idle(ctx.scheduler, 3000) == 0);
+        CHECK(raw_http_request(18219, "POST", "/v1/tasks", "{\"prompt\":\"retry\"}", &r) == 0 && r.status == 200);
+        CHECK(strstr(r.body, "\"id\":1") != NULL);
+        http_server_stop(ctx.http);
+        thread_join(server);
+    }
+    atomic_store(&capacity_release, 1);
+    scheduler_shutdown(ctx.scheduler, 3000);
+    scheduler_free(ctx.scheduler);
+    if (ctx.http) http_server_free(ctx.http);
+    config_free(ctx.config);
+}
+
 static void test_http_api(void) {
     section("http_api");
     const char *root = "state-http-test";
     fs_remove(root);
+    fs_mkdirs(root);
+    const char *capacity_config = "{\"scheduler.max.workers\":3,\"scheduler.max.active\":20}";
+    CHECK(fs_write_file("state-http-test/cognitive-os-agent.json", capacity_config,
+                        strlen(capacity_config)) == 0);
     config cfg;
     memset(&cfg, 0, sizeof cfg);
     cfg.state_root = root;
@@ -5314,6 +5414,8 @@ static void test_http_api(void) {
     time_sleep_ms(400);
 
     raw_http r;
+    CHECK(raw_http_request(18211, "GET", "/v1/scheduler", NULL, &r) == 0 && r.status == 200);
+    CHECK(strstr(r.body, "\"max_workers\":3") && strstr(r.body, "\"max_active\":20"));
     CHECK(raw_http_request(18211, "GET", "/v1/tools", NULL, &r) == 0 && r.status == 200);
     CHECK(strstr(r.body, "file_write") != NULL);
 
@@ -5735,6 +5837,7 @@ int main(void) {
     test_embedding();
     test_scheduler();
     test_scheduler_elastic();
+    test_scheduler_limits();
     test_scheduler_virtual_scale();
     test_coro();
     test_scheduler_mn();
@@ -5821,6 +5924,7 @@ int main(void) {
     test_catalog_skills_run();
     test_audit();
     test_llm_adapters_http();
+    test_http_capacity();
     test_http_api();
     test_ws_roundtrip();
     test_market_remote();

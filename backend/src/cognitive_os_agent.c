@@ -437,8 +437,18 @@ int init(runtime_ctx *ctx, const config *cfg) {
                                : config_get_str(ctx->config, "llm.base_url", NULL);
     const char *api_key =
         (cfg && cfg->api_key && *cfg->api_key) ? cfg->api_key : config_get_str(ctx->config, "llm.api_key", NULL);
-    ctx->workers =
-        (cfg && cfg->workers > 0) ? cfg->workers : (int)config_get_int(ctx->config, "scheduler.workers", 8);
+    long long configured_workers =
+        (cfg && cfg->workers > 0) ? cfg->workers : config_get_int(ctx->config, "scheduler.workers", 8);
+    long long max_workers = config_get_int(ctx->config, "scheduler.max.workers",
+                                           configured_workers > 32 ? configured_workers : 32);
+    long long max_active = config_get_int(ctx->config, "scheduler.max.active", 10000);
+    if (configured_workers < 1 || max_workers < configured_workers || max_workers > 256 ||
+        max_active < 1 || max_active > 1000000) {
+        log_error("invalid scheduler limits: workers <= max.workers <= 256, max.active 1..1000000");
+        runtime_shutdown(ctx);
+        return -1;
+    }
+    ctx->workers = (int)configured_workers;
     ctx->use_transaction =
         (cfg && cfg->use_transaction) ? 1 : (int)config_get_bool(ctx->config, "tx.use_transaction", 1);
     ctx->http_port =
@@ -761,7 +771,8 @@ int init(runtime_ctx *ctx, const config *cfg) {
         return -1;
     }
 
-    ctx->scheduler = scheduler_new(ctx->workers, sched_trampoline, ctx);
+    ctx->scheduler = scheduler_new_limited(ctx->workers, (int)max_workers, (int)max_active,
+                                           sched_trampoline, ctx);
     if (!ctx->scheduler) {
         log_error("init: scheduler failed to start");
         runtime_shutdown(ctx);

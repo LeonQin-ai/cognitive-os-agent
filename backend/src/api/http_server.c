@@ -141,6 +141,8 @@ static const char *status_reason(int code) {
         return "Not Found";
     case 405:
         return "Method Not Allowed";
+    case 429:
+        return "Too Many Requests";
     case 500:
         return "Internal Server Error";
     default:

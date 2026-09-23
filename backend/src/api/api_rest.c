@@ -115,6 +115,26 @@ static const char *task_status_str(task_status st) {
     }
 }
 
+static void scheduler_submit_error(http_response *resp, int64_t id) {
+    resp->status = id == SCHEDULER_FULL ? 429 : 500;
+    http_resp_json(resp, id == SCHEDULER_FULL ?
+        "{\"error\":\"task capacity reached; retry after active tasks complete\",\"code\":\"SCHEDULER_FULL\"}" :
+        "{\"error\":\"scheduler submit failed\"}");
+}
+
+static int h_scheduler(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
+    if (!authz_ok(ctx, req, resp)) return 0;
+    scheduler_stats stats;
+    scheduler_get_stats(ctx->scheduler, &stats);
+    http_resp_appendf(resp,
+        "{\"workers\":%d,\"max_workers\":%d,\"active\":%d,\"max_active\":%d,"
+        "\"queued\":%llu,\"rejected\":%llu}", stats.workers, stats.max_workers,
+        stats.active, stats.max_active, (unsigned long long)stats.queued,
+        (unsigned long long)stats.rejected);
+    return 0;
+}
+
 static int h_task_create(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
     char *b;
@@ -147,8 +167,7 @@ static int h_task_create(const http_request *req, http_response *resp, void *ud)
     snprintf(prompt_copy, sizeof(prompt_copy), "%s", prompt);
     cJSON_Delete(root);
     if (id < 0) {
-        resp->status = 500;
-        http_resp_json(resp, "{\"error\":\"scheduler submit failed\"}");
+        scheduler_submit_error(resp, id);
         return 0;
     }
 
@@ -369,9 +388,8 @@ static int h_task_resume(const http_request *req, http_response *resp, void *ud)
         return 0;
     }
     int64_t nid = scheduler_submit_tag(ctx->scheduler, 0, input, NULL, 0, session);
-    if (nid <= 0) {
-        resp->status = 500;
-        http_resp_json(resp, "{\"error\":\"submit failed\"}");
+    if (nid < 0) {
+        scheduler_submit_error(resp, nid);
     } else {
         http_resp_appendf(resp, "{\"ok\":true,\"id\":%lld,\"resumed_from\":%lld}", (long long)nid, (long long)id);
     }
@@ -444,8 +462,7 @@ static int h_chat(const http_request *req, http_response *resp, void *ud) {
     id = scheduler_submit_tag_mode(ctx->scheduler, 0, msg, NULL, 0, session, thinking);
     cJSON_Delete(root);
     if (id < 0) {
-        resp->status = 500;
-        http_resp_json(resp, "{\"error\":\"scheduler submit failed\"}");
+        scheduler_submit_error(resp, id);
         return 0;
     }
 
@@ -551,9 +568,8 @@ static int h_chat_session_post(const http_request *req, http_response *resp, voi
         }
         int64_t nid = scheduler_submit_tag(ctx->scheduler, 0, input, NULL, 0, sid);
         free(input);
-        if (nid <= 0) {
-            resp->status = 500;
-            http_resp_json(resp, "{\"error\":\"submit failed\"}");
+        if (nid < 0) {
+            scheduler_submit_error(resp, nid);
             return 0;
         }
         http_resp_appendf(resp, "{\"ok\":true,\"id\":%lld,\"session\":\"%s\"}", (long long)nid, sid);
@@ -616,8 +632,7 @@ static int h_orchestrate(const http_request *req, http_response *resp, void *ud)
     id = scheduler_submit(ctx->scheduler, 0, task, (void *)1, 0);
     cJSON_Delete(root);
     if (id < 0) {
-        resp->status = 500;
-        http_resp_json(resp, "{\"error\":\"scheduler submit failed\"}");
+        scheduler_submit_error(resp, id);
         return 0;
     }
 
@@ -693,8 +708,7 @@ static int h_flow_run(const http_request *req, http_response *resp, void *ud) {
     id = scheduler_submit(ctx->scheduler, 0, dag_json, (void *)2, 0);
     if (id < 0) {
         free(dag_json);
-        resp->status = 500;
-        http_resp_json(resp, "{\"error\":\"scheduler submit failed\"}");
+        scheduler_submit_error(resp, id);
         return 0;
     }
     /* persist the collaboration task so it can be listed/继续/取消/修改,
@@ -821,8 +835,7 @@ static int h_flow_resume(const http_request *req, http_response *resp, void *ud)
     id = scheduler_submit(ctx->scheduler, 0, dag_json, (void *)2, 0);
     if (id < 0) {
         free(dag_json);
-        resp->status = 500;
-        http_resp_json(resp, "{\"error\":\"scheduler submit failed\"}");
+        scheduler_submit_error(resp, id);
         return 0;
     }
     if (ctx->flowstore)
@@ -4833,6 +4846,7 @@ int api_attach(runtime_ctx *ctx) {
     http_server_route(ctx->http, "DELETE", "/v1/im/sessions/", h_im_session_route, ctx);
     http_server_ws_route(ctx->http, "/ws", on_ws_msg, ctx);
     http_server_route(ctx->http, "GET", "/metrics", h_metrics, ctx);
+    http_server_route(ctx->http, "GET", "/v1/scheduler", h_scheduler, ctx);
     http_server_route(ctx->http, "GET", "/v1/catalog/mcp", h_catalog_mcp, ctx);
     http_server_route(ctx->http, "GET", "/v1/catalog/models", h_catalog_models, ctx);
     http_server_route(ctx->http, "GET", "/v1/catalog/skills", h_catalog_skills, ctx);

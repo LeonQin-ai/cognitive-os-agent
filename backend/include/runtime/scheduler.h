@@ -63,9 +63,21 @@ typedef void (*task_runner)(task *t, scheduler *s, void *worker_ud);
 typedef void (*task_completion)(task *t, void *ud);
 
 scheduler *scheduler_new(int workers, task_runner runner, void *worker_ud);
+/* Explicit admission limits. 1 <= workers <= max_workers <= 256;
+ * max_active bounds queued + running tasks (0 = unlimited for embedders). */
+scheduler *scheduler_new_limited(int workers, int max_workers, int max_active,
+                                 task_runner runner, void *worker_ud);
+#define SCHEDULER_FULL (-2)
+typedef struct scheduler_stats {
+    int workers, max_workers, active, max_active;
+    size_t queued;
+    uint64_t rejected;
+} scheduler_stats;
+void scheduler_get_stats(scheduler *s, scheduler_stats *out);
 void scheduler_free(scheduler *s);
 
-/* Enqueue a task. Returns its id, or -1 on failure. */
+/* Enqueue a task. Returns its id, SCHEDULER_FULL at capacity, or -1 on failure.
+ * Rejected submissions do not consume task IDs. */
 int64_t scheduler_submit(scheduler *s, int priority, const char *input, void *userdata, int64_t timeout_ms);
 /* Same, with an owned routing tag (NULL = none). The tag is freed with the
  * task; runners read it as t->tag. */

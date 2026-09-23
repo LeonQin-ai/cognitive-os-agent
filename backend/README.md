@@ -196,6 +196,29 @@ or `"shell":"cmd"`; the default remains automatic. `file_read` returns up to
 text file. The chat's deep-thinking choice is per session, while the shared
 memory switch applies to every session.
 
+## Execution capacity
+
+The scheduler starts with `scheduler.workers` threads (default 8) and expands
+up to `scheduler.max.workers` (default at least 32, maximum 256). Configure
+`scheduler.max.active` to bound queued plus running tasks (default 10,000,
+allowed 1–1,000,000). These are startup settings, for example:
+
+```json
+{"scheduler.workers":4,"scheduler.max.workers":16,"scheduler.max.active":1000}
+```
+
+Environment overrides are `COA_SCHEDULER_WORKERS`, `COA_SCHEDULER_MAX_WORKERS`
+and `COA_SCHEDULER_MAX_ACTIVE`. `GET /v1/scheduler` reports current workers,
+active/queued tasks, configured limits and rejected submissions. Task, chat,
+orchestration and Flow submissions return HTTP 429 with `code:SCHEDULER_FULL`
+at capacity; retry after existing work completes. Scheduled jobs retry a
+rejected submission on a later tick without consuming that occurrence.
+
+Virtual agent registrations do not allocate execution threads. Completed task
+history is still retained in memory until shutdown; the active-task limit is
+not a bound on total process memory, and expanded worker threads remain until
+shutdown.
+
 ## LLM providers
 
 Configure via JSON config (`state/<name>/cognitive-os-agent.json`), CLI flags, or env vars with a

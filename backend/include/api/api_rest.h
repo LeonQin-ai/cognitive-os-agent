@@ -2,6 +2,7 @@
  * Routes:
  *   POST /v1/tasks               {"prompt":"..."} -> submit to scheduler
  *   GET  /v1/tasks/{id}          task status + output
+ *   GET  /v1/scheduler           execution capacity and queue statistics
  *   GET  /v1/tools               registered tool list
  *   GET  /v1/memory              working + long-term memory
  *   GET  /v1/snapshots           committed snapshots

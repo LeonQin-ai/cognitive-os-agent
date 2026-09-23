@@ -203,6 +203,12 @@ int cron_tick(cron_mgr *c) {
             char session[CRON_SESSION_MAX];
             snprintf(session, sizeof(session), "%s", j->session[0] ? j->session : CRON_DEFAULT_SESSION);
             int64_t tid = scheduler_submit_tag(c->sched, 0, j->prompt, NULL, 0, session);
+            if (tid < 0) {
+                /* Admission failure is not execution: retain the due job and
+                 * retry on a later tick without consuming this occurrence. */
+                j->next_run_ms = now + 1000;
+                continue;
+            }
             if (tid >= 0) {
                 j->last_id = (long long)tid; /* journal 查询结果用 (issue #13) */
                 log_info("cron: submitted job '%s' (task %lld, session %s)", j->name, (long long)tid, session);
