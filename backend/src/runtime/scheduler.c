@@ -26,6 +26,7 @@ struct scheduler {
 
     mutex_t mtx;
     cond not_empty;
+    cond idle;
     int shutdown_flag;
     int active; /* queued + running */
 
@@ -183,9 +184,12 @@ static void worker_main(void *arg) {
 
         if (cb)
             cb(t, cud);
-        mutex_lock(&s->mtx);
-        cond_broadcast(&s->not_empty);
-        mutex_unlock(&s->mtx);
+        if (done) {
+            mutex_lock(&s->mtx);
+            if (s->active == 0)
+                cond_broadcast(&s->idle);
+            mutex_unlock(&s->mtx);
+        }
     }
 }
 
@@ -203,6 +207,7 @@ scheduler *scheduler_new(int workers, task_runner runner, void *worker_ud) {
     s->worker_ud = worker_ud;
     mutex_init(&s->mtx);
     cond_init(&s->not_empty);
+    cond_init(&s->idle);
 
     s->threads = calloc((size_t)s->max_workers, sizeof(thread_t *));
     s->slots = calloc((size_t)s->max_workers, sizeof(worker_slot));
@@ -210,6 +215,7 @@ scheduler *scheduler_new(int workers, task_runner runner, void *worker_ud) {
         free(s->threads);
         free(s->slots);
         cond_destroy(&s->not_empty);
+        cond_destroy(&s->idle);
         mutex_destroy(&s->mtx);
         free(s);
         return NULL;
@@ -228,6 +234,7 @@ scheduler *scheduler_new(int workers, task_runner runner, void *worker_ud) {
             free(s->threads);
             free(s->slots);
             cond_destroy(&s->not_empty);
+            cond_destroy(&s->idle);
             mutex_destroy(&s->mtx);
             free(s);
             return NULL;
@@ -256,6 +263,7 @@ void scheduler_free(scheduler *s) {
     free(s->threads);
     free(s->slots);
     cond_destroy(&s->not_empty);
+    cond_destroy(&s->idle);
     mutex_destroy(&s->mtx);
     free(s);
 }
@@ -316,7 +324,7 @@ int64_t scheduler_submit_tag_mode(scheduler *s, int priority, const char *input,
         s->threads[s->workers++] = worker;
     }
     id = t->id;
-    cond_broadcast(&s->not_empty);
+    cond_signal(&s->not_empty);
     mutex_unlock(&s->mtx);
     return id;
 }
@@ -354,7 +362,7 @@ int scheduler_wait_idle(scheduler *s, int timeout_ms) {
             mutex_unlock(&s->mtx);
             return -1;
         }
-        cond_timedwait_ms(&s->not_empty, &s->mtx, 50);
+        cond_timedwait_ms(&s->idle, &s->mtx, 50);
     }
 
     mutex_unlock(&s->mtx);

@@ -14,13 +14,15 @@ Implemented now:
   retain their current compact-array semantics.
 - Allocation failures reject submission without leaving gaps in task IDs or
   corrupting the ready queue.
+- The scheduler now signals one worker for a new task and uses a separate idle
+  condition for completion waiters, avoiding a 32-thread broadcast per task.
 
 Local Windows capacity checks (opt-in unit modes, run separately):
 
 | Check | Result | Limit of evidence |
 | --- | --- | --- |
 | `COA_AGENT_STRESS_COUNT=1000000` | 1,000,000 agents registered, sampled lookups and removal passed; full unit suite 7,620/0 in 34.67 s. | Registry only; it does not start a model session for each agent. |
-| `COA_SCHED_STRESS_COUNT=1000000` | 1,000,000 no-op virtual tasks submitted and completed; full unit suite 2,086/0 in 230.93 s, with about 312 MB observed peak working set. | Short-task throughput is still slow; this is not a million concurrent reasoning sessions. |
+| `COA_SCHED_STRESS_COUNT=1000000` | 1,000,000 no-op virtual tasks submitted and completed; full unit suite 2,093/0 in 98.53 s on the same Windows host (previously 230.93 s), with about 312 MB observed peak working set before this change. | This is not a million concurrent reasoning sessions; current peak memory needs remeasurement. |
 
 Remaining before the million-agent **system** target can be closed:
 
