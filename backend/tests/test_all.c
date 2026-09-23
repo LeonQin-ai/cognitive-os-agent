@@ -253,6 +253,34 @@ static void test_scheduler_elastic(void) {
     scheduler_free(s);
 }
 
+static void run_virtual_noop(task *t, scheduler *s, void *ud) {
+    (void)s; (void)ud;
+    t->status = TS_DONE;
+}
+
+/* Opt-in capacity check: a million virtual tasks share bounded executors. */
+static void test_scheduler_virtual_scale(void) {
+    const char *stress = getenv("COA_SCHED_STRESS_COUNT");
+    if (!stress) return;
+    int count = atoi(stress);
+    if (count < 1 || count > 1000000) return;
+    section("scheduler_virtual_scale");
+    scheduler *s = scheduler_new(2, run_virtual_noop, NULL);
+    CHECK(s != NULL);
+    if (!s) return;
+    for (int i = 0; i < count; i++) {
+        if (scheduler_submit(s, 0, "", NULL, 0) != i) { CHECK(0); break; }
+    }
+    CHECK(scheduler_wait_idle(s, 120000) == 0);
+    CHECK(scheduler_total(s) == count);
+    for (int i = 0; i < count; i += 7919) {
+        task *t = scheduler_get(s, i);
+        CHECK(t && t->status == TS_DONE);
+    }
+    CHECK(scheduler_shutdown(s, 5000) == 0);
+    scheduler_free(s);
+}
+
 /* ---------- os: stackful coroutine ---------- */
 static int coro_steps[8];
 static int coro_step_count = 0;
@@ -1275,6 +1303,32 @@ static void test_agent_pool(void) {
     CHECK(agent_pool_find(p, "planner") == -1);
     CHECK(agent_pool_find(p, "executor") >= 0);
     CHECK(agent_post(p, "executor", "act", "done") == 0);
+    agent_pool_free(p);
+}
+
+static void test_agent_pool_scale(void) {
+    section("agent_pool_scale");
+    agent_pool *p = agent_pool_new();
+    CHECK(p != NULL);
+    if (!p) return;
+    const char *stress = getenv("COA_AGENT_STRESS_COUNT");
+    int count = stress ? atoi(stress) : 20000;
+    if (count < 20000 || count > 1000000) count = 20000;
+    char name[32];
+    for (int i = 0; i < count; i++) {
+        snprintf(name, sizeof(name), "agent-%05d", i);
+        if (agent_pool_add(p, name, "worker") != i) { CHECK(0); break; }
+    }
+    CHECK(agent_pool_count(p) == count);
+    for (int i = 0; i < count; i += 173) {
+        snprintf(name, sizeof(name), "agent-%05d", i);
+        CHECK(agent_pool_find(p, name) == i);
+    }
+    CHECK(agent_pool_add(p, "agent-10000", "duplicate") == -1);
+    CHECK(agent_pool_remove(p, "agent-10000") == 0);
+    CHECK(agent_pool_find(p, "agent-10000") == -1);
+    CHECK(agent_pool_find(p, "agent-10001") == 10000);
+    CHECK(agent_pool_count(p) == count - 1);
     agent_pool_free(p);
 }
 
@@ -4290,6 +4344,9 @@ static void test_attention(void) {
     CHECK(k == 3);
     CHECK(out[0].index == 0);
     CHECK(out[0].score >= out[1].score && out[1].score >= out[2].score);
+    attention_candidate cn = {"共享记忆只在任务完成后提交", NULL, 0.0};
+    attention_candidate irrelevant = {"天气预报与旅行计划", NULL, 0.0};
+    CHECK(attention_score(a, "共享记忆", &cn) > attention_score(a, "共享记忆", &irrelevant));
     attention_free(a);
 }
 
@@ -5485,6 +5542,7 @@ int main(void) {
     test_embedding();
     test_scheduler();
     test_scheduler_elastic();
+    test_scheduler_virtual_scale();
     test_coro();
     test_scheduler_mn();
     test_state_machine();
@@ -5508,6 +5566,7 @@ int main(void) {
     test_blackboard_persist();
     test_flow_store();
     test_agent_pool();
+    test_agent_pool_scale();
     test_auth();
     test_websocket();
     test_plugin_loader();

@@ -16,6 +16,10 @@ extern "C" {
 /* Embed `text` into a EMBED_DIM float vector (L2-normalized) using the
  * currently configured provider. */
 void embed_text(const char *text, float *out);
+/* Deterministic local embedding, even when a remote provider is configured.
+ * Use for cheap in-process ranking where a network request per candidate
+ * would be inappropriate. */
+void embed_text_local(const char *text, float *out);
 
 /* Cosine similarity between two EMBED_DIM vectors. */
 float embed_cosine(const float *a, const float *b, int dim);

@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <limits.h>
 #include "cJSON.h"
 
 typedef struct agent_entry {
@@ -23,6 +24,8 @@ struct agent_pool {
     agent_entry *agents;
     size_t count;
     size_t cap;
+    size_t *name_slots; /* open-addressed name -> index+1; 0 means empty */
+    size_t name_cap;
 };
 
 agent_pool *agent_pool_new(void) {
@@ -53,6 +56,7 @@ void agent_pool_free(agent_pool *p) {
     }
 
     free(p->agents);
+    free(p->name_slots);
     p->agents = NULL;
     p->count = p->cap = 0;
     mutex_unlock(&p->mtx);
@@ -74,12 +78,36 @@ void agent_pool_adopt_blackboard(agent_pool *p, blackboard *b) {
     p->owns_bb = 0;
 }
 
-/* Returns index of name, or -1. Caller must hold p->mtx. */
+/* O(1) average lookup for large virtual-agent rosters. Caller holds mtx. */
 static int find_agent(agent_pool *p, const char *name) {
-    for (size_t i = 0; i < p->count; i++)
-        if (strcmp(p->agents[i].name, name) == 0)
-            return (int)i;
+    if (!p->name_cap) return -1;
+    size_t slot = (size_t)hash64(name, strlen(name)) & (p->name_cap - 1);
+    while (p->name_slots[slot]) {
+        size_t idx = p->name_slots[slot] - 1;
+        if (strcmp(p->agents[idx].name, name) == 0) return (int)idx;
+        slot = (slot + 1) & (p->name_cap - 1);
+    }
     return -1;
+}
+
+static void name_index_insert(agent_pool *p, size_t idx) {
+    const char *name = p->agents[idx].name;
+    size_t slot = (size_t)hash64(name, strlen(name)) & (p->name_cap - 1);
+    while (p->name_slots[slot]) slot = (slot + 1) & (p->name_cap - 1);
+    p->name_slots[slot] = idx + 1;
+}
+
+static int name_index_reserve(agent_pool *p, size_t future_count) {
+    if (p->name_cap && future_count * 10 < p->name_cap * 7) return 0;
+    size_t cap = p->name_cap ? p->name_cap * 2 : 16;
+    if (cap < p->name_cap || cap > SIZE_MAX / sizeof(size_t)) return -1;
+    size_t *slots = calloc(cap, sizeof(size_t));
+    if (!slots) return -1;
+    free(p->name_slots);
+    p->name_slots = slots;
+    p->name_cap = cap;
+    for (size_t i = 0; i < p->count; i++) name_index_insert(p, i);
+    return 0;
 }
 
 int agent_pool_add(agent_pool *p, const char *name, const char *role) {
@@ -98,6 +126,10 @@ int agent_pool_add_model(agent_pool *p, const char *name, const char *role, cons
         return -1; /* duplicate */
     }
 
+    if (p->count >= INT_MAX || name_index_reserve(p, p->count + 1) != 0) {
+        mutex_unlock(&p->mtx);
+        return -1;
+    }
     if (p->count == p->cap) {
         size_t cap = p->cap ? p->cap * 2 : 8;
         agent_entry *na = (agent_entry *)realloc(p->agents, cap * sizeof(agent_entry));
@@ -109,12 +141,18 @@ int agent_pool_add_model(agent_pool *p, const char *name, const char *role, cons
         p->cap = cap;
     }
 
-    p->agents[p->count].name = xstrdup(name);
-    p->agents[p->count].role = role ? xstrdup(role) : xstrdup("");
-    p->agents[p->count].provider = provider ? xstrdup(provider) : NULL;
-    p->agents[p->count].model = model ? xstrdup(model) : NULL;
+    agent_entry next = {xstrdup(name), role ? xstrdup(role) : xstrdup(""),
+                        provider ? xstrdup(provider) : NULL,
+                        model ? xstrdup(model) : NULL};
+    if (!next.name || !next.role || (provider && !next.provider) || (model && !next.model)) {
+        free(next.name); free(next.role); free(next.provider); free(next.model);
+        mutex_unlock(&p->mtx);
+        return -1;
+    }
+    p->agents[p->count] = next;
     idx = (int)p->count;
     p->count++;
+    name_index_insert(p, (size_t)idx);
     mutex_unlock(&p->mtx);
     return idx;
 }
@@ -163,6 +201,8 @@ int agent_pool_remove(agent_pool *p, const char *name) {
     free(p->agents[idx].model);
     memmove(&p->agents[idx], &p->agents[idx + 1], (p->count - (size_t)idx - 1) * sizeof(agent_entry));
     p->count--;
+    memset(p->name_slots, 0, p->name_cap * sizeof(size_t));
+    for (size_t i = 0; i < p->count; i++) name_index_insert(p, i);
     mutex_unlock(&p->mtx);
     return 0;
 }

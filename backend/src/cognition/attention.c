@@ -1,5 +1,6 @@
 /* attention.c — salience scoring and top-k selection. */
 #include "cognition/attention.h"
+#include "retrieval/embedding.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -78,6 +79,15 @@ double attention_score(attention *a, const char *query, const attention_candidat
         else if (c->tags && ci_substr(c->tags, word))
             score += 0.5 + (double)wlen * 0.25;
     }
+
+    /* The local hashing embedding includes CJK bigrams, so a Chinese query
+     * can rank related memories even when ASCII word tokenization finds none.
+     * Keep this local to avoid one remote embedding call per candidate. */
+    float query_vec[EMBED_DIM], candidate_vec[EMBED_DIM];
+    embed_text_local(query, query_vec);
+    embed_text_local(c->text, candidate_vec);
+    float similarity = embed_cosine(query_vec, candidate_vec, EMBED_DIM);
+    if (similarity > 0.0f) score += 2.0 * similarity;
 
     return score;
 }

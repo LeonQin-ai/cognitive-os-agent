@@ -27,7 +27,7 @@ static int utf8_char_len(unsigned char c) {
     return 1;
 }
 
-static void local_embed(const char *text, float *out) {
+void embed_text_local(const char *text, float *out) {
     const char *p = text;
     float norm = 0.0f;
 
@@ -164,7 +164,7 @@ void embed_text(const char *text, float *out) {
         return;
     if (g_remote && remote_embed(text, out) == 0)
         return;
-    local_embed(text, out);
+    embed_text_local(text, out);
 }
 
 float embed_cosine(const float *a, const float *b, int dim) {
