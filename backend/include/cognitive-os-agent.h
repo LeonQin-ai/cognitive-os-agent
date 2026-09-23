@@ -134,6 +134,7 @@ typedef struct runtime_ctx {
 typedef struct config {
     const char *state_root; /* NULL = "state" */
     const char *workspace;  /* NULL = "." */
+    const char *config_file; /* NULL = <state_root>/cognitive-os-agent.json */
     const char *provider;   /* "mock" | "openai" | "anthropic" */
     const char *model;
     const char *base_url;

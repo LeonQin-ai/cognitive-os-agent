@@ -411,13 +411,23 @@ int init(runtime_ctx *ctx, const config *cfg) {
                                        "\"workspace\":\".\",\"market.url\":\"\",\"reasoning.max_rounds\":-1}");
     {
         char cfgfile[600];
-        path_join(cfgfile, sizeof(cfgfile), ctx->state_root, "cognitive-os-agent.json");
+        if (cfg && cfg->config_file && *cfg->config_file)
+            snprintf(cfgfile, sizeof(cfgfile), "%s", cfg->config_file);
+        else
+            path_join(cfgfile, sizeof(cfgfile), ctx->state_root, "cognitive-os-agent.json");
         have_cfg_file = (config_load_file(ctx->config, cfgfile) == 0);
         if (!have_cfg_file)
             log_debug("no config file at %s (using defaults + env)", cfgfile);
     }
 
     config_apply_env(ctx->config, "COA_");
+
+    if (!(cfg && cfg->workspace && *cfg->workspace)) {
+        const char *configured_workspace = config_get_str(ctx->config, "workspace", ".");
+        free(ctx->workspace);
+        ctx->workspace = xstrdup(configured_workspace && *configured_workspace ? configured_workspace : ".");
+        fs_mkdirs(ctx->workspace);
+    }
 
     /* effective values: explicit cfg > config > defaults */
     const char *provider = (cfg && cfg->provider && *cfg->provider)

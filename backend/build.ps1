@@ -21,7 +21,7 @@ try {
         if ($Target -ne 'all' -and $Target -ne $name) { continue }
         $spec=$targets[$name]
         Write-Host "[build] $($spec[0])"
-        & $zigCompiler cc -std=c11 -Wall -Wextra -O1 -g -Iinclude -Ithird_party/cJSON -Ithird_party/wasm3 -o "build/$($spec[0]).exe" @sourceFiles $spec[1] -lws2_32 -lwinhttp -lbcrypt -lm
+        & $zigCompiler cc -std=c11 -Wall -Wextra -O1 -g -Iinclude -Ithird_party/cJSON -Ithird_party/wasm3 -o "build/$($spec[0]).exe" @sourceFiles $spec[1] -lws2_32 -lwinhttp -lbcrypt -lshell32 -lm
         if ($LASTEXITCODE) { throw "Build failed: $name" }
     }
 } finally { Pop-Location }

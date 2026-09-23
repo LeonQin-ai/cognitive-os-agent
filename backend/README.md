@@ -59,17 +59,36 @@ fine-grained cancellation/timeout checkpoint.
 
 ## Usage
 
+The CLI reads `state/cognitive-os-agent.json` from the current directory by
+default. To use another file, pass `--config FILE`; its directory becomes the
+state directory unless `--state DIR` is supplied. The `workspace` field in the
+JSON file controls where tools operate; `--workspace DIR` overrides it.
+
+```json
+{
+  "llm.provider": "openai",
+  "llm.model": "your-model",
+  "llm.base_url": "https://your-provider.example/v1",
+  "llm.api_key": "your-key",
+  "workspace": "."
+}
 ```
-./build/cognitive-os-agent                      # interactive CLI
-run 创建 note.txt 写入内容为 hello   # run a task through the full pipeline
-tools                              # list registered tools
-memory                             # show memory state
-snapshot list                      # list snapshots
-snapshot rollback <id>             # undo a transaction (file-level rollback)
-serve <port>                       # start the HTTP API + web UI
-events                             # print event bus traffic
-help / exit
+
+```sh
+./build/cognitive-os-agent --config state/cognitive-os-agent.json
+# At the prompt, enter a task directly. Commands: /help, /config, /tools,
+# /memory, /snapshot list, /exit.
+
+./build/cognitive-os-agent --config state/cognitive-os-agent.json run "分析项目中的 bug"
+./build/cognitive-os-agent --config state/cognitive-os-agent.json "分析项目中的 bug"
+./build/cognitive-os-agent --config state/cognitive-os-agent.json config
+./build/cognitive-os-agent --config state/cognitive-os-agent.json serve 8080
 ```
+
+`config` prints an effective summary and only reports whether an API key is
+configured. `COA_*` environment values override file values. The terminal
+shows each agent stage while a task runs. On Windows, the CLI decodes Unicode
+command-line arguments before running a task, so Chinese text and paths work.
 
 `./build/cognitive-os-agent serve 8080` then `curl`:
 
