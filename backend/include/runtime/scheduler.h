@@ -51,6 +51,7 @@ typedef struct task {
     /* internal (managed by scheduler.c): coroutine handle + owning scheduler */
     void *coro;  /* coro* running this task, or NULL */
     void *sched; /* scheduler* back-pointer for the trampoline */
+    struct task *ready_next; /* owner-worker queue after a cooperative yield */
 } task;
 #undef TASK_ATOMIC
 

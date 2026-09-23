@@ -7,6 +7,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+typedef struct worker_slot {
+    struct scheduler *sched;
+    task *yield_head, *yield_tail; /* coroutine resumes only on its owner thread */
+} worker_slot;
+
 struct scheduler {
     int workers;
     int max_workers;
@@ -29,6 +34,7 @@ struct scheduler {
 
     int64_t next_id;
     thread_t **threads;
+    worker_slot *slots;
 };
 
 int task_should_abort(const task *t) {
@@ -127,17 +133,23 @@ void scheduler_yield(void) {
 }
 
 static void worker_main(void *arg) {
-    scheduler *s = (scheduler *)arg;
+    worker_slot *slot = (worker_slot *)arg;
+    scheduler *s = slot->sched;
     for (;;) {
         task *t = NULL;
         mutex_lock(&s->mtx);
-        while (!s->shutdown_flag && s->qlen == 0)
+        while (!s->shutdown_flag && s->qlen == 0 && !slot->yield_head)
             cond_wait(&s->not_empty, &s->mtx);
-        if (s->shutdown_flag && s->qlen == 0) {
+        if (s->shutdown_flag && s->qlen == 0 && !slot->yield_head) {
             mutex_unlock(&s->mtx);
             break;
         }
-        t = queue_pop(s);
+        if (slot->yield_head) {
+            t = slot->yield_head;
+            slot->yield_head = t->ready_next;
+            if (!slot->yield_head) slot->yield_tail = NULL;
+            t->ready_next = NULL;
+        } else t = queue_pop(s);
         if (!t->coro) {
             /* first run: create the coroutine (lazily, avoids eager 256KB stacks) */
             t->started_ms = time_now_ms();
@@ -158,13 +170,12 @@ static void worker_main(void *arg) {
                 t->coro = NULL;
             }
         } else {
-            if (queue_insert(s, t) != 0) {
-                t->status = TS_FAILED;
-                finalize_task(s, t);
-                coro_free((coro *)t->coro);
-                t->coro = NULL;
-                done = 1;
-            }
+            /* ucontext/Fiber state is tied to the thread where the task
+             * yielded. Keep the continuation on that worker. */
+            t->ready_next = NULL;
+            if (slot->yield_tail) slot->yield_tail->ready_next = t;
+            else slot->yield_head = t;
+            slot->yield_tail = t;
         }
         task_completion cb = done ? s->on_complete : NULL;
         void *cud = s->complete_ud;
@@ -173,7 +184,7 @@ static void worker_main(void *arg) {
         if (cb)
             cb(t, cud);
         mutex_lock(&s->mtx);
-        cond_signal(&s->not_empty);
+        cond_broadcast(&s->not_empty);
         mutex_unlock(&s->mtx);
     }
 }
@@ -194,7 +205,10 @@ scheduler *scheduler_new(int workers, task_runner runner, void *worker_ud) {
     cond_init(&s->not_empty);
 
     s->threads = calloc((size_t)s->max_workers, sizeof(thread_t *));
-    if (!s->threads) {
+    s->slots = calloc((size_t)s->max_workers, sizeof(worker_slot));
+    if (!s->threads || !s->slots) {
+        free(s->threads);
+        free(s->slots);
         cond_destroy(&s->not_empty);
         mutex_destroy(&s->mtx);
         free(s);
@@ -202,7 +216,8 @@ scheduler *scheduler_new(int workers, task_runner runner, void *worker_ud) {
     }
 
     for (int i = 0; i < workers; i++) {
-        s->threads[i] = thread_create(worker_main, s);
+        s->slots[i].sched = s;
+        s->threads[i] = thread_create(worker_main, &s->slots[i]);
         if (!s->threads[i]) {
             mutex_lock(&s->mtx);
             s->shutdown_flag = 1;
@@ -211,6 +226,7 @@ scheduler *scheduler_new(int workers, task_runner runner, void *worker_ud) {
             for (int j = 0; j < i; j++)
                 thread_join(s->threads[j]);
             free(s->threads);
+            free(s->slots);
             cond_destroy(&s->not_empty);
             mutex_destroy(&s->mtx);
             free(s);
@@ -228,6 +244,7 @@ void scheduler_free(scheduler *s) {
         free(s->all[i]->input);
         free(s->all[i]->output);
         free(s->all[i]->progress_json);
+        free(s->all[i]->trace_json);
         free(s->all[i]->pending_input);
         mutex_destroy(&s->all[i]->progress_mtx);
         free(s->all[i]->tag);
@@ -237,6 +254,7 @@ void scheduler_free(scheduler *s) {
     free(s->all);
     free(s->queue);
     free(s->threads);
+    free(s->slots);
     cond_destroy(&s->not_empty);
     mutex_destroy(&s->mtx);
     free(s);
@@ -292,7 +310,8 @@ int64_t scheduler_submit_tag_mode(scheduler *s, int priority, const char *input,
     /* Keep the initial thread count small, then add bounded executors as
      * concurrent work arrives. Virtual tasks remain queued without stacks. */
     while (s->active > s->workers && s->workers < s->max_workers) {
-        thread_t *worker = thread_create(worker_main, s);
+        s->slots[s->workers].sched = s;
+        thread_t *worker = thread_create(worker_main, &s->slots[s->workers]);
         if (!worker) break;
         s->threads[s->workers++] = worker;
     }
