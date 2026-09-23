@@ -4817,6 +4817,26 @@ static const unsigned char WASM_ADD[] = {
     0x01, 0x07, 0x00, 0x20, 0x00, 0x20, 0x01, 0x6a, 0x0b
 };
 
+/* One memory page and a bump allocator starting at 1024. Exports: echo packs
+ * (len<<32)|ptr; first reads byte 0; combine sums each string's first byte;
+ * bad returns -1; addf adds f64; nop is void; negative returns i32 -7. */
+static const unsigned char WASM_TEXT[] = {
+    0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x2b, 0x08, 0x60, 0x01, 0x7f, 0x01, 0x7f,
+    0x60, 0x02, 0x7f, 0x7f, 0x01, 0x7e, 0x60, 0x02, 0x7f, 0x7f, 0x01, 0x7f, 0x60, 0x04, 0x7f, 0x7f,
+    0x7f, 0x7f, 0x01, 0x7f, 0x60, 0x00, 0x01, 0x7e, 0x60, 0x02, 0x7c, 0x7c, 0x01, 0x7c, 0x60, 0x00,
+    0x00, 0x60, 0x00, 0x01, 0x7f, 0x03, 0x09, 0x08, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+    0x05, 0x03, 0x01, 0x00, 0x01, 0x06, 0x07, 0x01, 0x7f, 0x01, 0x41, 0x80, 0x08, 0x0b, 0x07, 0x44,
+    0x08, 0x09, 0x63, 0x6f, 0x61, 0x5f, 0x61, 0x6c, 0x6c, 0x6f, 0x63, 0x00, 0x00, 0x04, 0x65, 0x63,
+    0x68, 0x6f, 0x00, 0x01, 0x05, 0x66, 0x69, 0x72, 0x73, 0x74, 0x00, 0x02, 0x07, 0x63, 0x6f, 0x6d,
+    0x62, 0x69, 0x6e, 0x65, 0x00, 0x03, 0x03, 0x62, 0x61, 0x64, 0x00, 0x04, 0x04, 0x61, 0x64, 0x64,
+    0x66, 0x00, 0x05, 0x03, 0x6e, 0x6f, 0x70, 0x00, 0x06, 0x08, 0x6e, 0x65, 0x67, 0x61, 0x74, 0x69,
+    0x76, 0x65, 0x00, 0x07, 0x0a, 0x49, 0x08, 0x0f, 0x01, 0x01, 0x7f, 0x23, 0x00, 0x22, 0x01, 0x20,
+    0x00, 0x6a, 0x24, 0x00, 0x20, 0x01, 0x0b, 0x0c, 0x00, 0x20, 0x01, 0xad, 0x42, 0x20, 0x86, 0x20,
+    0x00, 0xad, 0x84, 0x0b, 0x07, 0x00, 0x20, 0x00, 0x2d, 0x00, 0x00, 0x0b, 0x0d, 0x00, 0x20, 0x00,
+    0x2d, 0x00, 0x00, 0x20, 0x02, 0x2d, 0x00, 0x00, 0x6a, 0x0b, 0x04, 0x00, 0x42, 0x7f, 0x0b, 0x07,
+    0x00, 0x20, 0x00, 0x20, 0x01, 0xa0, 0x0b, 0x02, 0x00, 0x0b, 0x04, 0x00, 0x41, 0x79, 0x0b,
+};
+
 static void test_sandbox_wasm(void) {
     section("sandbox_wasm");
     /* reset any runner registered earlier in the suite (init wires
@@ -4840,6 +4860,67 @@ static void test_sandbox_wasm(void) {
     r = sandbox_run_wasm(WASM_ADD, sizeof(WASM_ADD), "nope", "[]");
     CHECK(r != NULL && strstr(r, "ok\":false") != NULL);
     free(r);
+
+    const char *invalid[] = {"[2,40,7]", "[1.5,2]", "[true,2,40]", "[1e30,0]",
+                             "[2,40]junk", "{\"args\":false}", "[\"text\"]", "null"};
+    for (size_t i = 0; i < sizeof(invalid) / sizeof(invalid[0]); i++) {
+        r = sandbox_run_wasm(WASM_ADD, sizeof(WASM_ADD), "add", invalid[i]);
+        CHECK(r && strstr(r, "\"ok\":false"));
+        free(r);
+    }
+    struct { const char *fn, *args, *expected; } cases[] = {
+        {"first", "[\"AZ\"]", "\"result\":65"},
+        {"combine", "[\"A\",\"Z\"]", "\"result\":155"},
+        {"addf", "[1.25,2.5]", "\"result\":3.75"},
+        {"addf", "[1e308,1e308]", "\"ok\":false"},
+        {"addf", "[1e999,0]", "\"ok\":false"},
+        {"bad", "[]", "\"result\":-1"},
+        {"negative", "[]", "\"result\":-7"},
+        {"nop", "[]", "\"result\":null"},
+        {"bad", "{\"args\":[],\"result\":\"utf8\"}", "\"ok\":false"},
+        {"echo", "{\"args\":[65535,2],\"result\":\"utf8\"}", "\"ok\":false"},
+        {"echo", "{\"args\":[0,1],\"result\":\"utf8\"}", "\"ok\":false"},
+        {"echo", "{\"args\":[\"\"],\"result\":\"utf8\"}", "\"result\":\"\""},
+        {"echo", "{\"args\":[\"a\\u0000b\"],\"result\":\"utf8\"}", "\"ok\":false"},
+        {"echo", "{\"args\":[\"x\"],\"result\":\"bogus\"}", "\"ok\":false"},
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        r = sandbox_run_wasm(WASM_TEXT, sizeof(WASM_TEXT), cases[i].fn, cases[i].args);
+        CHECK(r && strstr(r, cases[i].expected));
+        free(r);
+    }
+    /* Same function with f32 argument/result types and f32.add opcode. */
+    unsigned char float32_module[sizeof(WASM_TEXT)];
+    memcpy(float32_module, WASM_TEXT, sizeof(WASM_TEXT));
+    for (size_t i = 0; i < sizeof(float32_module); i++) {
+        if (float32_module[i] == 0x7c) float32_module[i] = 0x7d;
+        else if (float32_module[i] == 0xa0) float32_module[i] = 0x92;
+    }
+    r = sandbox_run_wasm(float32_module, sizeof(float32_module), "addf", "[1.25,2.5]");
+    CHECK(r && strstr(r, "\"result\":3.75"));
+    free(r);
+    r = sandbox_run_wasm(float32_module, sizeof(float32_module), "addf", "[1e100,0]");
+    CHECK(r && strstr(r, "f32 argument out of range"));
+    free(r);
+    r = sandbox_run_wasm(WASM_TEXT, sizeof(WASM_TEXT), "echo",
+                        "{\"args\":[\"你好 \\\"Wasm\\\"\\n\"],\"result\":\"utf8\"}");
+    cJSON *reply = r ? cJSON_Parse(r) : NULL;
+    cJSON *value = reply ? cJSON_GetObjectItemCaseSensitive(reply, "result") : NULL;
+    CHECK(cJSON_IsString(value) && strcmp(value->valuestring, "你好 \"Wasm\"\n") == 0);
+    cJSON_Delete(reply);
+    free(r);
+
+    char *large = malloc(70005);
+    CHECK(large != NULL);
+    if (large) {
+        memcpy(large, "[\"", 2);
+        memset(large + 2, 'a', 70000);
+        memcpy(large + 70002, "\"]", 3);
+        r = sandbox_run_wasm(WASM_TEXT, sizeof(WASM_TEXT), "echo", large);
+        CHECK(r && strstr(r, "invalid memory range"));
+        free(r);
+        free(large);
+    }
 }
 
 /* ---------- runtime: task lifecycle ---------- */

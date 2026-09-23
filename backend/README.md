@@ -280,6 +280,24 @@ Verified against the DeepSeek Anthropic-compatible endpoint (`deepseek-v4-pro`):
 tool-selection 5/5, end-to-end 5/5, side-effect 2/2, multi-step 1/1, avg latency
 ~2.1 s/task.
 
+## WASM plugin arguments
+
+The built-in wasm3 runner accepts numeric arguments as an array or named values
+in object order. Numbers must match the function signature; extra, fractional
+integer and unsupported arguments return errors. JSON integer inputs must fit
+the exact range of their type (i64 inputs are limited to ±9,007,199,254,740,991).
+
+UTF-8 strings expand to two `i32` arguments: a pointer and a byte length. The
+module must export `coa_alloc(i32 size) -> i32 pointer`; zero means allocation
+failure. The host copies the string plus a NUL terminator, with the length
+excluding that terminator. Each invocation has its own runtime and memory.
+
+For text output, pass `{"args":["你好"],"result":"utf8"}`. The target function
+returns an `i64` containing `(uint64_t(length) << 32) | pointer`. The runner
+validates the guest memory range and returns `{"ok":true,"result":"你好"}`.
+Input/output text is limited to 1 MiB each and cannot contain embedded NUL.
+Numeric returns preserve their Wasm type; void functions return JSON `null`.
+
 ## Layout
 
 ```
