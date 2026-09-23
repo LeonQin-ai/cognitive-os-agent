@@ -17,7 +17,7 @@ behavior from remaining design work.
 | Embedding | A deterministic local 256-dimensional hashing provider exists, so the report's “external service only” concern is outdated. Learned local model support remains an enhancement. |
 | IM | Channel routing exists; presence and richer delivery guarantees remain outside the current implementation. |
 | Snapshot size | The 64 MB default is configurable; incremental capture for very large files is still open. |
-| Model catalog | The bundled catalog is static; dynamic discovery/configuration remains open. |
+| Model catalog | The bundled quick-start presets are static, while `catalog_provider_models_json` already fetches the configured provider's live `/models` endpoint. User-defined presets still lack file-backed catalog loading. |
 
 The report also mentions logging and sandbox hardening. Those require focused
 threat models and regression tests before claiming completion. Issue #65 stays
