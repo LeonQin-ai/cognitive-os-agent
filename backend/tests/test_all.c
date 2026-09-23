@@ -452,6 +452,33 @@ static void test_snapshot_tx(void) {
           strstr(bad_profile->output, "invalid") != NULL);
     tool_result_free(bad_profile);
 
+#if defined(_WIN32)
+    /* Issue #56: SSH must use cmd syntax even when the general shell selects
+     * Git Bash. The native runner must preserve the command's exit code. */
+    proc_result *native = proc_run_native_in("exit /b 7", 3000, NULL);
+    CHECK(native != NULL && native->exit_code == 7);
+    proc_result_free(native);
+#endif
+    /* A failed password login must not leave local secret/helper files behind.
+     * Use a separate working directory to cover relative state_root paths. */
+    fs_mkdirs("state-test/ssh-issue-56/work");
+    tool_ctx password_ctx = {0};
+    password_ctx.reg = reg;
+    password_ctx.state_root = "state-test/ssh-issue-56/state";
+    password_ctx.workspace = "state-test/ssh-issue-56/work";
+    tool_result *failed_login = tool_execute(reg, "ssh",
+        "{\"host\":\"127.0.0.1\",\"port\":1,\"user\":\"nobody\",\"password\":\"dummy@!\",\"command\":\"echo okay\",\"timeout_ms\":5000}",
+        &password_ctx);
+    CHECK(failed_login != NULL && failed_login->ok == 0);
+#if defined(_WIN32)
+    CHECK(failed_login != NULL && strstr(failed_login->output, "exit: /b") == NULL);
+#endif
+    tool_result_free(failed_login);
+    dir_list ssh_files = {0};
+    CHECK(fs_list_dir("state-test/ssh-issue-56/state/ssh", &ssh_files) == 0);
+    CHECK(ssh_files.count == 0);
+    fs_list_free(&ssh_files);
+
     tx_manager *tm = tx_manager_new();
     tool_ctx ctx;
     memset(&ctx, 0, sizeof(ctx));

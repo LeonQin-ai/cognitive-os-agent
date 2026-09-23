@@ -20,6 +20,9 @@ proc_result *proc_run(const char *cmd, int timeout_ms);
 /* Like proc_run but sets the child working directory to `cwd`
  * (NULL or empty = inherit). Relative paths/redirects resolve against cwd. */
 proc_result *proc_run_in(const char *cmd, int timeout_ms, const char *cwd);
+/* Run using the native Windows command interpreter even when the general
+ * shell is configured as Bash. POSIX platforms use /bin/sh as usual. */
+proc_result *proc_run_native_in(const char *cmd, int timeout_ms, const char *cwd);
 void proc_result_free(proc_result *r);
 
 /* Fire-and-forget: launch `cmd` through the platform shell, detached from the

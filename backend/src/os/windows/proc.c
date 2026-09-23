@@ -162,7 +162,7 @@ static wchar_t *utf8_to_wide(const char *s) {
     return w;
 }
 
-proc_result *proc_run_in(const char *cmd, int timeout_ms, const char *cwd) {
+static proc_result *proc_run_in_mode(const char *cmd, int timeout_ms, const char *cwd, int native_cmd) {
     char full[4096];
     proc_result *r;
     char *buf;
@@ -194,7 +194,10 @@ proc_result *proc_run_in(const char *cmd, int timeout_ms, const char *cwd) {
                                &sa, OPEN_EXISTING, 0, NULL);
     si.dwFlags |= STARTF_USESTDHANDLES;
 
-    compose_shell_command(cmd, full, sizeof(full));
+    if (native_cmd)
+        snprintf(full, sizeof(full), "cmd.exe /s /c \"%s\"", cmd);
+    else
+        compose_shell_command(cmd, full, sizeof(full));
     wchar_t *wfull = utf8_to_wide(full);
 
     /* lpCurrentDirectory must be a FULL path; a relative one makes
@@ -299,6 +302,14 @@ proc_result *proc_run_in(const char *cmd, int timeout_ms, const char *cwd) {
     CloseHandle(pi.hProcess);
     CloseHandle(pi.hThread);
     return r;
+}
+
+proc_result *proc_run_in(const char *cmd, int timeout_ms, const char *cwd) {
+    return proc_run_in_mode(cmd, timeout_ms, cwd, 0);
+}
+
+proc_result *proc_run_native_in(const char *cmd, int timeout_ms, const char *cwd) {
+    return proc_run_in_mode(cmd, timeout_ms, cwd, 1);
 }
 
 void proc_result_free(proc_result *r) {
@@ -584,4 +595,3 @@ void proc_popen_free(proc_popen *p) {
     free(p->buf);
     free(p);
 }
-

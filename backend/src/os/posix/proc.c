@@ -133,6 +133,10 @@ proc_result *proc_run(const char *cmd, int timeout_ms) {
     return proc_run_in(cmd, timeout_ms, NULL);
 }
 
+proc_result *proc_run_native_in(const char *cmd, int timeout_ms, const char *cwd) {
+    return proc_run_in(cmd, timeout_ms, cwd);
+}
+
 int proc_spawn_detached(const char *cmd) {
     pid_t pid;
 
