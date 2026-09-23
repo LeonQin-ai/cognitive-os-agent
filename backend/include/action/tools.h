@@ -86,6 +86,9 @@ const tool *tool_file_write(void);
 const tool *tool_file_edit(void);
 const tool *tool_shell(void);
 const tool *tool_ssh(void);
+/* Windows SSH_ASKPASS entry point: returns -1 for a normal launch, otherwise
+ * writes the local one-shot password to stdout and returns an exit status. */
+int ssh_askpass_run_if_requested(void);
 const tool *tool_git(void);
 const tool *tool_mcp(void);
 const tool *tool_skill(void);

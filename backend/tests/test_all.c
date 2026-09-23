@@ -220,6 +220,39 @@ static void test_scheduler(void) {
     scheduler_free(s);
 }
 
+static _Atomic int sched_running;
+static _Atomic int sched_peak;
+static void run_elastic(task *t, scheduler *s, void *ud) {
+    (void)s; (void)ud;
+    int concurrent = atomic_fetch_add(&sched_running, 1) + 1;
+    int peak = atomic_load(&sched_peak);
+    while (concurrent > peak && !atomic_compare_exchange_weak(&sched_peak, &peak, concurrent)) { }
+    time_sleep_ms(80);
+    atomic_fetch_sub(&sched_running, 1);
+    t->status = TS_DONE;
+}
+
+static void test_scheduler_elastic(void) {
+    section("scheduler_elastic");
+    atomic_store(&sched_running, 0);
+    atomic_store(&sched_peak, 0);
+    scheduler *s = scheduler_new(2, run_elastic, NULL);
+    CHECK(s != NULL);
+    if (!s) return;
+    for (int i = 0; i < 80; i++)
+        CHECK(scheduler_submit(s, i % 3, "elastic", NULL, 0) == i);
+    CHECK(scheduler_wait_idle(s, 5000) == 0);
+    CHECK(atomic_load(&sched_peak) > 2);
+    CHECK(atomic_load(&sched_peak) <= 32);
+    for (int i = 0; i < 80; i++) {
+        task *t = scheduler_get(s, i);
+        CHECK(t && t->status == TS_DONE);
+    }
+    CHECK(scheduler_shutdown(s, 3000) == 0);
+    CHECK(scheduler_submit(s, 0, "after shutdown", NULL, 0) < 0);
+    scheduler_free(s);
+}
+
 /* ---------- os: stackful coroutine ---------- */
 static int coro_steps[8];
 static int coro_step_count = 0;
@@ -458,6 +491,11 @@ static void test_snapshot_tx(void) {
     proc_result *native = proc_run_native_in("exit /b 7", 3000, NULL);
     CHECK(native != NULL && native->exit_code == 7);
     proc_result_free(native);
+    tool_result *powershell = tool_execute(reg, "shell",
+        "{\"command\":\"Write-Output 'PS_OK' | Out-String\",\"shell\":\"powershell\",\"timeout_ms\":5000}",
+        &ssh_ctx);
+    CHECK(powershell && powershell->ok && strstr(powershell->output, "PS_OK"));
+    tool_result_free(powershell);
 #endif
     /* A failed password login must not leave local secret/helper files behind.
      * Use a separate working directory to cover relative state_root paths. */
@@ -486,6 +524,20 @@ static void test_snapshot_tx(void) {
     ctx.snapshot = snap;
     ctx.workspace = "state-test/w";
     fs_mkdirs("state-test/w");
+    /* Issue #64: file_read pages through large text files without allocating
+     * the full file or silently truncating a partial read. */
+    char large_text[15000];
+    memset(large_text, 'A', 7000);
+    memset(large_text + 7000, 'B', sizeof(large_text) - 7000);
+    CHECK(fs_write_file("state-test/w/large-read.txt", large_text, sizeof(large_text)) == 0);
+    tool_result *first_page = tool_execute(reg, "file_read", "{\"path\":\"large-read.txt\"}", &ctx);
+    CHECK(first_page && first_page->ok && strstr(first_page->output, "more available") &&
+          strstr(first_page->output, "AAAA"));
+    tool_result_free(first_page);
+    tool_result *next_page = tool_execute(reg, "file_read",
+        "{\"path\":\"large-read.txt\",\"offset_bytes\":7000}", &ctx);
+    CHECK(next_page && next_page->ok && strstr(next_page->output, "BBBB"));
+    tool_result_free(next_page);
     tx *tx = tx_begin(tm, snap, reg, &ctx);
 
     /* write a file inside the tx (workspace-relative path resolves to
@@ -2693,6 +2745,18 @@ static void test_chat_upload_evolve(void) {
         CHECK(lanes_after && strstr(lanes_after, "lane-share-check") != NULL);
         free(lanes_after);
 
+        /* Issue #67: memory sharing is one persisted runtime setting, not a
+         * separate toggle for each conversation or worker lane. */
+        CHECK(reasoning_session_set_shared(ctx.reasoning, "tab-a", 0) == 0);
+        CHECK(reasoning_shared_memory_enabled(ctx.reasoning) == 0);
+        CHECK(reasoning_shared_memory_enabled(ctx.chat_lanes[1]) == 0);
+        char *new_session = reasoning_session_new(ctx.reasoning);
+        char *global_sessions = reasoning_sessions_json(ctx.reasoning);
+        CHECK(new_session && global_sessions && strstr(global_sessions, new_session));
+        CHECK(global_sessions && strstr(global_sessions, "\"shared_memory\":false"));
+        free(global_sessions);
+        free(new_session);
+
         /* step registry API: empty at first (no actions executed yet) */
         char *steps0 = reasoning_steps_json(ctx.reasoning);
         CHECK(steps0 && strstr(steps0, "[]") != NULL);
@@ -2713,6 +2777,7 @@ static void test_chat_upload_evolve(void) {
             cfg2.http_port = 0;
             runtime_ctx ctx2;
             if (init(&ctx2, &cfg2) != 0) { CHECK(0); return; }
+            CHECK(reasoning_shared_memory_enabled(ctx2.reasoning) == 0);
             /* regression (chat lanes): the persisted title index must be
              * loaded into the SHARED session store — the 最近 list keeps
              * human-readable titles after a restart instead of uuids
@@ -2729,6 +2794,7 @@ static void test_chat_upload_evolve(void) {
             char *rd = reasoning_history_json_ex(ctx2.reasoning, "default", 10);
             CHECK(rd && strstr(rd, "第三个话题") != NULL);
             free(rd);
+            CHECK(reasoning_session_set_shared(ctx2.reasoning, "default", 1) == 0);
             runtime_shutdown(&ctx2);
         }
     }
@@ -3956,6 +4022,20 @@ static void test_security(void) {
         CHECK(strstr(red, "[REDACTED:secret]") != NULL);
         CHECK(strstr(red, "Authorization") != NULL);
     }
+    free(red);
+    red = NULL;
+
+    /* Issue #58: uploaded filenames can be high entropy (UUID/hash names),
+     * but their label must survive egress redaction. Real token patterns in
+     * the same label remain protected by the deterministic rules. */
+    const char *attachment = "[附件: aB91xC42dE73fG04hJ85kL16mN27pQ38rS49.pdf]\n请总结文件";
+    red = secret_redact_text(attachment, strlen(attachment), NULL);
+    CHECK(red && strcmp(red, attachment) == 0);
+    free(red);
+    red = NULL;
+    const char *sensitive_name = "[附件: sk-abcdefghijklmnopqrstuvwxyz1234567890.txt]";
+    red = secret_redact_text(sensitive_name, strlen(sensitive_name), NULL);
+    CHECK(red && strstr(red, "[REDACTED:secret]") != NULL);
     free(red);
     red = NULL;
 
@@ -5332,6 +5412,7 @@ int main(void) {
     test_ringbuf_mpmc();
     test_embedding();
     test_scheduler();
+    test_scheduler_elastic();
     test_coro();
     test_scheduler_mn();
     test_state_machine();

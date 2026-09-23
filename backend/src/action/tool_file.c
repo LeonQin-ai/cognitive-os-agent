@@ -21,6 +21,9 @@ static tool_result *file_read_exec(const tool *self, const tool_ctx *ctx, const 
     char *rp;
     char *content;
     tool_result *r;
+    size_t read_bytes = 0;
+    int has_more = 0;
+    uint64_t offset = 0;
 
     (void)self;
     args = cJSON_Parse(args_json);
@@ -31,8 +34,16 @@ static tool_result *file_read_exec(const tool *self, const tool_ctx *ctx, const 
         cJSON_Delete(args);
         return tool_result_new(0, "file_read: missing string arg 'path'");
     }
+    cJSON *offset_j = cJSON_GetObjectItemCaseSensitive(args, "offset_bytes");
+    if (offset_j && cJSON_IsNumber(offset_j) && offset_j->valuedouble >= 0 &&
+        offset_j->valuedouble <= 9007199254740991.0)
+        offset = (uint64_t)offset_j->valuedouble;
 
     rp = resolve_path(ctx, path_j->valuestring);
+    if (!rp || !*rp) {
+        free(rp); cJSON_Delete(args);
+        return tool_result_new(0, "file_read: path is empty or too long");
+    }
     /* Reading a directory is common (the planner often probes a path before
      * reading a file). Instead of failing, return a listing so the agent can
      * continue — a single mis-targeted file_read must not fail the whole task. */
@@ -57,17 +68,36 @@ static tool_result *file_read_exec(const tool *self, const tool_ctx *ctx, const 
         fs_list_free(&dl);
     }
 
-    content = fs_read_file(rp);
+    content = fs_read_file_slice(rp, offset, 7000, &read_bytes, &has_more);
     cJSON_Delete(args);
     if (!content) {
         char msg[1024];
-        snprintf(msg, sizeof(msg), "file_read: cannot read %s", rp);
+        snprintf(msg, sizeof(msg), "file_read: cannot read %s (check path and permissions)", rp);
         free(rp);
         return tool_result_new(0, msg);
     }
 
+    if (memchr(content, '\0', read_bytes)) {
+        free(rp); free(content);
+        return tool_result_new(0, "file_read: binary file; use a format-specific extractor");
+    }
+    char *sanitized = NULL;
+    if (!str_utf8_valid_n(content, (int)read_bytes))
+        sanitized = str_utf8_sanitize(content);
+    strbuf output;
+    strbuf_init(&output);
+    if (offset || has_more)
+        strbuf_appendf(&output, "[bytes %llu-%llu%s; use offset_bytes to read the next part]\n",
+                       (unsigned long long)offset,
+                       (unsigned long long)(offset + (read_bytes ? read_bytes - 1 : 0)),
+                       has_more ? ", more available" : ", end of file");
+    if (sanitized) strbuf_append(&output, sanitized);
+    else strbuf_append_n(&output, content, read_bytes);
+    char *shown = strbuf_detach(&output);
     free(rp);
-    r = tool_result_new(1, content);
+    r = tool_result_new(1, shown ? shown : content);
+    free(shown);
+    free(sanitized);
     free(content);
     return r;
 }
@@ -305,8 +335,8 @@ static tool_result *file_edit_exec(const tool *self, const tool_ctx *ctx, const 
 const tool *tool_file_read(void) {
     static const tool t = {
         "file_read",
-        "Read a file's content. If the path is a DIRECTORY, returns its listing instead of failing.",
-        "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}}}",
+        "Read a text file in bounded chunks; offset_bytes pages through large files. Directories return listings.",
+        "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"offset_bytes\":{\"type\":\"integer\"}},\"required\":[\"path\"]}",
         0,
         file_read_exec,
         NULL,

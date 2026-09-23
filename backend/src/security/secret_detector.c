@@ -330,11 +330,15 @@ static void scan_patterns(const char *text, size_t len, matchvec *mv) {
 
 static void scan_entropy(const char *text, size_t len, matchvec *mv) {
     size_t run_start = 0, i = 0;
+    int in_attachment_name = 0;
     while (i <= len) {
+        if (i < len && text[i] == '[' && len - i >= strlen("[附件:") &&
+            memcmp(text + i, "[附件:", strlen("[附件:")) == 0)
+            in_attachment_name = 1;
         int cls = (i < len && (is_b64ish(text[i]) || text[i] == '.'));
         if (!cls) {
             size_t rl = i - run_start;
-            if (rl >= 28) {
+            if (rl >= 28 && !in_attachment_name) {
                 double h = shannon(text + run_start, rl);
                 if (h >= 4.5)
                     mv_push_nonoverlapping(mv, run_start, i,
@@ -342,6 +346,7 @@ static void scan_entropy(const char *text, size_t len, matchvec *mv) {
             }
             run_start = i + 1;
         }
+        if (i < len && text[i] == ']') in_attachment_name = 0;
         i++;
     }
 }

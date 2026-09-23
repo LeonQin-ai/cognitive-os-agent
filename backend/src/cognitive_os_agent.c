@@ -722,6 +722,7 @@ int init(runtime_ctx *ctx, const config *cfg) {
             rc.llm = ctx->llm;
             rc.tools = ctx->tools;
             rc.memory = ctx->memory;
+            rc.memory_service = ctx->memsvc;
             rc.policy = ctx->policy;
             rc.snapshot = ctx->snapshot;
             rc.bus = ctx->bus;

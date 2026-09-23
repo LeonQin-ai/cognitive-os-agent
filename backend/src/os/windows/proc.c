@@ -163,7 +163,7 @@ static wchar_t *utf8_to_wide(const char *s) {
 }
 
 static proc_result *proc_run_in_mode(const char *cmd, int timeout_ms, const char *cwd, int native_cmd) {
-    char full[4096];
+    char full[32768];
     proc_result *r;
     char *buf;
     int64_t deadline;
@@ -194,9 +194,13 @@ static proc_result *proc_run_in_mode(const char *cmd, int timeout_ms, const char
                                &sa, OPEN_EXISTING, 0, NULL);
     si.dwFlags |= STARTF_USESTDHANDLES;
 
-    if (native_cmd)
-        snprintf(full, sizeof(full), "cmd.exe /s /c \"%s\"", cmd);
-    else
+    if (native_cmd) {
+        if (snprintf(full, sizeof(full), "cmd.exe /s /c \"%s\"", cmd) >= (int)sizeof(full)) {
+            CloseHandle(rd); CloseHandle(wr);
+            if (si.hStdInput != INVALID_HANDLE_VALUE) CloseHandle(si.hStdInput);
+            return NULL;
+        }
+    } else
         compose_shell_command(cmd, full, sizeof(full));
     wchar_t *wfull = utf8_to_wide(full);
 

@@ -92,6 +92,7 @@ static char *build_catalog_prompt(const tool_registry *tools, struct skill_regis
                                   struct policy_engine *policy) {
     strbuf b;
     int have_skill_tool = 0;
+    int have_glob_tool = 0;
 
     if (!tools)
         return NULL;
@@ -103,6 +104,7 @@ static char *build_catalog_prompt(const tool_registry *tools, struct skill_regis
             continue;
         if (policy && policy_check(policy, t->name, "{}", NULL) == POLICY_DENY)
             continue;
+        if (strcmp(t->name, "glob") == 0) have_glob_tool = 1;
         if (strcmp(t->name, "skill") == 0) {
             have_skill_tool = 1;
             strbuf_append(&b,
@@ -119,6 +121,10 @@ static char *build_catalog_prompt(const tool_registry *tools, struct skill_regis
             }
         }
     }
+    if (have_glob_tool)
+        strbuf_append(&b, "Example file discovery: "
+                          "[{\"tool\":\"glob\",\"args\":{\"pattern\":\"**/*flow*\"}}]. "
+                          "Every glob action needs a non-empty pattern; fix schema errors before retrying.\n");
 
     if (have_skill_tool && skills && skill_count(skills) > 0) {
         strbuf_append(&b, "Registered skills (capabilities you can RUN via the skill tool):\n");

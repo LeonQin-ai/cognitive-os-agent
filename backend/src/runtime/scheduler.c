@@ -9,10 +9,11 @@
 
 struct scheduler {
     int workers;
+    int max_workers;
     task_runner runner;
     void *worker_ud;
 
-    task **queue; /* sorted by (priority asc, id asc) */
+    task **queue; /* min-heap by (priority asc, id asc) */
     size_t qlen, qcap;
 
     task **all; /* all tasks ever, for lookup */
@@ -46,24 +47,25 @@ static int task_less(const task *a, const task *b) {
     return a->id < b->id;
 }
 
-/* insert into sorted queue */
-static void queue_insert(scheduler *s, task *t) {
-    size_t i;
-
+/* O(log n) ready queue: a million virtual tasks must not shift an array on
+ * every submit/pop. Returns -1 on allocation failure. */
+static int queue_insert(scheduler *s, task *t) {
     if (s->qlen == s->qcap) {
         size_t cap = s->qcap ? s->qcap * 2 : 16;
-        s->queue = realloc(s->queue, cap * sizeof(task *));
+        task **next = realloc(s->queue, cap * sizeof(task *));
+        if (!next) return -1;
+        s->queue = next;
         s->qcap = cap;
     }
-
-    i = s->qlen;
-    while (i > 0 && task_less(t, s->queue[i - 1])) {
-        s->queue[i] = s->queue[i - 1];
-        i--;
+    size_t i = s->qlen++;
+    while (i > 0) {
+        size_t parent = (i - 1) / 2;
+        if (!task_less(t, s->queue[parent])) break;
+        s->queue[i] = s->queue[parent];
+        i = parent;
     }
-
     s->queue[i] = t;
-    s->qlen++;
+    return 0;
 }
 
 static task *queue_pop(scheduler *s) {
@@ -72,19 +74,32 @@ static task *queue_pop(scheduler *s) {
     if (s->qlen == 0)
         return NULL;
     t = s->queue[0];
-    memmove(s->queue, s->queue + 1, (s->qlen - 1) * sizeof(task *));
-    s->qlen--;
+    task *last = s->queue[--s->qlen];
+    if (s->qlen) {
+        size_t i = 0;
+        while (2 * i + 1 < s->qlen) {
+            size_t child = 2 * i + 1;
+            if (child + 1 < s->qlen && task_less(s->queue[child + 1], s->queue[child]))
+                child++;
+            if (!task_less(s->queue[child], last)) break;
+            s->queue[i] = s->queue[child];
+            i = child;
+        }
+        s->queue[i] = last;
+    }
     return t;
 }
 
-static void add_all(scheduler *s, task *t) {
+static int add_all(scheduler *s, task *t) {
     if (s->alen == s->acap) {
         size_t cap = s->acap ? s->acap * 2 : 16;
-        s->all = realloc(s->all, cap * sizeof(task *));
+        task **next = realloc(s->all, cap * sizeof(task *));
+        if (!next) return -1;
+        s->all = next;
         s->acap = cap;
     }
-
     s->all[s->alen++] = t;
+    return 0;
 }
 
 /* Coroutine body: run the task's runner to completion (or yield). */
@@ -143,7 +158,13 @@ static void worker_main(void *arg) {
                 t->coro = NULL;
             }
         } else {
-            queue_insert(s, t); /* yielded: re-enter the ready queue */
+            if (queue_insert(s, t) != 0) {
+                t->status = TS_FAILED;
+                finalize_task(s, t);
+                coro_free((coro *)t->coro);
+                t->coro = NULL;
+                done = 1;
+            }
         }
         task_completion cb = done ? s->on_complete : NULL;
         void *cud = s->complete_ud;
@@ -166,13 +187,16 @@ scheduler *scheduler_new(int workers, task_runner runner, void *worker_ud) {
     if (!s)
         return NULL;
     s->workers = workers;
+    s->max_workers = workers >= 32 ? workers : 32;
     s->runner = runner;
     s->worker_ud = worker_ud;
     mutex_init(&s->mtx);
     cond_init(&s->not_empty);
 
-    s->threads = calloc((size_t)workers, sizeof(thread_t *));
+    s->threads = calloc((size_t)s->max_workers, sizeof(thread_t *));
     if (!s->threads) {
+        cond_destroy(&s->not_empty);
+        mutex_destroy(&s->mtx);
         free(s);
         return NULL;
     }
@@ -180,10 +204,15 @@ scheduler *scheduler_new(int workers, task_runner runner, void *worker_ud) {
     for (int i = 0; i < workers; i++) {
         s->threads[i] = thread_create(worker_main, s);
         if (!s->threads[i]) {
-            /* shrink worker count; still usable */
+            mutex_lock(&s->mtx);
+            s->shutdown_flag = 1;
+            cond_broadcast(&s->not_empty);
+            mutex_unlock(&s->mtx);
             for (int j = 0; j < i; j++)
                 thread_join(s->threads[j]);
             free(s->threads);
+            cond_destroy(&s->not_empty);
+            mutex_destroy(&s->mtx);
             free(s);
             return NULL;
         }
@@ -231,7 +260,13 @@ int64_t scheduler_submit_tag_mode(scheduler *s, int priority, const char *input,
         return -1;
     if (mutex_init(&t->progress_mtx) != 0) { free(t); return -1; }
     mutex_lock(&s->mtx);
-    t->id = s->next_id++;
+    if (s->shutdown_flag) {
+        mutex_unlock(&s->mtx);
+        mutex_destroy(&t->progress_mtx);
+        free(t);
+        return -1;
+    }
+    t->id = s->next_id;
     t->priority = priority;
     t->timeout_ms = timeout_ms;
     t->created_ms = time_now_ms();
@@ -241,9 +276,26 @@ int64_t scheduler_submit_tag_mode(scheduler *s, int priority, const char *input,
     t->thinking_mode = thinking_mode != 0;
     t->userdata = userdata;
     t->sched = s;
-    queue_insert(s, t);
-    add_all(s, t);
+    if (!t->input || (tag && !t->tag) || add_all(s, t) != 0) {
+        mutex_unlock(&s->mtx);
+        free(t->input); free(t->tag); mutex_destroy(&t->progress_mtx); free(t);
+        return -1;
+    }
+    if (queue_insert(s, t) != 0) {
+        s->alen--; /* the new task is still the last index entry */
+        mutex_unlock(&s->mtx);
+        free(t->input); free(t->tag); mutex_destroy(&t->progress_mtx); free(t);
+        return -1;
+    }
+    s->next_id++;
     s->active++;
+    /* Keep the initial thread count small, then add bounded executors as
+     * concurrent work arrives. Virtual tasks remain queued without stacks. */
+    while (s->active > s->workers && s->workers < s->max_workers) {
+        thread_t *worker = thread_create(worker_main, s);
+        if (!worker) break;
+        s->threads[s->workers++] = worker;
+    }
     id = t->id;
     cond_broadcast(&s->not_empty);
     mutex_unlock(&s->mtx);
@@ -253,11 +305,8 @@ int64_t scheduler_submit_tag_mode(scheduler *s, int priority, const char *input,
 task *scheduler_get(scheduler *s, int64_t id) {
     task *r = NULL;
     mutex_lock(&s->mtx);
-    for (size_t i = 0; i < s->alen; i++)
-        if (s->all[i]->id == id) {
-            r = s->all[i];
-            break;
-        }
+    if (id >= 0 && (uint64_t)id < s->alen)
+        r = s->all[id]; /* IDs are monotonically assigned at append time */
 
     mutex_unlock(&s->mtx);
     return r;

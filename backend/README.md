@@ -16,7 +16,7 @@ pipeline as any other action.
 ```
 User Layer          CLI · Web UI · HTTP API (/v1/tasks, /v1/tools, /v1/memory,
                     /v1/blackboard, /v1/agents, /metrics) · optional bearer-token auth
-Cognitive Kernel    Event Bus · M:N Scheduler (coroutine tasks on a worker thread pool)
+Cognitive Kernel    Event Bus · M:N Scheduler (priority heap, elastic bounded worker pool)
                     · State Machine (RECEIVE→UNDERSTAND→REASON→PLAN→ACT→VERIFY→LEARN)
                     · Policy Engine (allow/deny/ask + risk)
 Coordination        Multi-agent pool (named agents + roles) · thread-safe Blackboard
@@ -24,7 +24,7 @@ Service Layer       Reasoning (planner→actor loop) · Memory (working / long-t
                     experience / vector-lite)
 LLM Runtime         unified vtable: mock · openai (POST /v1/chat/completions) ·
                     anthropic (POST /v1/messages) — both non-streaming + SSE stream
-Action Runtime      Tool Manager: file_read · file_write · shell · git · mcp
+Action Runtime      Tool Manager: file_read · file_write · file_edit · shell · ssh · git · mcp · glob · grep · skill
 Transaction Layer   BEGIN → Snapshot → Execute → Validate → COMMIT / ROLLBACK
 Snapshot Engine     COW content store (state/snapshots) + delta + metadata
 Knowledge System    keyword inverted index (scan → token → file/symbol → line)
@@ -168,7 +168,6 @@ settings out of prompts and support separate development, staging and
 production hosts:
 
 ```json
-// <state_root>/ssh/environments.json
 {
   "environments": {
     "staging": {
@@ -184,9 +183,18 @@ production hosts:
 ```
 
 Then invoke `ssh` with `{"environment":"staging","command":"uname -a"}`.
-The tool uses non-interactive key/agent authentication, requires host-key
-verification, bounds the command timeout to 60 seconds, and never publishes an
-in-flight session task into shared memory.
+Save this JSON as `<state_root>/ssh/environments.json`. The tool supports
+non-interactive key/agent authentication or a one-off `password` argument.
+Password authentication uses the local OpenSSH askpass mechanism and a
+short-lived local secret file; the password is never placed on the ssh command
+line. The tool requires host-key verification, bounds the command timeout to
+60 seconds, and never publishes an in-flight session task into shared memory.
+
+On Windows, `shell` accepts `{"shell":"powershell","command":"Get-ChildItem"}`
+or `"shell":"cmd"`; the default remains automatic. `file_read` returns up to
+7000 bytes per call and accepts `offset_bytes` for the next page of a large
+text file. The chat's deep-thinking choice is per session, while the shared
+memory switch applies to every session.
 
 ## LLM providers
 

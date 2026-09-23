@@ -17,6 +17,7 @@
 #include "action/tools.h"
 #include "plugin_intelligence/generator.h"
 #include "memory/memory.h"
+#include "memory/service.h"
 #include "retrieval/engine.h"
 #include "os/os_fs.h"
 #include "os/os_thread.h"
@@ -32,6 +33,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <time.h>
+#include <stdatomic.h>
 #include "cJSON.h"
 
 /* One chat session: isolated conversation history, compaction summary and
@@ -112,6 +114,7 @@ struct sess_meta {
 
 struct sess_store {
     mutex_t sess_mtx;          /* guards sessions + meta below */
+    atomic_int shared_memory_global; /* one Memory OS policy across all chat sessions */
     struct session **sessions;
     size_t nsessions, scap;
     struct sess_meta *meta;
@@ -143,6 +146,7 @@ struct reasoning {
     llm *llm;
     tool_registry *tools;
     memory *mem;
+    memory_service *memsvc;
     policy_engine *policy;
     snapshot *snap;
     event_bus *bus;
@@ -311,6 +315,7 @@ static struct session *session_get_locked(reasoning *r, const char *id) {
     if (r->ss->nsessions < SESSION_MAX) {
         s = session_new(want);
         if (s) {
+            s->shared_memory = atomic_load(&r->ss->shared_memory_global);
             struct session **na = realloc(r->ss->sessions, (r->ss->nsessions + 1) * sizeof(*na));
             if (na) {
                 r->ss->sessions = na;
@@ -530,6 +535,17 @@ static void meta_load(reasoning *r) {
 
     if (!r->state_root)
         return;
+    {
+        char setting_path[700];
+        path_join(setting_path, sizeof(setting_path), r->state_root, "chat/memory-sharing.json");
+        char *setting = fs_read_file(setting_path);
+        cJSON *value = setting ? cJSON_Parse(setting) : NULL;
+        cJSON *shared = value ? cJSON_GetObjectItemCaseSensitive(value, "shared") : NULL;
+        if (cJSON_IsBool(shared))
+            atomic_store(&r->ss->shared_memory_global, cJSON_IsTrue(shared));
+        cJSON_Delete(value);
+        free(setting);
+    }
     meta_index_path(path, sizeof(path), r->state_root);
     f = fopen(path, "rb");
     if (!f)
@@ -652,6 +668,7 @@ sess_store *sess_store_new(void) {
     if (!ss)
         return NULL;
     mutex_init(&ss->sess_mtx);
+    atomic_init(&ss->shared_memory_global, 1);
     return ss;
 }
 
@@ -1115,7 +1132,7 @@ static char *build_context(reasoning *r, const char *prompt) {
      * answer passage; passage-to-passage similarity beats question-to-passage
      * for recall. */
     cold_mark = b.len;
-    if (r->mem && r->attention && (!r->cur || r->cur->shared_memory)) {
+    if (r->mem && r->attention && atomic_load(&r->ss->shared_memory_global)) {
         char hyde_query_buf[1024];
         const char *retrieval_query = prompt;
         if (r->hyde && r->llm) {
@@ -1677,10 +1694,14 @@ static void memory_record_completed_run(reasoning *r, const char *answer) {
     char *task_head;
     char *shaped;
 
-    if (!r || !r->mem || (r->cur && !r->cur->shared_memory))
+    if (!r || !r->mem || !atomic_load(&r->ss->shared_memory_global))
         return;
     shaped = str_head(answer ? answer : "", LEARN_RESULT_CAP);
-    memory_record_experience(r->mem, r->last_prompt ? r->last_prompt : "(task)", shaped ? shaped : "");
+    if (r->memsvc)
+        memory_service_remember(r->memsvc, MEM_EPISODIC,
+                                r->last_prompt ? r->last_prompt : "(task)", shaped ? shaped : "");
+    else
+        memory_record_experience(r->mem, r->last_prompt ? r->last_prompt : "(task)", shaped ? shaped : "");
     free(shaped);
     task_head = str_head(r->last_prompt ? r->last_prompt : "(task)", 80);
     mutex_lock(&r->progress_mtx);
@@ -1715,10 +1736,12 @@ reasoning *reasoning_new(const reasoning_config *cfg) {
     if (mutex_init(&r->progress_mtx) != 0) { free(r); return NULL; }
     r->ss = &r->own_store_; /* embedded store until a shared one is attached */
     mutex_init(&r->own_store_.sess_mtx);
+    atomic_init(&r->own_store_.shared_memory_global, 1);
     r->cur = session_get(r, NULL); /* default session, always present */
     r->llm = cfg->llm;
     r->tools = cfg->tools;
     r->mem = cfg->memory;
+    r->memsvc = cfg->memory_service;
     r->policy = cfg->policy;
     r->snap = cfg->snapshot;
     r->bus = cfg->bus;
@@ -2104,7 +2127,7 @@ char *reasoning_sessions_json(reasoning *r) {
         cJSON_AddNumberToObject(o, "created_ms", (double)s->created_ms);
         cJSON_AddNumberToObject(o, "total_ms", (double)s->total_ms);
         cJSON_AddNumberToObject(o, "last_active_ms", (double)s->last_active_ms);
-        cJSON_AddBoolToObject(o, "shared_memory", s->shared_memory ? 1 : 0);
+        cJSON_AddBoolToObject(o, "shared_memory", atomic_load(&r->ss->shared_memory_global));
         cJSON_AddStringToObject(o, "task", s->sn_task);
         mutex_unlock(&s->mtx);
         cJSON_AddItemToArray(arr, o);
@@ -2149,7 +2172,7 @@ char *reasoning_sessions_json(reasoning *r) {
                 cJSON_AddNumberToObject(o, "created_ms", (double)(m ? m->created_ms : 0));
                 cJSON_AddNumberToObject(o, "total_ms", (double)(m ? m->total_ms : 0));
                 cJSON_AddNumberToObject(o, "last_active_ms", (double)(m ? m->last_active_ms : 0));
-                cJSON_AddBoolToObject(o, "shared_memory", (m ? m->shared_memory : 1) ? 1 : 0);
+                cJSON_AddBoolToObject(o, "shared_memory", atomic_load(&r->ss->shared_memory_global));
                 cJSON_AddStringToObject(o, "task", "");
                 cJSON_AddItemToArray(arr, o);
             }
@@ -2182,23 +2205,34 @@ char *reasoning_session_new(reasoning *r) {
     return xstrdup(uuid);
 }
 
-/* Toggle per-session memory sharing (共享记忆). 0 on success. */
+/* Compatibility entry point: sharing is now a runtime-wide setting. */
 int reasoning_session_set_shared(reasoning *r, const char *session_id, int shared) {
-    struct session *s;
-
-    if (!r || !session_id || !*session_id)
+    char path[700], dir[600];
+    const char *setting = shared ? "{\"shared\":true}" : "{\"shared\":false}";
+    if (!r || !session_id || !*session_id || !r->state_root)
         return -1;
-    s = session_get(r, session_id);
-    if (!s || strcmp(s->id, session_id) != 0)
+    path_join(dir, sizeof(dir), r->state_root, "chat");
+    if (fs_mkdirs(dir) != 0)
         return -1;
-    mutex_lock(&s->mtx);
-    s->shared_memory = shared ? 1 : 0;
-    mutex_unlock(&s->mtx);
+    path_join(path, sizeof(path), dir, "memory-sharing.json");
+    if (fs_write_file(path, setting, strlen(setting)) != 0)
+        return -1;
+    atomic_store(&r->ss->shared_memory_global, shared != 0);
     mutex_lock(&r->ss->sess_mtx);
-    meta_upsert_locked(r, s);
+    for (size_t i = 0; i < r->ss->nsessions; i++) {
+        struct session *s = r->ss->sessions[i];
+        mutex_lock(&s->mtx);
+        s->shared_memory = shared != 0;
+        mutex_unlock(&s->mtx);
+        meta_upsert_locked(r, s);
+    }
     meta_save_locked(r);
     mutex_unlock(&r->ss->sess_mtx);
     return 0;
+}
+
+int reasoning_shared_memory_enabled(reasoning *r) {
+    return r ? atomic_load(&r->ss->shared_memory_global) : 0;
 }
 
 /* Last recorded user input of a session (for 恢复/resume). Returns a malloc'd
@@ -2355,7 +2389,6 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     char *combined;
     int ret = -1;
     long long run_t0 = 0;
-    int mem_shared = 1;
 
     if (!r || !prompt)
         return -1;
@@ -2394,8 +2427,7 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     r->prog_tool_calls = r->prog_llm_calls = r->round_idx = r->prog_model_failures = 0;
     r->prog_llm_ms = r->prog_tool_ms = 0;
     progress_emit(r, "analyzing");
-    /* 会话可关闭共享记忆：关闭后本会话的运行不读写全局 Memory OS */
-    mem_shared = !r->cur || r->cur->shared_memory;
+    /* Shared memory is a live runtime-wide policy, checked at each read/write. */
 
     /* Ingestion guard: a prompt with invalid UTF-8 (e.g. a non-UTF-8 API
      * client) would poison memory/history and break every later LLM call. */
@@ -2510,6 +2542,7 @@ restart_planning:
         if (r->tool_fail_aborted) {
             round_log_append(r, result && *result ? result : "(tool failed repeatedly)");
             obs_log_append(r, result && *result ? result : "(tool failed repeatedly)");
+            st = ST_FAILED; /* do not report an incomplete task as completed */
             break;
         }
         if (task_has_messages(r->run_task)) {
@@ -2780,8 +2813,10 @@ restart_planning:
 
     if (st == ST_DONE) {
         memory_record_completed_run(r, combined);
-        if (r->mem && mem_shared)
-            memory_working_push(r->mem, combined);
+        if (r->mem && atomic_load(&r->ss->shared_memory_global)) {
+            if (r->memsvc) memory_service_remember(r->memsvc, MEM_WORKING, NULL, combined);
+            else memory_working_push(r->mem, combined);
+        }
         record_turn(r, prompt, combined);
         if (r->hooks) {
             cJSON *o = cJSON_CreateObject();

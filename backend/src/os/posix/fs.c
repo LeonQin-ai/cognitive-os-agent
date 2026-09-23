@@ -39,8 +39,31 @@ char *fs_read_file(const char *path) {
     }
 
     rd = fread(buf, 1, (size_t)n, f);
+    if (rd != (size_t)n || ferror(f)) {
+        free(buf); fclose(f); return NULL;
+    }
     fclose(f);
     buf[rd] = '\0';
+    return buf;
+}
+
+char *fs_read_file_slice(const char *path, uint64_t offset, size_t max_bytes,
+                         size_t *read_bytes, int *has_more) {
+    FILE *f = fopen(path, "rb");
+    if (!f || max_bytes == (size_t)-1 || offset > INT64_MAX) {
+        if (f) fclose(f);
+        return NULL;
+    }
+    if (fseeko(f, (off_t)offset, SEEK_SET) != 0) { fclose(f); return NULL; }
+    char *buf = malloc(max_bytes + 2);
+    if (!buf) { fclose(f); return NULL; }
+    size_t got = fread(buf, 1, max_bytes + 1, f);
+    int error = ferror(f);
+    fclose(f);
+    if (error) { free(buf); return NULL; }
+    if (read_bytes) *read_bytes = got > max_bytes ? max_bytes : got;
+    if (has_more) *has_more = got > max_bytes;
+    buf[got > max_bytes ? max_bytes : got] = '\0';
     return buf;
 }
 
@@ -52,8 +75,8 @@ int fs_write_file(const char *path, const void *data, size_t len) {
     if (!f)
         return -1;
     w = fwrite(data, 1, len, f);
-    ok = (w == len) ? 0 : -1;
-    fclose(f);
+    ok = (w == len && fflush(f) == 0) ? 0 : -1;
+    if (fclose(f) != 0) ok = -1;
     return ok;
 }
 
@@ -65,8 +88,8 @@ int fs_append_file(const char *path, const void *data, size_t len) {
     if (!f)
         return -1;
     w = fwrite(data, 1, len, f);
-    ok = (w == len) ? 0 : -1;
-    fclose(f);
+    ok = (w == len && fflush(f) == 0) ? 0 : -1;
+    if (fclose(f) != 0) ok = -1;
     return ok;
 }
 

@@ -20,6 +20,28 @@
 #endif
 
 #if defined(_WIN32)
+int ssh_askpass_run_if_requested(void) {
+    wchar_t secret_path[2300];
+    DWORD n = GetEnvironmentVariableW(L"COA_SSH_ASKPASS_SECRET", secret_path, 2300);
+    if (n == 0) return -1;
+    if (n >= 2300) return 1;
+    HANDLE file = CreateFileW(secret_path, GENERIC_READ, FILE_SHARE_READ, NULL,
+                              OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (file == INVALID_HANDLE_VALUE) return 1;
+    char password[1024];
+    DWORD got = 0, written = 0;
+    BOOL ok = ReadFile(file, password, sizeof(password), &got, NULL);
+    CloseHandle(file);
+    HANDLE output = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (!ok || output == NULL || output == INVALID_HANDLE_VALUE || got == 0 ||
+        !WriteFile(output, password, got, &written, NULL) || written != got) {
+        SecureZeroMemory(password, sizeof(password));
+        return 1;
+    }
+    SecureZeroMemory(password, sizeof(password));
+    return 0;
+}
+
 /* Child processes on Chinese Windows emit GBK/OEM text. Convert to UTF-8 so
  * the output is readable AND valid for the LLM API (which hard-rejects
  * invalid UTF-8). Returns a malloc'd string or NULL. */
@@ -58,6 +80,42 @@ static char *oem_to_utf8(const char *in) {
     free(w);
     return u8;
 }
+
+/* -EncodedCommand takes UTF-16LE base64, avoiding cmd/PowerShell quote
+ * reinterpretation for commands containing pipes, quotes or Unicode. */
+static char *powershell_command(const char *utf8) {
+    static const char alphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    int n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, utf8, -1, NULL, 0);
+    if (n <= 0 || n > 12000) return NULL;
+    wchar_t *wide = malloc((size_t)n * sizeof(*wide));
+    if (!wide) return NULL;
+    if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, utf8, -1, wide, n) != n) {
+        free(wide); return NULL;
+    }
+    const unsigned char *bytes = (const unsigned char *)wide;
+    size_t length = (size_t)(n - 1) * sizeof(*wide);
+    size_t encoded_len = ((length + 2) / 3) * 4;
+    const char *prefix = "powershell.exe -NoProfile -NonInteractive -EncodedCommand ";
+    char *out = malloc(strlen(prefix) + encoded_len + 1);
+    if (!out) { free(wide); return NULL; }
+    size_t pos = strlen(prefix);
+    memcpy(out, prefix, pos);
+    for (size_t i = 0; i < length; i += 3) {
+        unsigned a = bytes[i], b = i + 1 < length ? bytes[i + 1] : 0;
+        unsigned c = i + 2 < length ? bytes[i + 2] : 0;
+        out[pos++] = alphabet[a >> 2];
+        out[pos++] = alphabet[((a & 3) << 4) | (b >> 4)];
+        out[pos++] = i + 1 < length ? alphabet[((b & 15) << 2) | (c >> 6)] : '=';
+        out[pos++] = i + 2 < length ? alphabet[c & 63] : '=';
+    }
+    out[pos] = '\0';
+    free(wide);
+    return out;
+}
+#endif
+
+#if !defined(_WIN32)
+int ssh_askpass_run_if_requested(void) { return -1; }
 #endif
 
 static tool_result *shell_exec_impl(const tool *self, const tool_ctx *ctx, const char *args_json,
@@ -68,6 +126,7 @@ static tool_result *shell_exec_impl(const tool *self, const tool_ctx *ctx, const
     cJSON *t_j;
     proc_result *pr;
     char *converted = NULL;
+    char *ps_command = NULL;
     tool_result *r;
 
     (void)self;
@@ -88,9 +147,30 @@ static tool_result *shell_exec_impl(const tool *self, const tool_ctx *ctx, const
     if (timeout_ms > 60000)
         timeout_ms = 60000;
 
+    const char *command_text = cmd_j->valuestring;
+    cJSON *shell_j = cJSON_GetObjectItemCaseSensitive(args, "shell");
+    if (shell_j && cJSON_IsString(shell_j)) {
+        const char *choice = shell_j->valuestring;
+        if (strcmp(choice, "cmd") == 0) native_shell = 1;
+        else if (strcmp(choice, "powershell") == 0) {
+#if defined(_WIN32)
+            ps_command = powershell_command(command_text);
+            if (!ps_command) { cJSON_Delete(args); return tool_result_new(0, "shell: invalid PowerShell command"); }
+            command_text = ps_command;
+            native_shell = 1;
+#else
+            cJSON_Delete(args);
+            return tool_result_new(0, "shell: PowerShell mode is supported on Windows");
+#endif
+        } else if (strcmp(choice, "auto") != 0) {
+            cJSON_Delete(args);
+            return tool_result_new(0, "shell: shell must be auto, cmd or powershell");
+        }
+    }
     pr = native_shell
-        ? proc_run_native_in(cmd_j->valuestring, timeout_ms, ctx ? ctx->workspace : NULL)
-        : proc_run_in(cmd_j->valuestring, timeout_ms, ctx ? ctx->workspace : NULL);
+        ? proc_run_native_in(command_text, timeout_ms, ctx ? ctx->workspace : NULL)
+        : proc_run_in(command_text, timeout_ms, ctx ? ctx->workspace : NULL);
+    free(ps_command);
     cJSON_Delete(args);
     if (!pr)
         return tool_result_new(0, "shell: failed to spawn process");
@@ -139,7 +219,7 @@ const tool *tool_shell(void) {
     static const tool t = {
         "shell",
         "Run a shell command and capture combined stdout+stderr.",
-        "{\"type\":\"object\",\"properties\":{\"command\":{\"type\":\"string\"},\"timeout_ms\":{\"type\":\"integer\"}}"
+        "{\"type\":\"object\",\"properties\":{\"command\":{\"type\":\"string\"},\"timeout_ms\":{\"type\":\"integer\"},\"shell\":{\"type\":\"string\"}}"
         "}",
         1,
         shell_exec,
@@ -346,18 +426,20 @@ static int ssh_append_options(strbuf *out, const ssh_profile *profile, int has_p
     return 0;
 }
 
-/* OpenSSH's documented SSH_ASKPASS mechanism lets the built-in tool supply a
- * password without sshpass, Python or Paramiko.  The one-shot helper and its
- * secret file stay local under state/ssh and are removed after the command;
- * neither the password nor the original task text is included in the plan. */
+/* OpenSSH's SSH_ASKPASS mechanism supplies a local password without passing
+ * it on the command line. On Windows the running CLI executable itself acts
+ * as askpass (OpenSSH cannot reliably spawn a .cmd as an executable). */
 static int ssh_append_askpass(strbuf *out, const tool_ctx *ctx, const ssh_profile *profile,
                               int has_profile, const char *host, const char *user,
                               const char *password, const char *quoted_command,
                               int port, char *helper, size_t helper_cap,
                               char *secret, size_t secret_cap) {
-    char state_dir[1024], dir[2048], helper_name[96], secret_name[96];
+    char state_dir[1024], dir[2048], secret_name[96];
+#if !defined(_WIN32)
+    char helper_name[96];
     char *qhelper;
     strbuf data;
+#endif
     int64_t stamp;
     unsigned pid;
     static atomic_uint next_id = 1;
@@ -369,38 +451,46 @@ static int ssh_append_askpass(strbuf *out, const tool_ctx *ctx, const ssh_profil
     stamp = time_now_ms();
 #if defined(_WIN32)
     pid = (unsigned)GetCurrentProcessId();
-    snprintf(helper_name, sizeof(helper_name), "askpass-%u-%lld-%u.cmd", pid, (long long)stamp, id);
+    wchar_t exe_path[2300];
+    DWORD exe_len = GetModuleFileNameW(NULL, exe_path, 2300);
+    if (!exe_len || exe_len >= 2300 ||
+        !WideCharToMultiByte(CP_UTF8, 0, exe_path, -1, helper, (int)helper_cap, NULL, NULL))
+        return -1;
     snprintf(secret_name, sizeof(secret_name), "askpass-%u-%lld-%u.secret", pid, (long long)stamp, id);
 #else
     pid = (unsigned)getpid();
     snprintf(helper_name, sizeof(helper_name), "askpass-%u-%lld-%u.sh", pid, (long long)stamp, id);
     snprintf(secret_name, sizeof(secret_name), "askpass-%u-%lld-%u.secret", pid, (long long)stamp, id);
 #endif
-    if (strlen(dir) + strlen(helper_name) + 2 > helper_cap ||
-        strlen(dir) + strlen(secret_name) + 2 > secret_cap) return -1;
-    path_join(helper, helper_cap, dir, helper_name);
+    if (strlen(dir) + strlen(secret_name) + 2 > secret_cap) return -1;
     path_join(secret, secret_cap, dir, secret_name);
+#if !defined(_WIN32)
+    if (strlen(dir) + strlen(helper_name) + 2 > helper_cap) return -1;
+    path_join(helper, helper_cap, dir, helper_name);
     strbuf_init(&data);
-#if defined(_WIN32)
-    strbuf_append(&data, "@echo off\r\nsetlocal DisableDelayedExpansion\r\nset /p _COA_SSH_PASS=<\"%~dp0");
-    strbuf_append(&data, secret_name);
-    strbuf_append(&data, "\"\r\n<nul set /p \"=%_COA_SSH_PASS%\"\r\n");
-#else
     strbuf_append(&data, "#!/bin/sh\ncat \"$(dirname \"$0\")/");
     strbuf_append(&data, secret_name);
     strbuf_append(&data, "\"\n");
-#endif
-    if (fs_write_file(helper, data.buf, data.len) != 0 ||
-        fs_write_file(secret, password, strlen(password)) != 0) {
-        strbuf_free(&data); fs_remove(helper); fs_remove(secret); return -1;
+    if (fs_write_file(helper, data.buf, data.len) != 0) {
+        strbuf_free(&data); fs_remove(helper); return -1;
     }
     strbuf_free(&data);
+#endif
+    if (fs_write_file(secret, password, strlen(password)) != 0) {
+#if !defined(_WIN32)
+        fs_remove(helper);
+#endif
+        fs_remove(secret); return -1;
+    }
+#if !defined(_WIN32)
     qhelper = ssh_quote_arg(helper);
     if (!qhelper) { fs_remove(helper); fs_remove(secret); return -1; }
+#endif
 #if defined(_WIN32)
     /* set \"name=value\" protects spaces in state_root; do not put the
      * shell-quoted form inside the value because OpenSSH expects a raw path. */
-    strbuf_appendf(out, "set \"SSH_ASKPASS=%s\" & set \"SSH_ASKPASS_REQUIRE=force\" & set \"DISPLAY=1\" & ", helper);
+    strbuf_appendf(out, "set \"SSH_ASKPASS=%s\" & set \"COA_SSH_ASKPASS_SECRET=%s\" & "
+                        "set \"SSH_ASKPASS_REQUIRE=force\" & set \"DISPLAY=1\" & ", helper, secret);
 #else
     if (chmod(helper, 0700) != 0 || chmod(secret, 0600) != 0) {
         free(qhelper); fs_remove(helper); fs_remove(secret); return -1;
@@ -408,9 +498,14 @@ static int ssh_append_askpass(strbuf *out, const tool_ctx *ctx, const ssh_profil
     strbuf_appendf(out, "SSH_ASKPASS=%s SSH_ASKPASS_REQUIRE=force DISPLAY=1 ", qhelper);
 #endif
     if (ssh_append_options(out, profile, has_profile, host, user, quoted_command, port, 0) != 0) {
-        free(qhelper); fs_remove(helper); fs_remove(secret); return -1;
+#if !defined(_WIN32)
+        free(qhelper); fs_remove(helper);
+#endif
+        fs_remove(secret); return -1;
     }
+#if !defined(_WIN32)
     free(qhelper);
+#endif
     return 0;
 }
 
@@ -498,12 +593,16 @@ static tool_result *ssh_exec(const tool *self, const tool_ctx *ctx, const char *
     cJSON_Delete(profile_root);
     cJSON_Delete(args);
     if (!shell_args) {
+#if !defined(_WIN32)
         if (askpass_helper[0]) fs_remove(askpass_helper);
+#endif
         if (askpass_secret[0]) fs_remove(askpass_secret);
         return tool_result_new(0, "ssh: out of memory");
     }
     result = shell_exec_impl(NULL, ctx, shell_args, 1);
+#if !defined(_WIN32)
     if (askpass_helper[0]) fs_remove(askpass_helper);
+#endif
     if (askpass_secret[0]) fs_remove(askpass_secret);
     free(shell_args);
     return result;

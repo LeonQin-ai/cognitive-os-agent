@@ -16,6 +16,7 @@ typedef struct reasoning reasoning;
 typedef struct llm llm;
 typedef struct tool_registry tool_registry;
 typedef struct memory memory;
+typedef struct memory_service memory_service;
 typedef struct policy_engine policy_engine;
 typedef struct snapshot snapshot;
 typedef struct event_bus event_bus;
@@ -31,6 +32,7 @@ typedef struct reasoning_config {
     llm *llm;                                /* required */
     tool_registry *tools;                    /* required */
     memory *memory;                          /* may be NULL */
+    memory_service *memory_service;          /* optional Memory OS interface */
     policy_engine *policy;                   /* may be NULL = allow all */
     snapshot *snapshot;                      /* may be NULL = no rollback */
     event_bus *bus;                          /* may be NULL */
@@ -145,9 +147,9 @@ int reasoning_session_delete(reasoning *r, const char *session_id);
  * Returns a malloc'd id string, NULL on failure. */
 char *reasoning_session_new(reasoning *r);
 
-/* Toggle per-session memory sharing (共享记忆): 1 = share the Memory OS
- * across sessions (default), 0 = private memory. 0 on success, -1 on error. */
+/* Compatibility setter: memory sharing is now a persisted global switch. */
 int reasoning_session_set_shared(reasoning *r, const char *session_id, int shared);
+int reasoning_shared_memory_enabled(reasoning *r);
 
 /* Last recorded user input of a session (for resume/恢复). Returns a malloc'd
  * string or NULL when the session is unknown or has no turns. */

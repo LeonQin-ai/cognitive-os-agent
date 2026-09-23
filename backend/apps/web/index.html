@@ -405,6 +405,10 @@
 #chat-status{padding:6px 4px;min-height:20px!important;color:var(--muted)}
 .chat-tabs{gap:8px}.chat-tab{border-radius:20px;padding:6px 12px;background:transparent}.chat-tab.on{border-color:var(--border);background:var(--card);color:var(--fg)}
 .top .flow{display:none}button:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+.flow-progress-line{display:flex;align-items:flex-start;gap:8px;line-height:1.55;margin-top:3px}
+.flow-spinner{display:inline-block;width:12px;height:12px;margin-top:3px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:flow-spin .8s linear infinite;flex:none}
+@keyframes flow-spin{to{transform:rotate(360deg)}}
+@media(prefers-reduced-motion:reduce){.flow-spinner{animation:none}}
 @keyframes run-breathe{50%{opacity:.35;box-shadow:0 0 0 4px var(--accent-soft)}}
 @media(prefers-reduced-motion:reduce){.run-dot.active{animation:none}*{scroll-behavior:auto!important}}
   @media(max-width:640px){.chat-wrap{padding:16px 12px}.run-card>summary{padding:12px}.run-context,.run-metrics{margin-left:12px;margin-right:12px}.run-steps-title{margin-left:15px}.run-steps{margin-left:15px;margin-right:12px}.run-steps li{flex-wrap:wrap;gap:3px}.chat-message.user{max-width:92%}}
@@ -650,7 +654,7 @@ panels.chat = `
       <div class="row" style="align-items:center;gap:10px">
         <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
           <input type="checkbox" id="chat-shared" onchange="chatSharedToggle(this.checked)">
-          共享记忆（关闭后本会话使用私有 Memory OS）
+          共享记忆（全局设置，适用于所有会话）
         </label>
         <span class="muted" id="chat-session-meta"></span>
       </div>
@@ -2455,8 +2459,10 @@ function chatRedraw(){
 
 async function loadChat(){
   const box = $('chat-box'); if(!box) return;
-  await loadChatSessions();
-  await chatLoadHistory();
+  renderChatTabs(CHAT_TABS_CACHE);
+  if(CHAT_CACHE[CHAT_SESSION]?.length){ CHAT_MSGS = CHAT_CACHE[CHAT_SESSION]; chatRedraw(); }
+  void loadChatSessions();
+  void chatLoadHistory();
   loadUploads();
   fillChatModelSelect();
   chatInitDrop(); /* 粘贴图片 / 拖拽文件支持 */
@@ -2603,6 +2609,7 @@ function chatSessionTip(info, id){
 /* 侧边栏「最近」会话列表（ChatGPT 风格）：新建的会话自动归档到这里 */
 function sideRecent(list){
   const box = $('side-recent'); if(!box) return;
+  const nav = $('nav'), scrollTop = nav?.scrollTop || 0;
   box.innerHTML = '';
   const ids = list.map(s => s.id || 'default');
   if(!ids.includes(CHAT_SESSION)) ids.push(CHAT_SESSION);
@@ -2615,7 +2622,7 @@ function sideRecent(list){
     const label = (info && info.title) ? info.title : (id === 'default' ? '默认会话' : id);
     b.textContent = label.length > 16 ? label.slice(0, 16) + '…' : label;
     b.title = chatSessionTip(info, id);
-    b.onclick = () => { if(id !== CHAT_SESSION){ chatSwitchSession(id); } else { switchPanel('chat'); } };
+    b.onclick = () => chatSwitchSession(id);
     row.appendChild(b);
     const del = document.createElement('button');
     del.className = 'side-recent-delete';
@@ -2626,6 +2633,7 @@ function sideRecent(list){
     row.appendChild(del);
     box.appendChild(row);
   });
+  if(nav) nav.scrollTop = scrollTop;
 }
 
 /* ===== 新聊天设置区（模型配置 / 共享记忆）===== */
@@ -2639,7 +2647,7 @@ function chatToggleSettings(){
 function syncChatSettings(){
   const info = CHAT_TABS_CACHE.find(s => (s.id || 'default') === CHAT_SESSION);
   const cb = $('chat-shared');
-  if(cb) cb.checked = !(info && info.shared_memory === false);
+  if(cb) cb.checked = !(CHAT_TABS_CACHE[0] && CHAT_TABS_CACHE[0].shared_memory === false);
   syncChatThinkingToggle();
   const meta = $('chat-session-meta');
   if(meta){
@@ -2651,7 +2659,7 @@ function syncChatSettings(){
 }
 
 function chatThinkingEnabled(){
-  try { return localStorage.getItem('cognitive-thinking-mode') === '1'; } catch(e) { return false; }
+  try { return localStorage.getItem('cognitive-thinking-mode:' + CHAT_SESSION) === '1'; } catch(e) { return false; }
 }
 function syncChatThinkingToggle(){
   const btn = $('chat-thinking-toggle');
@@ -2662,18 +2670,17 @@ function syncChatThinkingToggle(){
   btn.title = enabled ? '深度思考已开启：允许额外规划轮次' : '深度思考：允许额外规划轮次，适合复杂问题';
 }
 function chatThinkingToggle(enabled){
-  try { localStorage.setItem('cognitive-thinking-mode', enabled ? '1' : '0'); } catch(e) {}
+  try { localStorage.setItem('cognitive-thinking-mode:' + CHAT_SESSION, enabled ? '1' : '0'); } catch(e) {}
   syncChatThinkingToggle();
   toast(enabled ? '已开启深度思考：复杂问题可进行额外规划。' : '已关闭深度思考：优先直接回答或执行必要工具。');
 }
 
-/* 共享记忆开关 → POST /v1/chat/sessions/<id>/shared */
+/* 全局共享记忆开关，兼容旧的会话设置 API。 */
 async function chatSharedToggle(shared){
   const r = await call('POST', '/v1/chat/sessions/' + encodeURIComponent(CHAT_SESSION) + '/shared', {shared: !!shared});
   if(r.status < 300){
-    toast(shared ? '已共享记忆（本会话可读写 Memory OS）' : '已切为私有记忆（本会话不读写 Memory OS）');
-    const info = CHAT_TABS_CACHE.find(s => (s.id || 'default') === CHAT_SESSION);
-    if(info) info.shared_memory = shared ? 1 : 0;
+    toast(shared ? '已开启全局共享记忆' : '已关闭全局共享记忆');
+    CHAT_TABS_CACHE.forEach(info => { info.shared_memory = shared; });
   } else {
     toast('设置失败：' + (r.obj && r.obj.error || r.status));
     syncChatSettings();
@@ -2727,11 +2734,11 @@ async function chatSwitchSession(id){
   chatCacheStore(); // 保存当前会话消息，切回时即时回放
   CHAT_SESSION = id;
   CHAT_NEW_SESSION = false;
-  CHAT_MSGS = [];
-  renderChatTabs([]);
-  await chatLoadHistory();
-  loadChatSessions();
-  chatGateCheck();
+  CHAT_MSGS = CHAT_CACHE[id] || [];
+  if(current !== 'chat') switchPanel('chat');
+  else { renderChatTabs(CHAT_TABS_CACHE); chatRedraw(); void chatLoadHistory(); }
+  void loadChatSessions();
+  void chatGateCheck();
   /* issue #22: 切回的会话若任务仍在执行，恢复「取消」按钮与状态行 */
   syncChatTaskId();
   if(chatIsBusy(id)){
@@ -2879,7 +2886,7 @@ function flowNodesText(t){
       if(d.length) s += ' · ' + d.join(' · ');
     }
     return s;
-  }).join(' · ');
+  }).join('\n');
 }
 
 /* 任务实时进度行：耗时 / 轮次 / 工具调用 / token —— 数据来自
@@ -2903,6 +2910,10 @@ function taskProgressText(t){
   if(t.tokens_in || t.tokens_out)
     bits.push('tokens ' + (t.tokens_in + t.tokens_out) + '（↑' + t.tokens_in + ' ↓' + t.tokens_out + '）');
   return bits.join(' · ');
+}
+function flowTaskStatus(t){
+  const detail = taskProgressText(t);
+  return '状态: ' + t.status + (detail ? (t.flow_nodes ? '\n' : ' · ') + detail : '');
 }
 
 /* Claude-Code 风格步骤化执行显示：● Tool(args) + ⎿ 输出首行摘要（不刷屏）；
@@ -3056,7 +3067,21 @@ let FLOW_MIRROR = {task:'', json:'', out:'', gen:'', run:'', follow:''};
 function flowStatus(which, text){
   FLOW_MIRROR[which === 'gen-status' ? 'gen' : which === 'follow-status' ? 'follow' : 'run'] = text;
   const el = $('flow-' + which);
-  if(el) el.textContent = text;
+  if(!el) return;
+  el.replaceChildren();
+  const lines = text.split('\n');
+  lines.forEach((line, index) => {
+    if(index === 0){ el.append(document.createTextNode(line)); return; }
+    const row = document.createElement('span'); row.className = 'flow-progress-line';
+    const at = line.indexOf('⏳');
+    if(at >= 0){
+      row.append(document.createTextNode(line.slice(0, at)));
+      const spinner = document.createElement('span'); spinner.className = 'flow-spinner';
+      spinner.setAttribute('aria-label', '运行中'); row.append(spinner);
+      row.append(document.createTextNode(line.slice(at + 1)));
+    } else row.textContent = line;
+    el.append(row);
+  });
 }
 
 function flowSaveState(){
@@ -3120,7 +3145,7 @@ async function flowAuto(){
     }
     const t = r.obj;
     if(t && t.status && t.status !== 'DONE')
-      flowStatus('gen-status', '状态: ' + t.status + (taskProgressText(t) ? ' · ' + taskProgressText(t) : ''));
+      flowStatus('gen-status', flowTaskStatus(t));
     if(t && (t.status === 'DONE' || t.status === 'FAILED' || t.status === 'CANCELLED' || t.status === 'TIMEOUT')){
       FLOW_LAST_OUTPUT = t.output || '';
       FLOW_MIRROR.out = FLOW_LAST_OUTPUT ? ('—— 综合答案 ——\n' + FLOW_LAST_OUTPUT) : '(无输出)';
@@ -3361,7 +3386,7 @@ async function flowChat(promptPrefix, statusEl){
       continue;
     }
     if(t && t.status && t.status !== 'DONE')
-      flowStatus(which, '状态: ' + t.status + (taskProgressText(t) ? ' · ' + taskProgressText(t) : ''));
+      flowStatus(which, flowTaskStatus(t));
     if(t && (t.status === 'DONE' || t.status === 'FAILED' || t.status === 'CANCELLED' || t.status === 'TIMEOUT')){
       FLOW_MIRROR.out = (FLOW_MIRROR.out ? FLOW_MIRROR.out + '\n\n' : '') + '—— LLM 回答 ——\n' + (t.output || '(无输出)');
       if(out && out.isConnected) out.textContent = FLOW_MIRROR.out;
@@ -3422,7 +3447,7 @@ async function flowRun(){
       continue;
     }
     flowStatus('status', (t && t.status && t.status !== 'DONE')
-      ? ('状态: ' + t.status + (taskProgressText(t) ? ' · ' + taskProgressText(t) : '')) : '');
+      ? flowTaskStatus(t) : '');
     if(t && (t.status === 'DONE' || t.status === 'FAILED' || t.status === 'CANCELLED' || t.status === 'TIMEOUT')){
       FLOW_LAST_OUTPUT = t.output || '';
       FLOW_MIRROR.out = FLOW_LAST_OUTPUT ? ('—— Flow 输出 ——\n' + FLOW_LAST_OUTPUT) : '(无输出)';
@@ -4045,7 +4070,22 @@ async function chatPollTask(session,id,entry){
   try {
     while(CHAT_TASKS[session] === id){
       const r = await call('GET','/v1/tasks/' + id);
-      if(r.status === 404){ chatFinish(session,id,entry,'任务已不存在，服务可能重启。可以重新发送或恢复任务。','failed'); return; }
+      if(r.status === 404){
+        /* A finished task may have left the scheduler after a restart while
+         * its durable chat turn already exists. Reconcile before claiming it
+         * failed; the thinking toggle itself never submits a task. */
+        const history = await call('GET', '/v1/chat/history?session=' + encodeURIComponent(session));
+        const messages = CHAT_CACHE[session] || (session === CHAT_SESSION ? CHAT_MSGS : []);
+        const at = messages.indexOf(entry);
+        const question = at > 0 ? messages.slice(0, at).reverse().find(m => m.role === 'user')?.text : null;
+        const turns = history.obj?.turns;
+        const last = Array.isArray(turns) ? turns[turns.length - 1] : null;
+        if(last?.a && question && last.q === question)
+          chatFinish(session,id,entry,last.a,'completed');
+        else
+          chatFinish(session,id,entry,'任务运行状态已丢失（服务可能重启）。会话记录已保留，可点击“恢复”继续。','failed');
+        return;
+      }
       if(r.status === 401 || r.status === 403){
         chatApplyProgress(session,id,{stage:'reconnecting'});
         if(CHAT_SESSION === session) $('chat-status').textContent = '访问被拒绝，请检查连接权限；恢复后将继续同步';

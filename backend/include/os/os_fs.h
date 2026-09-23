@@ -9,6 +9,10 @@ extern "C" {
 
 /* Read an entire file into a NUL-terminated malloc'd string. NULL on error. */
 char *fs_read_file(const char *path);
+/* Read at most max_bytes from offset without loading the whole file. Returns a
+ * NUL-terminated buffer, or NULL on open/seek/read error. */
+char *fs_read_file_slice(const char *path, uint64_t offset, size_t max_bytes,
+                         size_t *read_bytes, int *has_more);
 
 /* Write bytes to a file (creates/truncates). 0 on success, -1 on error. */
 int fs_write_file(const char *path, const void *data, size_t len);

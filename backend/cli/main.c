@@ -255,6 +255,10 @@ static void print_memory(runtime_ctx *ctx) {
 }
 
 int main(int argc, char **argv) {
+#ifdef _WIN32
+    int askpass_rc = ssh_askpass_run_if_requested();
+    if (askpass_rc >= 0) return askpass_rc;
+#endif
     const char *config_file = NULL, *state_root = STATE_ROOT, *workspace = NULL;
     char state_dir[1024];
     int arg = 1, rc = 0, state_overridden = 0;
