@@ -9,9 +9,17 @@ backend/release/
 # --- runtime state (never commit: contains API keys and local data) ---
 backend/state/
 backend/state*/
+/state/
+/state-*/
 
 # --- scratch / notes ---
 backend/test/
+__pycache__/
+/caps_gate_out.txt
+
+# generated benchmark runs; keep task definitions and published scorecards
+/backend/webarena/results.jsonl
+/backend/webarena/final_scores.json
 
 # --- binaries, logs, platform cruft ---
 *.exe
