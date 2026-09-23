@@ -596,6 +596,46 @@ static void test_snapshot_tx(void) {
     snapshot_close(snap);
 }
 
+/* Optional local SSH server integration: set COA_SSH_TEST_PORT and
+ * COA_SSH_TEST_KNOWN_HOSTS. The test executable also serves as askpass on
+ * Windows, just as the production CLI does. */
+static void test_ssh_password_integration(void) {
+    const char *port = getenv("COA_SSH_TEST_PORT");
+    const char *known_hosts = getenv("COA_SSH_TEST_KNOWN_HOSTS");
+    if (!port || !known_hosts) return;
+    section("ssh_password_integration");
+    fs_mkdirs("state-test/ssh-integration/ssh");
+    cJSON *root = cJSON_CreateObject();
+    cJSON *envs = cJSON_AddObjectToObject(root, "environments");
+    cJSON *profile = cJSON_AddObjectToObject(envs, "local");
+    cJSON_AddStringToObject(profile, "host", "127.0.0.1");
+    cJSON_AddStringToObject(profile, "user", "testuser");
+    cJSON_AddNumberToObject(profile, "port", atoi(port));
+    cJSON_AddStringToObject(profile, "known_hosts", known_hosts);
+    char *profile_json = cJSON_PrintUnformatted(root);
+    CHECK(profile_json && fs_write_file("state-test/ssh-integration/ssh/environments.json",
+                                        profile_json, strlen(profile_json)) == 0);
+    free(profile_json);
+    cJSON_Delete(root);
+    tool_registry *reg = tool_registry_new();
+    tool_register_builtins(reg);
+    tool_ctx ctx = {0};
+    ctx.reg = reg;
+    ctx.workspace = ".";
+    ctx.state_root = "state-test/ssh-integration";
+    tool_result *result = tool_execute(reg, "ssh",
+        "{\"environment\":\"local\",\"password\":\"dummy@!\",\"command\":\"echo SSH_OK\",\"timeout_ms\":5000}",
+        &ctx);
+    CHECK(result && result->ok && result->output && strstr(result->output, "SSH_OK"));
+    CHECK(result && result->output && !strstr(result->output, "dummy@!"));
+    tool_result_free(result);
+    dir_list leftovers = {0};
+    CHECK(fs_list_dir("state-test/ssh-integration/ssh", &leftovers) == 0);
+    CHECK(leftovers.count == 1); /* environments.json; no askpass secret */
+    fs_list_free(&leftovers);
+    tool_registry_free(reg);
+}
+
 /* ---------- llm: mock provider ---------- */
 static void test_llm_mock(void) {
     section("llm_mock");
@@ -5434,6 +5474,8 @@ static void test_local_model(void) {
 }
 
 int main(void) {
+    int askpass_rc = ssh_askpass_run_if_requested();
+    if (askpass_rc >= 0) return askpass_rc;
     setvbuf(stdout, NULL, _IONBF, 0); /* unbuffered: survive crashes mid-run */
     printf("cognitive-os-agent unit tests\n");
     test_util();
@@ -5450,6 +5492,7 @@ int main(void) {
     test_utf8_paths();
     test_memory();
     test_snapshot_tx();
+    test_ssh_password_integration();
     test_llm_mock();
     test_incomplete_run_memory_gate();
     test_llm_caps_cancel();
