@@ -220,6 +220,9 @@ struct reasoning {
     uint64_t last_failed_action_sig;
     int same_action_failures;
     int tool_fail_aborted;
+    uint64_t search_seen[64]; /* successful read-only searches in this run */
+    int search_seen_n;
+    int round_search_skips;
     int thinking_mode; /* task-local preference; set by the chat lane */
 
     /* live run progress for status display (polled via reasoning_progress):
@@ -1387,6 +1390,7 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
 
     (void)sm;
     r->all_actions_ok = 1;
+    r->round_search_skips = 0;
     strbuf_init(&b);
 
     if (r->n_actions == 0) {
@@ -1516,6 +1520,24 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
         uint64_t action_sig = hash64(r->actions[i].tool, strlen(r->actions[i].tool));
         action_sig ^= hash64(r->actions[i].args_json ? r->actions[i].args_json : "",
                              r->actions[i].args_json ? strlen(r->actions[i].args_json) : 0);
+        int is_search = strcmp(r->actions[i].tool, "glob") == 0 ||
+                        strcmp(r->actions[i].tool, "grep") == 0;
+        if (is_search) {
+            int repeated = r->search_seen_n >= (int)(sizeof(r->search_seen) / sizeof(r->search_seen[0]));
+            for (int j = 0; j < r->search_seen_n && !repeated; j++)
+                repeated = r->search_seen[j] == action_sig;
+            if (repeated) {
+                r->round_search_skips++;
+                strbuf_appendf(&b, "[%s] identical search already completed; use its earlier observation, "
+                                 "choose a new pattern, or answer now\n", r->actions[i].tool);
+                run_step_add(r, r->actions[i].tool, r->actions[i].args_json,
+                             "previous search result reused", 1, 0);
+                continue;
+            }
+        } else if (strcmp(r->actions[i].tool, "file_read") != 0) {
+            /* A write or opaque tool could change the files being searched. */
+            r->search_seen_n = 0;
+        }
         long long t_tool0 = time_now_ms();
         char step_out[240] = ""; /* output head for the step registry */
         if (tx) {
@@ -1563,6 +1585,8 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
             r->last_failed_action_sig = 0;
             r->same_action_failures = 0;
             r->ok_actions++;
+            if (is_search && r->search_seen_n < (int)(sizeof(r->search_seen) / sizeof(r->search_seen[0])))
+                r->search_seen[r->search_seen_n++] = action_sig;
             strbuf_appendf(&b, "[%s] ok\n", r->actions[i].tool);
             if (r->hooks)
                 hook_dispatch(r->hooks, "exec.after_execute", r->actions[i].tool);
@@ -2509,12 +2533,15 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     r->last_failed_action_sig = 0;
     r->same_action_failures = 0;
     r->tool_fail_aborted = 0;
+    r->search_seen_n = 0;
+    r->round_search_skips = 0;
 
      /* LLM's plain-text answer (had_plan == 0) */
          /* per-round pipeline output */
     state st = ST_FAILED;
     int consec_fail = 0; /* consecutive stage failures → circuit breaker */
     int fail_aborted = 0;
+    int search_only_rounds = 0;
 restart_planning:
     for (r->round_idx = 1; r->round_idx <= r->max_rounds; r->round_idx++) {
         if (run_aborted(r)) { st = ST_FAILED; break; }
@@ -2527,6 +2554,8 @@ restart_planning:
             snprintf(updated, size, "%s%s%s", prompt, separator, messages);
             free(messages); free(safe_prompt); safe_prompt = updated; prompt = updated;
             r->stall_nudged = r->intent_nudged = 0;
+            r->search_seen_n = 0;
+            search_only_rounds = 0;
             free(r->prev_plan); r->prev_plan = NULL;
             /* A steering message defines a revised task and needs a fresh
              * planning budget. Without resetting the per-plan counter, an
@@ -2677,6 +2706,26 @@ restart_planning:
         round_log_append(r, result ? result : "");
         obs_log_append(r, result ? result : "");
         r->intent_nudged = 0; /* narration recovered: reset the consecutive bound */
+        int search_only = r->n_actions > 0;
+        for (int i = 0; i < r->n_actions; i++)
+            if (strcmp(r->actions[i].tool, "glob") != 0 &&
+                strcmp(r->actions[i].tool, "grep") != 0) search_only = 0;
+        search_only_rounds = search_only ? search_only_rounds + 1 : 0;
+        if (r->n_actions > 0 && r->round_search_skips == r->n_actions) {
+            round_log_append(r, "[system] 本轮搜索均与已完成的搜索重复，停止空转；"
+                                "请根据已有结果回答，明确说明尚未找到的内容。");
+            stalled = 1;
+            break;
+        }
+        if (search_only_rounds >= 4) {
+            round_log_append(r, "[system] 连续四轮只有文件搜索，没有读取目标或推进任务。"
+                                "已停止重复搜索；根据已有观察给出结论，找不到时明确说明。");
+            stalled = 1;
+            break;
+        }
+        if (search_only_rounds == 2)
+            round_log_append(r, "[system] 已连续两轮只搜索文件。请阅读已找到的具体文件，"
+                                "或根据搜索结果直接回答；不要继续换相近的 glob 模式空转。");
         /* stall detection: the LLM proposed the exact same plan twice — no
          * progress is possible. Give ONE recovery nudge ("the actions already
          * succeeded; answer from the observations instead of repeating them")

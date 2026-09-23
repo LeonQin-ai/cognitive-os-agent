@@ -2322,6 +2322,12 @@ static void test_edit_search(void) {
     CHECK(r != NULL && r->ok == 1);
     CHECK(r && r->output && strstr(r->output, "No files found") != NULL);
     tool_result_free(r);
+    /* Real project-style discovery must descend into docs with **. */
+    tool_ctx docs_ctx = tctx;
+    docs_ctx.workspace = ".";
+    r = tool_execute(reg, "glob", "{\"pattern\":\"docs/**/*\"}", &docs_ctx);
+    CHECK(r && r->ok && r->output && strstr(r->output, "docs/architecture-v1.0.md"));
+    tool_result_free(r);
 
     /* --- grep --- */
     /* default mode: files_with_matches (a.txt no longer contains bar) */
