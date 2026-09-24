@@ -95,12 +95,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           cat > release-notes.md <<'EOF'
-          ## Release
+          ## v0.7.0
 
-          - 可观测、可插话的 Agent 执行过程与每轮模型调用状态
-          - 每个聊天框可选深度思考模式
-          - 事务 COW 快照支持刷新、最新回滚和多文件精确回滚
-          - 全新的 Cognitive OS 大脑图标与 macOS 原生应用包
+          - 支持将 SKILL.md 和 MCP JSON 直接复制到本地 state/skills、state/mcp 目录，并在界面中重新加载
+          - 支持从配置文件直接启动 CLI；增强 SSH 密码登录、命名环境和会话隔离
+          - 优化聊天会话切换后的输入焦点、Skills/MCP 页面和 Agent 执行反馈
+          - 修复共享记忆提交时机、任务恢复与调度相关问题
+
+          发布前 CI 已覆盖 Windows、Linux、macOS Apple Silicon/Intel 和 AddressSanitizer。
 
           ### 安装包
           - Windows：`cognitive-os-agent-setup.exe`
