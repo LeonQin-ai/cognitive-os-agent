@@ -2836,7 +2836,9 @@ restart_planning:
      * [tool]/action logs are execution details (visible live via
      * process_log / the UI's process panel), never part of the answer. The
      * obs_log is a fallback for runs that ended without a final answer. */
-    if (final_text && *final_text) {
+    if (unfinished) {
+        strbuf_append(&out, "任务未完成：模型只描述了后续动作，或尚未执行所需的写入/生成动作。请继续任务。");
+    } else if (final_text && *final_text) {
         strbuf_append(&out, final_text);
     } else if (r->obs_log_len > 0) {
         /* no final answer produced — fall back to the executed-action log.
@@ -2872,8 +2874,6 @@ restart_planning:
     if (fail_aborted)
         strbuf_appendf(&out, "\n(连续 %s 轮阶段失败，任务中止 — 请检查模型服务/网络可用性后重试)",
                        REASONING_CONSEC_FAIL_ABORT_STR);
-    if (unfinished)
-        strbuf_append(&out, "\n(任务未完成：模型只描述了后续动作，或尚未执行所需的写入/生成动作。请继续任务。)");
 
     free(final_text);
     free(result);

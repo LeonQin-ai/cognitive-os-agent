@@ -2794,7 +2794,7 @@ static void test_agent_loop(void) {
         char *ans = NULL;
         CHECK(reasoning_run(ctx.reasoning, "分析 b.txt 并修复其中的 OLD", &ans) != 0);
         /* answer = final text only; raw tool log must not leak into it */
-        CHECK(ans && strstr(ans, "综合回答") != NULL);
+        CHECK(ans && strstr(ans, "任务未完成") != NULL);
         CHECK(ans && strstr(ans, "[file_read]") == NULL);
         free(ans);
         char *content = fs_read_file(f);
