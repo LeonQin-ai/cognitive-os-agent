@@ -64,6 +64,9 @@ int skill_unregister(skill_registry *r, const char *name);
  * Load skips duplicates (e.g. the built-in echo_hello seeded at init). */
 int skill_registry_persist(skill_registry *r, const char *state_root);
 int skill_registry_load(skill_registry *r, const char *state_root);
+/* Import <state_root>/skills/<name>/SKILL.md and loose *.md files as prompt
+ * skills. Returns the number imported, or -1 if the directory cannot be read. */
+int skill_registry_load_local(skill_registry *r, const char *state_root);
 
 #ifdef __cplusplus
 }

@@ -64,6 +64,37 @@ default. To use another file, pass `--config FILE`; its directory becomes the
 state directory unless `--state DIR` is supplied. The `workspace` field in the
 JSON file controls where tools operate; `--workspace DIR` overrides it.
 
+### Local Skills and MCP
+
+The runtime creates two folders inside its state directory at startup. Copy a
+skill folder containing `SKILL.md` to `<state>/skills/<skill-name>/SKILL.md`, or
+put a single `.md` file directly in `<state>/skills/`. Its YAML `name` and
+`description` fields are used when present; the entire file is registered as a
+prompt skill for the agent. For example, with the default state directory:
+
+```text
+state/skills/code-review/SKILL.md
+```
+
+Copy one JSON file per MCP connection into `<state>/mcp/`. A file may contain a
+single connection (`name` defaults to the filename), or a standard
+`mcpServers` object:
+
+```json
+{"mcpServers":{"local":{"command":"node","args":["/path/to/server.js"]}}}
+```
+
+For HTTP, use `{"name":"local","transport":"http","url":"http://127.0.0.1:3000/mcp"}`.
+The MCP server executable and any runtime it needs must be installed locally.
+JSON `args` arrays preserve paths with spaces; plain string arguments still use
+space separation. Per-server `env` maps are not supported, so set environment
+variables before launching the agent. Secrets in MCP connection files remain local to the
+backend and are not sent to the LLM as configuration text.
+
+Restart to load copied files automatically, or click **重新加载** on the Skills
+or MCP page. The pages display the effective state folder paths. A custom
+`--state` directory works the same way.
+
 ```json
 {
   "llm.provider": "openai",

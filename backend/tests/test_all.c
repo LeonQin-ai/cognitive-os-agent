@@ -2200,6 +2200,37 @@ static void test_skills(void) {
     skill_registry_free(r);
 }
 
+static void test_local_dropins(void) {
+    section("local skills and MCP drop-ins");
+    const char *root = "state-test-local-dropins";
+    CHECK(fs_mkdirs("state-test-local-dropins/skills/review") == 0);
+    CHECK(fs_mkdirs("state-test-local-dropins/mcp") == 0);
+    const char *md = "---\nname: code-review\ndescription: Review code locally\n---\nReview the code carefully.\n";
+    CHECK(fs_write_file("state-test-local-dropins/skills/review/SKILL.md", md, strlen(md)) == 0);
+    skill_registry *skills = skill_registry_new();
+    CHECK(skill_registry_load_local(skills, root) == 1);
+    const skill *review = skill_find(skills, "code-review");
+    CHECK(review && strcmp(review->kind, "prompt") == 0);
+    CHECK(review && strstr(review->body, "Review the code carefully") != NULL);
+    skill_registry_free(skills);
+
+    const char *one = "{\"transport\":\"http\",\"url\":\"http://127.0.0.1:9321/mcp\"}";
+    const char *many = "{\"mcpServers\":{\"local-stdio\":{\"command\":\"node\",\"args\":[\"tools/mock_mcp_server.js\"]}}}";
+    CHECK(fs_write_file("state-test-local-dropins/mcp/one.json", one, strlen(one)) == 0);
+    CHECK(fs_write_file("state-test-local-dropins/mcp/many.json", many, strlen(many)) == 0);
+    mcp_manager *m = mcp_manager_new();
+    CHECK(mcp_manager_load_local(m, root) == 2);
+    const mcp_conn *http = mcp_manager_find(m, "one");
+    CHECK(http && strcmp(http->transport, "http") == 0);
+    const mcp_conn *stdio = mcp_manager_find(m, "local-stdio");
+    CHECK(stdio && strcmp(stdio->transport, "stdio") == 0);
+    CHECK(stdio && strstr(stdio->args_csv, "mock_mcp_server.js") != NULL);
+    mcp_manager_free(m);
+    fs_remove("state-test-local-dropins/skills/review/SKILL.md");
+    fs_remove("state-test-local-dropins/mcp/one.json");
+    fs_remove("state-test-local-dropins/mcp/many.json");
+}
+
 /* ---------- mcp manager ---------- */
 static void test_mcp(void) {
     section("mcp");
@@ -3584,6 +3615,29 @@ static void test_mcp_stdio(void) {
     CHECK(rc == 0);
     CHECK(out && strstr(out, "echo: stdio-test") != NULL);
     free(out); free(err);
+
+    /* Standard mcpServers args arrays must preserve one argument containing
+     * spaces, especially common for Windows user installation paths. */
+    CHECK(fs_mkdirs("state-test-mcp/space dir") == 0);
+    char *script = fs_read_file("tools/mock_mcp_server.js");
+    CHECK(script != NULL);
+    if (script) {
+        CHECK(fs_write_file("state-test-mcp/space dir/mock server.js", script, strlen(script)) == 0);
+        free(script);
+        mcp_manager *array_manager = mcp_manager_new();
+        mcp_conn array_conn = {0};
+        array_conn.name = (char *)"array-args";
+        array_conn.transport = (char *)"stdio";
+        array_conn.command = (char *)"node";
+        array_conn.args_csv = (char *)"[\"state-test-mcp/space dir/mock server.js\",\"--stdio\"]";
+        CHECK(mcp_manager_add_ex(array_manager, &array_conn) == 0);
+        out = NULL; err = NULL;
+        CHECK(mcp_manager_call(array_manager, "array-args", "echo", "{\"text\":\"space-path\"}", &out, &err) == 0);
+        CHECK(out && strstr(out, "echo: space-path") != NULL);
+        free(out); free(err);
+        mcp_manager_free(array_manager);
+        fs_remove("state-test-mcp/space dir/mock server.js");
+    }
 
     /* second call reuses the persistent child */
     out = err = NULL;
@@ -5928,6 +5982,7 @@ int main(void) {
     test_usage();
     test_registry();
     test_skills();
+    test_local_dropins();
     test_skill_args();
     test_caps_gate();
     test_generated_tool();

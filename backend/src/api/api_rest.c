@@ -29,6 +29,13 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <time.h>
+#ifdef _WIN32
+#include <direct.h>
+#define coa_getcwd _getcwd
+#else
+#include <unistd.h>
+#define coa_getcwd getcwd
+#endif
 #include "cJSON.h"
 
 /* Copy the (not null-terminated) request body into a C string. */
@@ -3188,11 +3195,46 @@ static int h_mcp_sync(const http_request *req, http_response *resp, void *ud) {
 
     if (!authz_ok(ctx, req, resp))
         return 0;
+    int loaded = ctx->mcp ? mcp_manager_load_local(ctx->mcp, ctx->state_root) : -1;
     n = (ctx->mcp && ctx->tools) ? mcp_manager_sync_tools(ctx->mcp, ctx->tools) : -1;
     o = cJSON_CreateObject();
+    cJSON_AddNumberToObject(o, "loaded", loaded);
     cJSON_AddNumberToObject(o, "registered", n);
     cJSON_AddBoolToObject(o, "ok", n >= 0);
     s = cJSON_PrintUnformatted(o);
+    cJSON_Delete(o);
+    http_resp_json(resp, s ? s : "{}");
+    free(s);
+    return 0;
+}
+
+static int h_local_dirs(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
+    char skills[1024], mcp[1024], state[1024], cwd[1024];
+    if (!authz_ok(ctx, req, resp)) return 0;
+    if (coa_getcwd(cwd, sizeof(cwd)))
+        path_resolve(state, sizeof(state), cwd, ctx->state_root);
+    else snprintf(state, sizeof(state), "%s", ctx->state_root);
+    path_join(skills, sizeof(skills), state, "skills");
+    path_join(mcp, sizeof(mcp), state, "mcp");
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddStringToObject(o, "skills", skills);
+    cJSON_AddStringToObject(o, "mcp", mcp);
+    char *s = cJSON_PrintUnformatted(o);
+    cJSON_Delete(o);
+    http_resp_json(resp, s ? s : "{}");
+    free(s);
+    return 0;
+}
+
+static int h_skills_reload(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
+    if (!authz_ok(ctx, req, resp)) return 0;
+    int loaded = ctx->skills ? skill_registry_load_local(ctx->skills, ctx->state_root) : -1;
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddNumberToObject(o, "loaded", loaded);
+    cJSON_AddBoolToObject(o, "ok", loaded >= 0);
+    char *s = cJSON_PrintUnformatted(o);
     cJSON_Delete(o);
     http_resp_json(resp, s ? s : "{}");
     free(s);
@@ -4818,6 +4860,8 @@ int api_attach(runtime_ctx *ctx) {
     http_server_route(ctx->http, "POST", "/v1/plugins/publish", h_plugins_publish, ctx);
     http_server_route(ctx->http, "DELETE", "/v1/plugins/market/", h_plugin_market_delete, ctx);
     http_server_route(ctx->http, "GET", "/v1/skills", h_skills, ctx);
+    http_server_route(ctx->http, "GET", "/v1/local/dirs", h_local_dirs, ctx);
+    http_server_route(ctx->http, "POST", "/v1/skills/reload", h_skills_reload, ctx);
     http_server_route(ctx->http, "POST", "/v1/skills/run", h_skill_run, ctx);
     http_server_route(ctx->http, "POST", "/v1/skills/install", h_skill_install, ctx);
     http_server_route(ctx->http, "POST", "/v1/skills/install-remote", h_skill_install_remote, ctx);

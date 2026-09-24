@@ -266,6 +266,20 @@ static char **stdio_argv(const mcp_conn *c) {
     size_t max = 4;
     char **argv;
     int n = 0;
+    cJSON *args_array = c->args_csv && c->args_csv[0] == '[' ? cJSON_Parse(c->args_csv) : NULL;
+
+    if (cJSON_IsArray(args_array)) {
+        max = (size_t)cJSON_GetArraySize(args_array) + 2;
+        argv = (char **)calloc(max, sizeof(char *));
+        if (!argv) { cJSON_Delete(args_array); return NULL; }
+        argv[n++] = xstrdup(c->command);
+        cJSON *arg;
+        cJSON_ArrayForEach(arg, args_array)
+            if (cJSON_IsString(arg)) argv[n++] = xstrdup(arg->valuestring);
+        cJSON_Delete(args_array);
+        return argv;
+    }
+    cJSON_Delete(args_array);
 
     if (c->args_csv)
         /* count every possible separator: strtok_r below splits on all of
@@ -1053,6 +1067,68 @@ int mcp_manager_load(mcp_manager *m, const char *state_root) {
 
     cJSON_Delete(arr);
     return 0;
+}
+
+static int mcp_local_entry(mcp_manager *m, cJSON *obj, const char *fallback) {
+    if (!cJSON_IsObject(obj)) return 0;
+    cJSON *n = cJSON_GetObjectItemCaseSensitive(obj, "name");
+    cJSON *t = cJSON_GetObjectItemCaseSensitive(obj, "transport");
+    cJSON *u = cJSON_GetObjectItemCaseSensitive(obj, "url");
+    cJSON *k = cJSON_GetObjectItemCaseSensitive(obj, "token");
+    cJSON *c = cJSON_GetObjectItemCaseSensitive(obj, "command");
+    cJSON *a = cJSON_GetObjectItemCaseSensitive(obj, "args");
+    const char *name = cJSON_IsString(n) ? n->valuestring : fallback;
+    const char *url = cJSON_IsString(u) ? u->valuestring : NULL;
+    const char *command = cJSON_IsString(c) ? c->valuestring : NULL;
+    char *args = NULL;
+    if (cJSON_IsString(a)) args = xstrdup(a->valuestring);
+    else if (cJSON_IsArray(a)) args = cJSON_PrintUnformatted(a);
+    mcp_conn conn = {0};
+    conn.name = (char *)name;
+    conn.transport = cJSON_IsString(t) ? t->valuestring : (command ? "stdio" : "http");
+    conn.url = (char *)url;
+    conn.token = cJSON_IsString(k) ? k->valuestring : NULL;
+    conn.command = (char *)command;
+    conn.args_csv = args;
+    int ok = mcp_manager_add_ex(m, &conn) == 0;
+    free(args);
+    return ok;
+}
+
+int mcp_manager_load_local(mcp_manager *m, const char *state_root) {
+    char dir[1024], path[1024];
+    dir_list entries = {0};
+    int count = 0;
+    if (!m || !state_root) return -1;
+    path_join(dir, sizeof(dir), state_root, "mcp");
+    if (fs_mkdirs(dir) != 0 || fs_list_dir(dir, &entries) != 0) return -1;
+    for (size_t i = 0; i < entries.count; i++) {
+        const dir_entry *e = &entries.items[i];
+        size_t len = strlen(e->name);
+        if (e->is_dir || len <= 5 || strcmp(e->name + len - 5, ".json") != 0) continue;
+        path_join(path, sizeof(path), dir, e->name);
+        if (fs_file_size(path) <= 0 || fs_file_size(path) > 256 * 1024) continue;
+        char *body = fs_read_file(path);
+        cJSON *root = body ? cJSON_Parse(body) : NULL;
+        free(body);
+        if (!root) { log_warn("mcp: invalid local config %s", path); continue; }
+        cJSON *servers = cJSON_GetObjectItemCaseSensitive(root, "mcpServers");
+        if (cJSON_IsObject(servers)) {
+            cJSON *server;
+            cJSON_ArrayForEach(server, servers)
+                count += mcp_local_entry(m, server, server->string);
+        } else {
+            char *stem = xstrdup(e->name);
+            if (stem) {
+                stem[len - 5] = '\0';
+                count += mcp_local_entry(m, root, stem);
+                free(stem);
+            }
+        }
+        cJSON_Delete(root);
+    }
+    fs_list_free(&entries);
+    return count;
 }
 
 /* ---- one-shot connection test (plaza "Test" button) ---- */

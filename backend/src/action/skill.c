@@ -518,3 +518,76 @@ int skill_registry_load(skill_registry *r, const char *state_root) {
     cJSON_Delete(arr);
     return 0;
 }
+
+static int skill_local_file(skill_registry *r, const char *path, const char *fallback_name) {
+    if (fs_file_size(path) <= 0 || fs_file_size(path) > 256 * 1024)
+        return 0;
+    char *body = fs_read_file(path);
+    if (!body)
+        return 0;
+    char *name = xstrdup(fallback_name);
+    char *description = xstrdup("");
+    /* Read only the YAML header. Keep the original SKILL.md as the prompt so
+     * relative resource references and instructions remain intact. */
+    if (strncmp(body, "---\n", 4) == 0 || strncmp(body, "---\r\n", 5) == 0) {
+        const char *p = strchr(body, '\n') + 1;
+        while (*p && strncmp(p, "---", 3) != 0) {
+            const char *end = strchr(p, '\n');
+            if (!end) end = p + strlen(p);
+            const char *value = NULL;
+            char **target = NULL;
+            if ((size_t)(end - p) >= 5 && strncmp(p, "name:", 5) == 0) {
+                value = p + 5; target = &name;
+            } else if ((size_t)(end - p) >= 12 && strncmp(p, "description:", 12) == 0) {
+                value = p + 12; target = &description;
+            }
+            if (target) {
+                while (value < end && (*value == ' ' || *value == '\t' || *value == '\'' || *value == '"')) value++;
+                const char *last = end;
+                while (last > value && (last[-1] == ' ' || last[-1] == '\r' || last[-1] == '\'' || last[-1] == '"')) last--;
+                if (last > value) {
+                    char *v = (char *)malloc((size_t)(last - value) + 1);
+                    if (v) {
+                        memcpy(v, value, (size_t)(last - value));
+                        v[last - value] = '\0';
+                        free(*target); *target = v;
+                    }
+                }
+            }
+            p = *end ? end + 1 : end;
+        }
+    }
+    skill s = {name, description, "prompt", body, NULL};
+    int ok = skill_register_ex(r, &s, 1) == 0;
+    free(name); free(description); free(body);
+    return ok;
+}
+
+int skill_registry_load_local(skill_registry *r, const char *state_root) {
+    char dir[1024], path[1024], file[1024];
+    dir_list entries = {0};
+    int count = 0;
+    if (!r || !state_root) return -1;
+    path_join(dir, sizeof(dir), state_root, "skills");
+    if (fs_mkdirs(dir) != 0 || fs_list_dir(dir, &entries) != 0) return -1;
+    for (size_t i = 0; i < entries.count; i++) {
+        const dir_entry *e = &entries.items[i];
+        if (e->name[0] == '.') continue;
+        if (e->is_dir) {
+            path_join(path, sizeof(path), dir, e->name);
+            path_join(file, sizeof(file), path, "SKILL.md");
+            count += skill_local_file(r, file, e->name);
+        } else {
+            size_t len = strlen(e->name);
+            if (len <= 3 || strcmp(e->name + len - 3, ".md") != 0) continue;
+            char *stem = xstrdup(e->name);
+            if (!stem) continue;
+            stem[len - 3] = '\0';
+            path_join(file, sizeof(file), dir, e->name);
+            count += skill_local_file(r, file, stem);
+            free(stem);
+        }
+    }
+    fs_list_free(&entries);
+    return count;
+}

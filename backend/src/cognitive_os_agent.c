@@ -565,6 +565,9 @@ int init(runtime_ctx *ctx, const config *cfg) {
     if (ctx->mcp) {
         if (mcp_manager_load(ctx->mcp, ctx->state_root) == 0)
             log_info("mcp: connections restored from %s/mcp.json", ctx->state_root);
+        int local_mcp = mcp_manager_load_local(ctx->mcp, ctx->state_root);
+        if (local_mcp > 0)
+            log_info("mcp: %d local connection(s) loaded from %s/mcp", local_mcp, ctx->state_root);
         int n = mcp_manager_sync_tools(ctx->mcp, ctx->tools);
         if (n > 0)
             log_info("mcp: %d remote tool(s) registered", n);
@@ -682,6 +685,9 @@ int init(runtime_ctx *ctx, const config *cfg) {
                                 "echo hello from cognitive-os-agent", NULL};
         skill_register(ctx->skills, &demo);
         skill_registry_load(ctx->skills, ctx->state_root);
+        int local_skills = skill_registry_load_local(ctx->skills, ctx->state_root);
+        if (local_skills > 0)
+            log_info("skills: %d local skill(s) loaded from %s/skills", local_skills, ctx->state_root);
     }
 
     /* self-evolution: re-bind generated tools (tool name -> skill) persisted

@@ -74,6 +74,9 @@ char *mcp_test_json(const mcp_conn *conn);
 /* Persist / restore connections to <state_root>/mcp.json. */
 int mcp_manager_persist(mcp_manager *m, const char *state_root);
 int mcp_manager_load(mcp_manager *m, const char *state_root);
+/* Import JSON connection files from <state_root>/mcp/. Supports a single
+ * connection object or the common {"mcpServers":{name:config}} format. */
+int mcp_manager_load_local(mcp_manager *m, const char *state_root);
 
 #ifdef __cplusplus
 }

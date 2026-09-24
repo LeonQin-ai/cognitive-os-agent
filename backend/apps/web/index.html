@@ -223,6 +223,8 @@
   .card-head .row{margin:0; gap:6px}
   .hint{color:var(--muted); font-size:12px; margin:0 0 10px; line-height:1.65}
   .muted{color:var(--muted)}
+  .local-path{display:block; width:100%; box-sizing:border-box; margin:8px 0; padding:9px 11px; border:1px solid var(--border); border-radius:var(--radius-sm); background:var(--bg); color:var(--fg); overflow-wrap:anywhere; user-select:all}
+  .local-step{font-size:12px; color:var(--muted); line-height:1.6}
 
   textarea,input[type=text],input[type=number],select{
     width:100%; background:var(--bg); color:var(--fg);
@@ -939,6 +941,12 @@ panels.flow = `
 
 panels.mcp = `
   <div class="card">
+    <div class="card-head"><h2>本地 MCP</h2><button class="sec sm" onclick="mcpSync()">重新加载</button></div>
+    <div class="local-step">将 JSON 配置文件复制到此目录</div><code class="local-path" id="local-mcp-dir">state/mcp/</code>
+    <div class="hint">支持单个连接或 <code>mcpServers</code> 格式。复制后点击“重新加载”发现工具。</div>
+    <span id="local-mcp-status" class="muted"></span>
+  </div>
+  <div class="card">
     <h2>MCP 广场</h2>
     <div class="hint">精选 MCP 服务器，一键添加连接。标"需本地运行"的条目要先启动对应服务（见提示）。更多服务器： <a href="https://modelscope.cn/mcp" target="_blank" rel="noopener">ModelScope MCP 广场（modelscope.cn/mcp）</a></div>
     <input id="mcp-search" class="search-in" type="text" placeholder="🔍 搜索 MCP 服务器（名称或描述）" oninput="renderMcpPlaza()">
@@ -979,8 +987,14 @@ panels.metrics   = outPanel('Metrics (Prometheus)', 'metrics-out', 'metrics');
 
 panels.skills = `
   <div class="card">
+    <div class="card-head"><h2>本地 Skills</h2><button class="sec sm" onclick="reloadLocalSkills()">重新加载</button></div>
+    <div class="local-step">将技能文件夹复制到此目录</div><code class="local-path" id="local-skills-dir">state/skills/</code>
+    <div class="hint">文件夹内放 <code>SKILL.md</code>；也支持直接放入单个 .md 文件。复制后点击“重新加载”。</div>
+    <span id="local-skills-status" class="muted"></span>
+  </div>
+  <div class="card">
     <h2>Skills</h2>
-    <div class="hint">静态 Shell/Python 技能，输入技能名即可运行。</div>
+    <div class="hint">已注册的 Shell/Python 技能可在此运行；本地 SKILL.md 作为提示词技能供 Agent 使用。</div>
     <div class="row">
       <input type="text" id="skillname" placeholder="技能名，例如 echo_hello" style="flex:1;min-width:180px">
       <button onclick="runSkill()">Run</button>
@@ -990,9 +1004,10 @@ panels.skills = `
   <div class="card">
     <div class="card-head">
       <h2>已注册技能</h2>
-      <button class="sec sm" onclick="copyPre('skills-out')">Copy</button>
+      <button class="sec sm" onclick="toggleSkillRaw()">原始数据</button>
     </div>
-    <pre id="skills-out">加载中…</pre>
+    <div id="skills-list">加载中…</div>
+    <pre id="skills-out" style="display:none">加载中…</pre>
   </div>
   <div class="card">
     <div class="card-head">
@@ -1275,8 +1290,8 @@ async function load(panel){
   if(panel === 'dashboard') return loadDashboard();
   if(panel === 'im') return renderIm();
   if(panel === 'agents') return (loadAgents(), loadFlow(), loadFlowTasks());
-  if(panel === 'mcp') return loadMcp();
-  if(panel === 'skills') return (loadSkillsMarket(), loadSkillsCatalog());
+  if(panel === 'mcp') return (loadLocalDirs(), loadMcp());
+  if(panel === 'skills') return (loadLocalDirs(), loadSkillsMarket(), loadSkillsCatalog());
   if(panel === 'plugins') return (loadFetcher('plugins'), loadPluginMarket());
   if(panel === 'snapshots') return loadSnapshots();
   if(panel === 'chat') return loadChat();
@@ -1568,6 +1583,21 @@ function agentPost(){
 
 /* ================= MCP ================= */
 
+async function loadLocalDirs(){
+  const r = await call('GET', '/v1/local/dirs');
+  if(r.status >= 300 || !r.obj) return;
+  if($('local-skills-dir')) $('local-skills-dir').textContent = r.obj.skills || 'state/skills';
+  if($('local-mcp-dir')) $('local-mcp-dir').textContent = r.obj.mcp || 'state/mcp';
+}
+
+async function reloadLocalSkills(){
+  const status = $('local-skills-status');
+  if(status) status.textContent = '正在扫描本地技能…';
+  const r = await call('POST', '/v1/skills/reload', {});
+  if(status) status.textContent = r.obj?.ok ? ('已加载 ' + r.obj.loaded + ' 个本地技能') : '加载失败，请检查目录和文件格式';
+  if(r.obj?.ok) loadSkillsMarket();
+}
+
 let MCP_CONNS = [];
 
 async function loadMcp(){
@@ -1702,10 +1732,17 @@ async function mcpConnTest(i){
 }
 
 async function mcpSync(){
-  toast('重新发现 MCP 工具…');
+  const status = $('local-mcp-status');
+  if(status) status.textContent = '正在扫描配置并发现工具…';
   const r = await call('POST', '/v1/mcp/sync', {});
-  if(r.status < 300) toast('✔ 已重新发现 ' + ((r.obj && r.obj.registered) || 0) + ' 个工具');
-  else toast('同步失败: HTTP ' + r.status);
+  if(r.status < 300){
+    const message = '已加载 ' + (r.obj?.loaded || 0) + ' 个本地配置，发现 ' + (r.obj?.registered || 0) + ' 个工具';
+    if(status) status.textContent = message;
+    toast(message);
+  } else {
+    if(status) status.textContent = '加载失败';
+    toast('同步失败: HTTP ' + r.status);
+  }
   loadMcp();
 }
 
@@ -1789,6 +1826,7 @@ async function runSkill(){
   if(!name) return;
   const r = await call('POST', '/v1/skills/run', {name});
   SKILLS_LIST = null; /* skills-out 现在显示的是运行结果，搜索过滤暂停生效 */
+  if($('skills-out')) $('skills-out').style.display = 'block';
   renderJSON(r.obj, $('skills-out'));
 }
 
@@ -1800,7 +1838,16 @@ function renderRegisteredSkills(){
   const q = skillQ();
   const list = !q ? SKILLS_LIST : SKILLS_LIST.filter(s =>
     [s.name, s.description, s.kind].some(f => f && String(f).toLowerCase().includes(q)));
+  const box = $('skills-list');
+  if(box) box.innerHTML = list.length ? list.map(s =>
+    '<div class="item"><b>' + esc(s.name) + '</b> <span class="tag">' + esc(s.kind) + '</span>' +
+    '<div class="hint">' + esc(s.description || '无描述') + '</div></div>').join('') : '<span class="muted">（暂无匹配技能）</span>';
   if($('skills-out')) renderJSON(list, $('skills-out'));
+}
+
+function toggleSkillRaw(){
+  const out = $('skills-out'); if(!out) return;
+  out.style.display = out.style.display === 'none' ? 'block' : 'none';
 }
 
 /* ================= 技能广场（精选目录） ================= */
@@ -2730,7 +2777,7 @@ async function chatLoadHistory(){
 }
 
 async function chatSwitchSession(id){
-  if(id === CHAT_SESSION){ switchPanel('chat'); return; }
+  if(id === CHAT_SESSION){ switchPanel('chat'); requestAnimationFrame(() => $('chat-input')?.focus()); return; }
   chatCacheStore(); // 保存当前会话消息，切回时即时回放
   CHAT_SESSION = id;
   CHAT_NEW_SESSION = false;
@@ -2745,6 +2792,7 @@ async function chatSwitchSession(id){
     const st = $('chat-status');
     if(st) st.textContent = '任务执行中…';
   }
+  requestAnimationFrame(() => $('chat-input')?.focus());
 }
 
 async function chatNewSession(){
@@ -2763,6 +2811,7 @@ async function chatNewSession(){
   if(st) st.textContent = ok ? ('新会话 ' + (id ? '' : '（临时）')) + '：已就绪' : '尚未配置模型，请在上方设置里先配置对话模型';
   fillChatModelSelect();
   syncChatTaskId(); /* 新会话无任务，隐藏「取消」按钮 */
+  requestAnimationFrame(() => $('chat-input')?.focus());
 }
 
 async function chatClearSession(id){
