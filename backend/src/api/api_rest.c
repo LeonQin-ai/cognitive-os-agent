@@ -3636,8 +3636,8 @@ static int h_catalog_models(const http_request *req, http_response *resp, void *
     char *s;
 
     (void)req;
-    (void)ud;
-    s = catalog_models_json();
+    runtime_ctx *ctx = (runtime_ctx *)ud;
+    s = catalog_models_json_for_state(ctx ? ctx->state_root : NULL);
     http_resp_json(resp, s ? s : "[]");
     free(s);
     return 0;

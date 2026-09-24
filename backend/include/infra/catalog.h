@@ -13,6 +13,10 @@ extern "C" {
  *   [{id,name,provider,base_url,model,key_hint,note}] */
 char *catalog_models_json(void);
 
+/* Built-in presets plus validated overrides from <state_root>/models.json.
+ * The file is read on each request, so edits take effect without restarting. */
+char *catalog_models_json_for_state(const char *state_root);
+
 /* JSON array of MCP server plaza entries:
  *   [{id,name,url,description,category,needs_local,key_hint,repo}] */
 char *catalog_mcp_json(void);

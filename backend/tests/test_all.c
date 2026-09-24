@@ -2792,7 +2792,7 @@ static void test_agent_loop(void) {
         runtime_ctx ctx;
         if (init(&ctx, &cfg) != 0) { CHECK(0); return; }
         char *ans = NULL;
-        CHECK(reasoning_run(ctx.reasoning, "分析 b.txt 并修复其中的 OLD", &ans) == 0);
+        CHECK(reasoning_run(ctx.reasoning, "分析 b.txt 并修复其中的 OLD", &ans) != 0);
         /* answer = final text only; raw tool log must not leak into it */
         CHECK(ans && strstr(ans, "综合回答") != NULL);
         CHECK(ans && strstr(ans, "[file_read]") == NULL);
@@ -2803,6 +2803,30 @@ static void test_agent_loop(void) {
         runtime_shutdown(&ctx);
         fs_remove(f);
         fs_remove("state-test/loop1/cognitive-os-agent.json");
+    }
+
+    /* issue #68: reading files, or a text-only claim, cannot complete a
+     * requested PPT when no action has generated the deliverable. */
+    {
+        fs_write_file("state-test/loop-w/readme.txt", "technical notes", 15);
+        config cfg;
+        memset(&cfg, 0, sizeof(cfg));
+        cfg.state_root = "state-test/loop-ppt-incomplete";
+        cfg.workspace = "state-test/loop-w";
+        cfg.provider = "mock";
+        cfg.http_port = 0;
+        runtime_ctx ctx;
+        if (init(&ctx, &cfg) != 0) { CHECK(0); return; }
+        char *ans = NULL;
+        CHECK(reasoning_run(ctx.reasoning, "未完成PPT回归测试：读取代码并生成PPT", &ans) != 0);
+        CHECK(ans && strstr(ans, "任务未完成") != NULL);
+        free(ans);
+        ans = NULL;
+        CHECK(reasoning_run(ctx.reasoning, "无动作PPT回归测试：生成PPT", &ans) != 0);
+        CHECK(ans && strstr(ans, "任务未完成") != NULL);
+        free(ans);
+        runtime_shutdown(&ctx);
+        fs_remove("state-test/loop-w/readme.txt");
     }
 
     /* plain chat is unchanged: no plan on round 1 -> answer is the LLM text */
@@ -3144,7 +3168,7 @@ static void test_policy_rules(void) {
         policy_add_rule(ctx.policy, "file_write", "deny", "readonly guard");
 
         char *ans = NULL;
-        CHECK(reasoning_run(ctx.reasoning, "创建 blocked.txt 写入内容 x", &ans) == 0);
+        CHECK(reasoning_run(ctx.reasoning, "创建 blocked.txt 写入内容 x", &ans) != 0);
         /* the deny surfaces in the execution log (process tail), not the
          * user-visible answer — the answer is final text only */
         char *plog = reasoning_round_log_tail(ctx.reasoning, 65536);
@@ -5067,6 +5091,25 @@ static void test_catalog(void) {
         CHECK(strstr(m, "\"groq\"") != NULL && strstr(m, "\"local\":false") != NULL);
         free(m);
     }
+    fs_mkdirs("state-test/catalog-custom");
+    const char *models = "[{\"id\":\"groq\",\"name\":\"My Groq\",\"provider\":\"openai\","
+                         "\"base_url\":\"https://example.test/v1\",\"model\":\"custom-v1\"},"
+                         "{\"id\":\"my-local\",\"name\":\"Local\",\"provider\":\"openai\","
+                         "\"base_url\":\"http://127.0.0.1:1234/v1\",\"model\":\"test\",\"local\":true},"
+                         "{\"id\":\"bad\",\"name\":\"Bad\",\"provider\":\"other\","
+                         "\"base_url\":\"file:///tmp\",\"model\":\"x\"}]";
+    CHECK(fs_write_file("state-test/catalog-custom/models.json", models, strlen(models)) == 0);
+    m = catalog_models_json_for_state("state-test/catalog-custom");
+    cJSON *model_arr = m ? cJSON_Parse(m) : NULL;
+    CHECK(cJSON_IsArray(model_arr) && cJSON_GetArraySize(model_arr) == 10);
+    CHECK(m && strstr(m, "custom-v1") && strstr(m, "my-local") && !strstr(m, "\"bad\""));
+    cJSON_Delete(model_arr);
+    free(m);
+    fs_write_file("state-test/catalog-custom/models.json", "not json", 8);
+    m = catalog_models_json_for_state("state-test/catalog-custom");
+    CHECK(m && strstr(m, "\"groq\"") && !strstr(m, "custom-v1"));
+    free(m);
+    fs_remove("state-test/catalog-custom/models.json");
     char *mc = catalog_mcp_json();
     CHECK(mc != NULL);
     if (mc) {

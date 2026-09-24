@@ -1946,6 +1946,7 @@ static int looks_like_intent(const char *text) {
         "\xe8\xae\xa9\xe6\x88\x91",             /* 让我   */
         "\xe6\x88\x91\xe5\xb0\x86",             /* 我将   */
         "\xe6\x88\x91\xe5\x85\x88",             /* 我先   */
+        "我来", "我还需要", "还需要", "接下来", "让我继续", "继续读取",
         "\xe7\xac\xac\xe4\xb8\x80\xe6\xad\xa5", /* 第一步 */
     };
     for (size_t i = 0; i < sizeof(marks) / sizeof(marks[0]); i++)
@@ -1996,6 +1997,33 @@ static int prompt_is_direct_information_request(const char *prompt) {
     for (size_t i = 0; i < sizeof(questions) / sizeof(questions[0]); i++)
         if (strstr(prompt, questions[i]))
             return 1;
+    return 0;
+}
+
+/* A requested file/code change needs evidence of an action before a text-only
+ * answer can close the run. In particular, reading source files is not proof
+ * that a requested PPT or copy was created (issue #68). */
+static int prompt_requires_mutation(const char *prompt) {
+    static const char *const verbs[] = {
+        "生成", "制作", "创建", "复制", "写入", "修改", "修复", "保存", "导出",
+        "安装", "部署", "删除", "create ", "generate ", "copy ", "write ",
+        "edit ", "fix ", "save ", "export ", "install ", "deploy ", "delete "
+    };
+    if (!prompt || strstr(prompt, "如何") || strstr(prompt, "怎么") || strstr(prompt, "how to "))
+        return 0;
+    for (size_t i = 0; i < sizeof(verbs) / sizeof(verbs[0]); i++)
+        if (strstr(prompt, verbs[i])) return 1;
+    return 0;
+}
+
+static int run_has_mutating_action(const reasoning *r) {
+    for (int i = 0; i < r->n_steps; i++) {
+        const struct run_step *step = &r->steps[i];
+        if (step->ok != 1) continue;
+        if (strcmp(step->tool, "file_read") == 0 || strcmp(step->tool, "glob") == 0 ||
+            strcmp(step->tool, "grep") == 0) continue;
+        return 1;
+    }
     return 0;
 }
 
@@ -2541,6 +2569,7 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     state st = ST_FAILED;
     int consec_fail = 0; /* consecutive stage failures → circuit breaker */
     int fail_aborted = 0;
+    int unfinished = 0; /* text described future work, or requested write never ran */
     int search_only_rounds = 0;
     int synthesized = 0; /* fallback answer may describe an incomplete run */
 restart_planning:
@@ -2652,18 +2681,23 @@ restart_planning:
              * (reset whenever a round executes a plan), not a per-run total:
              * a narration → plan → narration pattern is normal thinking
              * aloud, while the model stuck narrating 4 rounds in a row will
-             * not recover. After the bound, the text is accepted as the
-             * final answer. */
+             * not recover. Exhaustion must report an incomplete task. */
             const char *txt = strip_nudge_echo(result);
-            if ((r->thinking_mode || !prompt_is_direct_information_request(prompt)) && r->max_rounds > 1 && r->intent_nudged < 4 &&
-                r->round_idx < r->max_rounds && looks_like_intent(txt)) {
-                /* the model re-emitted the same narration after the nudge:
-                 * it has now "answered" twice with nothing new to add — the
-                 * text IS the final answer (meta questions with no tool work
-                 * used to bounce here until the round budget ran out,
-                 * concatenating the same answer once per round) */
+            int needs_action = prompt_requires_mutation(prompt) && !run_has_mutating_action(r);
+            int narrating = (r->thinking_mode || !prompt_is_direct_information_request(prompt)) &&
+                            looks_like_intent(txt);
+            if (needs_action || narrating) {
+                /* Repeating the same intention is not evidence of completion.
+                 * Stop rather than spending the remaining budget on identical
+                 * calls, and surface the task as failed/incomplete. */
                 if (last_narration && txt && strcmp(txt, last_narration) == 0) {
+                    unfinished = 1;
                     final_text = xstrdup(txt);
+                    break;
+                }
+                if (r->max_rounds <= 1 || r->intent_nudged >= 4 || r->round_idx >= r->max_rounds) {
+                    unfinished = 1;
+                    final_text = xstrdup(txt ? txt : "");
                     break;
                 }
                 r->intent_nudged++;
@@ -2788,9 +2822,15 @@ restart_planning:
         free(final_text); final_text = NULL;
         free(result); result = NULL;
         free(last_narration); last_narration = NULL;
-        stalled = consec_fail = fail_aborted = synthesized = 0;
+        stalled = consec_fail = fail_aborted = synthesized = unfinished = 0;
         goto restart_planning;
     }
+    /* A read-only final round may exhaust the budget without ever reaching
+     * the no-plan guard above. It is still incomplete if a write was asked. */
+    if (prompt_requires_mutation(prompt) && !run_has_mutating_action(r))
+        unfinished = 1;
+    if (unfinished)
+        st = ST_FAILED;
     strbuf_init(&out);
     /* user-visible answer = the model's final text ONLY. Raw tool output and
      * [tool]/action logs are execution details (visible live via
@@ -2832,6 +2872,8 @@ restart_planning:
     if (fail_aborted)
         strbuf_appendf(&out, "\n(连续 %s 轮阶段失败，任务中止 — 请检查模型服务/网络可用性后重试)",
                        REASONING_CONSEC_FAIL_ABORT_STR);
+    if (unfinished)
+        strbuf_append(&out, "\n(任务未完成：模型只描述了后续动作，或尚未执行所需的写入/生成动作。请继续任务。)");
 
     free(final_text);
     free(result);

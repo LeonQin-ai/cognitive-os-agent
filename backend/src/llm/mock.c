@@ -200,6 +200,16 @@ static char *mock_respond(const char *msg) {
     if (cur)
         msg = cur + strlen("## Current request\n");
 
+    /* Reproduce issue #68: reading files followed by a narrated promise to
+     * generate a PPT, with no action that actually creates the artifact. */
+    if (has_substr(msg, "未完成PPT回归测试")) {
+        if (in_loop)
+            return xstrdup("我来继续读取技术分析文档，然后生成PPT。");
+        return xstrdup("[{\"tool\":\"file_read\",\"args\":{\"path\":\"readme.txt\"}}]");
+    }
+    if (has_substr(msg, "无动作PPT回归测试"))
+        return xstrdup("任务完成。");
+
     /* Regression fixture for the per-action circuit breaker: deliberately
      * repeat the exact same invalid SSH call across planning rounds. */
     if (has_substr(msg, "SSH连续失败测试"))

@@ -239,6 +239,15 @@ platform-guarded and compiled together (the inactive one compiles to nothing).
 `local` 标志。Web 控制台的「免费模型广场」会把 `signup_url` 渲染成可点击的
 「申请 key」链接，用户复制 key 后走 `POST /v1/config/llm` 一键配置并设为当前。
 
+可在状态目录的 `models.json` 增加或覆盖预设；刷新模型目录即可生效，无需重新编译。
+文件是 JSON 数组，每项填写 `id`、`name`、`provider`（`openai`/`anthropic`）、
+`base_url` 和 `model`，可选 `key_hint`、`note`、`signup_url`、`local`。
+同 `id` 会覆盖内置预设，无效条目会跳过。例如：
+
+```json
+[{"id":"local-qwen","name":"本地 Qwen","provider":"openai","base_url":"http://127.0.0.1:1234/v1","model":"qwen","local":true}]
+```
+
 本地模型（Ollama / llama.cpp，无需 key）支持一键检测与启动：
 
 ```

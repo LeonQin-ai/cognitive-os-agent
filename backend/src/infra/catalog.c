@@ -5,6 +5,7 @@
 #include "infra/catalog.h"
 #include "infra/util.h"
 #include "os/http.h"
+#include "os/os_fs.h"
 #include "cJSON.h"
 
 #include <stdio.h>
@@ -202,6 +203,68 @@ char *catalog_models_json(void) {
         memcpy(out + cur, "]", 2);
     }
 
+    return out;
+}
+
+char *catalog_models_json_for_state(const char *state_root) {
+    char *builtins = catalog_models_json();
+    if (!builtins || !state_root || !*state_root) return builtins;
+    char path[768];
+    path_join(path, sizeof(path), state_root, "models.json");
+    long long size = fs_file_size(path);
+    if (size <= 0 || size > 131072) return builtins;
+    char *file = fs_read_file(path);
+    if (!file) return builtins;
+    cJSON *custom = cJSON_Parse(file);
+    cJSON *merged = cJSON_Parse(builtins);
+    free(file);
+    if (!cJSON_IsArray(custom) || !cJSON_IsArray(merged) || cJSON_GetArraySize(custom) > 64) {
+        cJSON_Delete(custom); cJSON_Delete(merged);
+        return builtins;
+    }
+    cJSON *entry = NULL;
+    cJSON_ArrayForEach(entry, custom) {
+        const char *fields[] = {"id", "name", "provider", "base_url", "model"};
+        const char *vals[5];
+        int valid = cJSON_IsObject(entry);
+        for (size_t i = 0; valid && i < 5; i++) {
+            cJSON *v = cJSON_GetObjectItemCaseSensitive(entry, fields[i]);
+            vals[i] = cJSON_GetStringValue(v);
+            if (!vals[i] || !*vals[i] || strlen(vals[i]) > 512) valid = 0;
+        }
+        if (!valid || (strcmp(vals[2], "openai") && strcmp(vals[2], "anthropic")) ||
+            (strncmp(vals[3], "http://", 7) && strncmp(vals[3], "https://", 8))) continue;
+        for (const char *p = vals[0]; *p; p++)
+            if (!isalnum((unsigned char)*p) && *p != '_' && *p != '-') valid = 0;
+        if (!valid) continue;
+        cJSON *copy = cJSON_Duplicate(entry, 1);
+        if (!copy) continue;
+        const char *optional[] = {"key_hint", "note", "signup_url"};
+        for (size_t i = 0; i < 3; i++) {
+            cJSON *v = cJSON_GetObjectItemCaseSensitive(copy, optional[i]);
+            if (!cJSON_IsString(v)) {
+                cJSON_DeleteItemFromObjectCaseSensitive(copy, optional[i]);
+                cJSON_AddStringToObject(copy, optional[i], "");
+            }
+        }
+        cJSON *local = cJSON_GetObjectItemCaseSensitive(copy, "local");
+        if (!cJSON_IsBool(local)) {
+            cJSON_DeleteItemFromObjectCaseSensitive(copy, "local");
+            cJSON_AddBoolToObject(copy, "local", 0);
+        }
+        int replace = -1;
+        for (int i = 0; i < cJSON_GetArraySize(merged); i++) {
+            cJSON *old = cJSON_GetArrayItem(merged, i);
+            const char *id = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(old, "id"));
+            if (id && strcmp(id, vals[0]) == 0) { replace = i; break; }
+        }
+        if (replace >= 0) cJSON_ReplaceItemInArray(merged, replace, copy);
+        else cJSON_AddItemToArray(merged, copy);
+    }
+    char *out = cJSON_PrintUnformatted(merged);
+    cJSON_Delete(custom); cJSON_Delete(merged);
+    if (!out) return builtins;
+    free(builtins);
     return out;
 }
 
