@@ -1651,3 +1651,9 @@ Reason: minimizes plaintext residency and avoids returning secrets to Agent memo
 Decision: Accepted.
 
 Reason: L0/L1/L2 describe memory representation; HOT/WARM/COLD describe runtime cache residency. Secret security must operate before both persistent memory and context cache ingestion.
+
+---
+
+## Implementation status (2026-09-27)
+
+This document is an architecture target. The Personal Edition currently has deterministic secret detection, redaction, selected LLM/log boundary guards, metrics and an audit trail. The managed encrypted store, opaque `credential_ref` / `session_ref` broker, capability-checked tool-boundary injection and rotation are **not implemented**. Existing configuration and MCP persistence can contain plaintext credentials. Consequently the P0 goals above are only partially met; the stronger invariants in Section 1.2 must not be treated as verified system-wide guarantees. P1 and P2 remain design work.

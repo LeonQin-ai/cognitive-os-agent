@@ -302,14 +302,20 @@ POST /v1/local/start             # body {"engine":"ollama"} 或 {"engine":"llama
 ./build/cognitive-os-agent-e2e                   # full pipeline, both providers
 ```
 
-Current unit result (verified locally on Windows):
+Current unit result (verified locally on Windows, 2026-09-27):
 
 ```
-unit:       1622 passed, 0 failed
+unit:       2112 passed, 0 failed
 adapters:   ADAPTER PASS (openai + anthropic, chat + stream)
 e2e:        E2E PASS (openai + anthropic)
 bench:      --mock tool-selection accuracy 100%
 ```
+
+On Windows with Git Bash and Zig, `tools/coverage.sh` builds an instrumented
+unit binary and reports first-party **function** coverage. Pass `--uncovered`
+to list functions the suite did not call. The report does not measure line or
+branch coverage, and an uncalled function may still be reachable through a
+registered HTTP route, tool callback or platform hook.
 
 ## Agent + LLM benchmark
 
@@ -364,7 +370,7 @@ Numeric returns preserve their Wasm type; void functions return JSON `null`.
 ## Layout
 
 ```
-include/cognitive-os-agent/      public headers (one per module, by layer)
+include/             public headers grouped by module and layer
 src/runtime/         event bus · scheduler · state machine · policy · agent · task
 src/cognition/       reasoning · planner · evaluator · blackboard · attention
 src/memory/          facade + kv (facts) · vector · graph · episode sub-stores

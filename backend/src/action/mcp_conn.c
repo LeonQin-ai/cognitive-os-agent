@@ -119,6 +119,7 @@ int mcp_manager_add_ex(mcp_manager *m, const mcp_conn *conn) {
     int is_http;
     int is_stdio;
     mcp_conn *e = NULL;
+    mcp_conn copy = {0};
     int i;
 
     if (!m || !conn || !conn->name || !*conn->name)
@@ -133,6 +134,21 @@ int mcp_manager_add_ex(mcp_manager *m, const mcp_conn *conn) {
     if (is_stdio && (!conn->command || !*conn->command))
         return -1;
 
+    /* Copy before taking the lock: callers may pass a borrowed connection
+     * from this manager. Replacing it must never free the source strings. */
+    copy.name = xstrdup(conn->name);
+    copy.transport = xstrdup(transport);
+    copy.url = conn->url ? xstrdup(conn->url) : NULL;
+    copy.token = conn->token ? xstrdup(conn->token) : NULL;
+    copy.command = conn->command ? xstrdup(conn->command) : NULL;
+    copy.args_csv = conn->args_csv ? xstrdup(conn->args_csv) : NULL;
+    if (!copy.name || !copy.transport || (conn->url && !copy.url) ||
+        (conn->token && !copy.token) || (conn->command && !copy.command) ||
+        (conn->args_csv && !copy.args_csv)) {
+        conn_free(&copy);
+        return -1;
+    }
+
     mutex_lock(&m->mtx);
     mcp_session *s = NULL;
     i = find_conn(m, conn->name);
@@ -145,12 +161,23 @@ int mcp_manager_add_ex(mcp_manager *m, const mcp_conn *conn) {
     } else {
         if (m->count == m->cap) {
             size_t ncap = m->cap ? m->cap * 2 : 8;
-            mcp_conn *ni = (mcp_conn *)realloc(m->items, ncap * sizeof(*ni));
-            mcp_session *ns = (mcp_session *)realloc(m->sess, ncap * sizeof(*ns));
+            /* Two reallocs can leave one old pointer dangling when only
+             * one succeeds. Allocate both before changing manager state. */
+            mcp_conn *ni = (mcp_conn *)malloc(ncap * sizeof(*ni));
+            mcp_session *ns = (mcp_session *)malloc(ncap * sizeof(*ns));
             if (!ni || !ns) {
+                free(ni);
+                free(ns);
                 mutex_unlock(&m->mtx);
+                conn_free(&copy);
                 return -1;
             }
+            if (m->count) {
+                memcpy(ni, m->items, m->count * sizeof(*ni));
+                memcpy(ns, m->sess, m->count * sizeof(*ns));
+            }
+            free(m->items);
+            free(m->sess);
             m->items = ni;
             m->sess = ns;
             m->cap = ncap;
@@ -162,12 +189,7 @@ int mcp_manager_add_ex(mcp_manager *m, const mcp_conn *conn) {
         m->count++;
     }
 
-    e->name = xstrdup(conn->name);
-    e->transport = xstrdup(transport);
-    e->url = conn->url ? xstrdup(conn->url) : NULL;
-    e->token = conn->token ? xstrdup(conn->token) : NULL;
-    e->command = conn->command ? xstrdup(conn->command) : NULL;
-    e->args_csv = conn->args_csv ? xstrdup(conn->args_csv) : NULL;
+    *e = copy;
     mutex_unlock(&m->mtx);
     return 0;
 }

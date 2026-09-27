@@ -2729,6 +2729,12 @@ The Personal Edition currently has working local runtime, task and Agent state m
 
 The capacity and latency values in Section 3 remain engineering targets until a reproducible benchmark report demonstrates them. Enterprise and advanced execution items must not be presented as production-complete based only on interfaces or local stubs.
 
+## 37.1 Code and test audit (2026-09-27)
+
+The Windows instrumented unit run measured **1,091 of 1,248 first-party functions reached (87.4%)**. REST API handlers were the largest test gap: `api_rest.c` reached 50 of 137 functions (36.5%). This is function coverage for one platform and one test binary; it is not line, branch, Linux, macOS or production-workload coverage. `backend/tools/coverage.sh --uncovered` reproduces the measurement on Windows with Zig and Git Bash. An uncalled function is not necessarily dead: many REST handlers and tool executors are registered through function pointers. The only confirmed unused private implementation found in this pass was removed; public extension points were retained.
+
+The audit fixed two independent ownership defects in MCP connection and Skill replacement and made the coverage collector safe for concurrent test threads. It also identified a material design-to-code gap: the Secret Security Plane currently detects and redacts secrets at selected boundaries, but it has no encrypted managed-secret store or opaque credential broker. The P0 design in `COGNITIVE_OS_SECRET_SECURITY_DDD_V1.0.md` is therefore **partial**, not an implemented security guarantee. Phase 7 and Phase 8 above remain explicit roadmap work; their distributed and advanced-execution acceptance criteria have not been validated by this local audit.
+
 ---
 
 # References

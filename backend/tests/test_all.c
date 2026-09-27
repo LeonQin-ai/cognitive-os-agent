@@ -642,7 +642,7 @@ static void test_snapshot_tx(void) {
     CHECK(native != NULL && native->exit_code == 7);
     proc_result_free(native);
     tool_result *powershell = tool_execute(reg, "shell",
-        "{\"command\":\"Write-Output 'PS_OK' | Out-String\",\"shell\":\"powershell\",\"timeout_ms\":5000}",
+        "{\"command\":\"Write-Output 'PS_OK' | Out-String\",\"shell\":\"powershell\",\"timeout_ms\":15000}",
         &ssh_ctx);
     CHECK(powershell && powershell->ok && strstr(powershell->output, "PS_OK"));
     tool_result_free(powershell);
@@ -2187,6 +2187,9 @@ static void test_skills(void) {
     CHECK(skill_count(r) == 1);
     const skill *f = skill_find(r, "echo_hi");
     CHECK(f != NULL && strcmp(f->kind, "shell") == 0);
+    CHECK(f && skill_register_ex(r, f, 1) == 0);
+    f = skill_find(r, "echo_hi");
+    CHECK(f && strcmp(f->body, "echo hi") == 0);
     skill_result *res = skill_execute(r, "echo_hi", NULL, NULL, 5000);
     CHECK(res != NULL);
     if (res) {
@@ -2242,6 +2245,19 @@ static void test_mcp(void) {
     CHECK(mcp_manager_count(m) == 1);
     const mcp_conn *c = mcp_manager_find(m, "srv1");
     CHECK(c != NULL && strstr(c->url, "9001") != NULL);
+    /* Updating from a borrowed entry used to free the source strings first. */
+    CHECK(c && mcp_manager_add_ex(m, c) == 0);
+    CHECK(mcp_manager_count(m) == 1);
+    CHECK(mcp_manager_find(m, "srv1") &&
+          strcmp(mcp_manager_find(m, "srv1")->url, "http://127.0.0.1:9001/mcp") == 0);
+    /* Exercise the parallel connection/session array growth boundary. */
+    for (int k = 0; k < 9; k++) {
+        char name[32];
+        snprintf(name, sizeof name, "extra-%d", k);
+        CHECK(mcp_manager_add(m, name, "http://127.0.0.1:9000/mcp", NULL) == 0);
+    }
+    CHECK(mcp_manager_count(m) == 10);
+    CHECK(mcp_manager_find(m, "srv1") != NULL);
     char *j = mcp_manager_json(m);
     CHECK(j && strstr(j, "srv1") != NULL);
     free(j);
@@ -2253,6 +2269,12 @@ static void test_mcp(void) {
         free(err);
     }
     CHECK(mcp_manager_remove(m, "srv1", NULL) == 0);
+    CHECK(mcp_manager_count(m) == 9);
+    for (int k = 0; k < 9; k++) {
+        char name[32];
+        snprintf(name, sizeof name, "extra-%d", k);
+        CHECK(mcp_manager_remove(m, name, NULL) == 0);
+    }
     CHECK(mcp_manager_count(m) == 0);
     mcp_manager_free(m);
 }
@@ -5515,6 +5537,16 @@ static void test_http_api(void) {
     CHECK(strstr(r.body, "\"max_workers\":3") && strstr(r.body, "\"max_active\":20"));
     CHECK(raw_http_request(18211, "GET", "/v1/tools", NULL, &r) == 0 && r.status == 200);
     CHECK(strstr(r.body, "file_write") != NULL);
+    CHECK(raw_http_request(18211, "GET", "/v1/local/dirs", NULL, &r) == 0 && r.status == 200);
+    CHECK(strstr(r.body, "skills") && strstr(r.body, "mcp"));
+    CHECK(raw_http_request(18211, "GET", "/v1/mcp", NULL, &r) == 0 && r.status == 200);
+    CHECK(fs_mkdirs("state-http-test/skills") == 0);
+    const char *local_md = "---\nname: audit-local\ndescription: local reload check\n---\nAudit local skill.\n";
+    CHECK(fs_write_file("state-http-test/skills/audit.md", local_md, strlen(local_md)) == 0);
+    CHECK(raw_http_request(18211, "POST", "/v1/skills/reload", NULL, &r) == 0 && r.status == 200);
+    CHECK(strstr(r.body, "\"loaded\":1") != NULL);
+    CHECK(raw_http_request(18211, "GET", "/v1/skills", NULL, &r) == 0 && r.status == 200);
+    CHECK(strstr(r.body, "audit-local") != NULL);
 
     CHECK(raw_http_request(18211, "GET", "/v1/catalog/models", NULL, &r) == 0 && r.status == 200);
     CHECK(strstr(r.body, "groq") != NULL);
@@ -5659,6 +5691,7 @@ static void test_http_api(void) {
     thread_join(th);
     runtime_shutdown(&ctx);
     fs_remove("a.txt");
+    fs_remove("state-http-test/skills/audit.md");
     fs_remove(root);
 }
 

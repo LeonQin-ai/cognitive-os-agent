@@ -5,7 +5,7 @@
 # then resolves the recorded PCs against the exe's CodeView symbols via
 # tools/cov_resolve.c (DbgHelp) and prints per-source-file coverage.
 #
-# Usage: ./tools/coverage.sh
+# Usage: ./tools/coverage.sh [--uncovered]
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -20,15 +20,19 @@ else
   exit 1
 fi
 
-SRCS="$(find src third_party/cJSON -name '*.c' | sort) third_party/wasm3/wasm3_all.c tools/cov_rt.c tests/test_all.c"
+SRCS="$(find src third_party/cJSON -name '*.c' | grep -v -E '^src/os/(linux|macos|windows|posix)/' | sort) $(find src/os/windows -name '*.c' | sort) third_party/wasm3/wasm3_all.c tools/cov_rt.c tests/test_all.c"
+mkdir -p build
 
 echo "[cov] building instrumented test binary"
 "$ZIG" cc -std=c11 -Wall -Wextra -O0 -g -finstrument-functions \
     -Iinclude -Ithird_party/cJSON -Ithird_party/wasm3 \
-    -o build/cognitive-os-agent-cov.exe $SRCS -lws2_32 -lwinhttp -lm
+    -o build/cognitive-os-agent-cov.exe $SRCS -lws2_32 -lwinhttp -lbcrypt -lshell32 -lm
 
-echo "[cov] running tests (records cov_hits.txt)"
-./build/cognitive-os-agent-cov.exe >/dev/null
+echo "[cov] running tests (records cov_hits.txt; log: build/coverage-test.log)"
+if ! ./build/cognitive-os-agent-cov.exe >build/coverage-test.log 2>&1; then
+  tail -n 50 build/coverage-test.log >&2
+  exit 1
+fi
 
 echo "[cov] building symbol resolver"
 "$ZIG" cc -std=c11 -O1 -o build/cov_resolve.exe tools/cov_resolve.c -ldbghelp
@@ -41,4 +45,4 @@ if command -v cygpath >/dev/null 2>&1; then ROOT="$(cygpath -w "$(pwd)")"; fi
 echo
 # first-party only (src/) — the target number. Vendored wasm3/cJSON are
 # third-party and drag the raw total down via macro-expanded opcode handlers.
-./build/cov_resolve.exe build/cognitive-os-agent-cov.exe build/cov_hits.txt "$ROOT\\src"
+./build/cov_resolve.exe build/cognitive-os-agent-cov.exe build/cov_hits.txt "$ROOT\\src" "${1:-}"

@@ -16,7 +16,7 @@
 #include <string.h>
 #include <stdint.h>
 
-typedef struct { uint64_t addr; char name[256]; char file[512]; } sym_t;
+typedef struct { uint64_t addr; char name[256]; char file[512]; int hit; } sym_t;
 
 #ifndef SymTagFunction
 #define SymTagFunction 5
@@ -33,7 +33,6 @@ static int cmp_addr(const void *a, const void *b) {
 static BOOL CALLBACK enum_cb(SYMBOL_INFO *si, ULONG size, PVOID ctx) {
     (void)size; (void)ctx;
     if (si->Tag != SymTagFunction || !*si->Name) return TRUE;
-    if (si->Flags & SYMFLAG_LOCAL) return TRUE;
     IMAGEHLP_LINE64 line;
     memset(&line, 0, sizeof line);
     line.SizeOfStruct = sizeof line;
@@ -54,15 +53,20 @@ static BOOL CALLBACK enum_cb(SYMBOL_INFO *si, ULONG size, PVOID ctx) {
     return TRUE;
 }
 
-/* rightmost symbol whose addr <= target; -1 if none */
+/* The instrumentation passes an entry PC. A nearest-preceding lookup can
+ * falsely count an unrelated function as covered, so require an exact entry. */
 static long find_sym(uint64_t target) {
-    long lo = 0, hi = (long)g_n - 1, res = -1;
+    long lo = 0, hi = (long)g_n - 1;
     while (lo <= hi) {
         long mid = (lo + hi) / 2;
-        if (g_syms[mid].addr <= target) { res = mid; lo = mid + 1; }
+        if (g_syms[mid].addr == target) {
+            while (mid > 0 && g_syms[mid - 1].addr == target) mid--;
+            return mid;
+        }
+        if (g_syms[mid].addr < target) lo = mid + 1;
         else hi = mid - 1;
     }
-    return res;
+    return -1;
 }
 
 static const char *base_of(const char *p) {
@@ -103,7 +107,11 @@ int main(int argc, char **argv) {
         uint64_t rva = pc - orig_base;
         uint64_t addr = modBase + rva;
         long i = find_sym(addr);
-        if (i >= 0 && g_syms[i].name[0]) { g_syms[i].name[0] = '\0'; n_hit++; }
+        if (i >= 0) {
+            n_hit++;
+            while ((size_t)i < g_n && g_syms[i].addr == addr)
+                g_syms[i++].hit = 1;
+        }
     }
     fclose(f);
 
@@ -114,7 +122,8 @@ int main(int argc, char **argv) {
     for (size_t i = 0; i < g_n; i++) {
         sym_t *s = &g_syms[i];
         if (root && strncmp(s->file, root, strlen(root)) != 0) continue;
-        const char *bf = base_of(s->file);
+        const char *bf = root ? s->file + strlen(root) : base_of(s->file);
+        while (*bf == '/' || *bf == '\\') bf++;
         size_t j;
         for (j = 0; j < na; j++) if (!strcmp(ag[j].file, bf)) break;
         if (j == na) {
@@ -124,9 +133,8 @@ int main(int argc, char **argv) {
             j = na++;
         }
         ag[j].total++;
-        if (!s->name[0]) ag[j].covered++;   /* name cleared = hit */
+        if (s->hit) ag[j].covered++;
     }
-    /* note: coverage should count covered when name was cleared; we cleared on hit */
 
     unsigned long long tot_f = 0, tot_c = 0;
     printf("%-46s %6s %6s %7s\n", "source file", "funcs", "hit", "cover");
@@ -139,5 +147,15 @@ int main(int argc, char **argv) {
     printf("------------------------------------------------------------------\n");
     printf("%-46s %6llu %6llu %6.1f%%   (distinct functions: %zu, hit PCs: %llu)\n",
            "TOTAL", tot_f, tot_c, 100.0 * tot_c / (tot_f ? tot_f : 1), g_n, n_hit);
+    if (argc > 4 && strcmp(argv[4], "--uncovered") == 0) {
+        puts("\nUNCOVERED (not proof of dead code):");
+        for (size_t i = 0; i < g_n; i++) {
+            sym_t *s = &g_syms[i];
+            if (s->hit || (root && strncmp(s->file, root, strlen(root)) != 0)) continue;
+            const char *file = root ? s->file + strlen(root) : s->file;
+            while (*file == '/' || *file == '\\') file++;
+            printf("%s:%s\n", file, s->name);
+        }
+    }
     return 0;
 }

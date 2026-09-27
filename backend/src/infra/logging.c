@@ -33,12 +33,6 @@ static const char *level_names[] = {
     "TRACE", "DEBUG", "INFO", "WARN", "ERROR", "FATAL",
 };
 
-const char *log_level_name(loglevel lvl) {
-    if (lvl < LOG_TRACE || lvl > LOG_FATAL)
-        return "?";
-    return level_names[lvl];
-}
-
 static const char *level_colors[] = {
     "\x1b[90m", "\x1b[36m", "\x1b[32m", "\x1b[33m", "\x1b[31m", "\x1b[35m",
 };

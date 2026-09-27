@@ -59,33 +59,35 @@ int skill_register(skill_registry *r, const skill *s) {
 int skill_register_ex(skill_registry *r, const skill *s, int replace) {
     int i;
     skill *e;
+    skill copy = {0};
 
     if (!r || !s || !s->name || !*s->name)
         return -1;
     const char *kind = (s->kind && *s->kind) ? s->kind : "shell";
     if (strcmp(kind, "shell") != 0 && strcmp(kind, "python") != 0 && strcmp(kind, "prompt") != 0)
         return -1;
+    copy.name = xstrdup(s->name);
+    copy.description = xstrdup(s->description ? s->description : "");
+    copy.kind = xstrdup(kind);
+    copy.body = xstrdup(s->body ? s->body : "");
+    copy.caps = xstrdup(s->caps ? s->caps : "");
+    if (!copy.name || !copy.description || !copy.kind || !copy.body || !copy.caps) {
+        skill_free(&copy);
+        return -1;
+    }
     mutex_lock(&r->mtx);
     i = find_skill(r, s->name);
     if (i >= 0 && !replace) {
         mutex_unlock(&r->mtx);
+        skill_free(&copy);
         return -1;
     }
 
     if (i >= 0) {
         /* upsert: overwrite in place */
         skill *e = &r->items[i];
-        free((void *)e->name);
-        free((void *)e->description);
-        free((void *)e->kind);
-        free((void *)e->body);
-        free((void *)e->caps);
-        memset(e, 0, sizeof(*e));
-        e->name = xstrdup(s->name);
-        e->description = xstrdup(s->description ? s->description : "");
-        e->kind = xstrdup(kind);
-        e->body = xstrdup(s->body ? s->body : "");
-        e->caps = xstrdup(s->caps ? s->caps : "");
+        skill_free(e);
+        *e = copy;
         mutex_unlock(&r->mtx);
         return 0;
     }
@@ -95,6 +97,7 @@ int skill_register_ex(skill_registry *r, const skill *s, int replace) {
         skill *ni = (skill *)realloc(r->items, ncap * sizeof(*ni));
         if (!ni) {
             mutex_unlock(&r->mtx);
+            skill_free(&copy);
             return -1;
         }
         r->items = ni;
@@ -102,12 +105,7 @@ int skill_register_ex(skill_registry *r, const skill *s, int replace) {
     }
 
     e = &r->items[r->count++];
-    memset(e, 0, sizeof(*e));
-    e->name = xstrdup(s->name);
-    e->description = xstrdup(s->description ? s->description : "");
-    e->kind = xstrdup(kind);
-    e->body = xstrdup(s->body ? s->body : "");
-    e->caps = xstrdup(s->caps ? s->caps : "");
+    *e = copy;
     mutex_unlock(&r->mtx);
     return 0;
 }
