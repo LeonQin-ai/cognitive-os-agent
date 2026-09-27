@@ -1723,11 +1723,24 @@ static int h_favicon(const http_request *req, http_response *resp, void *ud) {
 
 static int h_trace(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
+    char task_buf[32];
+    int64_t task_id = -1;
     char *s;
 
     if (!authz_ok(ctx, req, resp))
         return 0;
-    s = ctx->trace ? trace_json(ctx->trace) : xstrdup("[]");
+    query_param(req, "task_id", task_buf, sizeof(task_buf));
+    if (task_buf[0]) {
+        char *end;
+        long long parsed = strtoll(task_buf, &end, 10);
+        if (*end || parsed < 0) {
+            resp->status = 400;
+            http_resp_json(resp, "{\"error\":\"invalid task_id\"}");
+            return 0;
+        }
+        task_id = (int64_t)parsed;
+    }
+    s = ctx->trace ? trace_json_task(ctx->trace, task_id) : xstrdup("[]");
     http_resp_json(resp, s ? s : "[]");
     free(s);
     return 0;

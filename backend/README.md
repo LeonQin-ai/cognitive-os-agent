@@ -136,6 +136,20 @@ curl localhost:8080/metrics
 
 Open `http://localhost:8080/` for the embedded web console.
 
+### Execution trace
+
+`GET /v1/trace` returns the bounded, in-memory span ring. A scheduled run
+records `task.run`, planner model calls record `llm.plan`, and executed tools
+record sanitized names such as `tool.file_write`, each with a task ID,
+timestamps, duration, and status.
+Use `GET /v1/trace?task_id=0` to inspect one task. The ring is live and is
+not retained after restart. It contains stage names and timing, not prompt
+text, tool arguments, or tool output.
+
+Separately, each task keeps a bounded progress timeline in memory while it
+runs. On completion, the runtime writes that timeline to
+`<state>/journal/tasks.jsonl`; retrieve it with `GET /v1/tasks/journal`.
+
 ### Skills / MCP / Plugin 广场
 
 The console plaza surfaces curated catalogs over the HTTP API:
@@ -305,7 +319,7 @@ POST /v1/local/start             # body {"engine":"ollama"} 或 {"engine":"llama
 Current unit result (verified locally on Windows, 2026-09-27):
 
 ```
-unit:       2428 passed, 0 failed
+unit:       2450 passed, 0 failed
 adapters:   ADAPTER PASS (openai + anthropic, chat + stream)
 e2e:        E2E PASS (openai + anthropic)
 bench:      --mock tool-selection accuracy 100%

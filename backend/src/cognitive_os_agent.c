@@ -261,10 +261,12 @@ static void sched_trampoline(task *t, scheduler *s, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
     char *answer = NULL;
     int run_rc = 0;
+    int64_t task_span = trace_begin_task(ctx->trace, t->id, "task.run");
 
     (void)s;
     if (task_should_abort(t)) {
         t->status = TS_CANCELLED;
+        trace_end(ctx->trace, task_span, -1);
         return;
     }
 
@@ -273,9 +275,9 @@ static void sched_trampoline(task *t, scheduler *s, void *ud) {
         /* userdata marker (set by /v1/orchestrate = 1, /v1/flows = 2): run the
          * multi-agent pipeline / flow DAG instead of the single-agent loop */
         if (t->userdata == (void *)2)
-            flow_run(ctx, t->input, t->id, &answer, NULL);
+            run_rc = flow_run(ctx, t->input, t->id, &answer, NULL);
         else
-            orchestrate(ctx, t->input, &answer, NULL);
+            run_rc = orchestrate(ctx, t->input, &answer, NULL);
     } else {
         run_rc = chat_lane_run(ctx, t->tag, t->id, t->thinking_mode, t->input, &answer);
     }
@@ -283,6 +285,7 @@ static void sched_trampoline(task *t, scheduler *s, void *ud) {
     t->output = answer ? answer : xstrdup("(no output)");
     if (!answer || run_rc != 0)
         t->status = TS_FAILED;
+    trace_end(ctx->trace, task_span, task_should_abort(t) || t->status == TS_FAILED ? -1 : 1);
 }
 
 /* Ingest a message received from an external messaging channel into the IM
@@ -740,6 +743,7 @@ int init(runtime_ctx *ctx, const config *cfg) {
             rc.snapshot = ctx->snapshot;
             rc.bus = ctx->bus;
             rc.metrics = ctx->metrics;
+            rc.trace = ctx->trace;
             rc.workspace = ctx->workspace;
             rc.use_transaction = ctx->use_transaction;
             rc.skills = ctx->skills;

@@ -48,7 +48,7 @@ void trace_free(trace *t) {
     free(t);
 }
 
-int64_t trace_begin(trace *t, const char *name) {
+int64_t trace_begin_task(trace *t, int64_t task_id, const char *name) {
     trace_span *s;
     int64_t id;
 
@@ -61,6 +61,7 @@ int64_t trace_begin(trace *t, const char *name) {
     free(s->name);
     s->name = xstrdup(name);
     s->id = t->next_id++;
+    s->task_id = task_id;
     s->start_ms = time_now_ms();
     s->end_ms = 0;
     s->status = 0;
@@ -68,6 +69,10 @@ int64_t trace_begin(trace *t, const char *name) {
     id = s->id;
     mutex_unlock(&t->mtx);
     return id;
+}
+
+int64_t trace_begin(trace *t, const char *name) {
+    return trace_begin_task(t, -1, name);
 }
 
 void trace_end(trace *t, int64_t id, int status) {
@@ -108,7 +113,7 @@ void trace_clear(trace *t) {
     mutex_unlock(&t->mtx);
 }
 
-char *trace_json(trace *t) {
+char *trace_json_task(trace *t, int64_t task_id) {
     cJSON *arr = cJSON_CreateArray();
     char *js;
 
@@ -119,8 +124,11 @@ char *trace_json(trace *t) {
         /* oldest first: slots wrap, so iterate from (next - count) forward */
         size_t idx = (t->next + t->cap - t->count + i) % t->cap;
         trace_span *s = &t->spans[idx];
+        if (task_id >= 0 && s->task_id != task_id)
+            continue;
         cJSON *o = cJSON_CreateObject();
         cJSON_AddNumberToObject(o, "id", (double)s->id);
+        cJSON_AddNumberToObject(o, "task_id", (double)s->task_id);
         cJSON_AddStringToObject(o, "name", s->name ? s->name : "");
         cJSON_AddNumberToObject(o, "start_ms", (double)s->start_ms);
         cJSON_AddNumberToObject(o, "end_ms", (double)s->end_ms);
@@ -133,4 +141,8 @@ char *trace_json(trace *t) {
     js = cJSON_PrintUnformatted(arr);
     cJSON_Delete(arr);
     return js;
+}
+
+char *trace_json(trace *t) {
+    return trace_json_task(t, -1);
 }

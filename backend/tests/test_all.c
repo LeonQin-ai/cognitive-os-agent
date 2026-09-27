@@ -2064,10 +2064,17 @@ static void test_trace(void) {
     CHECK(id > 0);
     int64_t id2 = trace_begin(t, "span-b");
     CHECK(id2 > id);
+    int64_t id3 = trace_begin_task(t, 42, "llm.plan");
+    CHECK(id3 > id2);
     trace_end(t, id, 1);
-    CHECK(trace_count(t) == 2);
+    trace_end(t, id3, -1);
+    CHECK(trace_count(t) == 3);
     char *j = trace_json(t);
-    CHECK(j && strstr(j, "span-a") != NULL);
+    CHECK(j && strstr(j, "span-a") != NULL && strstr(j, "llm.plan") != NULL);
+    free(j);
+    j = trace_json_task(t, 42);
+    CHECK(j && strstr(j, "llm.plan") != NULL && strstr(j, "span-a") == NULL);
+    CHECK(j && strstr(j, "\"task_id\":42") != NULL && strstr(j, "\"status\":-1") != NULL);
     free(j);
     trace_clear(t);
     CHECK(trace_count(t) == 0);
@@ -6015,6 +6022,42 @@ static void test_http_api(void) {
                 if (!finished) time_sleep_ms(100);
             }
             /* mock pipeline should have created a.txt with the expected content */
+            char trace_path[128];
+            snprintf(trace_path, sizeof trace_path, "/v1/trace?task_id=%lld", (long long)id);
+            cJSON *spans = api_request_json(18211, "GET", trace_path, NULL, 200);
+            int saw_task = 0, saw_llm = 0, saw_tool = 0;
+            cJSON *span;
+            cJSON_ArrayForEach(span, spans) {
+                cJSON *name = cJSON_GetObjectItemCaseSensitive(span, "name");
+                cJSON *tid = cJSON_GetObjectItemCaseSensitive(span, "task_id");
+                cJSON *status = cJSON_GetObjectItemCaseSensitive(span, "status");
+                CHECK(cJSON_IsNumber(tid) && (int64_t)tid->valuedouble == id);
+                CHECK(cJSON_IsNumber(status) && status->valueint == 1);
+                if (cJSON_IsString(name)) {
+                    if (strcmp(name->valuestring, "task.run") == 0) saw_task = 1;
+                    if (strcmp(name->valuestring, "llm.plan") == 0) saw_llm = 1;
+                    if (strcmp(name->valuestring, "tool.file_write") == 0) saw_tool = 1;
+                }
+            }
+            CHECK(saw_task && saw_llm && saw_tool);
+            cJSON_Delete(spans);
+            spans = api_request_json(18211, "GET", "/v1/trace?task_id=invalid", NULL, 400);
+            cJSON_Delete(spans);
+            /* The per-task progress timeline is flushed to the durable journal
+             * after completion. The scheduler publishes DONE just before its
+             * completion callback, so allow that callback a short interval. */
+            int journal_has_trace = 0;
+            for (int attempt = 0; attempt < 20 && !journal_has_trace; attempt++) {
+                cJSON *journal = api_request_json(18211, "GET", "/v1/tasks/journal?limit=1", NULL, 200);
+                cJSON *record = cJSON_IsArray(journal) ? cJSON_GetArrayItem(journal, 0) : NULL;
+                cJSON *jid = record ? cJSON_GetObjectItemCaseSensitive(record, "id") : NULL;
+                cJSON *timeline = record ? cJSON_GetObjectItemCaseSensitive(record, "trace") : NULL;
+                journal_has_trace = cJSON_IsNumber(jid) && (int64_t)jid->valuedouble == id &&
+                                    cJSON_IsArray(timeline) && cJSON_GetArraySize(timeline) > 0;
+                cJSON_Delete(journal);
+                if (!journal_has_trace) time_sleep_ms(25);
+            }
+            CHECK(journal_has_trace);
             FILE *af = fopen("a.txt", "r");
             CHECK(af != NULL);
             if (af) {

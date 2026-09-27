@@ -26,6 +26,7 @@
 #include "execution/executor.h"
 #include "infra/util.h"
 #include "infra/logging.h"
+#include "infra/trace.h"
 #include "infra/metrics.h"
 #include "security/secret.h"
 
@@ -142,6 +143,7 @@ struct reasoning {
     reasoning_observer observer;
     void *observer_ud;
     task *run_task;
+    int64_t trace_task_id; /* Flow nodes have no run_task pointer */
     unsigned applied_updates;
     llm *llm;
     tool_registry *tools;
@@ -151,6 +153,7 @@ struct reasoning {
     snapshot *snap;
     event_bus *bus;
     metrics *metrics;
+    trace *trace;
     tx_manager *txm;
     evaluator *eval;
     char *workspace;
@@ -300,6 +303,7 @@ void reasoning_set_observer(reasoning *r, reasoning_observer cb, void *ud) {
 }
 void reasoning_set_thinking_mode(reasoning *r, int enabled) { if (r) r->thinking_mode = enabled != 0; }
 void reasoning_set_task(reasoning *r, task *t) { if (r) r->run_task = t; }
+void reasoning_set_trace_task_id(reasoning *r, int64_t task_id) { if (r) r->trace_task_id = task_id; }
 static int run_aborted(reasoning *r) {
     if (!r->run_task || !task_should_abort(r->run_task)) return 0;
     if (!r->run_task->cancel_flag) r->run_task->timed_out = 1;
@@ -1289,8 +1293,10 @@ static int h_reason(state_machine *sm, void *ud, const char *input, char **out) 
 
     long long t_llm0 = time_now_ms();
     progress_emit(r, "planning");
+    int64_t llm_span = trace_begin_task(r->trace, r->run_task ? r->run_task->id : r->trace_task_id, "llm.plan");
     int rc = planner_plan_ex(r->llm, r->tools, r->skills, r->policy, aug ? aug : input, &r->actions, &r->n_actions,
                                  &raw, &plan_err);
+    trace_end(r->trace, llm_span, rc == 0 && raw ? 1 : -1);
     r->prog_llm_ms += time_now_ms() - t_llm0;
     r->prog_llm_calls++;
     progress_emit(r, r->n_actions ? "planning" : "summarizing");
@@ -1539,6 +1545,17 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
             r->search_seen_n = 0;
         }
         long long t_tool0 = time_now_ms();
+        char span_name[64] = "tool.";
+        size_t span_len = strlen(span_name);
+        const unsigned char *tool_name = (const unsigned char *)r->actions[i].tool;
+        while (tool_name && *tool_name && span_len + 1 < sizeof(span_name)) {
+            unsigned char c = *tool_name++;
+            span_name[span_len++] = ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                                     (c >= '0' && c <= '9') || c == '_' || c == '-') ? (char)c : '_';
+        }
+        span_name[span_len] = '\0';
+        int64_t tool_span = trace_begin_task(r->trace, r->run_task ? r->run_task->id : r->trace_task_id,
+                                             span_name);
         char step_out[240] = ""; /* output head for the step registry */
         if (tx) {
             /* per-action output = the chunk tx_run appends to the aggregate */
@@ -1560,6 +1577,7 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
         } else {
             rc = -1;
         }
+        trace_end(r->trace, tool_span, rc == 0 ? 1 : -1);
         r->prog_tool_ms += time_now_ms() - t_tool0;
         run_step_add(r, r->actions[i].tool, r->actions[i].args_json, step_out, rc == 0 ? 1 : 0,
                      (int)(time_now_ms() - t_tool0));
@@ -1759,6 +1777,7 @@ reasoning *reasoning_new(const reasoning_config *cfg) {
         return NULL;
     if (mutex_init(&r->progress_mtx) != 0) { free(r); return NULL; }
     r->ss = &r->own_store_; /* embedded store until a shared one is attached */
+    r->trace_task_id = -1;
     mutex_init(&r->own_store_.sess_mtx);
     atomic_init(&r->own_store_.shared_memory_global, 1);
     r->cur = session_get(r, NULL); /* default session, always present */
@@ -1770,6 +1789,7 @@ reasoning *reasoning_new(const reasoning_config *cfg) {
     r->snap = cfg->snapshot;
     r->bus = cfg->bus;
     r->metrics = cfg->metrics;
+    r->trace = cfg->trace;
     r->workspace = cfg->workspace ? xstrdup(cfg->workspace) : NULL;
     r->use_transaction = cfg->use_transaction;
     r->budget_hot = cfg->budget_hot > 0 ? cfg->budget_hot : HIST_BUDGET;

@@ -445,6 +445,7 @@ static reasoning *flow_reasoning_new(runtime_ctx *ctx) {
     rc.policy = ctx->policy;
     rc.bus = ctx->bus;
     rc.metrics = ctx->metrics;
+    rc.trace = ctx->trace;
     rc.workspace = ctx->workspace;
     rc.skills = ctx->skills;
     rc.mcp = ctx->mcp;
@@ -463,6 +464,7 @@ static void flow_worker(void *arg) {
     flow_prog_node_mark(j->task_id, j->nd->id, FP_RUNNING);
     r = flow_reasoning_new(j->ctx);
     if (r) {
+        reasoning_set_trace_task_id(r, j->task_id);
         flow_prog_node_attach(j->task_id, j->nd->id, r);
         j->rc = reasoning_run(r, j->task, &j->out);
         flow_prog_node_attach(j->task_id, j->nd->id, NULL);

@@ -5,6 +5,7 @@
  * The LLM is a planner (cognitive accelerator), not the control center. */
 #pragma once
 #include <stddef.h>
+#include <stdint.h>
 #include "llm/router.h"
 #include "llm/usage.h"
 
@@ -21,6 +22,7 @@ typedef struct policy_engine policy_engine;
 typedef struct snapshot snapshot;
 typedef struct event_bus event_bus;
 typedef struct metrics metrics;
+typedef struct trace trace;
 typedef struct state_machine state_machine;
 typedef struct hook_registry hook_registry;
 
@@ -37,6 +39,7 @@ typedef struct reasoning_config {
     snapshot *snapshot;                      /* may be NULL = no rollback */
     event_bus *bus;                          /* may be NULL */
     metrics *metrics;                        /* may be NULL */
+    trace *trace;                            /* optional live execution spans */
     const char *workspace;                       /* base dir for relative tool paths */
     int use_transaction;                         /* wrap actions in a tx when snapshot present */
     struct skill_registry *skills;           /* advertised to the planner + skill tool (may be NULL) */
@@ -74,6 +77,8 @@ typedef void (*reasoning_observer)(const char *json, void *ud);
 void reasoning_set_observer(reasoning *r, reasoning_observer cb, void *ud);
 struct task;
 void reasoning_set_task(reasoning *r, struct task *task);
+/* Associate a Flow node's reasoning with its parent scheduler task. */
+void reasoning_set_trace_task_id(reasoning *r, int64_t task_id);
 reasoning *reasoning_new(const reasoning_config *cfg);
 void reasoning_free(reasoning *r);
 
