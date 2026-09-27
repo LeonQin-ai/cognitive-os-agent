@@ -305,7 +305,7 @@ POST /v1/local/start             # body {"engine":"ollama"} 或 {"engine":"llama
 Current unit result (verified locally on Windows, 2026-09-27):
 
 ```
-unit:       2112 passed, 0 failed
+unit:       2428 passed, 0 failed
 adapters:   ADAPTER PASS (openai + anthropic, chat + stream)
 e2e:        E2E PASS (openai + anthropic)
 bench:      --mock tool-selection accuracy 100%

@@ -5470,6 +5470,346 @@ static int raw_http_request(uint16_t port, const char *method, const char *path,
     return 0;
 }
 
+/* Exercise the public API through its socket dispatcher and require valid
+ * JSON even on errors. A handler being present in api_attach is not enough. */
+static cJSON *api_request_json(uint16_t port, const char *method, const char *path, const char *body,
+                               int expected_status) {
+    raw_http r = {0};
+    int rc = raw_http_request(port, method, path, body, &r);
+    CHECK(rc == 0);
+    if (rc != 0)
+        return NULL;
+    if (r.status != expected_status)
+        printf("  API %s %s: expected %d, got %d: %.200s\n", method, path, expected_status, r.status, r.body);
+    CHECK(r.status == expected_status);
+    cJSON *json = cJSON_Parse(r.body);
+    if (!json)
+        printf("  API %s %s: invalid JSON: %.200s\n", method, path, r.body);
+    CHECK(json != NULL);
+    return json;
+}
+
+static void test_http_api_contracts(uint16_t port) {
+    section("http API management contracts");
+    cJSON *j;
+    char path[256], body[512];
+    long long id;
+
+    /* State: write, read, export, delete and restore through real HTTP. */
+    j = api_request_json(port, "PUT", "/v1/state/audit/item", "{\"value\":\"round-trip\"}", 200);
+    CHECK(j && cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "ok")));
+    cJSON_Delete(j);
+    j = api_request_json(port, "GET", "/v1/state/audit/item", NULL, 200);
+    CHECK(j && cJSON_IsString(cJSON_GetObjectItemCaseSensitive(j, "value")) &&
+          strcmp(cJSON_GetObjectItemCaseSensitive(j, "value")->valuestring, "round-trip") == 0);
+    cJSON_Delete(j);
+    j = api_request_json(port, "GET", "/v1/state/audit", NULL, 200);
+    CHECK(j && cJSON_GetObjectItemCaseSensitive(j, "audit") != NULL);
+    cJSON_Delete(j);
+    j = api_request_json(port, "GET", "/v1/state", NULL, 200);
+    CHECK(j && cJSON_GetObjectItemCaseSensitive(j, "state") != NULL);
+    cJSON_Delete(j);
+    j = api_request_json(port, "POST", "/v1/state/snapshot", "{}", 200);
+    CHECK(j && cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "ok")));
+    cJSON_Delete(j);
+    j = api_request_json(port, "DELETE", "/v1/state/audit/item", NULL, 200);
+    CHECK(j && cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "removed")));
+    cJSON_Delete(j);
+    j = api_request_json(port, "GET", "/v1/state/audit/item", NULL, 404);
+    cJSON_Delete(j);
+    j = api_request_json(port, "POST", "/v1/state/restore", "{}", 200);
+    CHECK(j && cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "ok")));
+    cJSON_Delete(j);
+    j = api_request_json(port, "GET", "/v1/state/audit/item", NULL, 200);
+    CHECK(j && cJSON_IsString(cJSON_GetObjectItemCaseSensitive(j, "value")));
+    cJSON_Delete(j);
+    j = api_request_json(port, "DELETE", "/v1/state/audit/item", NULL, 200);
+    cJSON_Delete(j);
+
+    /* Policy, hook and blackboard mutations must be visible on readback. */
+    j = api_request_json(port, "GET", "/v1/policy/rules", NULL, 200);
+    cJSON *rules = j ? cJSON_GetObjectItemCaseSensitive(j, "rules") : NULL;
+    int old_rules = cJSON_IsArray(rules) ? cJSON_GetArraySize(rules) : 0;
+    cJSON_Delete(j);
+    j = api_request_json(port, "POST", "/v1/policy/rules",
+                         "{\"tool\":\"audit-only\",\"action\":\"deny\",\"reason\":\"test\"}", 200);
+    CHECK(j && cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "ok")));
+    cJSON_Delete(j);
+    j = api_request_json(port, "GET", "/v1/policy/rules", NULL, 200);
+    rules = j ? cJSON_GetObjectItemCaseSensitive(j, "rules") : NULL;
+    CHECK(cJSON_IsArray(rules) && cJSON_GetArraySize(rules) == old_rules + 1);
+    cJSON_Delete(j);
+    snprintf(path, sizeof path, "/v1/policy/rules/%d", old_rules);
+    j = api_request_json(port, "DELETE", path, NULL, 200);
+    cJSON_Delete(j);
+    j = api_request_json(port, "POST", "/v1/blackboard", "{\"key\":\"audit-key\",\"value\":\"audit-value\"}", 200);
+    CHECK(j && cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "ok")));
+    cJSON_Delete(j);
+    j = api_request_json(port, "GET", "/v1/blackboard", NULL, 200);
+    char *blackboard_json = j ? cJSON_PrintUnformatted(j) : NULL;
+    CHECK(blackboard_json && strstr(blackboard_json, "audit-value") != NULL);
+    free(blackboard_json);
+    cJSON_Delete(j);
+    j = api_request_json(port, "POST", "/v1/hooks", "{\"event\":\"audit.event\"}", 200);
+    cJSON *jid = j ? cJSON_GetObjectItemCaseSensitive(j, "id") : NULL;
+    id = cJSON_IsNumber(jid) ? (long long)jid->valuedouble : -1;
+    CHECK(id > 0);
+    cJSON_Delete(j);
+    j = api_request_json(port, "GET", "/v1/hooks", NULL, 200);
+    CHECK(j && cJSON_IsArray(cJSON_GetObjectItemCaseSensitive(j, "hooks")));
+    cJSON_Delete(j);
+    if (id > 0) {
+        snprintf(path, sizeof path, "/v1/hooks/%lld", id);
+        j = api_request_json(port, "DELETE", path, NULL, 200);
+        cJSON_Delete(j);
+    }
+
+    char agent_name[80];
+    snprintf(agent_name, sizeof agent_name, "api-audit-%lld", (long long)time_now_ms());
+    snprintf(body, sizeof body, "{\"name\":\"%s\",\"role\":\"reviewer\"}", agent_name);
+    j = api_request_json(port, "POST", "/v1/agents", body, 200);
+    CHECK(j && cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "ok")));
+    cJSON_Delete(j);
+    snprintf(path, sizeof path, "/v1/agents/%s", agent_name);
+    j = api_request_json(port, "PUT", path, "{\"provider\":\"mock\",\"model\":\"mock\"}", 200);
+    CHECK(j && cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "ok")));
+    cJSON_Delete(j);
+    snprintf(path, sizeof path, "/v1/agents/%s/post", agent_name);
+    j = api_request_json(port, "POST", path, "{\"key\":\"note\",\"value\":\"ready\"}", 200);
+    CHECK(j && cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "ok")));
+    cJSON_Delete(j);
+    snprintf(path, sizeof path, "/v1/agents/%s/run", agent_name);
+    j = api_request_json(port, "POST", path, "{\"task\":\"请直接回答你好\"}", 200);
+    CHECK(j && cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "ok")));
+    cJSON_Delete(j);
+    j = api_request_json(port, "GET", "/v1/agents", NULL, 200);
+    char *agent_json = j ? cJSON_PrintUnformatted(j) : NULL;
+    CHECK(agent_json && strstr(agent_json, agent_name) != NULL);
+    free(agent_json);
+    cJSON_Delete(j);
+    snprintf(path, sizeof path, "/v1/agents/%s", agent_name);
+    j = api_request_json(port, "DELETE", path, NULL, 200);
+    cJSON_Delete(j);
+
+    /* Route and cron lifecycle: a bad schedule must also return valid JSON. */
+    j = api_request_json(port, "POST", "/v1/routes", "{\"name\":\"audit-route\",\"provider\":\"mock\"}", 200);
+    cJSON_Delete(j);
+    j = api_request_json(port, "POST", "/v1/routes/policy", "{\"policy\":\"round_robin\"}", 200);
+    CHECK(j && cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "ok")));
+    cJSON_Delete(j);
+    j = api_request_json(port, "DELETE", "/v1/routes/audit-route", NULL, 200);
+    CHECK(j && cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "removed")));
+    cJSON_Delete(j);
+    j = api_request_json(port, "GET", "/v1/cron", NULL, 200);
+    CHECK(cJSON_IsArray(j));
+    cJSON_Delete(j);
+    j = api_request_json(port, "POST", "/v1/cron", "{\"prompt\":\"test\"}", 400);
+    cJSON_Delete(j);
+    j = api_request_json(port, "POST", "/v1/cron", "{\"name\":\"audit-job\",\"prompt\":\"test\",\"every_sec\":3600}",
+                         200);
+    jid = j ? cJSON_GetObjectItemCaseSensitive(j, "id") : NULL;
+    id = cJSON_IsNumber(jid) ? (long long)jid->valuedouble : -1;
+    CHECK(id >= 0);
+    cJSON_Delete(j);
+    if (id >= 0) {
+        snprintf(path, sizeof path, "/v1/cron/%lld/toggle", id);
+        j = api_request_json(port, "POST", path, "{\"enabled\":false}", 200);
+        cJSON_Delete(j);
+        snprintf(path, sizeof path, "/v1/cron/%lld", id);
+        j = api_request_json(port, "DELETE", path, NULL, 200);
+        cJSON_Delete(j);
+    }
+
+    /* Session controls, configuration and diagnostic endpoints. */
+    j = api_request_json(port, "POST", "/v1/chat/sessions", "{}", 200);
+    const char *sid = j && cJSON_IsString(cJSON_GetObjectItemCaseSensitive(j, "id"))
+                          ? cJSON_GetObjectItemCaseSensitive(j, "id")->valuestring
+                          : NULL;
+    char session_id[128] = "";
+    if (sid)
+        snprintf(session_id, sizeof session_id, "%s", sid);
+    CHECK(session_id[0] != '\0');
+    cJSON_Delete(j);
+    if (session_id[0]) {
+        snprintf(path, sizeof path, "/v1/chat/sessions/%s/shared", session_id);
+        j = api_request_json(port, "POST", path, "{\"shared\":true}", 200);
+        CHECK(j && cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "shared_memory")));
+        cJSON_Delete(j);
+        snprintf(path, sizeof path, "/v1/chat/sessions/%s/resume", session_id);
+        j = api_request_json(port, "POST", path, "{}", 409);
+        cJSON_Delete(j);
+        snprintf(path, sizeof path, "/v1/chat/sessions/%s", session_id);
+        j = api_request_json(port, "DELETE", path, NULL, 200);
+        cJSON_Delete(j);
+    }
+    j = api_request_json(port, "GET", "/v1/chat/sessions", NULL, 200);
+    CHECK(cJSON_IsArray(j));
+    cJSON_Delete(j);
+    j = api_request_json(port, "GET", "/v1/chat/history", NULL, 200);
+    cJSON_Delete(j);
+    j = api_request_json(port, "POST", "/v1/config/llm", "{\"provider\":\"not-a-provider\"}", 400);
+    cJSON_Delete(j);
+    j = api_request_json(port, "POST", "/v1/config/llm", "{\"provider\":\"mock\",\"model\":\"mock\"}", 200);
+    CHECK(j && cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "ok")));
+    cJSON_Delete(j);
+    j = api_request_json(port, "GET", "/v1/config/llm", NULL, 200);
+    CHECK(j && cJSON_IsString(cJSON_GetObjectItemCaseSensitive(j, "provider")) &&
+          strcmp(cJSON_GetObjectItemCaseSensitive(j, "provider")->valuestring, "mock") == 0);
+    cJSON_Delete(j);
+    j = api_request_json(port, "GET", "/v1/config/llm/test", NULL, 200);
+    cJSON_Delete(j);
+    j = api_request_json(port, "GET", "/v1/routes/models", NULL, 200);
+    cJSON_Delete(j);
+    j = api_request_json(port, "POST", "/v1/routes/models", "{}", 400);
+    cJSON_Delete(j);
+    j = api_request_json(port, "GET", "/v1/config/snapshot", NULL, 200);
+    cJSON_Delete(j);
+    j = api_request_json(port, "POST", "/v1/config/snapshot", "{\"max_file\":1048576}", 200);
+    cJSON_Delete(j);
+    j = api_request_json(port, "GET", "/v1/config/snapshot", NULL, 200);
+    CHECK(j && cJSON_IsNumber(cJSON_GetObjectItemCaseSensitive(j, "max_file")) &&
+          cJSON_GetObjectItemCaseSensitive(j, "max_file")->valuedouble == 1048576);
+    cJSON_Delete(j);
+    j = api_request_json(port, "GET", "/v1/security/stats", NULL, 200);
+    cJSON_Delete(j);
+    j = api_request_json(port, "POST", "/v1/config/security", "{\"mode\":\"invalid\"}", 400);
+    cJSON_Delete(j);
+    j = api_request_json(port, "GET", "/v1/trace", NULL, 200);
+    cJSON_Delete(j);
+    j = api_request_json(port, "GET", "/v1/memory/service", NULL, 200);
+    cJSON_Delete(j);
+    j = api_request_json(port, "GET", "/v1/plugins", NULL, 200);
+    cJSON_Delete(j);
+    j = api_request_json(port, "GET", "/v1/flows/list", NULL, 200);
+    cJSON_Delete(j);
+    j = api_request_json(port, "POST", "/v1/flows/decompose", "{}", 400);
+    cJSON_Delete(j);
+    j = api_request_json(port, "PUT", "/v1/flows/999999", "{}", 409);
+    cJSON_Delete(j);
+    j = api_request_json(port, "POST", "/v1/flows/999999/resume", "{}", 404);
+    cJSON_Delete(j);
+    j = api_request_json(port, "GET", "/v1/tasks/journal?limit=1", NULL, 200);
+    CHECK(cJSON_IsArray(j) && cJSON_GetArraySize(j) <= 1);
+    cJSON_Delete(j);
+    j = api_request_json(port, "DELETE", "/v1/tasks/999999", NULL, 404);
+    cJSON_Delete(j);
+    j = api_request_json(port, "POST", "/v1/tasks/999999/resume", "{}", 404);
+    cJSON_Delete(j);
+    j = api_request_json(port, "POST", "/v1/tasks/999999/messages", "{}", 404);
+    cJSON_Delete(j);
+    j = api_request_json(port, "POST", "/v1/mcp/sync", "{}", 200);
+    cJSON_Delete(j);
+    j = api_request_json(port, "POST", "/v1/mcp", "{}", 400);
+    cJSON_Delete(j);
+    j = api_request_json(port, "DELETE", "/v1/mcp/not-found", NULL, 200);
+    cJSON_Delete(j);
+    j = api_request_json(port, "DELETE", "/v1/skills/not-found", NULL, 404);
+    cJSON_Delete(j);
+    j = api_request_json(port, "POST", "/v1/skills/install-skillhub", "{}", 400);
+    cJSON_Delete(j);
+    j = api_request_json(port, "POST", "/v1/skills/install-github", "{}", 400);
+    cJSON_Delete(j);
+    j = api_request_json(port, "GET", "/v1/catalog/skillhub", NULL, 400);
+    cJSON_Delete(j);
+    j = api_request_json(port, "GET", "/v1/catalog/github-search", NULL, 400);
+    cJSON_Delete(j);
+    j = api_request_json(port, "DELETE", "/v1/plugins/market/not-found", NULL, 404);
+    cJSON_Delete(j);
+    j = api_request_json(port, "POST", "/v1/plugins/generate", "{}", 400);
+    cJSON_Delete(j);
+    j = api_request_json(port, "POST", "/v1/plugins/native/load", "{}", 400);
+    cJSON_Delete(j);
+    j = api_request_json(port, "POST", "/v1/tools/gh-install", "{}", 404);
+    cJSON_Delete(j);
+    j = api_request_json(port, "POST", "/v1/snapshots/rollback", "{\"paths\":[123]}", 400);
+    cJSON_Delete(j);
+
+    /* IM and cluster roundtrips use only the local runtime. */
+    j = api_request_json(port, "GET", "/v1/im/sessions", NULL, 200);
+    cJSON_Delete(j);
+    j = api_request_json(port, "POST", "/v1/im/sessions", "{\"name\":\"audit-room\"}", 200);
+    jid = j ? cJSON_GetObjectItemCaseSensitive(j, "id") : NULL;
+    id = cJSON_IsNumber(jid) ? (long long)jid->valuedouble : -1;
+    CHECK(id >= 0);
+    cJSON_Delete(j);
+    if (id >= 0) {
+        snprintf(path, sizeof path, "/v1/im/sessions/%lld/messages", id);
+        j = api_request_json(port, "POST", path, "{\"role\":\"user\",\"content\":\"audit-message\"}", 200);
+        CHECK(j && cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "ok")));
+        cJSON_Delete(j);
+        j = api_request_json(port, "GET", path, NULL, 200);
+        CHECK(cJSON_IsArray(j) && cJSON_GetArraySize(j) > 0);
+        cJSON_Delete(j);
+        snprintf(path, sizeof path, "/v1/im/sessions/%lld", id);
+        j = api_request_json(port, "DELETE", path, NULL, 200);
+        cJSON_Delete(j);
+    }
+    j = api_request_json(port, "GET", "/v1/im/search?q=audit-message", NULL, 200);
+    cJSON_Delete(j);
+    j = api_request_json(port, "POST", "/v1/im/channels",
+                         "{\"name\":\"audit-channel\",\"type\":\"generic\",\"endpoint\":\"http://127.0.0.1:1/echo\"}",
+                         200);
+    cJSON_Delete(j);
+    j = api_request_json(port, "POST", "/v1/im/channels/audit-channel/send", "{\"text\":\"audit-channel-message\"}",
+                         200);
+    CHECK(j && cJSON_IsFalse(cJSON_GetObjectItemCaseSensitive(j, "ok")));
+    cJSON_Delete(j);
+    j = api_request_json(port, "DELETE", "/v1/im/channels/audit-channel", NULL, 200);
+    cJSON_Delete(j);
+    j = api_request_json(port, "GET", "/v1/cluster", NULL, 200);
+    cJSON_Delete(j);
+    j = api_request_json(port, "POST", "/v1/cluster/join",
+                         "{\"id\":\"audit-node\",\"host\":\"127.0.0.1\",\"port\":12345}", 200);
+    cJSON_Delete(j);
+    j = api_request_json(port, "POST", "/v1/cluster/heartbeat", "{\"id\":\"audit-node\"}", 200);
+    cJSON_Delete(j);
+    j = api_request_json(port, "DELETE", "/v1/cluster/nodes/audit-node", NULL, 200);
+    cJSON_Delete(j);
+
+    /* File upload names are sanitized and can be listed and removed. */
+    j = api_request_json(port, "POST", "/v1/upload?name=audit.txt", "sample text", 200);
+    CHECK(j && cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "ok")));
+    cJSON_Delete(j);
+    j = api_request_json(port, "GET", "/v1/uploads", NULL, 200);
+    CHECK(j && cJSON_IsArray(cJSON_GetObjectItemCaseSensitive(j, "files")));
+    cJSON_Delete(j);
+    j = api_request_json(port, "DELETE", "/v1/uploads/audit.txt", NULL, 200);
+    cJSON_Delete(j);
+    j = api_request_json(port, "GET", "/v1/uploads", NULL, 200);
+    cJSON_Delete(j);
+    raw_http favicon = {0};
+    CHECK(raw_http_request(port, "GET", "/favicon.ico", NULL, &favicon) == 0 && favicon.status == 204);
+}
+
+static void test_http_install_auth(void) {
+    section("http tool installer authorization");
+    runtime_ctx ctx = {0};
+    ctx.http_port = 18221;
+    ctx.http_bind = "127.0.0.1";
+    ctx.auth = auth_new();
+    CHECK(ctx.auth != NULL);
+    if (!ctx.auth)
+        return;
+    auth_add_key(ctx.auth, "local-test-token");
+    CHECK(api_attach(&ctx) == 0);
+    if (!ctx.http) {
+        auth_free(ctx.auth);
+        return;
+    }
+    thread_t *server = thread_create(th_serve_http, ctx.http);
+    CHECK(server != NULL);
+    if (server) {
+        raw_http r = {0};
+        CHECK(raw_http_request(18221, "POST", "/v1/tools/gh-install", "{}", &r) == 0);
+        CHECK(r.status == 401);
+        CHECK(strstr(r.body, "unauthorized") != NULL);
+        http_server_stop(ctx.http);
+        thread_join(server);
+    }
+    http_server_free(ctx.http);
+    auth_free(ctx.auth);
+}
+
 static void test_http_capacity(void) {
     section("http admission backpressure");
     runtime_ctx ctx;
@@ -5642,6 +5982,8 @@ static void test_http_api(void) {
     CHECK(raw_http_request(18211, "GET", "/metrics", NULL, &r) == 0 && r.status == 200);
     CHECK(raw_http_request(18211, "GET", "/v1/routes", NULL, &r) == 0 && r.status == 200);
     CHECK(raw_http_request(18211, "GET", "/v1/usage", NULL, &r) == 0 && r.status == 200);
+
+    test_http_api_contracts(18211);
 
     /* POST a task -> runs the full reasoning pipeline via the mock provider */
     CHECK(raw_http_request(18211, "POST", "/v1/tasks",
@@ -6056,6 +6398,7 @@ int main(void) {
     test_audit();
     test_llm_adapters_http();
     test_http_capacity();
+    test_http_install_auth();
     test_http_api();
     test_ws_roundtrip();
     test_market_remote();

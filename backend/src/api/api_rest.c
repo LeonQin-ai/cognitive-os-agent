@@ -331,9 +331,8 @@ static int h_task_journal(const http_request *req, http_response *resp, void *ud
 
     if (!authz_ok(ctx, req, resp))
         return 0;
-    const char *q = strchr(req->path, '?');
-    if (q) {
-        const char *lim = strstr(q, "limit=");
+    if (req->query[0]) {
+        const char *lim = strstr(req->query, "limit=");
         if (lim)
             limit = atoi(lim + 6);
     }
@@ -1843,7 +1842,7 @@ static int h_cron_add(const http_request *req, http_response *resp, void *ud) {
     if ((!es || !cJSON_IsNumber(es) || es->valuedouble <= 0) && (!at || !*at)) {
         cJSON_Delete(root);
         resp->status = 400;
-        http_resp_json(resp, "{\"error\":\"need 'every_sec' (>0) or 'at' (\"HH:MM\")\"}");
+        http_resp_json(resp, "{\"error\":\"need 'every_sec' (>0) or 'at' (\\\"HH:MM\\\")\"}");
         return 0;
     }
     id = cron_add(ctx->cron, json_str(root, "name"), prompt, json_str(root, "session"),
@@ -2105,7 +2104,8 @@ static int h_config_snapshot_get(const http_request *req, http_response *resp, v
     return 0;
 }
 
-static int h_config_snapshot(const http_request *req, http_response *resp, void *ud) {    runtime_ctx *ctx = (runtime_ctx *)ud;
+static int h_config_snapshot(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     char *b;
     cJSON *root;
     cJSON *mf;
@@ -2784,13 +2784,15 @@ static int h_skills_market(const http_request *req, http_response *resp, void *u
  * runs DETACHED (winget can take minutes) — the single-threaded HTTP server
  * must never block inside a handler. */
 static int h_gh_install(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
     char *b;
     cJSON *root;
     char namebuf[128] = "";
     const char *winget = NULL;
     char cmd[512];
 
-    (void)ud;
+    if (!authz_ok(ctx, req, resp))
+        return 0;
     b = body_str(req);
     root = b ? cJSON_Parse(b) : NULL;
     free(b);
@@ -4355,7 +4357,7 @@ static int h_im_channel_send(const http_request *req, http_response *resp, void 
     char name[128];
     char *b;
     cJSON *root;
-    const char *text = NULL;
+    char *text = NULL;
     char *r;
 
     if (!authz_ok(ctx, req, resp))
@@ -4386,18 +4388,20 @@ static int h_im_channel_send(const http_request *req, http_response *resp, void 
     if (root && cJSON_IsObject(root)) {
         cJSON *t = cJSON_GetObjectItemCaseSensitive(root, "text");
         if (t && cJSON_IsString(t))
-            text = t->valuestring;
+            text = xstrdup(t->valuestring);
     }
 
     if (root)
         cJSON_Delete(root);
     if (!text || !*text) {
+        free(text);
         resp->status = 400;
         http_resp_json(resp, "{\"error\":\"need 'text' string\"}");
         return 0;
     }
 
     r = im_channel_send(ctx->channels, name, text);
+    free(text);
     http_resp_json(resp, r ? r : "{\"ok\":false,\"error\":\"channel not found\"}");
     free(r);
     return 0;
@@ -4470,9 +4474,8 @@ static int h_im_session_route(const http_request *req, http_response *resp, void
             if (s && cJSON_IsString(s))
                 sender = s->valuestring;
         }
-        if (root)
-            cJSON_Delete(root);
         if (!content || !*content) {
+            cJSON_Delete(root);
             resp->status = 400;
             http_resp_json(resp, "{\"error\":\"need 'content' string\"}");
             return 0;
@@ -4481,12 +4484,14 @@ static int h_im_session_route(const http_request *req, http_response *resp, void
             role = "user";
         int64_t id = im_send_ex(ctx->im, session_id, role, content, sender);
         if (id < 0) {
+            cJSON_Delete(root);
             resp->status = 404;
             http_resp_json(resp, "{\"error\":\"session not found\"}");
             return 0;
         }
         im_push(ctx, session_id, id, role, sender, content);
         im_forward_to_channel(ctx, session_id, content);
+        cJSON_Delete(root);
         http_resp_appendf(resp, "{\"id\":%lld,\"ok\":true}", (long long)id);
         return 0;
     }
@@ -4593,10 +4598,15 @@ static int h_state_get(const http_request *req, http_response *resp, void *ud) {
             http_resp_json(resp, "{\"error\":\"not found\"}");
             return 0;
         }
-        char *esc = cJSON_PrintUnformatted(cJSON_CreateString(v));
-        http_resp_appendf(resp, "{\"ok\":true,\"ns\":\"%s\",\"key\":\"%s\",\"value\":%s}", ns, key,
-                              esc ? esc : "\"\"");
-        free(esc);
+        cJSON *item = cJSON_CreateObject();
+        cJSON_AddBoolToObject(item, "ok", 1);
+        cJSON_AddStringToObject(item, "ns", ns);
+        cJSON_AddStringToObject(item, "key", key);
+        cJSON_AddStringToObject(item, "value", v);
+        char *json = cJSON_PrintUnformatted(item);
+        http_resp_json(resp, json ? json : "{}");
+        free(json);
+        cJSON_Delete(item);
         return 0;
     }
 
@@ -4728,7 +4738,13 @@ static int h_state_snapshot(const http_request *req, http_response *resp, void *
         return 0;
     }
 
-    http_resp_appendf(resp, "{\"ok\":true,\"path\":\"%s\"}", path);
+    cJSON *result = cJSON_CreateObject();
+    cJSON_AddBoolToObject(result, "ok", 1);
+    cJSON_AddStringToObject(result, "path", path);
+    char *json = cJSON_PrintUnformatted(result);
+    http_resp_json(resp, json ? json : "{}");
+    free(json);
+    cJSON_Delete(result);
     return 0;
 }
 
@@ -4867,7 +4883,7 @@ int api_attach(runtime_ctx *ctx) {
     http_server_route(ctx->http, "POST", "/v1/skills/install-remote", h_skill_install_remote, ctx);
     http_server_route(ctx->http, "GET", "/v1/skills/market", h_skills_market, ctx);
     http_server_route(ctx->http, "POST", "/v1/skills/publish", h_skills_publish, ctx);
-    http_server_route(ctx->http, "POST", "/v1/tools/gh-install", h_gh_install, NULL);
+    http_server_route(ctx->http, "POST", "/v1/tools/gh-install", h_gh_install, ctx);
     http_server_route(ctx->http, "DELETE", "/v1/skills/", h_skill_delete, ctx);
     http_server_route(ctx->http, "GET", "/v1/mcp", h_mcp, ctx);
     http_server_route(ctx->http, "POST", "/v1/mcp", h_mcp_add, ctx);
