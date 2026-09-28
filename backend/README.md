@@ -238,17 +238,37 @@ production hosts:
 Then invoke `ssh` with `{"environment":"staging","command":"uname -a"}`.
 Save this JSON as `<state_root>/ssh/environments.json`. The tool supports
 non-interactive key/agent authentication or a one-off `password` argument.
-The chat's **会话设置 → SSH 环境与本机凭据** panel manages named profiles and
-passwords locally. The equivalent `GET` / `POST` / `DELETE`
-`/v1/ssh/environments` API never returns a password. A successful password
-login to a named environment also enrolls that credential automatically, so
-the next turn can use the same environment without repeating the password.
-Successful one-off `host` / `user` / `port` password logins are likewise
-reused for that exact endpoint; the panel's **清除直连凭据** action removes one.
+The chat's **会话设置 → SSH 环境与本机凭据** panel shows connections discovered
+from successful SSH calls in the current chat. The next turn can call `ssh`
+with only `command` to reuse that chat's last host and local credential.
+Automatic profiles and passwords are isolated per chat; forgetting a profile
+or deleting the chat removes its managed credential. The optional shared named
+environments remain available through `GET` / `POST` / `DELETE`
+`/v1/ssh/environments`. `GET` / `DELETE /v1/ssh/session?session=<id>` manage
+the current chat's discovered profiles. Neither API returns a password.
 Windows protects stored credentials with the current user's DPAPI; macOS uses
 Keychain; Linux stores them in an owner-only (`0700` directory, `0600` file)
 local vault. Profile JSON contains connection settings only. Delete the
 environment to remove its managed credential.
+
+## IM Bridge and agent groups
+
+Register agents in **多 Agent & Flow**, then create an IM group whose members
+are those agent names. Each user message queues a bounded round: every
+registered member reads the room transcript and replies once in member order.
+The next user message starts the next round. Replies persist in the room,
+appear over WebSocket, and are sent to its linked external channel. Agent
+conversation state is isolated by room and agent. A group with no registered
+agent members remains a normal message room.
+
+`POST /v1/im/sessions/<id>/messages` with `{"content":"..."}` triggers a
+round, as does a WebSocket `im.send` event. Telegram inbound messages use the
+same path. Other external adapters can post an authenticated JSON body
+`{"text":"...","sender":"alice"}` to
+`/v1/im/channels/<name>/ingest` after linking a channel to the group. The
+response includes the queued `task_id` (`-3` means no agent is bound); task
+state is available through `/v1/tasks/<id>`. The bridge does not treat agent
+replies as new user messages, so agents cannot trigger an endless loop.
 
 The web console's **外观与背景** control in the sidebar (and browser header)
 accepts a local PNG, JPEG, WebP or GIF background up to 10 MB. The image is

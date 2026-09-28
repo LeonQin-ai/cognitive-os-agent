@@ -340,6 +340,25 @@ static cJSON *ssh_profile_load(const tool_ctx *ctx, const char *name, ssh_profil
     return root;
 }
 
+static int ssh_profile_parse(cJSON *p, ssh_profile *out) {
+    cJSON *v;
+    if (!cJSON_IsObject(p) || !out) return -1;
+    memset(out, 0, sizeof(*out));
+    v = cJSON_GetObjectItemCaseSensitive(p, "host");
+    out->host = cJSON_IsString(v) ? v->valuestring : NULL;
+    v = cJSON_GetObjectItemCaseSensitive(p, "user");
+    out->user = cJSON_IsString(v) ? v->valuestring : NULL;
+    v = cJSON_GetObjectItemCaseSensitive(p, "identity_file");
+    out->identity_file = cJSON_IsString(v) ? v->valuestring : NULL;
+    v = cJSON_GetObjectItemCaseSensitive(p, "proxy_jump");
+    out->proxy_jump = cJSON_IsString(v) ? v->valuestring : NULL;
+    v = cJSON_GetObjectItemCaseSensitive(p, "known_hosts");
+    out->known_hosts = cJSON_IsString(v) ? v->valuestring : NULL;
+    v = cJSON_GetObjectItemCaseSensitive(p, "port");
+    out->port = cJSON_IsNumber(v) ? (int)v->valuedouble : 22;
+    return 0;
+}
+
 /* Extract a password only from the locally retained task text.  The planner
  * never receives this text verbatim (llm.c redacts secrets before egress), so
  * an ssh action can omit password while the built-in tool still authenticates. */
@@ -350,12 +369,14 @@ static char *ssh_password_from_task(const char *task) {
         const char *p = strstr(task, keys[k]);
         if (!p) continue;
         p += strlen(keys[k]);
-        while (*p == ' ' || *p == '\t' || *p == ':' || *p == '=' ||
-               ((unsigned char)p[0] == 0xef && (unsigned char)p[1] == 0xbc &&
-                (unsigned char)p[2] == 0x9a)) { /* UTF-8 full-width colon */
-            if ((unsigned char)p[0] == 0xef) p += 3;
-            else p++;
-        }
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p == ':' || *p == '=') p++;
+        else if ((unsigned char)p[0] == 0xef && (unsigned char)p[1] == 0xbc &&
+                 (unsigned char)p[2] == 0x9a) p += 3; /* full-width colon */
+        else if (strncmp(p, "是", strlen("是")) == 0) p += strlen("是");
+        else if (strncmp(p, "is ", 3) == 0) p += 3;
+        else continue; /* do not mistake "password login" for a secret */
+        while (*p == ' ' || *p == '\t') p++;
         const char *e = p;
         while (*e && !isspace((unsigned char)*e) && *e != ',' &&
                !((unsigned char)e[0] == 0xef && (unsigned char)e[1] == 0xbc &&
@@ -520,6 +541,7 @@ static tool_result *ssh_exec(const tool *self, const tool_ctx *ctx, const char *
     const char *password_text = password && cJSON_IsString(password) ? password->valuestring : NULL;
     char *task_password = NULL;
     char *vault_password = NULL;
+    int session_profile = 0;
     char vault_key[96] = {0};
     char *quoted = NULL;
     char *shell_args = NULL;
@@ -528,7 +550,20 @@ static tool_result *ssh_exec(const tool *self, const tool_ctx *ctx, const char *
     strbuf cmd;
     (void)self;
 
-    if (environment && cJSON_IsString(environment)) {
+    if (ctx && ctx->session_id && *ctx->session_id &&
+        ((environment && cJSON_IsString(environment)) || !host_text)) {
+        char *raw = ssh_session_profile_get(ctx->state_root, ctx->session_id,
+                                             environment && cJSON_IsString(environment) ? environment->valuestring : NULL);
+        profile_root = raw ? cJSON_Parse(raw) : NULL;
+        free(raw);
+        if (profile_root && ssh_profile_parse(profile_root, &profile) == 0) {
+            session_profile = 1;
+            host_text = profile.host;
+            user_text = profile.user;
+            port_no = profile.port;
+        } else { cJSON_Delete(profile_root); profile_root = NULL; }
+    }
+    if (!session_profile && environment && cJSON_IsString(environment)) {
         profile_root = ssh_profile_load(ctx, environment->valuestring, &profile);
         if (!profile_root) {
             cJSON_Delete(args);
@@ -537,9 +572,12 @@ static tool_result *ssh_exec(const tool *self, const tool_ctx *ctx, const char *
         host_text = profile.host;
         user_text = profile.user;
         port_no = profile.port;
-        snprintf(vault_key, sizeof(vault_key), "%s", environment->valuestring);
     }
-    if (!profile_root && host_text && ssh_host_valid(host_text)) {
+    if (ctx && ctx->session_id && *ctx->session_id && host_text && ssh_host_valid(host_text)) {
+        ssh_session_vault_key(ctx->session_id, host_text, user_text, port_no, vault_key, sizeof(vault_key));
+    } else if (profile_root && environment && cJSON_IsString(environment)) {
+        snprintf(vault_key, sizeof(vault_key), "%s", environment->valuestring);
+    } else if (host_text && ssh_host_valid(host_text)) {
         ssh_vault_host_key(host_text, user_text, port_no, vault_key, sizeof(vault_key));
     }
     /* A planner only sees [REDACTED:secret]; resolve that marker from the
@@ -548,6 +586,8 @@ static tool_result *ssh_exec(const tool *self, const tool_ctx *ctx, const char *
         password_text = task_password = ssh_password_from_task(ctx->task_input);
     if (!password_text && vault_key[0] && ctx) {
         vault_password = ssh_vault_get(ctx->state_root, vault_key);
+        if (!vault_password && profile_root && !session_profile && environment && cJSON_IsString(environment))
+            vault_password = ssh_vault_get(ctx->state_root, environment->valuestring);
         password_text = vault_password;
     }
     if (!host_text || !ssh_host_valid(host_text) ||
@@ -604,8 +644,15 @@ static tool_result *ssh_exec(const tool *self, const tool_ctx *ctx, const char *
     result = shell_exec_impl(NULL, ctx, shell_args, 1);
     /* Enroll only a successful login; bad credentials must not replace a
      * working environment secret. A retrieved secret is already enrolled. */
-    if (result && result->ok && ctx && vault_key[0] && password_text && !vault_password)
+    if (result && result->ok && ctx && vault_key[0] && password_text)
         ssh_vault_put(ctx->state_root, vault_key, password_text);
+    if (result && result->ok && ctx && ctx->session_id && *ctx->session_id)
+        ssh_session_profile_record(ctx->state_root, ctx->session_id,
+            environment && cJSON_IsString(environment) ? environment->valuestring : NULL,
+            host_text, user_text, port_no,
+            profile_root ? profile.identity_file : NULL,
+            profile_root ? profile.proxy_jump : NULL,
+            profile_root ? profile.known_hosts : NULL);
 #if !defined(_WIN32)
     if (askpass_helper[0]) fs_remove(askpass_helper);
 #endif
@@ -619,7 +666,7 @@ static tool_result *ssh_exec(const tool *self, const tool_ctx *ctx, const char *
 const tool *tool_ssh(void) {
     static const tool t = {
         "ssh",
-        "Run one remote SSH command. Always use this tool for SSH work instead of shell. Supports named environments, keys/agent, and password authentication through the local system OpenSSH client without sshpass or Python.",
+        "Run one remote SSH command. Always use this tool for SSH work instead of shell. After a successful login, omit host/environment to reuse this chat session's last SSH connection. Supports named environments, keys/agent, and local password authentication without sshpass or Python.",
         "{\"type\":\"object\",\"properties\":{\"host\":{\"type\":\"string\"},\"environment\":{\"type\":\"string\"},\"user\":{\"type\":\"string\"},"
         "\"command\":{\"type\":\"string\"},\"port\":{\"type\":\"integer\"},"
         "\"timeout_ms\":{\"type\":\"integer\"}},\"required\":[\"command\"]}",

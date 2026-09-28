@@ -2231,6 +2231,25 @@ static int h_ssh_credential_delete(const http_request *req, http_response *resp,
     return 0;
 }
 
+static int h_ssh_session(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
+    char session[128], key[96];
+    if (!authz_ok(ctx, req, resp)) return 0;
+    query_param(req, "session", session, sizeof(session));
+    if (!*session) snprintf(session, sizeof(session), "default");
+    if (strcmp(req->method, "GET") == 0) {
+        char *json = ssh_session_profiles_json(ctx->state_root, session);
+        http_resp_json(resp, json ? json : "[]");
+        free(json);
+    } else {
+        query_param(req, "key", key, sizeof(key));
+        if (!*key || ssh_session_profile_forget(ctx->state_root, session, key)) {
+            resp->status = 404; http_resp_json(resp, "{\"error\":\"session SSH environment not found\"}");
+        } else http_resp_json(resp, "{\"ok\":true}");
+    }
+    return 0;
+}
+
 static int h_config_llm_get(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
     /* active LLM as persisted in config (set by set_llm / env / defaults) */
@@ -4422,6 +4441,7 @@ static void on_ws_msg(const char *text, void *ud) {
             if (id > 0) {
                 im_push(ctx, (int64_t)sid->valuedouble, id, "user", snd, content->valuestring);
                 im_forward_to_channel(ctx, (int64_t)sid->valuedouble, content->valuestring);
+                im_dispatch(ctx, (int64_t)sid->valuedouble, id);
             }
         }
     } else if (strcmp(t, "im.ping") == 0) {
@@ -4488,6 +4508,8 @@ static int h_im_session_create(const http_request *req, http_response *resp, voi
     }
 
     id = im_create_session_ex(ctx->im, name ? name : "", kind ? kind : "direct", members, n_members);
+    if (id > 0 && ctx->channels && channel && *channel)
+        im_session_set_channel(ctx->im, id, channel);
     cJSON_Delete(root);
     if (id < 0) {
         resp->status = 500;
@@ -4495,8 +4517,6 @@ static int h_im_session_create(const http_request *req, http_response *resp, voi
         return 0;
     }
 
-    if (id > 0 && ctx->channels && channel && *channel)
-        im_session_set_channel(ctx->im, id, channel);
     http_resp_appendf(resp, "{\"id\":%lld}", (long long)id);
     return 0;
 }
@@ -4619,10 +4639,13 @@ static int h_im_channel_send(const http_request *req, http_response *resp, void 
     runtime_ctx *ctx = (runtime_ctx *)ud;
     size_t blen;
     const char *send = "/send";
+    const char *ingest = "/ingest";
+    int inbound = 0;
     char name[128];
     char *b;
     cJSON *root;
     char *text = NULL;
+    char *sender = NULL;
     char *r;
 
     if (!authz_ok(ctx, req, resp))
@@ -4635,8 +4658,16 @@ static int h_im_channel_send(const http_request *req, http_response *resp, void 
 
     const char *base = req->path + strlen("/v1/im/channels/");
     blen = strlen(base);
-    if (blen > strlen(send) && strcmp(base + blen - strlen(send), send) == 0)
+    if (blen > strlen(ingest) && strcmp(base + blen - strlen(ingest), ingest) == 0) {
+        blen -= strlen(ingest);
+        inbound = 1;
+    } else if (blen > strlen(send) && strcmp(base + blen - strlen(send), send) == 0)
         blen -= strlen(send);
+    else {
+        resp->status = 404;
+        http_resp_json(resp, "{\"error\":\"expected /send or /ingest\"}");
+        return 0;
+    }
     if (blen >= sizeof(name))
         blen = sizeof(name) - 1;
     memcpy(name, base, blen);
@@ -4654,19 +4685,43 @@ static int h_im_channel_send(const http_request *req, http_response *resp, void 
         cJSON *t = cJSON_GetObjectItemCaseSensitive(root, "text");
         if (t && cJSON_IsString(t))
             text = xstrdup(t->valuestring);
+        cJSON *who = cJSON_GetObjectItemCaseSensitive(root, "sender");
+        if (who && cJSON_IsString(who) && who->valuestring[0])
+            sender = xstrdup(who->valuestring);
     }
 
     if (root)
         cJSON_Delete(root);
     if (!text || !*text) {
         free(text);
+        free(sender);
         resp->status = 400;
         http_resp_json(resp, "{\"error\":\"need 'text' string\"}");
         return 0;
     }
 
+    if (inbound) {
+        im_channel *ch = im_channel_find(ctx->channels, name);
+        int64_t sid = ctx->im ? im_session_by_channel(ctx->im, name) : -1;
+        if (!ch || !ch->enabled || sid < 0) {
+            free(text);
+            free(sender);
+            resp->status = 404;
+            http_resp_json(resp, "{\"error\":\"channel is disabled or not linked\"}");
+            return 0;
+        }
+        int64_t id = im_send_ex(ctx->im, sid, "user", text, sender ? sender : name);
+        if (id > 0) im_push(ctx, sid, id, "user", sender ? sender : name, text);
+        int64_t task_id = id > 0 ? im_dispatch(ctx, sid, id) : -1;
+        free(text);
+        free(sender);
+        http_resp_appendf(resp, "{\"ok\":%s,\"id\":%lld,\"task_id\":%lld}",
+                          id > 0 ? "true" : "false", (long long)id, (long long)task_id);
+        return 0;
+    }
     r = im_channel_send(ctx->channels, name, text);
     free(text);
+    free(sender);
     http_resp_json(resp, r ? r : "{\"ok\":false,\"error\":\"channel not found\"}");
     free(r);
     return 0;
@@ -4745,8 +4800,15 @@ static int h_im_session_route(const http_request *req, http_response *resp, void
             http_resp_json(resp, "{\"error\":\"need 'content' string\"}");
             return 0;
         }
-        if (!role || !*role)
-            role = "user";
+        /* Public message entrypoints represent a human turn. Agent messages
+         * are appended by the IM runner, so clients cannot spoof them. */
+        if (role && *role && strcmp(role, "user") != 0) {
+            cJSON_Delete(root);
+            resp->status = 400;
+            http_resp_json(resp, "{\"error\":\"only user messages are accepted\"}");
+            return 0;
+        }
+        role = "user";
         int64_t id = im_send_ex(ctx->im, session_id, role, content, sender);
         if (id < 0) {
             cJSON_Delete(root);
@@ -4756,8 +4818,10 @@ static int h_im_session_route(const http_request *req, http_response *resp, void
         }
         im_push(ctx, session_id, id, role, sender, content);
         im_forward_to_channel(ctx, session_id, content);
+        int64_t task_id = im_dispatch(ctx, session_id, id);
         cJSON_Delete(root);
-        http_resp_appendf(resp, "{\"id\":%lld,\"ok\":true}", (long long)id);
+        http_resp_appendf(resp, "{\"id\":%lld,\"task_id\":%lld,\"ok\":true}",
+                          (long long)id, (long long)task_id);
         return 0;
     }
 
@@ -5102,6 +5166,8 @@ int api_attach(runtime_ctx *ctx) {
     http_server_route(ctx->http, "POST", "/v1/ssh/environments", h_ssh_environments, ctx);
     http_server_route(ctx->http, "DELETE", "/v1/ssh/environments/", h_ssh_environment_delete, ctx);
     http_server_route(ctx->http, "DELETE", "/v1/ssh/credentials", h_ssh_credential_delete, ctx);
+    http_server_route(ctx->http, "GET", "/v1/ssh/session", h_ssh_session, ctx);
+    http_server_route(ctx->http, "DELETE", "/v1/ssh/session", h_ssh_session, ctx);
     http_server_route(ctx->http, "POST", "/v1/config/llm", h_config_llm, ctx);
     http_server_route(ctx->http, "POST", "/v1/config/llm/test", h_config_llm_test, ctx);
     http_server_route(ctx->http, "GET", "/v1/config/llm/test", h_config_llm_test, ctx);

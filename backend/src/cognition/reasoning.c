@@ -1422,6 +1422,7 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
     tctx.bus = r->bus;
     tctx.workspace = r->workspace;
     tctx.state_root = r->state_root;
+    tctx.session_id = r->cur ? r->cur->id : "default";
     tctx.task_input = r->last_prompt;
     tctx.metrics = r->metrics;
     tctx.skills = r->skills;
@@ -2454,6 +2455,7 @@ int reasoning_session_clear(reasoning *r, const char *session_id) {
         char fpath[700];
         chat_file_path(fpath, sizeof(fpath), r->state_root, want);
         fs_remove(fpath);
+        ssh_session_profiles_clear(r->state_root, want);
     }
     return 0;
 }
@@ -2494,6 +2496,7 @@ int reasoning_session_delete(reasoning *r, const char *session_id) {
             char fpath[700];
             chat_file_path(fpath, sizeof(fpath), r->state_root, want);
             fs_remove(fpath);
+            ssh_session_profiles_clear(r->state_root, want);
         }
         return removed ? 0 : -1;
     }
@@ -2522,6 +2525,7 @@ int reasoning_session_delete(reasoning *r, const char *session_id) {
         char fpath[700];
         chat_file_path(fpath, sizeof(fpath), r->state_root, want);
         fs_remove(fpath);
+        ssh_session_profiles_clear(r->state_root, want);
     }
     session_free(s);
     return 0;

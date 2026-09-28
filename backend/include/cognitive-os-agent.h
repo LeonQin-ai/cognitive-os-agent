@@ -160,6 +160,11 @@ int run(runtime_ctx *ctx, const char *prompt, char **answer);
  * blackboard under the agent's name. Returns 0 ok, -1 bad args, -2 unknown. */
 int agent_run(runtime_ctx *ctx, const char *agent, const char *task, char **answer);
 
+/* Queue one bounded IM round for the human message. Group members must name
+ * registered agents. Returns task id (including 0), -3 when no agent is
+ * bound, or another negative value on error. */
+int64_t im_dispatch(runtime_ctx *ctx, int64_t session_id, int64_t message_id);
+
 /* Run a task through the multi-agent orchestration pipeline: LLM decomposes
  * the task into subtasks compiled to a Flow DAG, flow_run executes it (one
  * isolated reasoning instance per node, parallel; results on the blackboard

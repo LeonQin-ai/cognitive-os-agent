@@ -810,9 +810,13 @@ panels.chat = `
         <span class="muted" id="chat-session-meta"></span>
       </div>
       <div class="hint" style="margin-top:6px">对话模型在上方下拉切换（来自 Model routes）；新增路由请到 <a href="#" onclick="switchPanel('models');return false">Models</a> 页配置。会话支持 取消 / 恢复：运行中点「取消」，取消或失败后点「恢复」重跑上一条输入。</div>
-      <details style="margin-top:14px;border-top:1px solid var(--border);padding-top:12px" ontoggle="if(this.open)sshEnvironmentLoad()">
+      <details id="ssh-session-details" style="margin-top:14px;border-top:1px solid var(--border);padding-top:12px" ontoggle="if(this.open)sshSessionLoad()">
         <summary style="cursor:pointer;font-weight:650">SSH 环境与本机凭据</summary>
-        <div class="hint" style="margin:8px 0">保存后在对话中使用环境名称，例如“在 staging 执行 uname”。密码仅交给本机 SSH 工具，后续对话无需重复输入。</div>
+        <div class="hint" style="margin:8px 0">当前会话首次成功连接后会自动记住主机和本机凭据；下次直接说“继续连接并执行…”即可复用。其他会话不会读取这里的自动凭据。</div>
+        <div id="ssh-session-list" style="display:flex;gap:6px;flex-wrap:wrap;margin:8px 0"></div>
+        <details style="margin-top:10px" ontoggle="if(this.open)sshEnvironmentLoad()">
+        <summary style="cursor:pointer;color:var(--muted)">手动配置共享环境（可选）</summary>
+        <div class="hint" style="margin:8px 0">手动环境可通过名称在不同会话中调用。密码仍由本机保管。</div>
         <div id="ssh-environment-list" style="display:flex;gap:6px;flex-wrap:wrap;margin:8px 0"></div>
         <div class="row" style="gap:8px;flex-wrap:wrap">
           <input id="ssh-env-name" aria-label="SSH 环境名称" placeholder="环境名称，如 staging" autocomplete="off" style="flex:1;min-width:160px">
@@ -828,6 +832,7 @@ panels.chat = `
           <button class="sec sm" onclick="sshCredentialClear()" title="清除当前主机、用户、端口的直连登录凭据">清除直连凭据</button>
         </div>
         <div class="hint" id="ssh-env-status" role="status" style="margin-top:7px"></div>
+        </details>
       </details>
       <details style="margin-top:14px;border-top:1px solid var(--border);padding-top:12px" ontoggle="if(this.open)loadUploads()">
         <summary style="cursor:pointer;font-weight:650">已上传文件</summary>
@@ -1313,7 +1318,8 @@ panels.im = `
         <label class="toggle-row" style="display:flex;align-items:center;gap:6px;margin:0 0 6px;font-size:12px;color:var(--muted)">
           <input type="checkbox" id="im-group" style="width:16px;height:16px;accent-color:var(--accent)"> 群聊
         </label>
-        <input id="im-members" type="text" placeholder="群成员（逗号分隔，如 alice,bob）" style="margin-bottom:6px" hidden>
+        <input id="im-members" type="text" placeholder="Agent 名称，逗号分隔（先在多 Agent 页面创建）" style="margin-bottom:6px" hidden>
+        <div class="hint" id="im-agent-hint" style="margin:0 0 8px" hidden>群内已注册的 Agent 会依次回复用户消息；每条消息最多触发每位 Agent 一次。发送下一条消息即可开始下一轮。</div>
         <select id="im-channel" style="margin-bottom:10px;font-size:12.5px">
           <option value="">关联外部渠道（选填）</option>
         </select>
@@ -1328,15 +1334,16 @@ panels.im = `
         <div class="im-thread" id="im-thread">
           <span class="muted" style="font-size:12px">选择一个会话开始聊天</span>
         </div>
+        <div id="im-run-status" class="muted" style="min-height:22px;padding:3px 2px;font-size:12px" aria-live="polite"></div>
         <div class="im-input-row">
-          <input id="im-input" type="text" placeholder="消息内容，Enter 发送（@成员名 可指定发送者）">
+          <input id="im-input" type="text" placeholder="发送消息，群内 Agent 将依次回应；Enter 发送">
           <button onclick="imSend()">Send</button>
         </div>
       </div>
     </div>
     <div class="card" style="margin-top:10px">
       <h2 style="font-size:14px;margin:0 0 6px">外部消息渠道（IM Bridge）</h2>
-      <div class="hint">把会话关联到一个渠道：创建会话时选择渠道即可。收到的消息会自动同步到会话；会话消息会转发到渠道。</div>
+      <div class="hint">把群聊关联到渠道后，外部用户消息会触发群内 Agent 依次执行。Telegram 自动收取消息；其他渠道可向 <code>POST /v1/im/channels/&lt;name&gt;/ingest</code> 提交 <code>{"text":"...","sender":"..."}</code>（使用 API 认证）。</div>
       <div style="margin:6px 0">
         <button class="sm" onclick="renderChannels()">刷新</button>
         <span id="channels-stat" class="muted"></span>
@@ -2455,13 +2462,27 @@ async function pluginGenerate(){
 let IM_ACTIVE = null;
 let WS = null;
 let IM_CHANNELS = [];
+const IM_RUN_STATE = new Map();
+
+function imRunUpdate(m){
+  const rank = {queued:1,running:2,done:3,failed:3};
+  const previous = IM_RUN_STATE.get(m.task_id);
+  if(previous && previous.rank > (rank[m.status] || 0)) return;
+  IM_RUN_STATE.set(m.task_id,{rank:rank[m.status] || 0,session_id:m.session_id,status:m.status,agent:m.agent});
+  if(IM_RUN_STATE.size > 100) IM_RUN_STATE.delete(IM_RUN_STATE.keys().next().value);
+  if(IM_ACTIVE !== m.session_id) return;
+  const el = $('im-run-status'); if(!el) return;
+  el.textContent = m.status === 'queued' ? '已排队，等待 Agent…' :
+    m.status === 'running' ? ((m.agent || 'Agent') + ' 正在回应…') :
+    m.status === 'failed' ? '本轮执行失败，请查看任务 #' + m.task_id : '本轮已完成';
+}
 
 function imCreate(){
   const name = $('im-new').value.trim() || '新会话';
   const isGroup = $('im-group').checked;
   const members = $('im-members').value.split(',').map(s => s.trim()).filter(Boolean);
   const body = {name: name, kind: isGroup ? 'group' : 'direct'};
-  if(members.length) body.members = members;
+  if(isGroup && members.length) body.members = members;
   const sel = $('im-channel');
   if(sel && sel.value){ body.channel = sel.value; }
   call('POST', '/v1/im/sessions', body).then(() => {
@@ -2547,6 +2568,10 @@ function channelSendTest(name){
 
 function imSelect(id){
   IM_ACTIVE = id;
+  const st = $('im-run-status'); if(st) st.textContent = '';
+  let latest = null;
+  for(const [task_id,state] of IM_RUN_STATE) if(state.session_id === id) latest = {task_id,...state};
+  if(latest) imRunUpdate(latest);
   document.querySelectorAll('.im-session').forEach(s => s.classList.toggle('on', s.dataset.id === String(id)));
   renderImThread();
 }
@@ -2599,7 +2624,7 @@ async function renderIm(){
   const g = $('im-group');
   if(g && !g.dataset.bound){
     g.dataset.bound = '1';
-    g.addEventListener('change', () => { const el = $('im-members'); if(el) el.hidden = !g.checked; });
+    g.addEventListener('change', () => { const el = $('im-members'); if(el) el.hidden = !g.checked; const hint = $('im-agent-hint'); if(hint) hint.hidden = !g.checked; });
   }
   const r = await call('GET', '/v1/im/sessions');
   const sessions = (r.obj && Array.isArray(r.obj.sessions)) ? r.obj.sessions : [];
@@ -2649,10 +2674,7 @@ function imSend(){
   const input = $('im-input');
   let content = input.value.trim();
   if(!content || IM_ACTIVE === null) return;
-  let sender = 'me';
-  const m = content.match(/^@(\S+)\s+/);
-  if(m){ sender = m[1]; content = content.slice(m[0].length); }
-  if(!content) return;
+  const sender = 'me';
   input.value = '';
   const payload = {type:'im.send', session_id: IM_ACTIVE, content, sender};
   if(WS && WS.readyState === WebSocket.OPEN){
@@ -2696,6 +2718,8 @@ function wsConnect(){
           } else {
             toast('📩 新消息: ' + ((m.role === 'user') ? '用户' : '助手'));
           }
+        } else if(m.type === 'im.run'){
+          imRunUpdate(m);
         } else if(m.type === 'event' && m.source === 'flow'){
           const el = $('flow-out');
           if(el && m.payload){
@@ -2928,6 +2952,31 @@ function chatToggleSettings(){
 }
 
 let SSH_ENVIRONMENTS = [];
+async function sshSessionLoad(){
+  const session = CHAT_SESSION;
+  const r = await call('GET','/v1/ssh/session?session=' + encodeURIComponent(session));
+  if(session !== CHAT_SESSION) return;
+  const list = $('ssh-session-list'); if(!list) return;
+  list.innerHTML = '';
+  if(r.status !== 200 || !Array.isArray(r.obj)){ list.textContent = '会话环境加载失败'; return; }
+  if(!r.obj.length){ list.textContent = '本会话尚无 SSH 连接'; return; }
+  for(const env of r.obj){
+    const item = document.createElement('span'); item.className = 'chip';
+    item.textContent = (env.environment || env.host || 'SSH') +
+      (env.user ? ' · ' + env.user : '') + ':' + (env.port || 22) +
+      (env.has_password ? ' · 已托管密码' : ' · 私钥/agent');
+    const forget = document.createElement('button');
+    forget.className = 'sec sm'; forget.textContent = '忘记';
+    forget.title = '移除本会话中的这条连接和凭据';
+    forget.onclick = () => sshSessionForget(session,env.key);
+    item.appendChild(forget); list.appendChild(item);
+  }
+}
+async function sshSessionForget(session,key){
+  const r = await call('DELETE','/v1/ssh/session?session=' + encodeURIComponent(session) + '&key=' + encodeURIComponent(key));
+  toast(r.status < 300 ? '已忘记本会话的 SSH 连接' : '移除失败');
+  if(r.status < 300 && session === CHAT_SESSION) await sshSessionLoad();
+}
 async function sshEnvironmentLoad(){
   const r = await call('GET', '/v1/ssh/environments');
   const list = $('ssh-environment-list');
@@ -3114,6 +3163,7 @@ async function chatSwitchSession(id){
   if(id === CHAT_SESSION){ switchPanel('chat'); chatFocusComposer(id); return; }
   chatCacheStore(); // 保存当前会话消息，切回时即时回放
   CHAT_SESSION = id;
+  if($('ssh-session-details')?.open) void sshSessionLoad();
   CHAT_NEW_SESSION = false;
   CHAT_MSGS = CHAT_CACHE[id] || [];
   if(current !== 'chat') switchPanel('chat');
@@ -3143,6 +3193,7 @@ async function chatNewSession(){
   const r = await call('POST', '/v1/chat/sessions');
   const id = r.obj && r.obj.id;
   CHAT_SESSION = id || ('s-' + Date.now());
+  if($('ssh-session-details')?.open) void sshSessionLoad();
   CHAT_NEW_SESSION = !id; /* 后端已注册时无需等首条消息 */
   CHAT_MSGS = [];
   renderChatTabs([]);

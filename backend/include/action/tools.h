@@ -45,6 +45,7 @@ typedef struct tool_ctx {
     event_bus *bus;                /* event publisher (may be NULL) */
     const char *workspace;             /* base dir for relative paths */
     const char *state_root;        /* runtime state dir (SSH environment profiles) */
+    const char *session_id;        /* current chat session; scopes auto SSH credentials */
     const char *task_input;        /* original local task text; never sent to an LLM */
     metrics *metrics;              /* metrics sink (may be NULL) */
     struct skill_registry *skills; /* for the skill tool (may be NULL) */
@@ -94,6 +95,16 @@ int ssh_vault_put(const char *state_root, const char *name, const char *password
 char *ssh_vault_get(const char *state_root, const char *name);
 int ssh_vault_delete(const char *state_root, const char *name);
 void ssh_vault_secret_free(char *secret);
+int ssh_session_vault_key(const char *session_id, const char *host, const char *user,
+                          int port, char *out, size_t cap);
+char *ssh_session_profile_get(const char *state_root, const char *session_id,
+                              const char *environment);
+int ssh_session_profile_record(const char *state_root, const char *session_id,
+                               const char *environment, const char *host, const char *user,
+                               int port, const char *identity, const char *jump, const char *known);
+char *ssh_session_profiles_json(const char *state_root, const char *session_id);
+int ssh_session_profile_forget(const char *state_root, const char *session_id, const char *key);
+void ssh_session_profiles_clear(const char *state_root, const char *session_id);
 /* Windows SSH_ASKPASS entry point: returns -1 for a normal launch, otherwise
  * writes the local one-shot password to stdout and returns an exit status. */
 int ssh_askpass_run_if_requested(void);

@@ -176,6 +176,8 @@ typedef struct {
 } lane_sess_lock;
 static lane_sess_lock g_lane_sess[LANE_SESS_MAX];
 static mutex_t g_lane_sess_mtx;
+#define IM_ROOM_LOCKS 64
+static mutex_t g_im_room_mtx[IM_ROOM_LOCKS];
 
 /* Acquire the per-session run lock (entry created on first use). Blocks
  * while another task on the SAME session is still executing. */
@@ -257,6 +259,156 @@ static int chat_lane_run(runtime_ctx *ctx, const char *session_id, int64_t task_
     return rc;
 }
 
+static void im_run_status(runtime_ctx *ctx, int64_t room_id, int64_t task_id,
+                          const char *status, const char *agent) {
+    if (!ctx || !ctx->http) return;
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddStringToObject(o, "type", "im.run");
+    cJSON_AddNumberToObject(o, "session_id", (double)room_id);
+    cJSON_AddNumberToObject(o, "task_id", (double)task_id);
+    cJSON_AddStringToObject(o, "status", status);
+    if (agent) cJSON_AddStringToObject(o, "agent", agent);
+    char *js = cJSON_PrintUnformatted(o);
+    if (js) http_server_ws_broadcast(ctx->http, js);
+    free(js); cJSON_Delete(o);
+}
+
+/* One human turn invokes each registered member once. The room lock keeps
+ * overlapping messages in order; agent state stays isolated by room/name. */
+static int im_run_round(runtime_ctx *ctx, task *t, char **summary) {
+    long long parsed_room, parsed_trigger;
+    int64_t room_id, trigger_id, generated[64];
+    size_t generated_n = 0, session_n = 0;
+    im_session *sessions;
+    im_session *room_session = NULL;
+    int replied = 0;
+    if (!t->tag || sscanf(t->tag, "im:%lld", &parsed_room) != 1 ||
+        sscanf(t->input, "%lld", &parsed_trigger) != 1)
+        return -1;
+    room_id = (int64_t)parsed_room;
+    trigger_id = (int64_t)parsed_trigger;
+    mutex_t *room_lock = &g_im_room_mtx[(uint64_t)room_id % IM_ROOM_LOCKS];
+    mutex_lock(room_lock);
+    sessions = im_list_sessions(ctx->im, &session_n);
+    for (size_t i = 0; i < session_n; i++)
+        if (sessions[i].id == room_id) { room_session = &sessions[i]; break; }
+    if (!room_session || task_should_abort(t)) {
+        im_sessions_free(sessions, session_n);
+        mutex_unlock(room_lock);
+        im_run_status(ctx, room_id, t->id, "failed", NULL);
+        return -1;
+    }
+    for (size_t i = 0; i < room_session->n_members && i < 64 && !task_should_abort(t); i++) {
+        const char *name = room_session->members[i];
+        if (!name || agent_pool_find(ctx->agents, name) < 0) continue;
+        int already_spoke = 0;
+        for (size_t earlier = 0; earlier < i; earlier++)
+            if (room_session->members[earlier] && strcmp(room_session->members[earlier], name) == 0)
+                already_spoke = 1;
+        if (already_spoke) continue;
+        size_t msg_n = 0;
+        im_message *msgs = im_messages(ctx->im, room_id, &msg_n);
+        if (!msgs || !msg_n) { im_messages_free(msgs, msg_n); break; }
+        cJSON *history = cJSON_CreateArray();
+        size_t start = msg_n > 32 ? msg_n - 32 : 0;
+        for (size_t m = start; m < msg_n; m++) {
+            int include = msgs[m].id <= trigger_id;
+            for (size_t g = 0; g < generated_n; g++)
+                if (generated[g] == msgs[m].id) include = 1;
+            if (!include) continue;
+            cJSON *entry = cJSON_CreateObject();
+            cJSON_AddStringToObject(entry, "speaker", msgs[m].sender ? msgs[m].sender : msgs[m].role);
+            cJSON_AddStringToObject(entry, "content", msgs[m].content);
+            cJSON_AddItemToArray(history, entry);
+        }
+        char *transcript = cJSON_PrintUnformatted(history);
+        cJSON_Delete(history);
+        im_messages_free(msgs, msg_n);
+        char *roster = agent_pool_snapshot_json(ctx->agents);
+        cJSON *ro = roster ? cJSON_Parse(roster) : NULL;
+        const char *role = "";
+        cJSON *agents = ro ? cJSON_GetObjectItemCaseSensitive(ro, "agents") : NULL;
+        cJSON *agent;
+        cJSON_ArrayForEach(agent, agents) {
+            cJSON *an = cJSON_GetObjectItemCaseSensitive(agent, "name");
+            cJSON *ar = cJSON_GetObjectItemCaseSensitive(agent, "role");
+            if (cJSON_IsString(an) && strcmp(an->valuestring, name) == 0) {
+                if (cJSON_IsString(ar)) role = ar->valuestring;
+                break;
+            }
+        }
+        size_t plen = strlen(transcript ? transcript : "[]") + strlen(name) + strlen(role) + 512;
+        char *prompt = malloc(plen);
+        if (prompt) snprintf(prompt, plen,
+            "You are %s in an IM group. Your role: %s. Read the room transcript JSON below and contribute one concise message in your own voice. Reply to the latest human request and other agents when relevant. Do not impersonate another speaker. Do not claim to have done work you did not do. Transcript: %s",
+            name, role, transcript ? transcript : "[]");
+        cJSON_Delete(ro); free(roster); free(transcript);
+        if (!prompt) continue;
+        char agent_session[160];
+        snprintf(agent_session, sizeof(agent_session), "im:%lld:%s", (long long)room_id, name);
+        char *reply = NULL;
+        im_run_status(ctx, room_id, t->id, "running", name);
+        int rc = chat_lane_run(ctx, agent_session, t->id, t->thinking_mode, prompt, &reply);
+        free(prompt);
+        if (rc == 0 && reply && *reply) {
+            int64_t id = im_send_ex(ctx->im, room_id, "assistant", reply, name);
+            if (id > 0) {
+                generated[generated_n++] = id;
+                replied++;
+                cJSON *evt = cJSON_CreateObject();
+                cJSON_AddStringToObject(evt, "type", "im.message");
+                cJSON_AddNumberToObject(evt, "session_id", (double)room_id);
+                cJSON_AddNumberToObject(evt, "id", (double)id);
+                cJSON_AddStringToObject(evt, "role", "assistant");
+                cJSON_AddStringToObject(evt, "sender", name);
+                cJSON_AddStringToObject(evt, "content", reply);
+                cJSON_AddNumberToObject(evt, "ts_ms", (double)time_now_ms());
+                char *js = cJSON_PrintUnformatted(evt);
+                if (js && ctx->http) http_server_ws_broadcast(ctx->http, js);
+                free(js); cJSON_Delete(evt);
+                const char *channel = room_session->channel;
+                if (channel && ctx->channels) {
+                    size_t len = strlen(name) + strlen(reply) + 4;
+                    char *out = malloc(len);
+                    if (out) {
+                        snprintf(out, len, "%s: %s", name, reply);
+                        char *sent = im_channel_send(ctx->channels, channel, out);
+                        free(sent); free(out);
+                    }
+                }
+            }
+        }
+        free(reply);
+    }
+    im_sessions_free(sessions, session_n);
+    mutex_unlock(room_lock);
+    im_run_status(ctx, room_id, t->id, replied ? "done" : "failed", NULL);
+    *summary = xstrdup(replied ? "IM round complete" : "No agent replied");
+    return replied ? 0 : -1;
+}
+
+int64_t im_dispatch(runtime_ctx *ctx, int64_t session_id, int64_t message_id) {
+    size_t n = 0;
+    im_session *sessions;
+    int bound = 0;
+    if (!ctx || !ctx->im || !ctx->agents || !ctx->scheduler || message_id <= 0) return -1;
+    sessions = im_list_sessions(ctx->im, &n);
+    for (size_t i = 0; i < n; i++) if (sessions[i].id == session_id &&
+        sessions[i].kind && strcmp(sessions[i].kind, "group") == 0) {
+        for (size_t j = 0; j < sessions[i].n_members; j++)
+            if (agent_pool_find(ctx->agents, sessions[i].members[j]) >= 0) bound++;
+        break;
+    }
+    im_sessions_free(sessions, n);
+    if (!bound) return -3;
+    char tag[64], input[64];
+    snprintf(tag, sizeof(tag), "im:%lld", (long long)session_id);
+    snprintf(input, sizeof(input), "%lld", (long long)message_id);
+    int64_t task_id = scheduler_submit_tag(ctx->scheduler, 0, input, (void *)3, 0, tag);
+    if (task_id >= 0) im_run_status(ctx, session_id, task_id, "queued", NULL);
+    return task_id;
+}
+
 /* Scheduler task runner: run the prompt through the reasoning pipeline and
  * store the result on the task. Chat tasks (userdata == 0) run on a lane;
  * orchestration/flow tasks keep their dedicated pipelines. */
@@ -277,7 +429,9 @@ static void sched_trampoline(task *t, scheduler *s, void *ud) {
     if (t->userdata) {
         /* userdata marker (set by /v1/orchestrate = 1, /v1/flows = 2): run the
          * multi-agent pipeline / flow DAG instead of the single-agent loop */
-        if (t->userdata == (void *)2)
+        if (t->userdata == (void *)3)
+            run_rc = im_run_round(ctx, t, &answer);
+        else if (t->userdata == (void *)2)
             run_rc = flow_run(ctx, t->input, t->id, &answer, NULL);
         else
             run_rc = orchestrate(ctx, t->input, &answer, NULL);
@@ -325,6 +479,8 @@ static void channel_ingest(const char *channel_name, const char *sender, const c
             http_server_ws_broadcast(ctx->http, js);
         free(js);
     }
+
+    im_dispatch(ctx, sid, id);
 
     /* Inbound IM messages are session input, not completed task evidence.
      * Reasoning commits the episode through Memory Service on completion. */
@@ -395,6 +551,7 @@ int init(runtime_ctx *ctx, const config *cfg) {
     memset(ctx, 0, sizeof(*ctx));
     mutex_init(&ctx->run_lock);
     mutex_init(&g_lane_sess_mtx);
+    for (int i = 0; i < IM_ROOM_LOCKS; i++) mutex_init(&g_im_room_mtx[i]);
     for (int i = 0; i < LANE_SESS_MAX; i++)
         mutex_init(&g_lane_sess[i].m);
 

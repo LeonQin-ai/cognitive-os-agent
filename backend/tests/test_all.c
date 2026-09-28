@@ -686,6 +686,28 @@ static void test_snapshot_tx(void) {
     CHECK(ssh_vault_delete(vault_root, host_key) == 0);
     CHECK(ssh_vault_delete(vault_root, "staging-1") == 0);
     CHECK(ssh_vault_get(vault_root, "staging-1") == NULL);
+    CHECK(ssh_session_profile_record(vault_root, "chat-one", "staging", "127.0.0.1",
+                                     "tester", 2222, NULL, NULL, NULL) == 0);
+    CHECK(ssh_session_vault_key("chat-one", "127.0.0.1", "tester", 2222,
+                                host_key, sizeof(host_key)) == 0);
+    CHECK(ssh_vault_put(vault_root, host_key, "chat-one-secret") == 0);
+    char *session_profile = ssh_session_profile_get(vault_root, "chat-one", NULL);
+    CHECK(session_profile && strstr(session_profile, "staging") && strstr(session_profile, "127.0.0.1"));
+    free(session_profile);
+    session_profile = ssh_session_profile_get(vault_root, "chat-two", NULL);
+    CHECK(session_profile == NULL);
+    free(session_profile);
+    char *session_list = ssh_session_profiles_json(vault_root, "chat-one");
+    CHECK(session_list && strstr(session_list, "has_password\":true") &&
+          !strstr(session_list, "chat-one-secret"));
+    free(session_list);
+    CHECK(ssh_session_profile_forget(vault_root, "chat-two", host_key) != 0);
+    CHECK(ssh_session_profile_forget(vault_root, "chat-one", host_key) == 0);
+    CHECK(ssh_vault_get(vault_root, host_key) == NULL);
+    CHECK(ssh_session_profile_record(vault_root, "chat-one", NULL, "127.0.0.1",
+                                     "tester", 2222, NULL, NULL, NULL) == 0);
+    ssh_session_profiles_clear(vault_root, "chat-one");
+    CHECK(ssh_session_profile_get(vault_root, "chat-one", NULL) == NULL);
 
     tx_manager *tm = tx_manager_new();
     tool_ctx ctx;
@@ -793,6 +815,7 @@ static void test_ssh_password_integration(void) {
     ctx.reg = reg;
     ctx.workspace = ".";
     ctx.state_root = "state-test/ssh-integration";
+    ctx.session_id = "ssh-chat-one";
     tool_result *result = tool_execute(reg, "ssh",
         "{\"environment\":\"local\",\"password\":\"dummy@!\",\"command\":\"echo SSH_OK\",\"timeout_ms\":5000}",
         &ctx);
@@ -800,13 +823,17 @@ static void test_ssh_password_integration(void) {
     CHECK(result && result->output && !strstr(result->output, "dummy@!"));
     tool_result_free(result);
     result = tool_execute(reg, "ssh",
-        "{\"environment\":\"local\",\"command\":\"echo SSH_SECOND_TURN\",\"timeout_ms\":5000}",
+        "{\"command\":\"echo SSH_SECOND_TURN\",\"timeout_ms\":5000}",
         &ctx);
     CHECK(result && result->ok && result->output && strstr(result->output, "SSH_SECOND_TURN"));
     tool_result_free(result);
+    ctx.session_id = "ssh-chat-two";
+    result = tool_execute(reg, "ssh", "{\"command\":\"echo WRONG_CHAT\"}", &ctx);
+    CHECK(result && !result->ok);
+    tool_result_free(result);
     dir_list leftovers = {0};
     CHECK(fs_list_dir("state-test/ssh-integration/ssh", &leftovers) == 0);
-    CHECK(leftovers.count == 2); /* environments.json + vault; no askpass secret */
+    CHECK(leftovers.count == 3); /* environments.json + vault + sessions; no askpass secret */
     fs_list_free(&leftovers);
     tool_registry_free(reg);
 }
@@ -4946,6 +4973,51 @@ static void test_im_bridge(void) {
     fs_remove(root);
 }
 
+static void test_im_agent_round(void) {
+    section("im_agent_round");
+    const char *root = "state-im-agent-round-test";
+    char path[600];
+    snprintf(path, sizeof(path), "%s/im/sessions.json", root);
+    fs_remove(path);
+    config cfg = {0};
+    cfg.state_root = root;
+    cfg.workspace = ".";
+    cfg.provider = "mock";
+    runtime_ctx ctx;
+    if (init(&ctx, &cfg) != 0) { CHECK(0); return; }
+    CHECK(agent_pool_add(ctx.agents, "wolf", "Wolf player") >= 0);
+    CHECK(agent_pool_add(ctx.agents, "seer", "Seer player") >= 0);
+    const char *members[] = {"wolf", "seer"};
+    int64_t room = im_create_session_ex(ctx.im, "werewolf", "group", members, 2);
+    int64_t empty = im_create_session(ctx.im, "empty");
+    int64_t direct = im_create_session_ex(ctx.im, "direct", "direct", members, 2);
+    CHECK(room > 0 && empty > 0 && direct > 0);
+    int64_t human = im_send_ex(ctx.im, room, "user", "Start the game", "host");
+    CHECK(im_dispatch(&ctx, empty, human) == -3);
+    CHECK(im_dispatch(&ctx, direct, human) == -3);
+    int64_t task_id = im_dispatch(&ctx, room, human);
+    CHECK(task_id >= 0);
+    CHECK(scheduler_wait_idle(ctx.scheduler, 30000) == 0);
+    task *t = scheduler_get(ctx.scheduler, task_id);
+    CHECK(t && t->status == TS_DONE);
+    size_t n = 0;
+    im_message *messages = im_messages(ctx.im, room, &n);
+    CHECK(n == 3);
+    if (n == 3) {
+        CHECK_STR(messages[0].sender, "host");
+        CHECK_STR(messages[1].sender, "wolf");
+        CHECK_STR(messages[2].sender, "seer");
+        CHECK_STR(messages[1].role, "assistant");
+    }
+    im_messages_free(messages, n);
+    runtime_shutdown(&ctx);
+    im *reloaded = im_new(root);
+    messages = im_messages(reloaded, room, &n);
+    CHECK(n == 3);
+    im_messages_free(messages, n);
+    im_free(reloaded);
+}
+
 /* ---------- plugin intelligence: AI plugin generation (mock mode) ---------- */
 static void test_plugin_generate(void) {
     section("plugin_generate");
@@ -5823,6 +5895,27 @@ static void test_http_api_contracts(uint16_t port) {
                          200);
     CHECK(j && cJSON_IsFalse(cJSON_GetObjectItemCaseSensitive(j, "ok")));
     cJSON_Delete(j);
+    j = api_request_json(port, "POST", "/v1/im/sessions",
+                         "{\"name\":\"bridge-room\",\"kind\":\"group\",\"channel\":\"audit-channel\"}", 200);
+    jid = j ? cJSON_GetObjectItemCaseSensitive(j, "id") : NULL;
+    long long bridge_id = cJSON_IsNumber(jid) ? (long long)jid->valuedouble : -1;
+    cJSON_Delete(j);
+    j = api_request_json(port, "POST", "/v1/im/channels/audit-channel/ingest",
+                         "{\"text\":\"external hello\",\"sender\":\"alice\"}", 200);
+    CHECK(j && cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "ok")));
+    cJSON_Delete(j);
+    if (bridge_id >= 0) {
+        snprintf(path, sizeof path, "/v1/im/sessions/%lld/messages", bridge_id);
+        j = api_request_json(port, "GET", path, NULL, 200);
+        CHECK(cJSON_IsArray(j) && cJSON_GetArraySize(j) == 1);
+        cJSON *first = cJSON_IsArray(j) ? cJSON_GetArrayItem(j, 0) : NULL;
+        cJSON *who = first ? cJSON_GetObjectItemCaseSensitive(first, "sender") : NULL;
+        CHECK(who && cJSON_IsString(who) && strcmp(who->valuestring, "alice") == 0);
+        cJSON_Delete(j);
+        snprintf(path, sizeof path, "/v1/im/sessions/%lld", bridge_id);
+        j = api_request_json(port, "DELETE", path, NULL, 200);
+        cJSON_Delete(j);
+    }
     j = api_request_json(port, "DELETE", "/v1/im/channels/audit-channel", NULL, 200);
     cJSON_Delete(j);
     j = api_request_json(port, "GET", "/v1/cluster", NULL, 200);
@@ -6569,6 +6662,7 @@ int main(void) {
     test_im();
     test_im_search();
     test_im_bridge();
+    test_im_agent_round();
     test_plugin_generate();
     test_task();
     test_tasklog();
