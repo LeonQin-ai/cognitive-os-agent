@@ -153,6 +153,10 @@ Spans contain stage names and timing, not prompt text, tool arguments, or tool o
 Separately, each task keeps a bounded progress timeline in memory while it
 runs. On completion, the runtime writes that timeline to
 `<state>/journal/tasks.jsonl`; retrieve it with `GET /v1/tasks/journal`.
+`GET /v1/chat/history?session=<id>` also returns the session's recent turns
+and terminal `runs` from this journal, so completed and failed execution cards
+are restored after a restart. Sessions with only failed tasks remain visible
+in the Recent list.
 
 ### Skills / MCP / Plugin 广场
 
@@ -234,6 +238,22 @@ production hosts:
 Then invoke `ssh` with `{"environment":"staging","command":"uname -a"}`.
 Save this JSON as `<state_root>/ssh/environments.json`. The tool supports
 non-interactive key/agent authentication or a one-off `password` argument.
+The chat's **会话设置 → SSH 环境与本机凭据** panel manages named profiles and
+passwords locally. The equivalent `GET` / `POST` / `DELETE`
+`/v1/ssh/environments` API never returns a password. A successful password
+login to a named environment also enrolls that credential automatically, so
+the next turn can use the same environment without repeating the password.
+Successful one-off `host` / `user` / `port` password logins are likewise
+reused for that exact endpoint; the panel's **清除直连凭据** action removes one.
+Windows protects stored credentials with the current user's DPAPI; macOS uses
+Keychain; Linux stores them in an owner-only (`0700` directory, `0600` file)
+local vault. Profile JSON contains connection settings only. Delete the
+environment to remove its managed credential.
+
+The web console's **外观与背景** control in the sidebar (and browser header)
+accepts a local PNG, JPEG, WebP or GIF background up to 10 MB. The image is
+stored in the current device's IndexedDB; intensity and blur are adjustable,
+and **移除背景** deletes it. The image is not uploaded to the runtime.
 Password authentication uses the local OpenSSH askpass mechanism and a
 short-lived local secret file; the password is never placed on the ssh command
 line. The tool requires host-key verification, bounds the command timeout to
@@ -323,7 +343,7 @@ POST /v1/local/start             # body {"engine":"ollama"} 或 {"engine":"llama
 Current unit result (verified locally on Windows, 2026-09-28):
 
 ```
-unit:       2478 passed, 0 failed
+unit:       2514 passed, 0 failed
 adapters:   ADAPTER PASS (openai + anthropic, chat + stream)
 e2e:        E2E PASS (openai + anthropic)
 bench:      --mock tool-selection accuracy 100%

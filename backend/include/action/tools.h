@@ -86,6 +86,14 @@ const tool *tool_file_write(void);
 const tool *tool_file_edit(void);
 const tool *tool_shell(void);
 const tool *tool_ssh(void);
+/* Local-only SSH credential vault. The returned secret must be wiped and freed
+ * with ssh_vault_secret_free; neither API serializes it into tool results. */
+int ssh_vault_name_valid(const char *name);
+int ssh_vault_host_key(const char *host, const char *user, int port, char *out, size_t cap);
+int ssh_vault_put(const char *state_root, const char *name, const char *password);
+char *ssh_vault_get(const char *state_root, const char *name);
+int ssh_vault_delete(const char *state_root, const char *name);
+void ssh_vault_secret_free(char *secret);
 /* Windows SSH_ASKPASS entry point: returns -1 for a normal launch, otherwise
  * writes the local one-shot password to stdout and returns an exit status. */
 int ssh_askpass_run_if_requested(void);

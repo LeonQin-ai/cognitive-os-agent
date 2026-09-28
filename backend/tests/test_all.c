@@ -667,6 +667,26 @@ static void test_snapshot_tx(void) {
     CHECK(ssh_files.count == 0);
     fs_list_free(&ssh_files);
 
+    /* A named environment reuses its locally managed credential in a later
+     * turn, even when task_input and tool args contain no password. */
+    const char *vault_root = "state-test/ssh-vault-regression";
+    CHECK(!ssh_vault_name_valid("../escape") && ssh_vault_name_valid("staging-1"));
+    CHECK(ssh_vault_put(vault_root, "staging-1", "local-only-secret") == 0);
+    char *saved_secret = ssh_vault_get(vault_root, "staging-1");
+    CHECK_STR(saved_secret, "local-only-secret");
+    ssh_vault_secret_free(saved_secret);
+    CHECK(ssh_vault_get(vault_root, "other-env") == NULL);
+    char host_key[96];
+    CHECK(ssh_vault_host_key("127.0.0.1", "tester", 2222, host_key, sizeof(host_key)) == 0);
+    CHECK(ssh_vault_name_valid(host_key));
+    CHECK(ssh_vault_put(vault_root, host_key, "direct-secret") == 0);
+    saved_secret = ssh_vault_get(vault_root, host_key);
+    CHECK_STR(saved_secret, "direct-secret");
+    ssh_vault_secret_free(saved_secret);
+    CHECK(ssh_vault_delete(vault_root, host_key) == 0);
+    CHECK(ssh_vault_delete(vault_root, "staging-1") == 0);
+    CHECK(ssh_vault_get(vault_root, "staging-1") == NULL);
+
     tx_manager *tm = tx_manager_new();
     tool_ctx ctx;
     memset(&ctx, 0, sizeof(ctx));
@@ -779,9 +799,14 @@ static void test_ssh_password_integration(void) {
     CHECK(result && result->ok && result->output && strstr(result->output, "SSH_OK"));
     CHECK(result && result->output && !strstr(result->output, "dummy@!"));
     tool_result_free(result);
+    result = tool_execute(reg, "ssh",
+        "{\"environment\":\"local\",\"command\":\"echo SSH_SECOND_TURN\",\"timeout_ms\":5000}",
+        &ctx);
+    CHECK(result && result->ok && result->output && strstr(result->output, "SSH_SECOND_TURN"));
+    tool_result_free(result);
     dir_list leftovers = {0};
     CHECK(fs_list_dir("state-test/ssh-integration/ssh", &leftovers) == 0);
-    CHECK(leftovers.count == 1); /* environments.json; no askpass secret */
+    CHECK(leftovers.count == 2); /* environments.json + vault; no askpass secret */
     fs_list_free(&leftovers);
     tool_registry_free(reg);
 }
@@ -3084,11 +3109,12 @@ static void test_chat_upload_evolve(void) {
         CHECK(reasoning_shared_memory_enabled(ctx.reasoning) == 0);
         CHECK(reasoning_shared_memory_enabled(ctx.chat_lanes[1]) == 0);
         char *new_session = reasoning_session_new(ctx.reasoning);
+        reasoning_session_note_prompt(ctx.reasoning, new_session, "失败任务标题");
         char *global_sessions = reasoning_sessions_json(ctx.reasoning);
         CHECK(new_session && global_sessions && strstr(global_sessions, new_session));
+        CHECK(global_sessions && strstr(global_sessions, "失败任务标题"));
         CHECK(global_sessions && strstr(global_sessions, "\"shared_memory\":false"));
         free(global_sessions);
-        free(new_session);
 
         /* step registry API: empty at first (no actions executed yet) */
         char *steps0 = reasoning_steps_json(ctx.reasoning);
@@ -3113,11 +3139,14 @@ static void test_chat_upload_evolve(void) {
             CHECK(reasoning_shared_memory_enabled(ctx2.reasoning) == 0);
             /* regression (chat lanes): the persisted title index must be
              * loaded into the SHARED session store — the 最近 list keeps
-             * human-readable titles after a restart instead of uuids
-             * (only sessions with a transcript file are listed; tab-a was
-             * cleared so its file is gone, tab-b was deleted) */
+             * human-readable titles after a restart instead of uuids.
+             * Metadata-only sessions must also survive, even without a
+             * completed turn or transcript file. */
             char *sj2 = reasoning_sessions_json(ctx2.reasoning);
             CHECK(sj2 && strstr(sj2, "第三个话题") != NULL && strstr(sj2, "tab-b") == NULL);
+            CHECK(new_session && sj2 && strstr(sj2, new_session) != NULL);
+            CHECK(sj2 && strstr(sj2, "失败任务标题") != NULL);
+            CHECK(sj2 && strstr(sj2, "tab-a") != NULL);
             free(sj2);
             /* tab-b was DELETED above: its transcript must stay gone after a
              * restart (deletion, unlike clearing, survives restarts) */
@@ -3130,6 +3159,7 @@ static void test_chat_upload_evolve(void) {
             CHECK(reasoning_session_set_shared(ctx2.reasoning, "default", 1) == 0);
             runtime_shutdown(&ctx2);
         }
+        free(new_session);
     }
 
     /* uploaded documents are recallable via the vector store (Chinese text
@@ -5662,7 +5692,25 @@ static void test_http_api_contracts(uint16_t port) {
     j = api_request_json(port, "GET", "/v1/chat/sessions", NULL, 200);
     CHECK(cJSON_IsArray(j));
     cJSON_Delete(j);
-    j = api_request_json(port, "GET", "/v1/chat/history", NULL, 200);
+    j = api_request_json(port, "GET", "/v1/chat/history?session=contract-empty", NULL, 200);
+    cJSON_Delete(j);
+    j = api_request_json(port, "POST", "/v1/ssh/environments",
+        "{\"name\":\"contract-ssh\",\"host\":\"127.0.0.1\",\"user\":\"tester\",\"password\":\"vault-secret\"}", 200);
+    CHECK(j && cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "ok")));
+    cJSON_Delete(j);
+    j = api_request_json(port, "GET", "/v1/ssh/environments", NULL, 200);
+    CHECK(cJSON_IsArray(j));
+    if (j) {
+        char *listed = cJSON_PrintUnformatted(j);
+        CHECK(listed && strstr(listed, "contract-ssh") && strstr(listed, "has_password") &&
+              !strstr(listed, "vault-secret"));
+        free(listed);
+    }
+    cJSON_Delete(j);
+    j = api_request_json(port, "DELETE", "/v1/ssh/environments/contract-ssh", NULL, 200);
+    cJSON_Delete(j);
+    j = api_request_json(port, "DELETE", "/v1/ssh/credentials",
+        "{\"host\":\"127.0.0.1\",\"user\":\"tester\",\"port\":22}", 200);
     cJSON_Delete(j);
     j = api_request_json(port, "POST", "/v1/config/llm", "{\"provider\":\"not-a-provider\"}", 400);
     cJSON_Delete(j);
@@ -6101,17 +6149,12 @@ static void test_http_api(void) {
     /* A long completed turn must remain valid JSON when replayed by the chat
      * UI. http_resp_appendf has a 4 KiB formatting buffer. */
     {
-        char body[6200];
-        const char *prefix = "{\"prompt\":\"long-history-";
-        size_t pos = strlen(prefix);
-        memcpy(body, prefix, pos);
-        memset(body + pos, 'x', 5000);
-        pos += 5000;
-        memcpy(body + pos, "\"}", 3);
-        cJSON *submitted = api_request_json(18211, "POST", "/v1/tasks", body, 200);
-        cJSON *jid = submitted ? cJSON_GetObjectItemCaseSensitive(submitted, "id") : NULL;
-        int64_t long_id = cJSON_IsNumber(jid) ? (int64_t)jid->valuedouble : -1;
-        cJSON_Delete(submitted);
+        char prompt[5200], session[80], history_path[160];
+        memcpy(prompt, "long-history-", 13);
+        memset(prompt + 13, 'x', 5000);
+        prompt[5013] = '\0';
+        snprintf(session, sizeof session, "long-history-%lld", (long long)time_now_ms());
+        int64_t long_id = scheduler_submit_tag(ctx.scheduler, 0, prompt, NULL, 0, session);
         int complete = 0;
         for (int i = 0; i < 60 && long_id >= 0 && !complete; i++) {
             char path[128];
@@ -6123,13 +6166,41 @@ static void test_http_api(void) {
             if (!complete) time_sleep_ms(100);
         }
         CHECK(complete);
-        CHECK(raw_http_request(18211, "GET", "/v1/chat/history", NULL, &r) == 0 && r.status == 200);
+        snprintf(history_path, sizeof history_path, "/v1/chat/history?session=%s", session);
+        CHECK(raw_http_request(18211, "GET", history_path, NULL, &r) == 0 && r.status == 200);
         CHECK(r.body_len > 4096);
         cJSON *history = cJSON_Parse(r.body);
         cJSON *turns = history ? cJSON_GetObjectItemCaseSensitive(history, "turns") : NULL;
         cJSON *last = cJSON_IsArray(turns) ? cJSON_GetArrayItem(turns, cJSON_GetArraySize(turns) - 1) : NULL;
         cJSON *question = last ? cJSON_GetObjectItemCaseSensitive(last, "q") : NULL;
         CHECK(cJSON_IsString(question) && strstr(question->valuestring, "long-history-") == question->valuestring);
+        cJSON_Delete(history);
+    }
+
+    /* Failed tasks have no completed chat turn, but their execution record
+     * still belongs to the session after the UI or runtime restarts. */
+    {
+        char session[80], path[160];
+        snprintf(session, sizeof session, "failure-replay-%lld", (long long)time_now_ms());
+        tasklog_record(ctx.tasklog, 90001, "FAILED", session, "failed prompt", "model unavailable",
+                       "[{\"stage\":\"failed\",\"activity\":\"模型请求失败\",\"seq\":1}]", "[]");
+        snprintf(path, sizeof path, "/v1/chat/history?session=%s", session);
+        cJSON *history = api_request_json(18211, "GET", path, NULL, 200);
+        cJSON *runs = history ? cJSON_GetObjectItemCaseSensitive(history, "runs") : NULL;
+        cJSON *run = cJSON_IsArray(runs) ? cJSON_GetArrayItem(runs, cJSON_GetArraySize(runs) - 1) : NULL;
+        cJSON *status = run ? cJSON_GetObjectItemCaseSensitive(run, "status") : NULL;
+        cJSON *trace = run ? cJSON_GetObjectItemCaseSensitive(run, "trace") : NULL;
+        CHECK(cJSON_IsString(status) && strcmp(status->valuestring, "FAILED") == 0);
+        CHECK(cJSON_IsArray(trace) && cJSON_GetArraySize(trace) == 1);
+        cJSON_Delete(history);
+        history = api_request_json(18211, "GET", "/v1/chat/history?session=contract-empty", NULL, 200);
+        runs = history ? cJSON_GetObjectItemCaseSensitive(history, "runs") : NULL;
+        CHECK(cJSON_IsArray(runs) && cJSON_GetArraySize(runs) == 0);
+        cJSON *entry;
+        cJSON_ArrayForEach(entry, runs) {
+            cJSON *id = cJSON_GetObjectItemCaseSensitive(entry, "id");
+            CHECK(!cJSON_IsNumber(id) || (int64_t)id->valuedouble != 90001);
+        }
         cJSON_Delete(history);
     }
 

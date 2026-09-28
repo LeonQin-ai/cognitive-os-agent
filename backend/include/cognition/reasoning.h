@@ -151,6 +151,8 @@ int reasoning_session_delete(reasoning *r, const char *session_id);
 /* Create a new session with a random UUID id (registered + persisted).
  * Returns a malloc'd id string, NULL on failure. */
 char *reasoning_session_new(reasoning *r);
+/* Name a new session from its first submitted prompt, even if the run fails. */
+void reasoning_session_note_prompt(reasoning *r, const char *session_id, const char *prompt);
 
 /* Compatibility setter: memory sharing is now a persisted global switch. */
 int reasoning_session_set_shared(reasoning *r, const char *session_id, int shared);

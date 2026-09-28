@@ -240,14 +240,7 @@ static int ssh_host_valid(const char *s) {
 }
 
 static int ssh_name_valid(const char *s) {
-    if (!s || !*s)
-        return 0;
-    for (; *s; s++) {
-        unsigned char c = (unsigned char)*s;
-        if (!isalnum(c) && c != '_' && c != '-' && c != '.')
-            return 0;
-    }
-    return 1;
+    return ssh_vault_name_valid(s);
 }
 
 /* Profile paths are local configuration, but still validate them before
@@ -526,6 +519,8 @@ static tool_result *ssh_exec(const tool *self, const tool_ctx *ctx, const char *
     const char *user_text = user && cJSON_IsString(user) ? user->valuestring : NULL;
     const char *password_text = password && cJSON_IsString(password) ? password->valuestring : NULL;
     char *task_password = NULL;
+    char *vault_password = NULL;
+    char vault_key[96] = {0};
     char *quoted = NULL;
     char *shell_args = NULL;
     char askpass_helper[2300] = {0}, askpass_secret[2300] = {0};
@@ -542,11 +537,19 @@ static tool_result *ssh_exec(const tool *self, const tool_ctx *ctx, const char *
         host_text = profile.host;
         user_text = profile.user;
         port_no = profile.port;
+        snprintf(vault_key, sizeof(vault_key), "%s", environment->valuestring);
+    }
+    if (!profile_root && host_text && ssh_host_valid(host_text)) {
+        ssh_vault_host_key(host_text, user_text, port_no, vault_key, sizeof(vault_key));
     }
     /* A planner only sees [REDACTED:secret]; resolve that marker from the
      * locally retained task instead of ever treating it as a credential. */
     if ((!password_text || strstr(password_text, "[REDACTED:secret]")) && ctx)
         password_text = task_password = ssh_password_from_task(ctx->task_input);
+    if (!password_text && vault_key[0] && ctx) {
+        vault_password = ssh_vault_get(ctx->state_root, vault_key);
+        password_text = vault_password;
+    }
     if (!host_text || !ssh_host_valid(host_text) ||
         (user_text && !ssh_name_valid(user_text)) ||
         (password_text && (strchr(password_text, '\n') || strchr(password_text, '\r'))) ||
@@ -554,13 +557,13 @@ static tool_result *ssh_exec(const tool *self, const tool_ctx *ctx, const char *
         (profile_root && ((profile.identity_file && !ssh_path_valid(profile.identity_file)) ||
                           (profile.known_hosts && !ssh_path_valid(profile.known_hosts)) ||
                           (profile.proxy_jump && !ssh_host_valid(profile.proxy_jump))))) {
-        ssh_secret_free(task_password); cJSON_Delete(profile_root);
+        ssh_secret_free(task_password); ssh_vault_secret_free(vault_password); cJSON_Delete(profile_root);
         cJSON_Delete(args);
         return tool_result_new(0, "ssh: host, command or port is invalid");
     }
     quoted = ssh_quote_arg(command->valuestring);
     if (!quoted) {
-        ssh_secret_free(task_password); cJSON_Delete(profile_root); cJSON_Delete(args);
+        ssh_secret_free(task_password); ssh_vault_secret_free(vault_password); cJSON_Delete(profile_root); cJSON_Delete(args);
         return tool_result_new(0, "ssh: command must be a single line");
     }
     if (timeout_ms < 100)
@@ -572,13 +575,13 @@ static tool_result *ssh_exec(const tool *self, const tool_ctx *ctx, const char *
         if (ssh_append_askpass(&cmd, ctx, &profile, profile_root != NULL, host_text, user_text,
                                password_text, quoted, port_no, askpass_helper, sizeof(askpass_helper),
                                askpass_secret, sizeof(askpass_secret)) != 0) {
-            ssh_secret_free(task_password); cJSON_Delete(profile_root); cJSON_Delete(args); free(quoted); strbuf_free(&cmd);
+            ssh_secret_free(task_password); ssh_vault_secret_free(vault_password); cJSON_Delete(profile_root); cJSON_Delete(args); free(quoted); strbuf_free(&cmd);
             return tool_result_new(0, "ssh: password arguments are invalid");
         }
     } else {
         if (ssh_append_options(&cmd, &profile, profile_root != NULL, host_text, user_text,
                                quoted, port_no, 1) != 0) {
-            ssh_secret_free(task_password); cJSON_Delete(profile_root); cJSON_Delete(args); free(quoted); strbuf_free(&cmd);
+            ssh_secret_free(task_password); ssh_vault_secret_free(vault_password); cJSON_Delete(profile_root); cJSON_Delete(args); free(quoted); strbuf_free(&cmd);
             return tool_result_new(0, "ssh: profile arguments are invalid");
         }
     }
@@ -589,22 +592,27 @@ static tool_result *ssh_exec(const tool *self, const tool_ctx *ctx, const char *
     cJSON_Delete(wrapped);
     strbuf_free(&cmd);
     free(quoted);
-    ssh_secret_free(task_password);
-    cJSON_Delete(profile_root);
-    cJSON_Delete(args);
     if (!shell_args) {
 #if !defined(_WIN32)
         if (askpass_helper[0]) fs_remove(askpass_helper);
 #endif
         if (askpass_secret[0]) fs_remove(askpass_secret);
+        ssh_secret_free(task_password); ssh_vault_secret_free(vault_password);
+        cJSON_Delete(profile_root); cJSON_Delete(args);
         return tool_result_new(0, "ssh: out of memory");
     }
     result = shell_exec_impl(NULL, ctx, shell_args, 1);
+    /* Enroll only a successful login; bad credentials must not replace a
+     * working environment secret. A retrieved secret is already enrolled. */
+    if (result && result->ok && ctx && vault_key[0] && password_text && !vault_password)
+        ssh_vault_put(ctx->state_root, vault_key, password_text);
 #if !defined(_WIN32)
     if (askpass_helper[0]) fs_remove(askpass_helper);
 #endif
     if (askpass_secret[0]) fs_remove(askpass_secret);
     free(shell_args);
+    ssh_secret_free(task_password); ssh_vault_secret_free(vault_password);
+    cJSON_Delete(profile_root); cJSON_Delete(args);
     return result;
 }
 
@@ -613,7 +621,7 @@ const tool *tool_ssh(void) {
         "ssh",
         "Run one remote SSH command. Always use this tool for SSH work instead of shell. Supports named environments, keys/agent, and password authentication through the local system OpenSSH client without sshpass or Python.",
         "{\"type\":\"object\",\"properties\":{\"host\":{\"type\":\"string\"},\"environment\":{\"type\":\"string\"},\"user\":{\"type\":\"string\"},"
-        "\"command\":{\"type\":\"string\"},\"password\":{\"type\":\"string\"},\"port\":{\"type\":\"integer\"},"
+        "\"command\":{\"type\":\"string\"},\"port\":{\"type\":\"integer\"},"
         "\"timeout_ms\":{\"type\":\"integer\"}},\"required\":[\"command\"]}",
         1,
         ssh_exec,

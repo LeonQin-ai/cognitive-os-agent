@@ -29,6 +29,7 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <time.h>
+#include <ctype.h>
 #ifdef _WIN32
 #include <direct.h>
 #define coa_getcwd _getcwd
@@ -466,6 +467,8 @@ static int h_chat(const http_request *req, http_response *resp, void *ud) {
     }
 
     id = scheduler_submit_tag_mode(ctx->scheduler, 0, msg, NULL, 0, session, thinking);
+    if (id >= 0)
+        reasoning_session_note_prompt(ctx->reasoning, session, msg);
     cJSON_Delete(root);
     if (id < 0) {
         scheduler_submit_error(resp, id);
@@ -1141,21 +1144,66 @@ static void uploads_dir_of(const runtime_ctx *ctx, char *dir, size_t cap) {
 static int h_chat_history(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
     char sid[128] = "";
-    char *turns;
+    char *turns, *journal, *text;
+    cJSON *result, *turn_list, *runs, *records, *record;
 
     if (!authz_ok(ctx, req, resp))
         return 0;
     const char *sp = strstr(req->query, "session=");
     if (sp)
         sanitize_upload_name(sp + 8, sid, sizeof(sid));
-    turns =
-        ctx->reasoning ? reasoning_history_json_ex(ctx->reasoning, sid[0] ? sid : NULL, 20) : xstrdup("[]");
-    /* appendf uses a 4 KiB formatting buffer; a long chat history must be
-     * appended directly or the response becomes truncated, invalid JSON. */
-    http_resp_append(resp, "{\"turns\":");
-    http_resp_append(resp, turns ? turns : "[]");
-    http_resp_append(resp, "}");
+    turns = ctx->reasoning ? reasoning_history_json_ex(ctx->reasoning, sid[0] ? sid : NULL, 200) : xstrdup("[]");
+    turn_list = turns ? cJSON_Parse(turns) : NULL;
     free(turns);
+    if (!cJSON_IsArray(turn_list)) {
+        cJSON_Delete(turn_list);
+        turn_list = cJSON_CreateArray();
+    }
+    result = cJSON_CreateObject();
+    runs = cJSON_CreateArray();
+    if (!result || !turn_list || !runs) {
+        cJSON_Delete(result);
+        cJSON_Delete(turn_list);
+        cJSON_Delete(runs);
+        resp->status = 500;
+        http_resp_json(resp, "{\"error\":\"out of memory\"}");
+        return 0;
+    }
+    cJSON_AddItemToObject(result, "turns", turn_list);
+    cJSON_AddItemToObject(result, "runs", runs);
+
+    /* Task progress lives in the durable journal, not browser sessionStorage.
+     * Expose only records for the requested session so a desktop restart can
+     * reconstruct both completed and failed execution cards. */
+    journal = tasklog_json(ctx->tasklog, 0);
+    records = journal ? cJSON_Parse(journal) : NULL;
+    free(journal);
+    cJSON_ArrayForEach(record, records) {
+        cJSON *session = cJSON_GetObjectItemCaseSensitive(record, "session");
+        cJSON *input = cJSON_GetObjectItemCaseSensitive(record, "input");
+        const char *tag = cJSON_IsString(session) ? session->valuestring : "";
+        const char *want = sid[0] ? sid : "default";
+        if (strcmp(tag && *tag ? tag : "default", want) != 0 ||
+            !cJSON_IsString(input) || !input->valuestring[0])
+            continue;
+        cJSON *run = cJSON_CreateObject();
+        if (!run)
+            continue;
+        const char *fields[] = {"id", "status", "input", "output", "trace", "ts"};
+        for (size_t i = 0; i < sizeof(fields) / sizeof(fields[0]); i++) {
+            cJSON *v = cJSON_GetObjectItemCaseSensitive(record, fields[i]);
+            if (v)
+                cJSON_AddItemToObject(run, fields[i], cJSON_Duplicate(v, 1));
+        }
+        cJSON_AddItemToArray(runs, run);
+        if (cJSON_GetArraySize(runs) > 200)
+            cJSON_Delete(cJSON_DetachItemFromArray(runs, 0));
+    }
+    cJSON_Delete(records);
+    text = cJSON_PrintUnformatted(result);
+    http_resp_json(resp, text ? text : "{\"turns\":[],\"runs\":[]}");
+    free(text);
+    cJSON_Delete(result);
     return 0;
 }
 
@@ -2047,6 +2095,139 @@ static int h_route_delete(const http_request *req, http_response *resp, void *ud
         router_save_file(ctx->router, rpath);
     }
 
+    return 0;
+}
+
+/* Named SSH profiles contain connection metadata only. Credentials are stored
+ * by the local vault and never returned through this API. */
+static cJSON *ssh_profiles_read(const char *state_root) {
+    char path[1024];
+    path_join(path, sizeof(path), state_root, "ssh/environments.json");
+    char *raw = fs_read_file(path);
+    cJSON *root = raw ? cJSON_Parse(raw) : NULL;
+    free(raw);
+    if (!cJSON_IsObject(root)) { cJSON_Delete(root); root = cJSON_CreateObject(); }
+    if (!cJSON_IsObject(cJSON_GetObjectItemCaseSensitive(root, "environments"))) {
+        cJSON_DeleteItemFromObjectCaseSensitive(root, "environments");
+        cJSON_AddObjectToObject(root, "environments");
+    }
+    return root;
+}
+
+static int ssh_profiles_save(const char *state_root, cJSON *root) {
+    char dir[1024], path[1100];
+    path_join(dir, sizeof(dir), state_root, "ssh");
+    path_join(path, sizeof(path), dir, "environments.json");
+    char *raw = cJSON_PrintUnformatted(root);
+    int rc = raw && fs_mkdirs(dir) == 0 ? fs_write_file(path, raw, strlen(raw)) : -1;
+    free(raw);
+    return rc;
+}
+
+static int ssh_profile_field_valid(const char *s, const char *allowed) {
+    if (!s || !*s || strlen(s) > 512) return 0;
+    for (const unsigned char *p = (const unsigned char *)s; *p; p++)
+        if (!isalnum(*p) && !strchr(allowed, *p)) return 0;
+    return 1;
+}
+
+static int h_ssh_environments(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
+    if (!authz_ok(ctx, req, resp)) return 0;
+    cJSON *root = ssh_profiles_read(ctx->state_root);
+    cJSON *envs = cJSON_GetObjectItemCaseSensitive(root, "environments");
+    if (strcmp(req->method, "GET") == 0) {
+        cJSON *list = cJSON_CreateArray();
+        cJSON *profile;
+        cJSON_ArrayForEach(profile, envs) {
+            if (!profile->string || !ssh_vault_name_valid(profile->string) || !cJSON_IsObject(profile)) continue;
+            cJSON *item = cJSON_CreateObject();
+            const char *keys[] = {"host", "user", "identity_file", "proxy_jump", "known_hosts"};
+            for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); i++) {
+                const char *value = json_str(profile, keys[i]);
+                if (value) cJSON_AddStringToObject(item, keys[i], value);
+            }
+            cJSON *port_value = cJSON_GetObjectItemCaseSensitive(profile, "port");
+            if (cJSON_IsNumber(port_value)) cJSON_AddNumberToObject(item, "port", port_value->valuedouble);
+            cJSON_AddStringToObject(item, "name", profile->string);
+            char *secret = ssh_vault_get(ctx->state_root, profile->string);
+            cJSON_AddBoolToObject(item, "has_password", secret != NULL);
+            ssh_vault_secret_free(secret);
+            cJSON_AddItemToArray(list, item);
+        }
+        char *s = cJSON_PrintUnformatted(list);
+        http_resp_json(resp, s ? s : "[]");
+        free(s); cJSON_Delete(list); cJSON_Delete(root);
+        return 0;
+    }
+    char *body = body_str(req);
+    cJSON *input = body ? cJSON_Parse(body) : NULL;
+    free(body);
+    const char *name = json_str(input, "name"), *host = json_str(input, "host");
+    const char *user = json_str(input, "user"), *password = json_str(input, "password");
+    const char *identity = json_str(input, "identity_file");
+    const char *jump = json_str(input, "proxy_jump"), *known = json_str(input, "known_hosts");
+    int port = (int)json_dbl(input, "port", 22);
+    if (!ssh_vault_name_valid(name) || !ssh_profile_field_valid(host, "._-:@[]") ||
+        (user && !ssh_vault_name_valid(user)) || port < 1 || port > 65535 ||
+        (identity && *identity && !ssh_profile_field_valid(identity, "._-/\\: ")) ||
+        (known && *known && !ssh_profile_field_valid(known, "._-/\\: ")) ||
+        (jump && *jump && !ssh_profile_field_valid(jump, "._-:@[]")) ||
+        (password && (!*password || strlen(password) > 1024 || strchr(password, '\n') || strchr(password, '\r')))) {
+        resp->status = 400; http_resp_json(resp, "{\"error\":\"invalid SSH environment\"}");
+    } else {
+        cJSON *profile = cJSON_CreateObject();
+        cJSON_AddStringToObject(profile, "host", host);
+        if (user) cJSON_AddStringToObject(profile, "user", user);
+        cJSON_AddNumberToObject(profile, "port", port);
+        if (identity && *identity) cJSON_AddStringToObject(profile, "identity_file", identity);
+        if (jump && *jump) cJSON_AddStringToObject(profile, "proxy_jump", jump);
+        if (known && *known) cJSON_AddStringToObject(profile, "known_hosts", known);
+        cJSON_DeleteItemFromObjectCaseSensitive(envs, name);
+        cJSON_AddItemToObject(envs, name, profile);
+        if (ssh_profiles_save(ctx->state_root, root) ||
+            (password && ssh_vault_put(ctx->state_root, name, password))) {
+            resp->status = 500; http_resp_json(resp, "{\"error\":\"SSH environment save failed\"}");
+        } else http_resp_json(resp, "{\"ok\":true}");
+    }
+    cJSON_Delete(input); cJSON_Delete(root);
+    return 0;
+}
+
+static int h_ssh_environment_delete(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
+    if (!authz_ok(ctx, req, resp)) return 0;
+    const char *name = req->path + strlen("/v1/ssh/environments/");
+    if (!ssh_vault_name_valid(name)) {
+        resp->status = 400; http_resp_json(resp, "{\"error\":\"invalid environment name\"}"); return 0;
+    }
+    cJSON *root = ssh_profiles_read(ctx->state_root);
+    cJSON *envs = cJSON_GetObjectItemCaseSensitive(root, "environments");
+    cJSON_DeleteItemFromObjectCaseSensitive(envs, name);
+    int rc = ssh_profiles_save(ctx->state_root, root) || ssh_vault_delete(ctx->state_root, name);
+    cJSON_Delete(root);
+    if (rc) { resp->status = 500; http_resp_json(resp, "{\"error\":\"SSH environment delete failed\"}"); }
+    else http_resp_json(resp, "{\"ok\":true}");
+    return 0;
+}
+
+static int h_ssh_credential_delete(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
+    if (!authz_ok(ctx, req, resp)) return 0;
+    char *body = body_str(req);
+    cJSON *input = body ? cJSON_Parse(body) : NULL;
+    free(body);
+    const char *host = json_str(input, "host"), *user = json_str(input, "user");
+    int port = (int)json_dbl(input, "port", 22);
+    char key[96];
+    if (!ssh_profile_field_valid(host, "._-:@[]") ||
+        (user && *user && !ssh_vault_name_valid(user)) ||
+        ssh_vault_host_key(host, user, port, key, sizeof(key))) {
+        resp->status = 400; http_resp_json(resp, "{\"error\":\"invalid SSH endpoint\"}");
+    } else if (ssh_vault_delete(ctx->state_root, key)) {
+        resp->status = 500; http_resp_json(resp, "{\"error\":\"credential delete failed\"}");
+    } else http_resp_json(resp, "{\"ok\":true}");
+    cJSON_Delete(input);
     return 0;
 }
 
@@ -4917,6 +5098,10 @@ int api_attach(runtime_ctx *ctx) {
     http_server_route(ctx->http, "POST", "/v1/cron/", h_cron_toggle, ctx);
     http_server_route(ctx->http, "DELETE", "/v1/routes/", h_route_delete, ctx);
     http_server_route(ctx->http, "GET", "/v1/config/llm", h_config_llm_get, ctx);
+    http_server_route(ctx->http, "GET", "/v1/ssh/environments", h_ssh_environments, ctx);
+    http_server_route(ctx->http, "POST", "/v1/ssh/environments", h_ssh_environments, ctx);
+    http_server_route(ctx->http, "DELETE", "/v1/ssh/environments/", h_ssh_environment_delete, ctx);
+    http_server_route(ctx->http, "DELETE", "/v1/ssh/credentials", h_ssh_credential_delete, ctx);
     http_server_route(ctx->http, "POST", "/v1/config/llm", h_config_llm, ctx);
     http_server_route(ctx->http, "POST", "/v1/config/llm/test", h_config_llm_test, ctx);
     http_server_route(ctx->http, "GET", "/v1/config/llm/test", h_config_llm_test, ctx);

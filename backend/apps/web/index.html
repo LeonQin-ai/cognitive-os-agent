@@ -12,7 +12,7 @@
     --tr-dur:150ms;
     --mono:ui-monospace,"Cascadia Code",Consolas,"JetBrains Mono",monospace;
     --sans:system-ui,-apple-system,"Segoe UI",Roboto,"Microsoft YaHei","PingFang SC",sans-serif;
-    --side-w:232px;
+    --side-w:248px;
   }
   /* base = dark theme (ChatGPT-style palette per UI.png) */
   body{
@@ -84,7 +84,7 @@
   }
   /* ChatGPT 风格：圆角导航项 + “新聊天”首项 + 最近会话区 */
   nav button{
-    border-left:0; border-radius:8px; margin:1px 8px; padding:9px 12px;
+    border-left:0; border-radius:8px; margin:1px 8px; padding:9px 12px;width:calc(100% - 16px);
   }
   /* 可折叠分组（插件 / 更多） */
   nav button.navgroup{position:relative}
@@ -159,7 +159,7 @@
   .thinking-toggle:hover{color:var(--fg);border-color:color-mix(in srgb,var(--accent) 45%,var(--border));background:var(--accent-soft)}
   .thinking-toggle.on{color:#fff;border-color:transparent;background:linear-gradient(135deg,#7c3aed,#4f46e5);box-shadow:0 4px 14px rgba(99,102,241,.28)}
   .thinking-toggle svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}.thinking-toggle .chevron{width:12px;height:12px;stroke-width:2}
-  .brand{display:flex; align-items:center; gap:10px; padding:16px 14px 14px; border-bottom:1px solid var(--border)}
+  .brand{display:flex; align-items:center; gap:11px; min-height:76px; padding:17px 17px 16px; border-bottom:1px solid var(--border)}
   .logo{
     width:34px; height:34px; border-radius:9px; flex-shrink:0; display:grid; place-items:center;
     /* Matches the generated ICO used by setup, shortcuts and native windows. */
@@ -170,7 +170,7 @@
   .brain-mark{width:100%;height:100%;display:block;stroke:currentColor;fill:none;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}.logo .brain-mark{padding:6px}.avatar .brain-mark{padding:5px}
   .brand h1{margin:0; font-size:15px; font-weight:700; letter-spacing:.2px}
   .brand .sub{color:var(--muted); font-size:11px; margin-top:1px}
-  nav{flex:1; overflow-y:auto; padding:8px 0}
+  nav{flex:1; overflow-y:auto;overflow-x:hidden; padding:12px 0}
   nav button{
     display:flex; align-items:center; gap:10px; width:100%;
     background:none; border:0; border-left:3px solid transparent;
@@ -183,7 +183,9 @@
   nav button.on, nav button[aria-current="true"]{
     background:var(--nav-on); border-left-color:var(--accent); color:var(--fg); font-weight:600;
   }
-  .side-foot{padding:12px 14px; border-top:1px solid var(--border)}
+  .side-foot{padding:12px 14px; border-top:1px solid var(--border);display:grid;gap:8px}
+  .appearance-entry{width:100%;display:flex;align-items:center;gap:9px;padding:9px 10px;border:1px solid transparent;border-radius:9px;background:transparent;color:var(--muted);font-size:12.5px;text-align:left}
+  .appearance-entry:hover{background:var(--nav-hover);color:var(--fg)}
   .conn{display:flex; align-items:center; gap:8px; font-size:12px; color:var(--muted)}
   .dot{width:8px; height:8px; border-radius:50%; display:inline-block; flex-shrink:0}
   .dot.ok{background:var(--ok)}
@@ -192,10 +194,12 @@
   .dot.pulse{animation:blink 1.6s ease-in-out infinite}
   @keyframes blink{0%,100%{opacity:1}50%{opacity:.35}}
 
-  main{flex:1; display:flex; flex-direction:column; min-width:0; height:100vh}
+  main{flex:1; display:flex; flex-direction:column; min-width:0; height:100vh;position:relative;isolation:isolate;background:var(--bg);overflow:hidden}
+  main::before{content:"";position:absolute;inset:-18px;background-image:var(--wallpaper-image,none);background-size:cover;background-position:center;filter:blur(var(--wallpaper-blur,0px));opacity:var(--wallpaper-opacity,0);pointer-events:none;z-index:0;transition:opacity .25s ease}
+  main>.top,main>.content{position:relative;z-index:1}
   .top{
     display:flex; align-items:center; justify-content:space-between; gap:12px;
-    padding:11px 18px; border-bottom:1px solid var(--border); background:var(--card); flex-shrink:0;
+    min-height:58px;padding:10px 24px; border-bottom:1px solid var(--border); background:color-mix(in srgb,var(--card) 92%,transparent); flex-shrink:0;
   }
   .top-left{display:flex; align-items:center; gap:10px; min-width:0}
   .title{font-size:14px; font-weight:650; letter-spacing:.2px; outline:none}
@@ -210,13 +214,14 @@
   .icon-btn:hover{color:var(--fg); background:var(--accent-soft); border-color:color-mix(in srgb, var(--accent) 30%, transparent)}
   .icon-btn:focus-visible{outline:2px solid var(--accent-ring); outline-offset:2px}
   #navToggle{display:none}
-  .content{flex:1; padding:20px; overflow-y:auto; scrollbar-gutter:stable}
+  .content{flex:1; padding:28px clamp(20px,3vw,48px) 40px; overflow-y:auto; scrollbar-gutter:stable}
+  .content:not(.chat-content)>*{max-width:1360px;margin-left:auto;margin-right:auto}
   /* The native desktop host provides the global menu bar. Browser access
      keeps the console header, while ?desktop=1 removes the duplicate row. */
   body.desktop-shell .top{display:none}
-  body.desktop-shell .content{padding-top:12px}
+  body.desktop-shell .content{padding-top:24px}
 
-  .card{background:var(--card); border:1px solid var(--border); border-radius:var(--radius); padding:16px; margin-bottom:14px; box-shadow:var(--shadow-sm)}
+  .card{background:color-mix(in srgb,var(--card) 96%,transparent); border:1px solid var(--border); border-radius:14px; padding:20px; margin-bottom:16px; box-shadow:var(--shadow-sm)}
   .card h2{margin:0 0 4px; font-size:13px; font-weight:650}
   .card-head{display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:8px}
   .card-head h2{margin:0}
@@ -236,14 +241,14 @@
   .local-path{display:block; width:100%; box-sizing:border-box; margin:8px 0; padding:9px 11px; border:1px solid var(--border); border-radius:var(--radius-sm); background:var(--bg); color:var(--fg); overflow-wrap:anywhere; user-select:all}
   .local-step{font-size:12px; color:var(--muted); line-height:1.6}
 
-  textarea,input[type=text],input[type=number],select{
+  textarea,input:not([type]),input[type=text],input[type=password],input[type=number],select{
     width:100%; background:var(--bg); color:var(--fg);
     border:1px solid var(--border); border-radius:var(--radius-sm);
     padding:8px 10px; font-size:12.5px;
     transition:border-color var(--tr-dur), box-shadow var(--tr-dur);
   }
-  textarea,input[type=text],input[type=number]{font-family:var(--mono)}
-  textarea:focus,input[type=text]:focus,input[type=number]:focus,select:focus{
+  textarea,input:not([type]),input[type=text],input[type=password],input[type=number]{font-family:var(--mono)}
+  textarea:focus,input:not([type]):focus,input[type=text]:focus,input[type=password]:focus,input[type=number]:focus,select:focus{
     outline:none; border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-ring);
   }
   textarea{height:76px; resize:vertical; line-height:1.55}
@@ -314,8 +319,8 @@
   .backdrop{position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:20; display:none; backdrop-filter:blur(2px)}
 
   /* ---------- dashboard stats ---------- */
-  .stat-grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:12px}
-  .stat{padding:14px 16px; border:1px solid var(--border); border-radius:var(--radius); background:var(--card)}
+  .stat-grid{display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px;margin-bottom:18px}
+  .stat{padding:18px; border:1px solid var(--border); border-radius:14px; background:color-mix(in srgb,var(--card) 96%,transparent)}
   .stat .num{font-size:22px; font-weight:700}
   .stat .lbl{font-size:11.5px; color:var(--muted); margin-top:2px}
 
@@ -380,8 +385,8 @@
 </style>
 <style>
 /* Quiet, spacious conversation surfaces, shared with the native macOS shell. */
-.chat-wrap{max-width:840px;box-sizing:border-box;padding:32px 28px 20px;min-height:0}
-#chat-hero{gap:20px;padding:48px 0}
+.chat-wrap{max-width:940px;box-sizing:border-box;padding:30px 28px 22px;min-height:0}
+#chat-hero{flex:0 0 auto;gap:18px;min-height:176px!important;padding:28px 0 22px}
 #chat-hero .hero-title{font-size:clamp(26px,3vw,36px);font-weight:550;letter-spacing:-1px;line-height:1.35}
 #chat-hero::before{content:'COGNITIVE OS';font-size:11px;letter-spacing:3px;color:var(--muted)}
 #chat-hero .chip{border-radius:12px;padding:12px 16px;background:var(--card);font-size:13px}
@@ -393,7 +398,7 @@
 .chat-copy{position:absolute;right:4px;top:-10px;opacity:0;padding:3px 8px;border:1px solid var(--border);border-radius:8px;background:var(--card);color:var(--muted);font-size:11px;cursor:pointer;transition:opacity var(--tr-dur)}
 .chat-message:hover .chat-copy,.chat-copy:focus-visible{opacity:1}
 .chat-answer{font-family:var(--sans);font-size:14px;line-height:1.85;white-space:pre-wrap;overflow-wrap:anywhere;margin:18px 0 0}
-.run-card{border:1px solid var(--border);border-radius:14px;background:color-mix(in srgb,var(--card) 65%,transparent);overflow:hidden}
+.run-card{border:1px solid var(--border);border-radius:14px;background:color-mix(in srgb,var(--card) 92%,transparent);overflow:hidden;backdrop-filter:blur(12px)}
 .run-card>summary{display:flex;align-items:center;gap:10px;padding:14px 16px;cursor:pointer;list-style:none;font-size:13px}
 .run-card>summary::-webkit-details-marker{display:none}
 .run-card>summary::after{content:'⌄';color:var(--muted);font-size:16px;transition:transform 150ms}
@@ -411,14 +416,16 @@
 .run-steps li[data-state=running]{color:var(--fg)}.run-steps li[data-state=failed]{color:var(--danger)}
 .run-steps small{font-size:11px;white-space:nowrap;color:var(--muted)}
 .run-step-main{min-width:0;display:flex;flex-direction:column;gap:2px}.run-step-name{color:inherit}.run-step-detail{max-width:100%;color:var(--muted);font-family:var(--mono);font-size:11px;line-height:1.45;white-space:pre-wrap;overflow-wrap:anywhere;cursor:pointer}.run-step-detail>summary{display:list-item;padding:0;cursor:pointer}.run-step-detail>summary::marker{color:var(--muted)}
-.pillbar{border:1px solid var(--border);border-radius:22px!important;box-shadow:0 8px 28px #0000000c;padding:12px!important}
+.pillbar{border:1px solid var(--border);border-radius:22px!important;box-shadow:0 10px 30px #00000018;padding:12px!important;backdrop-filter:blur(14px)}
 .pillbar:focus-within{border-color:var(--accent-ring);box-shadow:0 0 0 3px var(--accent-soft)}
 #chat-input{font-size:14px;line-height:1.7;min-height:28px}
 .content.chat-content{display:flex;flex-direction:column;min-height:0;overflow-y:hidden}
-.chat-content .chat-wrap{min-height:0;flex:1}
+.chat-content .chat-wrap{min-height:0;flex:1;overflow:hidden}
 .chat-content #chat-hero{min-height:0}
 .chat-content #chat-box{min-height:0;overflow-y:auto}
-.chat-content .chat-wrap + .card{flex-shrink:0}
+#chat-settings{max-height:min(52vh,440px);overflow:auto}
+.chat-wrap.settings-open #chat-hero,.chat-wrap.settings-open #chat-gate{display:none!important}
+.chat-wrap.settings-open #chat-settings{flex:0 0 auto;max-height:min(44vh,360px)}
 #chat-status{padding:6px 4px;min-height:20px!important;color:var(--muted)}
 .chat-tabs{gap:8px}.chat-tab{border-radius:20px;padding:6px 12px;background:transparent}.chat-tab.on{border-color:var(--border);background:var(--card);color:var(--fg)}
 .top .flow{display:none}button:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
@@ -428,8 +435,22 @@
 @media(prefers-reduced-motion:reduce){.flow-spinner{animation:none}}
 @keyframes run-breathe{50%{opacity:.35;box-shadow:0 0 0 4px var(--accent-soft)}}
 @media(prefers-reduced-motion:reduce){.run-dot.active{animation:none}*{scroll-behavior:auto!important}}
-  @media(max-width:640px){.chat-wrap{padding:16px 12px}.run-card>summary{padding:12px}.run-context,.run-metrics{margin-left:12px;margin-right:12px}.run-steps-title{margin-left:15px}.run-steps{margin-left:15px;margin-right:12px}.run-steps li{flex-wrap:wrap;gap:3px}.chat-message.user{max-width:92%}}
+  @media(max-width:640px){.chat-wrap{padding:16px 12px}#chat-hero{min-height:140px!important;padding:18px 0}.run-card>summary{padding:12px}.run-context,.run-metrics{margin-left:12px;margin-right:12px}.run-steps-title{margin-left:15px}.run-steps{margin-left:15px;margin-right:12px}.run-steps li{flex-wrap:wrap;gap:3px}.chat-message.user{max-width:92%}}
   @media(max-width:640px){.chat-toolbar{align-items:flex-start;flex-direction:column;gap:9px}.chat-toolbar-actions{width:100%}.chat-toolbar #chat-model{flex:1;width:auto}.chat-toolbar .sec{flex-shrink:0}}
+
+/* Appearance dialog is available in the browser and desktop shell. */
+.appearance-dialog{border:1px solid var(--border);border-radius:18px;padding:0;background:var(--card);color:var(--fg);width:min(460px,calc(100vw - 28px));box-shadow:var(--shadow)}
+.appearance-dialog::backdrop{background:rgba(5,10,20,.58);backdrop-filter:blur(5px)}
+.appearance-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:22px 24px 14px}
+.appearance-head h2{font-size:17px;line-height:1.3;margin:0 0 5px}.appearance-head p{font-size:12px;color:var(--muted);margin:0}
+.appearance-body{padding:0 24px 24px;display:grid;gap:16px}
+.appearance-preview{height:138px;border:1px solid var(--border);border-radius:13px;background:var(--bg);position:relative;overflow:hidden;display:grid;place-items:center;color:var(--muted);font-size:12px;background-size:cover;background-position:center}
+.appearance-preview::after{content:"预览";position:absolute;right:10px;bottom:10px;padding:3px 8px;border-radius:20px;background:color-mix(in srgb,var(--card) 85%,transparent);color:var(--fg)}
+.appearance-actions{display:flex;gap:8px;flex-wrap:wrap}.appearance-actions button{flex:1;min-width:120px}
+.appearance-field{display:grid;grid-template-columns:74px 1fr 42px;gap:10px;align-items:center;font-size:12px;color:var(--muted)}
+.appearance-field input[type=range]{width:100%;accent-color:var(--accent)}.appearance-field output{text-align:right;font-variant-numeric:tabular-nums;color:var(--fg)}
+@media(max-width:1100px){.stat-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:600px){.content{padding:16px 12px 28px}.card{padding:16px}.stat-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.top{padding:8px 12px}}
 
 </style>
 </head>
@@ -485,6 +506,10 @@
     <div id="side-recent"></div>
   </nav>
   <div class="side-foot">
+    <button class="appearance-entry" onclick="showAppearance()" title="设置界面主题和背景图片" aria-label="外观与背景">
+      <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8" cy="8" r="1.5"/><path d="m3 17 5-5 4 4 3-3 6 6"/></svg>
+      外观与背景
+    </button>
     <div class="usercard">
       <div class="avatar" aria-hidden="true"><svg class="brain-mark" viewBox="0 0 24 24"><path d="M12 6.1A3.5 3.5 0 0 0 5.7 8.2 3.8 3.8 0 0 0 4.2 15a3.5 3.5 0 0 0 4.4 5.3A4.1 4.1 0 0 0 12 22"/><path d="M12 6.1a3.5 3.5 0 0 1 6.3 2.1 3.8 3.8 0 0 1 1.5 6.8 3.5 3.5 0 0 1-4.4 5.3A4.1 4.1 0 0 1 12 22"/><path d="M12 6v16M8 10l4 2 4-2M7.5 15l4.5 2 4.5-2"/></svg></div>
       <div>
@@ -508,6 +533,9 @@
       <button class="icon-btn" id="btnRefresh" title="刷新当前页" aria-label="刷新当前页">
         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
       </button>
+      <button class="icon-btn" onclick="showAppearance()" title="外观与背景" aria-label="外观与背景">
+        <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8" cy="8" r="1.5"/><path d="m3 17 5-5 4 4 3-3 6 6"/></svg>
+      </button>
       <select id="theme" title="主题">
         <option value="dark">Dark</option>
         <option value="light">Light</option>
@@ -520,6 +548,23 @@
   <div class="content" id="content"></div>
 </main>
 <div class="toast" id="toast" role="status"></div>
+<dialog class="appearance-dialog" id="appearance-dialog" aria-labelledby="appearance-title">
+  <div class="appearance-head">
+    <div><h2 id="appearance-title">外观与背景</h2><p>选择本机图片，背景只保存在当前设备。</p></div>
+    <button class="icon-btn" onclick="closeAppearance()" aria-label="关闭外观设置">✕</button>
+  </div>
+  <div class="appearance-body">
+    <div class="appearance-preview" id="appearance-preview">尚未设置背景图片</div>
+    <div class="appearance-actions">
+      <button onclick="$('appearance-file').click()" id="appearance-pick">选择图片</button>
+      <button class="sec" onclick="appearanceClear()">移除背景</button>
+      <input type="file" id="appearance-file" accept="image/png,image/jpeg,image/webp,image/gif" hidden onchange="appearanceChoose(this)">
+    </div>
+    <label class="appearance-field"><span>图片强度</span><input id="appearance-opacity" type="range" min="5" max="65" step="1" value="28" oninput="appearanceAdjust()"><output id="appearance-opacity-value">28%</output></label>
+    <label class="appearance-field"><span>柔化</span><input id="appearance-blur" type="range" min="0" max="18" step="1" value="0" oninput="appearanceAdjust()"><output id="appearance-blur-value">0px</output></label>
+    <div class="hint" style="margin:0">支持 PNG、JPEG、WebP、GIF，最大 10 MB；可随时移除，不上传到服务器。</div>
+  </div>
+</dialog>
 
 <script>
 'use strict';
@@ -542,6 +587,95 @@ async function call(method, path, body) {
 }
 
 function esc(s){ return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+let APPEARANCE_URL = null;
+function appearanceDb(){
+  return new Promise((resolve,reject) => {
+    if(!window.indexedDB){ reject(new Error('当前浏览器不支持本机图片存储')); return; }
+    const request = indexedDB.open('cognitive-os-appearance', 1);
+    request.onupgradeneeded = () => request.result.createObjectStore('assets');
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error('无法打开图片存储'));
+  });
+}
+async function appearanceStore(blob){
+  const db = await appearanceDb();
+  try {
+    await new Promise((resolve,reject) => {
+      const tx = db.transaction('assets','readwrite');
+      tx.objectStore('assets').put(blob,'wallpaper');
+      tx.oncomplete = resolve;
+      tx.onerror = () => reject(tx.error || new Error('保存失败'));
+    });
+  } finally { db.close(); }
+}
+async function appearanceRead(){
+  const db = await appearanceDb();
+  try {
+    return await new Promise((resolve,reject) => {
+      const tx = db.transaction('assets','readonly');
+      const request = tx.objectStore('assets').get('wallpaper');
+      request.onsuccess = () => resolve(request.result || null);
+      request.onerror = () => reject(request.error || new Error('读取失败'));
+    });
+  } finally { db.close(); }
+}
+async function appearanceDelete(){
+  const db = await appearanceDb();
+  try {
+    await new Promise((resolve,reject) => {
+      const tx = db.transaction('assets','readwrite');
+      tx.objectStore('assets').delete('wallpaper');
+      tx.oncomplete = resolve;
+      tx.onerror = () => reject(tx.error || new Error('删除失败'));
+    });
+  } finally { db.close(); }
+}
+function appearanceApplyImage(blob){
+  if(APPEARANCE_URL) URL.revokeObjectURL(APPEARANCE_URL);
+  APPEARANCE_URL = blob ? URL.createObjectURL(blob) : null;
+  document.querySelector('main').style.setProperty('--wallpaper-image',APPEARANCE_URL ? 'url("' + APPEARANCE_URL + '")' : 'none');
+  const preview = $('appearance-preview');
+  preview.style.backgroundImage = APPEARANCE_URL ? 'url("' + APPEARANCE_URL + '")' : 'none';
+  preview.textContent = APPEARANCE_URL ? '' : '尚未设置背景图片';
+}
+function appearanceAdjust(){
+  const opacity = Number($('appearance-opacity').value);
+  const blur = Number($('appearance-blur').value);
+  $('appearance-opacity-value').textContent = opacity + '%';
+  $('appearance-blur-value').textContent = blur + 'px';
+  const main = document.querySelector('main');
+  main.style.setProperty('--wallpaper-opacity',String(opacity / 100));
+  main.style.setProperty('--wallpaper-blur',blur + 'px');
+  try { localStorage.setItem('cognitive-os-appearance-settings',JSON.stringify({opacity,blur})); } catch(e) {}
+}
+async function appearanceChoose(input){
+  const file = input.files?.[0]; input.value = '';
+  if(!file) return;
+  if(!['image/png','image/jpeg','image/webp','image/gif'].includes(file.type) || file.size > 10 * 1024 * 1024){
+    toast('请选择 10 MB 以内的 PNG、JPEG、WebP 或 GIF 图片'); return;
+  }
+  try { await appearanceStore(file); appearanceApplyImage(file); toast('背景图片已保存到本机'); }
+  catch(e){ toast('背景保存失败：' + e.message); }
+}
+async function appearanceClear(){
+  try { await appearanceDelete(); appearanceApplyImage(null); toast('背景图片已移除'); }
+  catch(e){ toast('移除失败：' + e.message); }
+}
+function showAppearance(){
+  const dialog = $('appearance-dialog');
+  if(!dialog.open) dialog.showModal();
+}
+function closeAppearance(){ $('appearance-dialog').close(); }
+async function appearanceLoad(){
+  try {
+    const settings = JSON.parse(localStorage.getItem('cognitive-os-appearance-settings') || '{}');
+    if(Number.isFinite(settings.opacity)) $('appearance-opacity').value = Math.min(65,Math.max(5,settings.opacity));
+    if(Number.isFinite(settings.blur)) $('appearance-blur').value = Math.min(18,Math.max(0,settings.blur));
+  } catch(e) {}
+  appearanceAdjust();
+  try { appearanceApplyImage(await appearanceRead()); } catch(e) { /* optional visual setting */ }
+}
 
 function renderPre(obj){ return jsonHighlight(obj); }
 
@@ -676,6 +810,31 @@ panels.chat = `
         <span class="muted" id="chat-session-meta"></span>
       </div>
       <div class="hint" style="margin-top:6px">对话模型在上方下拉切换（来自 Model routes）；新增路由请到 <a href="#" onclick="switchPanel('models');return false">Models</a> 页配置。会话支持 取消 / 恢复：运行中点「取消」，取消或失败后点「恢复」重跑上一条输入。</div>
+      <details style="margin-top:14px;border-top:1px solid var(--border);padding-top:12px" ontoggle="if(this.open)sshEnvironmentLoad()">
+        <summary style="cursor:pointer;font-weight:650">SSH 环境与本机凭据</summary>
+        <div class="hint" style="margin:8px 0">保存后在对话中使用环境名称，例如“在 staging 执行 uname”。密码仅交给本机 SSH 工具，后续对话无需重复输入。</div>
+        <div id="ssh-environment-list" style="display:flex;gap:6px;flex-wrap:wrap;margin:8px 0"></div>
+        <div class="row" style="gap:8px;flex-wrap:wrap">
+          <input id="ssh-env-name" aria-label="SSH 环境名称" placeholder="环境名称，如 staging" autocomplete="off" style="flex:1;min-width:160px">
+          <input id="ssh-env-host" aria-label="SSH 主机" placeholder="主机 / IP" autocomplete="off" style="flex:1;min-width:160px">
+          <input id="ssh-env-user" aria-label="SSH 用户" placeholder="用户名" autocomplete="off" style="flex:1;min-width:130px">
+          <input id="ssh-env-port" aria-label="SSH 端口" type="number" min="1" max="65535" value="22" style="width:78px">
+        </div>
+        <div class="row" style="gap:8px;flex-wrap:wrap;margin-top:8px">
+          <input id="ssh-env-identity" aria-label="SSH 私钥路径" placeholder="私钥路径（可选）" autocomplete="off" style="flex:1;min-width:190px">
+          <input id="ssh-env-known" aria-label="SSH known_hosts 路径" placeholder="known_hosts 路径（可选）" autocomplete="off" style="flex:1;min-width:190px">
+          <input id="ssh-env-password" aria-label="SSH 登录密码" type="password" placeholder="登录密码（留空则保持原凭据）" autocomplete="new-password" style="flex:1;min-width:190px">
+          <button class="sec sm" onclick="sshEnvironmentSave()">保存环境</button>
+          <button class="sec sm" onclick="sshCredentialClear()" title="清除当前主机、用户、端口的直连登录凭据">清除直连凭据</button>
+        </div>
+        <div class="hint" id="ssh-env-status" role="status" style="margin-top:7px"></div>
+      </details>
+      <details style="margin-top:14px;border-top:1px solid var(--border);padding-top:12px" ontoggle="if(this.open)loadUploads()">
+        <summary style="cursor:pointer;font-weight:650">已上传文件</summary>
+        <div class="row" style="justify-content:flex-end;margin:8px 0"><button class="sec sm" onclick="loadUploads()">刷新</button></div>
+        <div class="chips" id="uploads-list">加载中…</div>
+        <div class="hint" style="margin:8px 0 0">文本类文件自动分块入库（RAG）；上传的文件保存在 state/uploads/。</div>
+      </details>
     </div>
     <div id="chat-box" style="display:flex;flex-direction:column;gap:8px;max-height:52vh;overflow-y:auto;padding:4px 2px"></div>
     <div class="muted" id="chat-status" style="min-height:16px;font-size:12px"></div>
@@ -692,14 +851,6 @@ panels.chat = `
       <button class="pill-send" id="chat-send" onclick="chatSend()" title="发送">↑</button>
       <input type="file" id="chat-file" style="display:none" onchange="uploadFile(this)">
     </div>
-  </div>
-  <div class="card" style="max-width:768px;margin:0 auto 16px;width:calc(100% - 32px)">
-    <div class="card-head">
-      <h2>已上传文件</h2>
-      <button class="sec sm" onclick="loadUploads()">Refresh</button>
-    </div>
-    <div class="chips" id="uploads-list">加载中…</div>
-    <div class="hint">文本类文件自动分块入库（RAG）；上传的文件保存在 state/uploads/。</div>
   </div>`;
 
 panels.agents = `
@@ -2770,7 +2921,74 @@ function sideRecent(list){
 
 function chatToggleSettings(){
   const el = $('chat-settings');
-  if(el) el.style.display = el.style.display === 'none' ? '' : 'none';
+  if(!el) return;
+  const open = el.style.display === 'none';
+  el.style.display = open ? '' : 'none';
+  $('chat-wrap')?.classList.toggle('settings-open',open);
+}
+
+let SSH_ENVIRONMENTS = [];
+async function sshEnvironmentLoad(){
+  const r = await call('GET', '/v1/ssh/environments');
+  const list = $('ssh-environment-list');
+  if(!list) return;
+  if(r.status !== 200 || !Array.isArray(r.obj)){
+    list.textContent = '环境加载失败'; return;
+  }
+  SSH_ENVIRONMENTS = r.obj;
+  list.innerHTML = '';
+  if(!SSH_ENVIRONMENTS.length){ list.textContent = '暂无 SSH 环境'; return; }
+  for(const env of SSH_ENVIRONMENTS){
+    const b = document.createElement('button');
+    b.className = 'sec sm';
+    b.textContent = env.name + ' · ' + env.host + (env.has_password ? ' · 已托管密码' : ' · 私钥/agent');
+    b.onclick = () => {
+      $('ssh-env-name').value = env.name || '';
+      $('ssh-env-host').value = env.host || '';
+      $('ssh-env-user').value = env.user || '';
+      $('ssh-env-port').value = env.port || 22;
+      $('ssh-env-identity').value = env.identity_file || '';
+      $('ssh-env-known').value = env.known_hosts || '';
+      $('ssh-env-password').value = '';
+    };
+    const del = document.createElement('button');
+    del.className = 'sec sm'; del.textContent = '删除 ' + env.name;
+    del.onclick = () => sshEnvironmentDelete(env.name);
+    list.append(b, del);
+  }
+}
+
+async function sshEnvironmentSave(){
+  const name = $('ssh-env-name')?.value.trim();
+  const host = $('ssh-env-host')?.value.trim();
+  const status = $('ssh-env-status');
+  if(!name || !host){ if(status) status.textContent = '请填写环境名称和主机'; return; }
+  const body = {name, host, user:$('ssh-env-user').value.trim(),
+    port:Number($('ssh-env-port').value) || 22,
+    identity_file:$('ssh-env-identity').value.trim(),
+    known_hosts:$('ssh-env-known').value.trim()};
+  const password = $('ssh-env-password').value;
+  if(password) body.password = password;
+  const r = await call('POST', '/v1/ssh/environments', body);
+  $('ssh-env-password').value = '';
+  if(status) status.textContent = r.status < 300 ? '已保存 ' + name : '保存失败：' + (r.obj?.error || r.status);
+  if(r.status < 300) await sshEnvironmentLoad();
+}
+
+async function sshEnvironmentDelete(name){
+  const r = await call('DELETE', '/v1/ssh/environments/' + encodeURIComponent(name));
+  const status = $('ssh-env-status');
+  if(status) status.textContent = r.status < 300 ? '已删除 ' + name : '删除失败：' + (r.obj?.error || r.status);
+  if(r.status < 300) await sshEnvironmentLoad();
+}
+async function sshCredentialClear(){
+  const host = $('ssh-env-host').value.trim();
+  const user = $('ssh-env-user').value.trim();
+  const port = Number($('ssh-env-port').value) || 22;
+  const status = $('ssh-env-status');
+  if(!host){ if(status) status.textContent = '请先填写要清除凭据的主机'; return; }
+  const r = await call('DELETE','/v1/ssh/credentials',{host,user,port});
+  if(status) status.textContent = r.status < 300 ? '已清除该主机的直连凭据' : '清除失败：' + (r.obj?.error || r.status);
 }
 
 /* 用当前会话信息同步设置区（共享记忆勾选 + 会话元数据） */
@@ -2848,15 +3066,48 @@ async function chatLoadHistory(){
   const r = await call('GET', '/v1/chat/history?session=' + encodeURIComponent(session));
   if(session !== CHAT_SESSION || chatIsBusy(session)) return;
   if(r.status !== 200 || !r.obj || !Array.isArray(r.obj.turns)) return;
-  const turns = r.obj.turns;
   /* The request may finish after the user has switched away and back again.
      Keep a monotonically increasing per-load token so only the newest fetch
      * for this session can replace its local view. */
   if(session !== CHAT_SESSION || seq !== chatLoadHistory._seq) return;
-  CHAT_MSGS = [];
-  turns.forEach(t => { if(t.q) CHAT_MSGS.push({role:'user', text:t.q, pending:false, el:null});
-                       if(t.a) CHAT_MSGS.push({role:'bot',  text:t.a, pending:false, el:null}); });
+  CHAT_MSGS = chatHistoryEntries(r.obj.turns, r.obj.runs);
   chatRedraw();
+}
+
+function chatHistoryEntries(turns, runs){
+  const rows = turns.filter(t => t.q).map(t => ({q:t.q, a:t.a || '', run:null}));
+  const failures = [];
+  let next = 0;
+  for(const run of Array.isArray(runs) ? runs : []){
+    if(!run || !run.input) continue;
+    let match = -1;
+    for(let i = next; i < rows.length; i++){
+      const row = rows[i];
+      if(row.run || !run.input.startsWith(row.q)) continue;
+      if(run.output && row.a && !run.output.startsWith(row.a) && !row.a.startsWith(run.output)) continue;
+      match = i; break;
+    }
+    if(match >= 0){ rows[match].run = run; next = match + 1; }
+    else if(run.status && run.status !== 'DONE'){
+      failures.push({q:run.input, a:run.output || '任务' + run.status + '，可点击“恢复”重试。', run});
+    }
+  }
+  for(const failed of failures){
+    const after = rows.findIndex(row => row.run && row.run.ts > failed.run.ts);
+    rows.splice(after < 0 ? rows.length : after, 0, failed);
+  }
+  const messages = [];
+  for(const row of rows){
+    messages.push({role:'user',text:row.q,pending:false,el:null});
+    if(!row.a && !row.run) continue;
+    const run = row.run;
+    const trace = Array.isArray(run?.trace) ? run.trace : [];
+    const last = trace[trace.length - 1] || {};
+    const stage = run?.status === 'DONE' ? 'completed' : run?.status === 'CANCELLED' ? 'cancelled' : 'failed';
+    messages.push({role:'bot',text:row.a,pending:false,el:null,
+      ...(run ? {taskId:run.id,progress:{...last,stage},progressEvents:trace} : {})});
+  }
+  return messages;
 }
 
 async function chatSwitchSession(id){
@@ -4048,6 +4299,7 @@ function durationLabel(ms){
   return sec >= 60 ? Math.floor(sec / 60) + ' 分 ' + sec % 60 + ' 秒' : sec + ' 秒';
 }
 function progressLabel(p){
+  if(['completed','failed','cancelled','timed_out'].includes(p.stage)) return STAGE_LABELS[p.stage];
   if(p.activity) return p.activity;
   if(p.stage === 'planning' || p.stage === 'preparing_context'){
     return (p.round > 0 ? '第 ' + p.round + ' 轮 · ' : '') + STAGE_LABELS[p.stage];
@@ -4057,6 +4309,7 @@ function progressLabel(p){
     : (STAGE_LABELS[p.stage] || '正在处理');
 }
 function progressNarrative(p){
+  if(['completed','failed','cancelled','timed_out'].includes(p.stage)) return STAGE_NOTES[p.stage];
   if(p.activity) return p.activity;
   let note = STAGE_NOTES[p.stage] || '正在推进任务。';
   if(p.stage === 'executing' && p.cur_tool) note = '正在' + toolLabel(p.cur_tool) + '（' + p.cur_tool + '），完成后会继续下一步。';
@@ -4092,6 +4345,7 @@ function renderChatEntry(entry){
   const follow = chatNearBottom();
   const previous = el.querySelector('details');
   const wasOpen = previous?.open;
+  const expandedSteps = new Set([...el.querySelectorAll('.run-step-detail[open]')].map(d => d.dataset.step));
   el.replaceChildren();
   const p = entry.progress;
   if(p){
@@ -4139,7 +4393,7 @@ function renderChatEntry(entry){
       item.append(main,meta); list.append(item);
     }
     const steps = Array.isArray(p.steps) ? p.steps : [];
-    for(const s of steps){
+    for(const [index,s] of steps.entries()){
       const item = document.createElement('li');
       item.dataset.state = s.ok === 1 ? 'done' : s.ok === 0 ? 'failed' : 'skipped';
       const main = document.createElement('span'); main.className = 'run-step-main';
@@ -4148,6 +4402,8 @@ function renderChatEntry(entry){
       main.append(title);
       if(s.args || s.out){
         const detail = document.createElement('details'); detail.className = 'run-step-detail';
+        detail.dataset.step = String(index);
+        detail.open = expandedSteps.has(detail.dataset.step);
         const ds = document.createElement('summary'); ds.textContent = '查看参数与结果摘要'; detail.append(ds);
         const body = document.createElement('div');
         body.textContent = [s.args ? '参数：' + s.args : '', s.out ? '结果：' + s.out : ''].filter(Boolean).join('\n');
@@ -4198,7 +4454,6 @@ function chatFinish(session,id,entry,text,stage){
     elapsed_ms: entry.progress?.started_ms ? Date.now()-entry.progress.started_ms : 0};
   delete CHAT_TASKS[session]; CHAT_ENTRIES.delete(id);
   renderChatEntry(entry);
-  if(entry.el?.querySelector('details')) entry.el.querySelector('details').open = false;
   if(CHAT_SESSION === session){
     CHAT_TASK_ID = null; CHAT_RESUME_OK = stage !== 'completed'; chatBusyUI(false);
     const status = $('chat-status'); if(status) status.textContent = '';
@@ -4222,7 +4477,13 @@ async function chatPollTask(session,id,entry){
         const question = at > 0 ? messages.slice(0, at).reverse().find(m => m.role === 'user')?.text : null;
         const turns = history.obj?.turns;
         const last = Array.isArray(turns) ? turns[turns.length - 1] : null;
-        if(last?.a && question && last.q === question)
+        const archived = Array.isArray(history.obj?.runs) ? history.obj.runs.find(run =>
+          run.id === id && question && run.input === question) : null;
+        if(archived){
+          const stage = {DONE:'completed',FAILED:'failed',CANCELLED:'cancelled',TIMEOUT:'timed_out'}[archived.status] || 'failed';
+          chatFinish(session,id,entry,archived.output || STAGE_LABELS[stage],stage);
+          if(CHAT_SESSION === session) void chatLoadHistory();
+        } else if(last?.a && question && last.q === question)
           chatFinish(session,id,entry,last.a,'completed');
         else
           chatFinish(session,id,entry,'任务运行状态已丢失（服务可能重启）。会话记录已保留，可点击“恢复”继续。','failed');
@@ -4319,6 +4580,7 @@ async function chatCancel(){
 chatRestore();
 
 applyTheme(localStorage.getItem('cognitive-os-agent-theme') || 'dark');
+void appearanceLoad();
 
 /* ================= 连接状态 ================= */
 

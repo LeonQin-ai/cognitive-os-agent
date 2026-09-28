@@ -323,6 +323,16 @@ static struct session *session_get_locked(reasoning *r, const char *id) {
         s = session_new(want);
         if (s) {
             s->shared_memory = atomic_load(&r->ss->shared_memory_global);
+            for (size_t i = 0; i < r->ss->nmeta; i++) {
+                const struct sess_meta *m = &r->ss->meta[i];
+                if (strcmp(m->id, want) != 0)
+                    continue;
+                snprintf(s->title, sizeof(s->title), "%s", m->title);
+                s->created_ms = m->created_ms;
+                s->total_ms = m->total_ms;
+                s->last_active_ms = m->last_active_ms;
+                break;
+            }
             struct session **na = realloc(r->ss->sessions, (r->ss->nsessions + 1) * sizeof(*na));
             if (na) {
                 r->ss->sessions = na;
@@ -2134,11 +2144,32 @@ char *reasoning_history_json_ex(reasoning *r, const char *session_id, int max_tu
     size_t start;
     cJSON *arr;
     char *sjson;
+    const char *want = session_id && *session_id ? session_id : "default";
+    int known = 0;
 
     if (!r)
         return xstrdup("[]");
     if (max_turns <= 0)
         max_turns = 20;
+    /* History reads must not create a new session: querying a deleted ID
+     * used to resurrect it in sessions.json at shutdown. */
+    mutex_lock(&r->ss->sess_mtx);
+    for (size_t i = 0; i < r->ss->nsessions && !known; i++)
+        known = strcmp(r->ss->sessions[i]->id, want) == 0;
+    for (size_t i = 0; i < r->ss->nmeta && !known; i++)
+        known = strcmp(r->ss->meta[i].id, want) == 0;
+    mutex_unlock(&r->ss->sess_mtx);
+    if (!known && r->state_root) {
+        char path[700];
+        chat_file_path(path, sizeof(path), r->state_root, want);
+        FILE *f = fopen(path, "rb");
+        if (f) {
+            known = 1;
+            fclose(f);
+        }
+    }
+    if (!known)
+        return xstrdup("[]");
     s = session_get(r, session_id);
     if (!s)
         return xstrdup("[]");
@@ -2252,6 +2283,36 @@ char *reasoning_sessions_json(reasoning *r) {
         }
     }
 
+    /* A session can contain only a failed/cancelled task, so it has metadata
+     * and a task-journal entry but no successful chat transcript yet. Keep it
+     * in 最近 after restart so the durable execution record remains reachable. */
+    for (size_t i = 0; i < r->ss->nmeta; i++) {
+        const struct sess_meta *m = &r->ss->meta[i];
+        int seen = 0;
+        cJSON *existing;
+        cJSON_ArrayForEach(existing, arr) {
+            cJSON *id = cJSON_GetObjectItemCaseSensitive(existing, "id");
+            if (cJSON_IsString(id) && strcmp(id->valuestring, m->id) == 0) {
+                seen = 1;
+                break;
+            }
+        }
+        if (seen)
+            continue;
+        cJSON *o = cJSON_CreateObject();
+        if (!o)
+            break;
+        cJSON_AddStringToObject(o, "id", m->id);
+        cJSON_AddStringToObject(o, "title", m->title);
+        cJSON_AddNumberToObject(o, "turns", 0);
+        cJSON_AddNumberToObject(o, "created_ms", (double)m->created_ms);
+        cJSON_AddNumberToObject(o, "total_ms", (double)m->total_ms);
+        cJSON_AddNumberToObject(o, "last_active_ms", (double)m->last_active_ms);
+        cJSON_AddBoolToObject(o, "shared_memory", atomic_load(&r->ss->shared_memory_global));
+        cJSON_AddStringToObject(o, "task", "");
+        cJSON_AddItemToArray(arr, o);
+    }
+
     mutex_unlock(&r->ss->sess_mtx);
     sjson = cJSON_PrintUnformatted(arr);
     cJSON_Delete(arr);
@@ -2275,6 +2336,29 @@ char *reasoning_session_new(reasoning *r) {
     meta_save_locked(r);
     mutex_unlock(&r->ss->sess_mtx);
     return xstrdup(uuid);
+}
+
+void reasoning_session_note_prompt(reasoning *r, const char *session_id, const char *prompt) {
+    struct session *s;
+    char *title;
+
+    if (!r || !prompt || !*prompt)
+        return;
+    s = session_get(r, session_id);
+    if (!s)
+        return;
+    title = str_head(prompt, 60);
+    if (!title)
+        return;
+    mutex_lock(&s->mtx);
+    if (!s->title[0])
+        snprintf(s->title, sizeof(s->title), "%s", title);
+    mutex_unlock(&s->mtx);
+    free(title);
+    mutex_lock(&r->ss->sess_mtx);
+    meta_upsert_locked(r, s);
+    meta_save_locked(r);
+    mutex_unlock(&r->ss->sess_mtx);
 }
 
 /* Compatibility entry point: sharing is now a runtime-wide setting. */
