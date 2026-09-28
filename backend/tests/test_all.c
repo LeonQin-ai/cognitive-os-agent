@@ -6098,6 +6098,41 @@ static void test_http_api(void) {
         }
     }
 
+    /* A long completed turn must remain valid JSON when replayed by the chat
+     * UI. http_resp_appendf has a 4 KiB formatting buffer. */
+    {
+        char body[6200];
+        const char *prefix = "{\"prompt\":\"long-history-";
+        size_t pos = strlen(prefix);
+        memcpy(body, prefix, pos);
+        memset(body + pos, 'x', 5000);
+        pos += 5000;
+        memcpy(body + pos, "\"}", 3);
+        cJSON *submitted = api_request_json(18211, "POST", "/v1/tasks", body, 200);
+        cJSON *jid = submitted ? cJSON_GetObjectItemCaseSensitive(submitted, "id") : NULL;
+        int64_t long_id = cJSON_IsNumber(jid) ? (int64_t)jid->valuedouble : -1;
+        cJSON_Delete(submitted);
+        int complete = 0;
+        for (int i = 0; i < 60 && long_id >= 0 && !complete; i++) {
+            char path[128];
+            snprintf(path, sizeof path, "/v1/tasks/%lld", (long long)long_id);
+            cJSON *task_state = api_request_json(18211, "GET", path, NULL, 200);
+            cJSON *status = task_state ? cJSON_GetObjectItemCaseSensitive(task_state, "status") : NULL;
+            complete = cJSON_IsString(status) && strcmp(status->valuestring, "DONE") == 0;
+            cJSON_Delete(task_state);
+            if (!complete) time_sleep_ms(100);
+        }
+        CHECK(complete);
+        CHECK(raw_http_request(18211, "GET", "/v1/chat/history", NULL, &r) == 0 && r.status == 200);
+        CHECK(r.body_len > 4096);
+        cJSON *history = cJSON_Parse(r.body);
+        cJSON *turns = history ? cJSON_GetObjectItemCaseSensitive(history, "turns") : NULL;
+        cJSON *last = cJSON_IsArray(turns) ? cJSON_GetArrayItem(turns, cJSON_GetArraySize(turns) - 1) : NULL;
+        cJSON *question = last ? cJSON_GetObjectItemCaseSensitive(last, "q") : NULL;
+        CHECK(cJSON_IsString(question) && strstr(question->valuestring, "long-history-") == question->valuestring);
+        cJSON_Delete(history);
+    }
+
     /* error paths */
     CHECK(raw_http_request(18211, "POST", "/v1/tasks", "{}", &r) == 0 && r.status == 400);
     CHECK(raw_http_request(18211, "GET", "/v1/nope", NULL, &r) == 0 && r.status == 404);

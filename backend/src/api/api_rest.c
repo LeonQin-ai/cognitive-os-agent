@@ -1150,7 +1150,11 @@ static int h_chat_history(const http_request *req, http_response *resp, void *ud
         sanitize_upload_name(sp + 8, sid, sizeof(sid));
     turns =
         ctx->reasoning ? reasoning_history_json_ex(ctx->reasoning, sid[0] ? sid : NULL, 20) : xstrdup("[]");
-    http_resp_appendf(resp, "{\"turns\":%s}", turns ? turns : "[]");
+    /* appendf uses a 4 KiB formatting buffer; a long chat history must be
+     * appended directly or the response becomes truncated, invalid JSON. */
+    http_resp_append(resp, "{\"turns\":");
+    http_resp_append(resp, turns ? turns : "[]");
+    http_resp_append(resp, "}");
     free(turns);
     return 0;
 }

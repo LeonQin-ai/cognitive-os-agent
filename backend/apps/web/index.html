@@ -414,6 +414,11 @@
 .pillbar{border:1px solid var(--border);border-radius:22px!important;box-shadow:0 8px 28px #0000000c;padding:12px!important}
 .pillbar:focus-within{border-color:var(--accent-ring);box-shadow:0 0 0 3px var(--accent-soft)}
 #chat-input{font-size:14px;line-height:1.7;min-height:28px}
+.content.chat-content{display:flex;flex-direction:column;min-height:0;overflow-y:hidden}
+.chat-content .chat-wrap{min-height:0;flex:1}
+.chat-content #chat-hero{min-height:0}
+.chat-content #chat-box{min-height:0;overflow-y:auto}
+.chat-content .chat-wrap + .card{flex-shrink:0}
 #chat-status{padding:6px 4px;min-height:20px!important;color:var(--muted)}
 .chat-tabs{gap:8px}.chat-tab{border-radius:20px;padding:6px 12px;background:transparent}.chat-tab.on{border-color:var(--border);background:var(--card);color:var(--fg)}
 .top .flow{display:none}button:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
@@ -2573,18 +2578,19 @@ let CHAT_MSGS = [];             // 当前会话气泡的本地镜像 [{role,text
 const CHAT_CACHE = {};
 function chatCacheStore(){ CHAT_CACHE[CHAT_SESSION] = CHAT_MSGS; }
 
-function chatRedraw(){
+function chatRedraw(toBottom = false){
   const box = $('chat-box'); if(!box) return;
+  const follow = toBottom || chatNearBottom();
   box.innerHTML = '';
   CHAT_MSGS.forEach(m => { m.el = chatAddBubble(m.role, m.text, false); renderChatEntry(m); });
   updateChatHero();
-  chatScroll();
+  chatScroll(follow);
 }
 
 async function loadChat(){
   const box = $('chat-box'); if(!box) return;
   renderChatTabs(CHAT_TABS_CACHE);
-  if(CHAT_CACHE[CHAT_SESSION]?.length){ CHAT_MSGS = CHAT_CACHE[CHAT_SESSION]; chatRedraw(); }
+  if(CHAT_CACHE[CHAT_SESSION]?.length){ CHAT_MSGS = CHAT_CACHE[CHAT_SESSION]; chatRedraw(true); }
   void loadChatSessions();
   void chatLoadHistory();
   loadUploads();
@@ -2854,22 +2860,30 @@ async function chatLoadHistory(){
 }
 
 async function chatSwitchSession(id){
-  if(id === CHAT_SESSION){ switchPanel('chat'); requestAnimationFrame(() => $('chat-input')?.focus()); return; }
+  if(id === CHAT_SESSION){ switchPanel('chat'); chatFocusComposer(id); return; }
   chatCacheStore(); // 保存当前会话消息，切回时即时回放
   CHAT_SESSION = id;
   CHAT_NEW_SESSION = false;
   CHAT_MSGS = CHAT_CACHE[id] || [];
   if(current !== 'chat') switchPanel('chat');
-  else { renderChatTabs(CHAT_TABS_CACHE); chatRedraw(); void chatLoadHistory(); }
+  else { renderChatTabs(CHAT_TABS_CACHE); chatRedraw(true); void chatLoadHistory(); }
   void loadChatSessions();
-  void chatGateCheck();
+  void chatGateCheck().then(() => chatFocusComposer(id));
   /* issue #22: 切回的会话若任务仍在执行，恢复「取消」按钮与状态行 */
   syncChatTaskId();
   if(chatIsBusy(id)){
     const st = $('chat-status');
     if(st) st.textContent = '任务执行中…';
   }
-  requestAnimationFrame(() => $('chat-input')?.focus());
+}
+
+function chatFocusComposer(session){
+  requestAnimationFrame(() => {
+    if(current !== 'chat' || CHAT_SESSION !== session) return;
+    chatScroll(true);
+    const input = $('chat-input');
+    if(input && !input.disabled) input.focus({preventScroll:true});
+  });
 }
 
 async function chatNewSession(){
@@ -2888,7 +2902,7 @@ async function chatNewSession(){
   if(st) st.textContent = ok ? ('新会话 ' + (id ? '' : '（临时）')) + '：已就绪' : '尚未配置模型，请在上方设置里先配置对话模型';
   fillChatModelSelect();
   syncChatTaskId(); /* 新会话无任务，隐藏「取消」按钮 */
-  requestAnimationFrame(() => $('chat-input')?.focus());
+  chatFocusComposer(CHAT_SESSION);
 }
 
 async function chatClearSession(id){
@@ -3950,7 +3964,9 @@ function switchPanel(p){
     if(on) b.setAttribute('aria-current', 'true'); else b.removeAttribute('aria-current');
   });
   const t = $('pageTitle'); if(t) t.textContent = TITLES[p] || p;
-  $('content').innerHTML = panels[p];
+  const content = $('content');
+  content.classList.toggle('chat-content', p === 'chat');
+  content.innerHTML = panels[p];
   load(p);
   if(p === 'flow' || p === 'agents') flowRestoreState();
   if(window.innerWidth < 900) toggleSidebar(false);
