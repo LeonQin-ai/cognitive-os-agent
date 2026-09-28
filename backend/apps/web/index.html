@@ -445,24 +445,36 @@
 .chat-copy{position:absolute;right:4px;top:-10px;opacity:0;padding:3px 8px;border:1px solid var(--border);border-radius:8px;background:var(--card);color:var(--muted);font-size:11px;cursor:pointer;transition:opacity var(--tr-dur)}
 .chat-message:hover .chat-copy,.chat-copy:focus-visible{opacity:1}
 .chat-answer{font-family:var(--sans);font-size:14px;line-height:1.85;white-space:pre-wrap;overflow-wrap:anywhere;margin:18px 0 0}
-.run-card{border:1px solid var(--border);border-radius:14px;background:color-mix(in srgb,var(--card) 92%,transparent);overflow:hidden;backdrop-filter:blur(12px)}
-.run-card>summary{display:flex;align-items:center;gap:10px;padding:14px 16px;cursor:pointer;list-style:none;font-size:13px}
+.run-card{border-left:2px solid var(--border);margin:6px 0 0 6px;padding-left:18px;background:transparent}
+.run-card>summary{display:flex;align-items:center;gap:10px;padding:8px 0;cursor:pointer;list-style:none;font-size:13px}
 .run-card>summary::-webkit-details-marker{display:none}
-.run-card>summary::after{content:'⌄';color:var(--muted);font-size:16px;transition:transform 150ms}
+.run-card>summary::after{content:'⌄';color:var(--muted);font-size:16px;transition:transform 150ms;margin-left:4px}
 .run-card[open]>summary::after{transform:rotate(180deg)}
-.run-label{flex:1;font-weight:500}.run-time{color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums}
+.run-label{flex:1;font-weight:590}.run-time{color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums}
 .run-dot{width:7px;height:7px;border-radius:50%;background:var(--ok);flex-shrink:0}
 .run-dot.active{background:var(--accent);animation:run-breathe 1.8s ease-in-out infinite}.run-dot.error{background:var(--danger)}
-.run-context{margin:0 16px 12px;padding:11px 12px;border-radius:10px;background:var(--accent-soft);border:1px solid color-mix(in srgb,var(--accent) 18%,transparent);color:var(--fg);font-size:12.5px;line-height:1.65}
-.run-context b{font-weight:600}.run-metrics{display:flex;flex-wrap:wrap;gap:7px;margin:0 16px 13px}.run-metrics span{padding:3px 8px;border:1px solid var(--border);border-radius:99px;color:var(--muted);font-size:11px;font-variant-numeric:tabular-nums}
-.run-steps-title{margin:0 20px 4px 19px;color:var(--muted);font-size:11px;letter-spacing:.35px}
-.run-steps{list-style:none;margin:0 20px 16px 19px;padding:0 0 0 17px;border-left:1px solid var(--border)}
+.run-context{margin:4px 0 13px;color:var(--fg);font-size:13px;line-height:1.7}
+.run-context b{font-weight:620}.run-metrics{display:flex;flex-wrap:wrap;gap:7px;margin:0 0 16px}.run-metrics span{color:var(--muted);font-size:11px;font-variant-numeric:tabular-nums}.run-metrics span+span::before{content:'·';margin-right:7px;color:var(--muted)}
+.run-steps-title{margin:14px 0 7px;color:var(--muted);font-size:11px;letter-spacing:.35px}
+.run-steps{list-style:none;margin:0 0 16px;padding:0 0 0 17px;border-left:1px solid var(--border)}
 .run-steps li{position:relative;padding:9px 0;display:flex;gap:12px;justify-content:space-between;color:var(--muted);font-size:12px;overflow-wrap:anywhere}
-.run-steps li::before{content:'';position:absolute;left:-21px;top:14px;width:7px;height:7px;border-radius:50%;background:var(--muted);box-shadow:0 0 0 3px var(--card)}
+.run-steps li::before{content:'';position:absolute;left:-21px;top:14px;width:7px;height:7px;border-radius:50%;background:var(--muted);box-shadow:0 0 0 3px var(--bg)}
 .run-steps li[data-state=done]::before{background:var(--ok)}.run-steps li[data-state=failed]::before{background:var(--danger)}.run-steps li[data-state=running]::before{background:var(--accent);animation:run-breathe 1.8s ease-in-out infinite}
 .run-steps li[data-state=running]{color:var(--fg)}.run-steps li[data-state=failed]{color:var(--danger)}
 .run-steps small{font-size:11px;white-space:nowrap;color:var(--muted)}
 .run-step-main{min-width:0;display:flex;flex-direction:column;gap:2px}.run-step-name{color:inherit}.run-step-detail{max-width:100%;color:var(--muted);font-family:var(--mono);font-size:11px;line-height:1.45;white-space:pre-wrap;overflow-wrap:anywhere;cursor:pointer}.run-step-detail>summary{display:list-item;padding:0;cursor:pointer}.run-step-detail>summary::marker{color:var(--muted)}
+.run-files{border:1px solid var(--border);border-radius:14px;background:var(--card);overflow:hidden;margin:14px 0 12px}
+.run-files-head{display:flex;align-items:center;gap:12px;padding:12px 15px;font-size:13px;font-weight:620}
+.run-files-icon{display:grid;place-items:center;width:34px;height:34px;border-radius:9px;background:var(--accent-soft);color:var(--accent);font-size:20px;flex:none}
+.run-file{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 15px;border-top:1px solid var(--border);font-size:12px}
+.run-file code{font-family:var(--mono);overflow-wrap:anywhere}.run-file span{color:var(--muted);white-space:nowrap}
+.run-actions{border:1px solid var(--border);border-radius:12px;background:var(--card);margin:12px 0 16px;overflow:hidden}
+.run-actions>summary{cursor:pointer;list-style:none;padding:10px 14px;font-size:12px;color:var(--muted)}
+.run-actions>summary::-webkit-details-marker{display:none}.run-actions>summary::before{content:'⌄';display:inline-block;margin-right:8px;transition:transform 150ms}.run-actions[open]>summary::before{transform:rotate(180deg)}
+.run-actions .run-steps{margin:0 14px 6px 20px}
+.run-timeline{margin:10px 0 12px}.run-timeline>summary{cursor:pointer;list-style:none;color:var(--muted);font-size:12px;padding:4px 0}
+.run-timeline>summary::-webkit-details-marker{display:none}.run-timeline>summary::before{content:'⌄';display:inline-block;margin-right:8px;transition:transform 150ms}.run-timeline[open]>summary::before{transform:rotate(180deg)}
+.run-timeline .run-steps{margin:6px 0 0}
 .pillbar{border:1px solid var(--border);border-radius:22px!important;box-shadow:0 10px 30px #00000018;padding:12px!important;backdrop-filter:blur(14px)}
 .pillbar:focus-within{border-color:var(--accent-ring);box-shadow:0 0 0 3px var(--accent-soft)}
 #chat-input{font-size:14px;line-height:1.7;min-height:28px}
@@ -482,7 +494,7 @@
 @media(prefers-reduced-motion:reduce){.flow-spinner{animation:none}}
 @keyframes run-breathe{50%{opacity:.35;box-shadow:0 0 0 4px var(--accent-soft)}}
 @media(prefers-reduced-motion:reduce){.run-dot.active{animation:none}*{scroll-behavior:auto!important}}
-  @media(max-width:640px){.chat-wrap{padding:16px 12px}#chat-hero{min-height:140px!important;padding:18px 0}.run-card>summary{padding:12px}.run-context,.run-metrics{margin-left:12px;margin-right:12px}.run-steps-title{margin-left:15px}.run-steps{margin-left:15px;margin-right:12px}.run-steps li{flex-wrap:wrap;gap:3px}.chat-message.user{max-width:92%}}
+  @media(max-width:640px){.chat-wrap{padding:16px 12px}#chat-hero{min-height:140px!important;padding:18px 0}.run-card>summary{padding:9px 0}.run-steps li{flex-wrap:wrap;gap:3px}.chat-message.user{max-width:92%}}
   @media(max-width:640px){.chat-toolbar{align-items:flex-start;flex-direction:column;gap:9px}.chat-toolbar-actions{width:100%}.chat-toolbar #chat-model{flex:1;width:auto}.chat-toolbar .sec{flex-shrink:0}}
 
 /* Appearance dialog is available in the browser and desktop shell. */
@@ -4478,7 +4490,8 @@ const CHAT_ENTRIES = new Map();
 const STAGE_LABELS = {
   steering:'已收到补充，等待当前操作结束', replanning:'正在根据补充调整任务',
   submitting:'已收到，正在准备', queued:'等待执行', analyzing:'正在分析需求',
-  preparing_context:'正在准备会话上下文', planning:'正在等待模型回复', executing:'正在执行',
+  preparing_context:'正在准备会话上下文', planning:'正在等待模型回复', plan_ready:'已收到执行计划',
+  response_ready:'已收到模型答复', executing:'正在执行',
   summarizing:'正在整理结果', completed:'执行完成', failed:'执行失败',
   cancelled:'已取消', timed_out:'执行超时', reconnecting:'连接中断，正在重试',
   cancelling:'正在取消，等待当前操作结束'
@@ -4488,6 +4501,8 @@ const STAGE_NOTES = {
   analyzing:'正在识别目标、约束和需要完成的工作。',
   preparing_context:'正在整理本会话的已完成工作与相关上下文。',
   planning:'正在请求模型生成下一步可执行计划。',
+  plan_ready:'模型已生成可执行计划，准备开始工具操作。',
+  response_ready:'模型已给出答复，正在整理展示。',
   executing:'正在执行计划中的动作，完成后会记录结果。',
   summarizing:'正在整理执行结果、验证状态和未完成项。',
   replanning:'已收到新的补充要求，正在保留已完成工作并调整剩余计划。',
@@ -4502,6 +4517,7 @@ const TOOL_LABELS = {file_read:'读取文件', file_write:'写入文件', file_e
 function toolLabel(name){ return TOOL_LABELS[name] || (name && name.startsWith('file_') ? '处理文件' : name || '执行操作'); }
 function durationLabel(ms){
   const sec = Math.max(0, Math.floor((ms || 0) / 1000));
+  if(ms > 0 && sec === 0) return '<1 秒';
   return sec >= 60 ? Math.floor(sec / 60) + ' 分 ' + sec % 60 + ' 秒' : sec + ' 秒';
 }
 function progressLabel(p){
@@ -4515,6 +4531,12 @@ function progressLabel(p){
     : (STAGE_LABELS[p.stage] || '正在处理');
 }
 function progressNarrative(p){
+  if(p.stage === 'completed'){
+    const steps = Array.isArray(p.steps) ? p.steps : [];
+    const files = new Set(steps.filter(s => s.ok === 1 && (s.tool === 'file_write' || s.tool === 'file_edit') && s.target).map(s => s.target));
+    if(files.size) return '任务已完成，修改了 ' + files.size + ' 个文件；结果和执行记录已整理。';
+    if(steps.length) return '任务已完成，执行了 ' + steps.length + ' 个工具动作；结果已整理。';
+  }
   if(['completed','failed','cancelled','timed_out'].includes(p.stage)) return STAGE_NOTES[p.stage];
   if(p.activity) return p.activity;
   let note = STAGE_NOTES[p.stage] || '正在推进任务。';
@@ -4551,12 +4573,14 @@ function renderChatEntry(entry){
   const follow = chatNearBottom();
   const previous = el.querySelector('details');
   const wasOpen = previous?.open;
+  const actionsOpen = previous?.querySelector('.run-actions')?.open;
+  const timelineOpen = previous?.querySelector('.run-timeline')?.open;
   const expandedSteps = new Set([...el.querySelectorAll('.run-step-detail[open]')].map(d => d.dataset.step));
   el.replaceChildren();
   const p = entry.progress;
   if(p){
     const panel = document.createElement('details'); panel.className = 'run-card';
-    panel.open = wasOpen === undefined ? !!entry.pending : wasOpen;
+    panel.open = wasOpen === undefined ? !!entry.pending || !!entry.progressEvents?.length : wasOpen;
     const summary = document.createElement('summary');
     const dot = document.createElement('span');
     dot.className = 'run-dot' + (entry.pending ? ' active' : '') + (p.stage === 'failed' ? ' error' : '');
@@ -4565,13 +4589,12 @@ function renderChatEntry(entry){
     label.setAttribute('role','status'); label.setAttribute('aria-live','polite');
     const elapsed = document.createElement('span'); elapsed.className = 'run-time';
     const ms = entry.pending && p.started_ms ? Math.max(0,Date.now()-p.started_ms) : (p.elapsed_ms || 0);
-    elapsed.textContent = ms ? '总耗时 ' + Math.floor(ms/1000) + ' 秒' : '';
+    elapsed.textContent = ms ? '总耗时 ' + durationLabel(ms) : '';
     summary.append(dot,label,elapsed); panel.append(summary);
     const context = document.createElement('div'); context.className = 'run-context';
-    const strong = document.createElement('b'); strong.textContent = entry.pending ? '正在处理：' : '执行摘要：';
-    context.append(strong, document.createTextNode(progressNarrative(p))); panel.append(context);
+    context.textContent = progressNarrative(p); panel.append(context);
     const metrics = document.createElement('div'); metrics.className = 'run-metrics';
-    if(p.round) { const m = document.createElement('span'); m.textContent = '第 ' + p.round + ' 轮'; metrics.append(m); }
+    if(p.round) { const m = document.createElement('span'); m.textContent = '规划轮次 ' + p.round; metrics.append(m); }
     if(p.tool_calls) { const m = document.createElement('span'); m.textContent = p.tool_calls + ' 个动作'; metrics.append(m); }
     if(ms) { const m = document.createElement('span'); m.textContent = '用时 ' + durationLabel(ms); metrics.append(m); }
     if(p.llm_ms) { const m = document.createElement('span'); m.textContent = '模型 ' + durationLabel(p.llm_ms); metrics.append(m); }
@@ -4581,30 +4604,66 @@ function renderChatEntry(entry){
     if(p.model_failures) { const m = document.createElement('span'); m.textContent = '请求失败 ' + p.model_failures + ' 次'; metrics.append(m); }
     if(p.tool_ms) { const m = document.createElement('span'); m.textContent = '工具 ' + durationLabel(p.tool_ms); metrics.append(m); }
     if(metrics.children.length) panel.append(metrics);
-    const stepsTitle = document.createElement('div'); stepsTitle.className = 'run-steps-title'; stepsTitle.textContent = '执行记录'; panel.append(stepsTitle);
-    const list = document.createElement('ol'); list.className = 'run-steps';
     const events = Array.isArray(entry.progressEvents) ? entry.progressEvents : [];
-    for(const event of events){
+    const milestones = events.filter(e => !['executing','preparing_context','completed'].includes(e.stage));
+    const timeline = document.createElement('details'); timeline.className = 'run-timeline';
+    timeline.open = timelineOpen === undefined ? !!entry.pending : timelineOpen;
+    const timelineTitle = document.createElement('summary');
+    timelineTitle.textContent = entry.pending ? '正在执行 · ' + milestones.length + ' 个阶段' : '执行过程 · ' + milestones.length + ' 个阶段';
+    timeline.append(timelineTitle);
+    const list = document.createElement('ol'); list.className = 'run-steps';
+    for(const event of milestones.slice(-20)){
       const item = document.createElement('li');
-      item.dataset.state = entry.pending && event.seq === p.seq ? 'running' : 'done';
+      item.dataset.state = event.stage === 'failed' || event.stage === 'reconnecting' ? 'failed' :
+        (entry.pending && event.seq === p.seq ? 'running' : 'done');
       const main = document.createElement('span'); main.className = 'run-step-main';
       const title = document.createElement('span'); title.className = 'run-step-name';
       title.textContent = event.activity || progressLabel(event); main.append(title);
       const meta = document.createElement('small');
       const parts = [];
       if(event.round) parts.push('第 ' + event.round + ' 轮');
-      if(event.model && (event.stage === 'planning' || event.stage === 'summarizing')) parts.push(event.model);
+      if(Number.isFinite(event.elapsed_ms)) parts.push(durationLabel(event.elapsed_ms));
       if(event.model_failures) parts.push('失败 ' + event.model_failures + ' 次');
-      meta.textContent = parts.join(' · ') || '已记录';
+      meta.textContent = parts.join(' · ');
       item.append(main,meta); list.append(item);
     }
+    if(entry.pending && p.cur_tool){
+      const item = document.createElement('li'); item.dataset.state = 'running';
+      const name = document.createElement('span'); name.className = 'run-step-name';
+      name.textContent = '正在' + toolLabel(p.cur_tool); item.append(name); list.append(item);
+    }
+    if(list.children.length){ timeline.append(list); panel.append(timeline); }
     const steps = Array.isArray(p.steps) ? p.steps : [];
+    const files = new Map();
+    for(const s of steps){
+      if(s.ok === 1 && (s.tool === 'file_write' || s.tool === 'file_edit') && s.target)
+        files.set(s.target, s.tool === 'file_write' ? '已写入' : '已编辑');
+    }
+    if(files.size){
+      const fileCard = document.createElement('section'); fileCard.className = 'run-files';
+      const head = document.createElement('div'); head.className = 'run-files-head';
+      const icon = document.createElement('span'); icon.className = 'run-files-icon'; icon.textContent = '✎'; icon.setAttribute('aria-hidden','true');
+      const title = document.createElement('span'); title.textContent = '已修改 ' + files.size + ' 个文件';
+      head.append(icon,title); fileCard.append(head);
+      for(const [path,action] of files){
+        const row = document.createElement('div'); row.className = 'run-file';
+        const name = document.createElement('code'); name.textContent = path;
+        const status = document.createElement('span'); status.textContent = action;
+        row.append(name,status); fileCard.append(row);
+      }
+      panel.append(fileCard);
+    }
+    if(steps.length){
+      const actions = document.createElement('details'); actions.className = 'run-actions';
+      actions.open = actionsOpen === undefined ? false : actionsOpen;
+      const actionSummary = document.createElement('summary'); actionSummary.textContent = '查看 ' + steps.length + ' 个工具动作'; actions.append(actionSummary);
+      const actionList = document.createElement('ol'); actionList.className = 'run-steps';
     for(const [index,s] of steps.entries()){
       const item = document.createElement('li');
       item.dataset.state = s.ok === 1 ? 'done' : s.ok === 0 ? 'failed' : 'skipped';
       const main = document.createElement('span'); main.className = 'run-step-main';
       const title = document.createElement('span'); title.className = 'run-step-name';
-      title.textContent = (s.ok === 1 ? '已完成 · ' : s.ok === 0 ? '失败 · ' : '已跳过 · ') + toolLabel(s.tool);
+      title.textContent = (s.ok === 1 ? '已完成 · ' : s.ok === 0 ? '失败 · ' : '已跳过 · ') + toolLabel(s.tool) + (s.target ? ' · ' + s.target : '');
       main.append(title);
       if(s.args || s.out){
         const detail = document.createElement('details'); detail.className = 'run-step-detail';
@@ -4617,16 +4676,15 @@ function renderChatEntry(entry){
       }
       const meta = document.createElement('small');
       meta.textContent = (s.ok === 1 ? '已完成' : s.ok === 0 ? '失败' : '已跳过') + ' · ' + ((s.ms || 0)/1000).toFixed(1) + ' 秒';
-      item.append(main,meta); list.append(item);
+      item.append(main,meta); actionList.append(item);
     }
-    if(entry.pending && !events.length){
-      const item = document.createElement('li'); item.dataset.state = 'running';
-      item.textContent = progressLabel(p); list.append(item);
+      actions.append(actionList); panel.append(actions);
     }
-    if(!steps.length && !entry.pending){
-      const item = document.createElement('li'); item.textContent = '本次任务未调用工具'; list.append(item);
+    if(entry.pending && !events.length && !p.cur_tool){
+      const item = document.createElement('div'); item.className = 'run-steps-title';
+      item.textContent = '正在建立执行记录…'; panel.append(item);
     }
-    panel.append(list); el.append(panel);
+    el.append(panel);
   }
   if(entry.text && !entry.pending){
     const answer = document.createElement('pre'); answer.className = 'chat-answer';
@@ -4646,7 +4704,8 @@ function chatApplyProgress(session,id,p){
   if(p.seq && (!entry.progressEvents?.length || entry.progressEvents[entry.progressEvents.length-1].seq !== p.seq)){
     entry.progressEvents = [...(entry.progressEvents || []), {
       seq:p.seq, stage:p.stage, activity:p.activity, round:p.round, model:p.model, thinking:p.thinking,
-      model_call:p.model_call, model_failures:p.model_failures
+      model_call:p.model_call, model_failures:p.model_failures, elapsed_ms:p.elapsed_ms,
+      cur_tool:p.cur_tool, tool_calls:p.tool_calls
     }].slice(-24);
   }
   entry.progress = {...entry.progress, ...p};

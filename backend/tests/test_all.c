@@ -5244,6 +5244,11 @@ static void test_task(void) {
     task_transition(t, TS_DONE, 0);
     CHECK(t->finished_ms > 0);
     CHECK(t->status == TS_DONE);
+    task_trace_add(t, "{\"stage\":\"executing\",\"seq\":1,\"steps\":[{\"tool\":\"file_edit\",\"target\":\"src/main.c\",\"args\":\"secret content\",\"out\":\"private output\",\"ok\":1,\"ms\":12}]}");
+    char *timeline = task_trace_copy(t);
+    CHECK(timeline && strstr(timeline, "src/main.c") != NULL);
+    CHECK(timeline && strstr(timeline, "secret content") == NULL && strstr(timeline, "private output") == NULL);
+    free(timeline);
     char *j = task_to_json(t);
     CHECK(j && strstr(j, "hello task") != NULL && strstr(j, "done") != NULL);
     free(j);
@@ -6256,7 +6261,7 @@ static void test_http_api(void) {
             /* The per-task progress timeline is flushed to the durable journal
              * after completion. The scheduler publishes DONE just before its
              * completion callback, so allow that callback a short interval. */
-            int journal_has_trace = 0;
+            int journal_has_trace = 0, saw_plan_ready = 0, saw_safe_target = 0;
             for (int attempt = 0; attempt < 20 && !journal_has_trace; attempt++) {
                 cJSON *journal = api_request_json(18211, "GET", "/v1/tasks/journal?limit=1", NULL, 200);
                 cJSON *record = cJSON_IsArray(journal) ? cJSON_GetArrayItem(journal, 0) : NULL;
@@ -6264,10 +6269,28 @@ static void test_http_api(void) {
                 cJSON *timeline = record ? cJSON_GetObjectItemCaseSensitive(record, "trace") : NULL;
                 journal_has_trace = cJSON_IsNumber(jid) && (int64_t)jid->valuedouble == id &&
                                     cJSON_IsArray(timeline) && cJSON_GetArraySize(timeline) > 0;
+                if (journal_has_trace) {
+                    cJSON *event;
+                    cJSON_ArrayForEach(event, timeline) {
+                        cJSON *stage = cJSON_GetObjectItemCaseSensitive(event, "stage");
+                        if (cJSON_IsString(stage) && strcmp(stage->valuestring, "plan_ready") == 0)
+                            saw_plan_ready = 1;
+                        cJSON *event_steps = cJSON_GetObjectItemCaseSensitive(event, "steps");
+                        cJSON *step;
+                        cJSON_ArrayForEach(step, event_steps) {
+                            cJSON *target = cJSON_GetObjectItemCaseSensitive(step, "target");
+                            if (cJSON_IsString(target) && strcmp(target->valuestring, "a.txt") == 0)
+                                saw_safe_target = 1;
+                            CHECK(cJSON_GetObjectItemCaseSensitive(step, "args") == NULL);
+                            CHECK(cJSON_GetObjectItemCaseSensitive(step, "out") == NULL);
+                        }
+                    }
+                }
                 cJSON_Delete(journal);
                 if (!journal_has_trace) time_sleep_ms(25);
             }
             CHECK(journal_has_trace);
+            CHECK(saw_plan_ready && saw_safe_target);
             int history_has_spans = 0;
             for (int attempt = 0; attempt < 20 && !history_has_spans; attempt++) {
                 char history_path[128];

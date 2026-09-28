@@ -130,10 +130,12 @@ void task_trace_add(task *t, const char *json) {
             cJSON_ArrayForEach(step, field) {
                 cJSON *safe = cJSON_CreateObject();
                 cJSON *tool = cJSON_GetObjectItemCaseSensitive(step, "tool");
+                cJSON *target = cJSON_GetObjectItemCaseSensitive(step, "target");
                 cJSON *ok = cJSON_GetObjectItemCaseSensitive(step, "ok");
                 cJSON *ms = cJSON_GetObjectItemCaseSensitive(step, "ms");
                 if (!safe) continue;
                 if (tool) cJSON_AddItemToObject(safe, "tool", cJSON_Duplicate(tool, 1));
+                if (cJSON_IsString(target)) cJSON_AddItemToObject(safe, "target", cJSON_Duplicate(target, 1));
                 if (ok) cJSON_AddItemToObject(safe, "ok", cJSON_Duplicate(ok, 1));
                 if (ms) cJSON_AddItemToObject(safe, "ms", cJSON_Duplicate(ms, 1));
                 cJSON_AddItemToArray(safe_steps, safe);

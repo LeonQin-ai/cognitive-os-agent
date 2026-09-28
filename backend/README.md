@@ -156,7 +156,9 @@ runs. On completion, the runtime writes that timeline to
 `GET /v1/chat/history?session=<id>` also returns the session's recent turns
 and terminal `runs` from this journal, so completed and failed execution cards
 are restored after a restart. Sessions with only failed tasks remain visible
-in the Recent list.
+in the Recent list. The chat view groups milestones, modified files, and tool
+actions; the saved timeline keeps redacted file target paths but omits tool
+arguments and output content.
 
 ### Skills / MCP / Plugin 广场
 

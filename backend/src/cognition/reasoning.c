@@ -127,6 +127,7 @@ struct run_step {
     char tool[48];
     char args[160];
     char out[240];
+    char target[240]; /* file path only; never persist file contents in the task timeline */
     int ok; /* 1 ok, 0 failed, -1 skipped (policy/hook) */
     int ms;
 };
@@ -252,8 +253,14 @@ static void progress_emit(reasoning *r, const char *stage) {
     const char *model = (r && r->llm && r->llm->model && *r->llm->model) ? r->llm->model : "未配置模型";
     cJSON *o = cJSON_CreateObject();
     if (!o) return;
-    if (strcmp(stage, "planning") == 0)
+    if (strcmp(stage, "analyzing") == 0)
+        snprintf(activity, sizeof(activity), "正在分析任务目标和执行范围");
+    else if (strcmp(stage, "planning") == 0)
         snprintf(activity, sizeof(activity), "正在等待模型 %s 返回第 %d 次规划结果", model, r->prog_llm_calls + 1);
+    else if (strcmp(stage, "plan_ready") == 0)
+        snprintf(activity, sizeof(activity), "模型已返回计划，准备执行 %d 个动作", r->n_actions);
+    else if (strcmp(stage, "response_ready") == 0)
+        snprintf(activity, sizeof(activity), "模型已返回答复，正在整理结果");
     else if (strcmp(stage, "reconnecting") == 0)
         snprintf(activity, sizeof(activity), "模型请求第 %d 次失败，正在重试", r->prog_model_failures);
     else if (strcmp(stage, "preparing_context") == 0)
@@ -262,6 +269,10 @@ static void progress_emit(reasoning *r, const char *stage) {
         snprintf(activity, sizeof(activity), "正在执行工具 %s", r->prog_tool);
     else if (strcmp(stage, "summarizing") == 0)
         snprintf(activity, sizeof(activity), "正在由模型 %s 整理最终结果", model);
+    else if (strcmp(stage, "completed") == 0)
+        snprintf(activity, sizeof(activity), "执行已完成");
+    else if (strcmp(stage, "failed") == 0)
+        snprintf(activity, sizeof(activity), "执行失败，正在保留记录");
     else
         snprintf(activity, sizeof(activity), "正在推进任务阶段：%s", stage ? stage : "unknown");
     cJSON_AddStringToObject(o, "stage", stage);
@@ -1309,7 +1320,8 @@ static int h_reason(state_machine *sm, void *ud, const char *input, char **out) 
     trace_end(r->trace, llm_span, rc == 0 && raw ? 1 : -1);
     r->prog_llm_ms += time_now_ms() - t_llm0;
     r->prog_llm_calls++;
-    progress_emit(r, r->n_actions ? "planning" : "summarizing");
+    if (rc == 0 && raw)
+        progress_emit(r, r->n_actions ? "plan_ready" : "response_ready");
     free(aug);
     if (rc != 0 || !raw) {
         free(raw);
@@ -1390,6 +1402,13 @@ static void run_step_add(reasoning *r, const char *tool, const char *args, const
     utf8_head_copy(st->tool, sizeof(st->tool), tool ? tool : "?");
     utf8_head_copy(st->args, sizeof(st->args), args ? args : "");
     utf8_head_copy(st->out, sizeof(st->out), out ? out : "");
+    if (tool && strncmp(tool, "file_", 5) == 0 && args) {
+        cJSON *parsed = cJSON_Parse(args);
+        cJSON *path = parsed ? cJSON_GetObjectItemCaseSensitive(parsed, "path") : NULL;
+        if (cJSON_IsString(path) && path->valuestring)
+            utf8_head_copy(st->target, sizeof(st->target), path->valuestring);
+        cJSON_Delete(parsed);
+    }
     st->ok = ok;
     st->ms = ms;
     mutex_unlock(&r->progress_mtx);
@@ -1763,13 +1782,8 @@ static void memory_record_completed_run(reasoning *r, const char *answer) {
         if (step->ok != 1)
             continue;
         memory_record_edge(r->mem, task_head ? task_head : "(task)", step->tool, "used_tool");
-        if (strncmp(step->tool, "file_", 5) == 0 && step->args[0]) {
-            cJSON *ao = cJSON_Parse(step->args);
-            cJSON *pj = ao ? cJSON_GetObjectItemCaseSensitive(ao, "path") : NULL;
-            if (pj && cJSON_IsString(pj) && pj->valuestring)
-                memory_record_edge(r->mem, step->tool, pj->valuestring, "touched");
-            cJSON_Delete(ao);
-        }
+        if (strncmp(step->tool, "file_", 5) == 0 && step->target[0])
+            memory_record_edge(r->mem, step->tool, step->target, "touched");
     }
     mutex_unlock(&r->progress_mtx);
     free(task_head);
@@ -3159,6 +3173,11 @@ char *reasoning_steps_json(reasoning *r) {
         char *output = secret_redact_text(st->out, strlen(st->out), NULL);
         cJSON_AddStringToObject(o, "args", args ? args : "");
         cJSON_AddStringToObject(o, "out", output ? output : "");
+        if (st->target[0]) {
+            char *target = secret_redact_text(st->target, strlen(st->target), NULL);
+            cJSON_AddStringToObject(o, "target", target ? target : "");
+            free(target);
+        }
         free(args); free(output);
         cJSON_AddNumberToObject(o, "ok", st->ok);
         cJSON_AddNumberToObject(o, "ms", st->ms);
