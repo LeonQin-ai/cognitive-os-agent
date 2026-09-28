@@ -143,8 +143,12 @@ records `task.run`, planner model calls record `llm.plan`, and executed tools
 record sanitized names such as `tool.file_write`, each with a task ID,
 timestamps, duration, and status.
 Use `GET /v1/trace?task_id=0` to inspect one task. The ring is live and is
-not retained after restart. It contains stage names and timing, not prompt
-text, tool arguments, or tool output.
+not retained after restart. At terminal task completion, the newest 128 spans
+for that task are written to `<state>/journal/tasks.jsonl`. Query them after a
+restart with `GET /v1/trace/history?limit=30` or add `&task_id=0`. The history
+endpoint returns status, session, timestamp, and spans; it excludes the
+journal's prompt and answer. The Monitor page shows live and saved spans.
+Spans contain stage names and timing, not prompt text, tool arguments, or tool output.
 
 Separately, each task keeps a bounded progress timeline in memory while it
 runs. On completion, the runtime writes that timeline to
@@ -316,10 +320,10 @@ POST /v1/local/start             # body {"engine":"ollama"} 或 {"engine":"llama
 ./build/cognitive-os-agent-e2e                   # full pipeline, both providers
 ```
 
-Current unit result (verified locally on Windows, 2026-09-27):
+Current unit result (verified locally on Windows, 2026-09-28):
 
 ```
-unit:       2450 passed, 0 failed
+unit:       2465 passed, 0 failed
 adapters:   ADAPTER PASS (openai + anthropic, chat + stream)
 e2e:        E2E PASS (openai + anthropic)
 bench:      --mock tool-selection accuracy 100%

@@ -2076,6 +2076,9 @@ static void test_trace(void) {
     CHECK(j && strstr(j, "llm.plan") != NULL && strstr(j, "span-a") == NULL);
     CHECK(j && strstr(j, "\"task_id\":42") != NULL && strstr(j, "\"status\":-1") != NULL);
     free(j);
+    j = trace_json_task_limit(t, -1, 1);
+    CHECK(j && strstr(j, "llm.plan") != NULL && strstr(j, "span-a") == NULL);
+    free(j);
     trace_clear(t);
     CHECK(trace_count(t) == 0);
     trace_free(t);
@@ -3431,6 +3434,9 @@ static void test_flow(void) {
         {
             char *prog = NULL;
             CHECK(flow_run(&ctx, dag, 777, &ans, &trace) == 0);
+            char *spans = trace_json_task(ctx.trace, 777);
+            CHECK(spans && strstr(spans, "llm.plan") != NULL && strstr(spans, "tool.file_write") != NULL);
+            free(spans);
             prog = flow_progress_json(777);
             CHECK(prog && strstr(prog, "\"id\":\"a\"") && strstr(prog, "\"id\":\"b\"") &&
                   strstr(prog, "\"status\":\"ok\"") && !strstr(prog, "queued"));
@@ -5113,10 +5119,11 @@ static void test_tasklog(void) {
     CHECK(tl != NULL);
     if (!tl) return;
 
-    tasklog_record(tl, 1, "DONE", "chat-tab-1", "input-1", "output-1", "[]");
-    tasklog_record(tl, 2, "FAILED", NULL, "input-2", NULL, "[]");
-    tasklog_record(tl, 1, "DONE", "chat-tab-1", "input-1 again", "out again", "[]");
-    tasklog_record(tl, 0, "DONE", "first-task", "input-0", "output-0", "[{\"stage\":\"completed\"}]");
+    tasklog_record(tl, 1, "DONE", "chat-tab-1", "input-1", "output-1", "[]", "[]");
+    tasklog_record(tl, 2, "FAILED", NULL, "input-2", NULL, "[]", "[]");
+    tasklog_record(tl, 1, "DONE", "chat-tab-1", "input-1 again", "out again", "[]", "[]");
+    tasklog_record(tl, 0, "DONE", "first-task", "input-0", "output-0", "[{\"stage\":\"completed\"}]",
+                   "[{\"name\":\"task.run\",\"task_id\":0,\"duration_ms\":12,\"status\":1}]");
 
     /* newest record wins for the same id */
     char *status = NULL, *session = NULL, *input = NULL, *output = NULL;
@@ -5155,6 +5162,9 @@ static void test_tasklog(void) {
     CHECK_STR(status, "FAILED");
     CHECK_STR(input, "input-2");
     free(status); free(input);
+    j = tasklog_json(tl, 1);
+    CHECK(j && strstr(j, "\"spans\"") != NULL && strstr(j, "task.run") != NULL);
+    free(j);
     tasklog_free(tl);
     fs_remove("state-test/tlog/journal/tasks.jsonl");
 }
@@ -5683,6 +5693,10 @@ static void test_http_api_contracts(uint16_t port) {
     cJSON_Delete(j);
     j = api_request_json(port, "GET", "/v1/trace", NULL, 200);
     cJSON_Delete(j);
+    j = api_request_json(port, "GET", "/v1/trace/history?limit=bad", NULL, 400);
+    cJSON_Delete(j);
+    j = api_request_json(port, "GET", "/v1/trace/history?task_id=bad", NULL, 400);
+    cJSON_Delete(j);
     j = api_request_json(port, "GET", "/v1/memory/service", NULL, 200);
     cJSON_Delete(j);
     j = api_request_json(port, "GET", "/v1/plugins", NULL, 200);
@@ -6058,6 +6072,22 @@ static void test_http_api(void) {
                 if (!journal_has_trace) time_sleep_ms(25);
             }
             CHECK(journal_has_trace);
+            int history_has_spans = 0;
+            for (int attempt = 0; attempt < 20 && !history_has_spans; attempt++) {
+                char history_path[128];
+                snprintf(history_path, sizeof history_path, "/v1/trace/history?task_id=%lld", (long long)id);
+                cJSON *history = api_request_json(18211, "GET", history_path, NULL, 200);
+                cJSON *record = cJSON_IsArray(history) ? cJSON_GetArrayItem(history, cJSON_GetArraySize(history) - 1) : NULL;
+                cJSON *saved = record ? cJSON_GetObjectItemCaseSensitive(record, "spans") : NULL;
+                history_has_spans = cJSON_IsArray(saved) && cJSON_GetArraySize(saved) > 0;
+                if (record) {
+                    CHECK(cJSON_GetObjectItemCaseSensitive(record, "input") == NULL);
+                    CHECK(cJSON_GetObjectItemCaseSensitive(record, "output") == NULL);
+                }
+                cJSON_Delete(history);
+                if (!history_has_spans) time_sleep_ms(25);
+            }
+            CHECK(history_has_spans);
             FILE *af = fopen("a.txt", "r");
             CHECK(af != NULL);
             if (af) {

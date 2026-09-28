@@ -1746,6 +1746,73 @@ static int h_trace(const http_request *req, http_response *resp, void *ud) {
     return 0;
 }
 
+/* GET /v1/trace/history — terminal spans from the task journal. Expose only
+ * observability metadata, not the journal's prompts or model answers. */
+static int h_trace_history(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
+    char task_buf[32], limit_buf[16];
+    int64_t task_id = -1;
+    int limit = 50;
+    char *raw, *text;
+    cJSON *records, *result, *record;
+
+    if (!authz_ok(ctx, req, resp))
+        return 0;
+    query_param(req, "task_id", task_buf, sizeof(task_buf));
+    if (task_buf[0]) {
+        char *end;
+        long long parsed = strtoll(task_buf, &end, 10);
+        if (*end || parsed < 0) {
+            resp->status = 400;
+            http_resp_json(resp, "{\"error\":\"invalid task_id\"}");
+            return 0;
+        }
+        task_id = (int64_t)parsed;
+    }
+    query_param(req, "limit", limit_buf, sizeof(limit_buf));
+    if (limit_buf[0]) {
+        char *end;
+        long parsed = strtol(limit_buf, &end, 10);
+        if (*end || parsed < 1 || parsed > 100) {
+            resp->status = 400;
+            http_resp_json(resp, "{\"error\":\"limit must be 1..100\"}");
+            return 0;
+        }
+        limit = (int)parsed;
+    }
+    raw = tasklog_json(ctx->tasklog, 0);
+    records = raw ? cJSON_Parse(raw) : NULL;
+    free(raw);
+    result = cJSON_CreateArray();
+    if (records && result) {
+        cJSON_ArrayForEach(record, records) {
+            cJSON *id = cJSON_GetObjectItemCaseSensitive(record, "id");
+            cJSON *spans = cJSON_GetObjectItemCaseSensitive(record, "spans");
+            if (!cJSON_IsNumber(id) || !cJSON_IsArray(spans) ||
+                (task_id >= 0 && (int64_t)id->valuedouble != task_id))
+                continue;
+            cJSON *entry = cJSON_CreateObject();
+            if (!entry)
+                continue;
+            const char *fields[] = {"id", "status", "session", "ts", "spans"};
+            for (size_t i = 0; i < sizeof(fields) / sizeof(fields[0]); i++) {
+                cJSON *v = cJSON_GetObjectItemCaseSensitive(record, fields[i]);
+                if (v)
+                    cJSON_AddItemToObject(entry, fields[i], cJSON_Duplicate(v, 1));
+            }
+            cJSON_AddItemToArray(result, entry);
+            if (cJSON_GetArraySize(result) > limit)
+                cJSON_Delete(cJSON_DetachItemFromArray(result, 0));
+        }
+    }
+    text = result ? cJSON_PrintUnformatted(result) : NULL;
+    http_resp_json(resp, text ? text : "[]");
+    free(text);
+    cJSON_Delete(result);
+    cJSON_Delete(records);
+    return 0;
+}
+
 static int h_routes(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
     char *s;
@@ -4832,6 +4899,7 @@ int api_attach(runtime_ctx *ctx) {
     http_server_route(ctx->http, "DELETE", "/v1/agents/", h_agent_delete, ctx);
     http_server_route(ctx->http, "GET", "/v1/snapshots", h_snapshots, ctx);
     http_server_route(ctx->http, "POST", "/v1/snapshots/rollback", h_snapshot_rollback, ctx);
+    http_server_route(ctx->http, "GET", "/v1/trace/history", h_trace_history, ctx);
     http_server_route(ctx->http, "GET", "/v1/trace", h_trace, ctx);
     http_server_route(ctx->http, "GET", "/v1/market/status", h_market_status, ctx);
     http_server_route(ctx->http, "GET", "/v1/local/status", h_local_status, ctx);

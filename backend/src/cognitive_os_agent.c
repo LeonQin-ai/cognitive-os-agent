@@ -32,7 +32,7 @@ static void task_done(task *t, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
     const char *st = "UNKNOWN";
 
-    if (!ctx->state || !t)
+    if (!t)
         return;
     switch (t->status) {
     case TS_QUEUED:
@@ -57,12 +57,15 @@ static void task_done(task *t, void *ud) {
         break;
     }
 
-    state_store_task_set(ctx->state, t->id, st, t->input);
+    if (ctx->state)
+        state_store_task_set(ctx->state, t->id, st, t->input);
 
     /* durable journal: append the terminal transition for checkpoint/resume */
     char *trace = task_trace_copy(t);
-    tasklog_record(ctx->tasklog, t->id, st, t->tag, t->input, t->output, trace);
+    char *spans = trace_json_task_limit(ctx->trace, t->id, 128);
+    tasklog_record(ctx->tasklog, t->id, st, t->tag, t->input, t->output, trace, spans);
     free(trace);
+    free(spans);
     /* collaboration tasks: mirror terminal status into the persistent registry */
     if (ctx->flowstore)
         flow_store_mark(ctx->flowstore, t->id, st);

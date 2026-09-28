@@ -223,6 +223,16 @@
   .card-head .row{margin:0; gap:6px}
   .hint{color:var(--muted); font-size:12px; margin:0 0 10px; line-height:1.65}
   .muted{color:var(--muted)}
+  .trace-list{display:grid; gap:4px}
+  .trace-row{display:grid; grid-template-columns:64px minmax(130px,1fr) 64px 180px; align-items:center;
+    gap:12px; padding:8px 2px; border-bottom:1px solid var(--border); font-size:12px}
+  .trace-row code{overflow-wrap:anywhere}
+  .trace-row .muted:last-child{text-align:right}
+  .trace-state{font-weight:650}
+  .trace-group{padding:10px 0 5px; border-top:1px solid var(--border)}
+  .trace-group-title{font-size:12px; font-weight:650; margin-bottom:5px}
+  @media(max-width:700px){.trace-row{grid-template-columns:58px minmax(90px,1fr) 54px;gap:6px}
+    .trace-row .muted:last-child{grid-column:2 / 4;text-align:left}}
   .local-path{display:block; width:100%; box-sizing:border-box; margin:8px 0; padding:9px 11px; border:1px solid var(--border); border-radius:var(--radius-sm); background:var(--bg); color:var(--fg); overflow-wrap:anywhere; user-select:all}
   .local-step{font-size:12px; color:var(--muted); line-height:1.6}
 
@@ -1123,10 +1133,17 @@ panels.snapshots = `
 panels.trace = `
   <div class="card">
     <div class="card-head">
-      <h2>Trace (spans) · Monitor</h2>
-      <button class="sec sm" onclick="load('trace')">Refresh</button>
+      <h2>执行轨迹 · Monitor</h2>
+      <button class="sec sm" onclick="loadTrace()">刷新</button>
     </div>
-    <pre id="trace-out">加载中…</pre>
+    <div class="row" style="margin:0 0 12px;gap:8px">
+      <input id="trace-task-id" type="number" min="0" placeholder="任务 ID（可选）" style="max-width:190px" onchange="loadTrace()">
+      <span class="hint" style="margin:0">只展示阶段、时间与状态；提示词和工具内容不会进入 span</span>
+    </div>
+    <h3 style="font-size:12px;margin:14px 0 8px">实时轨迹 <span id="trace-live-count" class="muted"></span></h3>
+    <div id="trace-live" class="trace-list hint">加载中…</div>
+    <h3 style="font-size:12px;margin:18px 0 8px">已完成任务 <span class="muted">（重启后仍可查询）</span></h3>
+    <div id="trace-history" class="trace-list hint">加载中…</div>
   </div>`;
 
 panels.im = `
@@ -1267,7 +1284,6 @@ panels.models = `
 const fetchers = {
   memory:    {path:'/v1/memory',    out:'memory-out'},
   snapshots: {path:'/v1/snapshots', out:'snapshots-out'},
-  trace:     {path:'/v1/trace',     out:'trace-out'},
   usage:     {path:'/v1/usage',     out:'usage-out'},
   plugins:   {path:'/v1/plugins',   out:'plugins-out'},
   skills:    {path:'/v1/skills',    out:'skills-out'},
@@ -1285,6 +1301,66 @@ async function loadFetcher(key){
   const el = $(f.out); if(el) renderJSON(r.obj, el);
 }
 
+let traceLoading = false;
+function renderTraceSpans(target, spans, emptyText){
+  if(!target) return;
+  target.replaceChildren();
+  if(!spans.length){ target.textContent = emptyText; target.classList.add('hint'); return; }
+  target.classList.remove('hint');
+  spans.forEach(s => {
+    const row = document.createElement('div'); row.className = 'trace-row';
+    const state = document.createElement('span'); state.className = 'trace-state';
+    state.style.color = s.status === 1 ? 'var(--ok)' : s.status === -1 ? 'var(--danger)' : 'var(--accent)';
+    state.textContent = s.status === 1 ? '完成' : s.status === -1 ? '失败' : '进行中';
+    const name = document.createElement('code'); name.textContent = s.name || 'span';
+    const task = document.createElement('span'); task.className = 'muted';
+    task.textContent = Number.isFinite(s.task_id) && s.task_id >= 0 ? '#' + s.task_id : '本地';
+    const time = document.createElement('span'); time.className = 'muted';
+    const duration = s.end_ms ? s.duration_ms : Math.max(0, Date.now() - (s.start_ms || Date.now()));
+    time.textContent = (s.start_ms ? new Date(s.start_ms).toLocaleTimeString() + ' · ' : '') + duration + ' ms';
+    row.append(state,name,task,time); target.append(row);
+  });
+}
+
+async function loadTrace(){
+  if(traceLoading || current !== 'trace') return;
+  const field = $('trace-task-id');
+  const value = field ? field.value.trim() : '';
+  if(value && (!/^\d+$/.test(value) || Number(value) < 0)){
+    toast('请输入有效的任务 ID'); return;
+  }
+  traceLoading = true;
+  try {
+    const filter = value ? '&task_id=' + encodeURIComponent(value) : '';
+    const [live, history] = await Promise.all([
+      call('GET', '/v1/trace' + (value ? '?task_id=' + encodeURIComponent(value) : '')),
+      call('GET', '/v1/trace/history?limit=30' + filter)
+    ]);
+    if(current !== 'trace') return;
+    const spans = Array.isArray(live.obj) ? live.obj : [];
+    const records = Array.isArray(history.obj) ? history.obj : [];
+    const persisted = new Set(records.flatMap(rec =>
+      (Array.isArray(rec.spans) ? rec.spans : []).map(s => s.id + ':' + s.start_ms)));
+    const liveOnly = spans.filter(s => !persisted.has(s.id + ':' + s.start_ms));
+    const count = $('trace-live-count'); if(count) count.textContent = '(' + liveOnly.length + ')';
+    renderTraceSpans($('trace-live'), liveOnly, live.status === 0 ? 'Trace 服务不可用' : '暂无进行中的 span');
+    const box = $('trace-history'); if(!box) return;
+    box.replaceChildren();
+    if(!records.length){ box.classList.add('hint'); box.textContent = history.status === 0 ? '任务历史不可用' : '暂无已落盘的 span'; return; }
+    box.classList.remove('hint');
+    records.slice().reverse().forEach(rec => {
+      const group = document.createElement('section'); group.className = 'trace-group';
+      const title = document.createElement('div'); title.className = 'trace-group-title';
+      title.textContent = '#' + rec.id + ' · ' + (rec.status || '?') + ' · ' +
+        (rec.session || 'default') + ' · ' + (rec.ts ? new Date(rec.ts).toLocaleString() : '');
+      group.append(title);
+      const list = document.createElement('div');
+      renderTraceSpans(list, Array.isArray(rec.spans) ? rec.spans : [], '无 span');
+      group.append(list); box.append(group);
+    });
+  } finally { traceLoading = false; }
+}
+
 async function load(panel){
   if(panel === 'models') return loadModels();
   if(panel === 'dashboard') return loadDashboard();
@@ -1294,6 +1370,7 @@ async function load(panel){
   if(panel === 'skills') return (loadLocalDirs(), loadSkillsMarket(), loadSkillsCatalog());
   if(panel === 'plugins') return (loadFetcher('plugins'), loadPluginMarket());
   if(panel === 'snapshots') return loadSnapshots();
+  if(panel === 'trace') return loadTrace();
   if(panel === 'chat') return loadChat();
   if(panel === 'cron') return loadCron();
   if(panel === 'policy') return loadPolicy();
@@ -4237,6 +4314,7 @@ async function pingServer(){
   if(txt) txt.textContent = ok ? '已连接' : '离线';
 }
 setInterval(pingServer, 8000);
+setInterval(() => { if(current === 'trace' && !document.hidden) loadTrace(); }, 3000);
 
 /* ================= 初始化 ================= */
 /* ChatGPT 风格：对话是默认首页 */

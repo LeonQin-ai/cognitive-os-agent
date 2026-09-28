@@ -8,6 +8,7 @@
  *   GET  /v1/snapshots           committed snapshots
  *   POST /v1/snapshots/rollback  restore latest snapshot
  *   GET  /v1/trace[?task_id=N]   live execution spans (in-memory ring)
+ *   GET  /v1/trace/history       terminal task spans from the journal
  *   GET  /v1/routes              model route table
  *   GET  /v1/usage               per-model token accounting
  *   GET  /v1/plugins             versioned plugin registry

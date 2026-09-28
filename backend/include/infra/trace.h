@@ -37,6 +37,8 @@ int trace_count(trace *t);
 char *trace_json(trace *t);
 /* task_id < 0 returns every span; otherwise only the matching task. */
 char *trace_json_task(trace *t, int64_t task_id);
+/* The newest `limit` matching spans (0 = all), for bounded journal records. */
+char *trace_json_task_limit(trace *t, int64_t task_id, size_t limit);
 /* Clear all spans. */
 void trace_clear(trace *t);
 

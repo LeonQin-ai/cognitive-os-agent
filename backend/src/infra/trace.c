@@ -113,12 +113,17 @@ void trace_clear(trace *t) {
     mutex_unlock(&t->mtx);
 }
 
-char *trace_json_task(trace *t, int64_t task_id) {
+char *trace_json_task_limit(trace *t, int64_t task_id, size_t limit) {
     cJSON *arr = cJSON_CreateArray();
     char *js;
 
-    if (!t)
-        return cJSON_PrintUnformatted(arr);
+    if (!arr)
+        return NULL;
+    if (!t) {
+        js = cJSON_PrintUnformatted(arr);
+        cJSON_Delete(arr);
+        return js;
+    }
     mutex_lock(&t->mtx);
     for (size_t i = 0; i < t->count; i++) {
         /* oldest first: slots wrap, so iterate from (next - count) forward */
@@ -135,12 +140,18 @@ char *trace_json_task(trace *t, int64_t task_id) {
         cJSON_AddNumberToObject(o, "duration_ms", (double)(s->end_ms ? s->end_ms - s->start_ms : 0));
         cJSON_AddNumberToObject(o, "status", s->status);
         cJSON_AddItemToArray(arr, o);
+        if (limit && (size_t)cJSON_GetArraySize(arr) > limit)
+            cJSON_Delete(cJSON_DetachItemFromArray(arr, 0));
     }
 
     mutex_unlock(&t->mtx);
     js = cJSON_PrintUnformatted(arr);
     cJSON_Delete(arr);
     return js;
+}
+
+char *trace_json_task(trace *t, int64_t task_id) {
+    return trace_json_task_limit(t, task_id, 0);
 }
 
 char *trace_json(trace *t) {

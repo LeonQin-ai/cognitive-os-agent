@@ -12,6 +12,7 @@
 
 #define TASKLOG_OUT_CAP 4096   /* per-record output head cap */
 #define TASKLOG_TRACE_CAP 65536 /* bounded terminal execution timeline */
+#define TASKLOG_SPANS_CAP 65536 /* newest spans for one terminal task */
 #define TASKLOG_FILE_MAX 32u * 1024 * 1024
 
 struct tasklog {
@@ -45,7 +46,7 @@ void tasklog_free(tasklog *tl) {
 }
 
 void tasklog_record(tasklog *tl, int64_t id, const char *status, const char *session, const char *input,
-                    const char *output, const char *trace_json) {
+                    const char *output, const char *trace_json, const char *spans_json) {
     cJSON *o;
     char *line;
     FILE *f;
@@ -71,6 +72,13 @@ void tasklog_record(tasklog *tl, int64_t id, const char *status, const char *ses
             cJSON_AddItemToObject(o, "trace", trace);
         else
             cJSON_Delete(trace);
+    }
+    if (spans_json && *spans_json && strlen(spans_json) <= TASKLOG_SPANS_CAP) {
+        cJSON *spans = cJSON_Parse(spans_json);
+        if (spans && cJSON_IsArray(spans))
+            cJSON_AddItemToObject(o, "spans", spans);
+        else
+            cJSON_Delete(spans);
     }
     cJSON_AddNumberToObject(o, "ts", (double)time(NULL) * 1000);
     line = cJSON_PrintUnformatted(o);
