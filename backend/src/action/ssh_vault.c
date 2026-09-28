@@ -1,5 +1,8 @@
 /* ssh_vault.c — local credentials keyed by SSH environment name.
  * Passwords never enter profiles, tool schemas, or model-visible results. */
+#if !defined(_WIN32) && !defined(__APPLE__)
+#define _POSIX_C_SOURCE 200809L
+#endif
 #include "action/tools.h"
 #include "os/os_fs.h"
 #include "infra/util.h"

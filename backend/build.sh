@@ -27,8 +27,8 @@ CFLAGS="-std=c11 -Wall -Wextra -O1 -g -Iinclude -Ithird_party/cJSON -Ithird_part
 LIBS=""
 EXE=""
 case "$OS" in
-  MINGW*|MSYS*|CYGWIN*) LIBS="-lws2_32 -lwinhttp -lbcrypt -lshell32 -lm"; EXE=".exe"; PLAT="src/os/windows"; POSIX="" ;;
-  Darwin*)              LIBS="-lpthread -lm";        EXE="";      PLAT="src/os/macos";  POSIX="src/os/posix" ;;
+  MINGW*|MSYS*|CYGWIN*) LIBS="-lws2_32 -lwinhttp -lbcrypt -lcrypt32 -lshell32 -lm"; EXE=".exe"; PLAT="src/os/windows"; POSIX="" ;;
+  Darwin*)              LIBS="-lpthread -lm -framework Security -framework CoreFoundation"; EXE=""; PLAT="src/os/macos"; POSIX="src/os/posix" ;;
   *)                    LIBS="-lpthread -ldl -lm";    EXE="";      PLAT="src/os/linux";  POSIX="src/os/posix" ;;
 esac
 

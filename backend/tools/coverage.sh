@@ -26,7 +26,7 @@ mkdir -p build
 echo "[cov] building instrumented test binary"
 "$ZIG" cc -std=c11 -Wall -Wextra -O0 -g -finstrument-functions \
     -Iinclude -Ithird_party/cJSON -Ithird_party/wasm3 \
-    -o build/cognitive-os-agent-cov.exe $SRCS -lws2_32 -lwinhttp -lbcrypt -lshell32 -lm
+    -o build/cognitive-os-agent-cov.exe $SRCS -lws2_32 -lwinhttp -lbcrypt -lcrypt32 -lshell32 -lm
 
 echo "[cov] running tests (records cov_hits.txt; log: build/coverage-test.log)"
 if ! ./build/cognitive-os-agent-cov.exe >build/coverage-test.log 2>&1; then
