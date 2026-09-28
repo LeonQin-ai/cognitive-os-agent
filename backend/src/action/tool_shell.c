@@ -359,45 +359,6 @@ static int ssh_profile_parse(cJSON *p, ssh_profile *out) {
     return 0;
 }
 
-/* Extract a password only from the locally retained task text.  The planner
- * never receives this text verbatim (llm.c redacts secrets before egress), so
- * an ssh action can omit password while the built-in tool still authenticates. */
-static char *ssh_password_from_task(const char *task) {
-    const char *keys[] = {"password", "Password", "密码"};
-    if (!task) return NULL;
-    for (size_t k = 0; k < sizeof(keys) / sizeof(keys[0]); k++) {
-        const char *p = strstr(task, keys[k]);
-        if (!p) continue;
-        p += strlen(keys[k]);
-        while (*p == ' ' || *p == '\t') p++;
-        if (*p == ':' || *p == '=') p++;
-        else if ((unsigned char)p[0] == 0xef && (unsigned char)p[1] == 0xbc &&
-                 (unsigned char)p[2] == 0x9a) p += 3; /* full-width colon */
-        else if (strncmp(p, "是", strlen("是")) == 0) p += strlen("是");
-        else if (strncmp(p, "is ", 3) == 0) p += 3;
-        else continue; /* do not mistake "password login" for a secret */
-        while (*p == ' ' || *p == '\t') p++;
-        const char *e = p;
-        while (*e && !isspace((unsigned char)*e) && *e != ',' &&
-               !((unsigned char)e[0] == 0xef && (unsigned char)e[1] == 0xbc &&
-                 (unsigned char)e[2] == 0x8c)) e++; /* UTF-8 full-width comma */
-        if (e > p) {
-            size_t n = (size_t)(e - p);
-            char *out = malloc(n + 1);
-            if (out) { memcpy(out, p, n); out[n] = '\0'; }
-            return out;
-        }
-    }
-    return NULL;
-}
-
-static void ssh_secret_free(char *secret) {
-    if (secret) {
-        memset(secret, 0, strlen(secret));
-        free(secret);
-    }
-}
-
 static int ssh_absolute_dir(const char *dir, char *out, size_t cap) {
 #if defined(_WIN32)
     wchar_t wide[2048], absolute[2048];
@@ -538,8 +499,7 @@ static tool_result *ssh_exec(const tool *self, const tool_ctx *ctx, const char *
     cJSON *profile_root = NULL;
     const char *host_text = host && cJSON_IsString(host) ? host->valuestring : NULL;
     const char *user_text = user && cJSON_IsString(user) ? user->valuestring : NULL;
-    const char *password_text = password && cJSON_IsString(password) ? password->valuestring : NULL;
-    char *task_password = NULL;
+    const char *password_text = NULL;
     char *vault_password = NULL;
     int session_profile = 0;
     char vault_key[96] = {0};
@@ -580,16 +540,20 @@ static tool_result *ssh_exec(const tool *self, const tool_ctx *ctx, const char *
     } else if (host_text && ssh_host_valid(host_text)) {
         ssh_vault_host_key(host_text, user_text, port_no, vault_key, sizeof(vault_key));
     }
-    /* A planner only sees [REDACTED:secret]; resolve that marker from the
-     * locally retained task instead of ever treating it as a credential. */
-    if ((!password_text || strstr(password_text, "[REDACTED:secret]")) && ctx)
-        password_text = task_password = ssh_password_from_task(ctx->task_input);
-    if (!password_text && vault_key[0] && ctx) {
+    /* Session runs only read the local vault. A model-generated password
+     * argument is never accepted as a credential. Direct trusted tool calls
+     * without a session retain their explicit-password compatibility path. */
+    if (vault_key[0] && ctx) {
         vault_password = ssh_vault_get(ctx->state_root, vault_key);
         if (!vault_password && profile_root && !session_profile && environment && cJSON_IsString(environment))
             vault_password = ssh_vault_get(ctx->state_root, environment->valuestring);
         password_text = vault_password;
     }
+    if (!password_text && (!ctx || !ctx->session_id || !*ctx->session_id) &&
+        password && cJSON_IsString(password) &&
+        !strstr(password->valuestring, "[REDACTED:") &&
+        !strstr(password->valuestring, "[LOCAL_SSH_PASSWORD]"))
+        password_text = password->valuestring;
     if (!host_text || !ssh_host_valid(host_text) ||
         (user_text && !ssh_name_valid(user_text)) ||
         (password_text && (strchr(password_text, '\n') || strchr(password_text, '\r'))) ||
@@ -597,13 +561,13 @@ static tool_result *ssh_exec(const tool *self, const tool_ctx *ctx, const char *
         (profile_root && ((profile.identity_file && !ssh_path_valid(profile.identity_file)) ||
                           (profile.known_hosts && !ssh_path_valid(profile.known_hosts)) ||
                           (profile.proxy_jump && !ssh_host_valid(profile.proxy_jump))))) {
-        ssh_secret_free(task_password); ssh_vault_secret_free(vault_password); cJSON_Delete(profile_root);
+        ssh_vault_secret_free(vault_password); cJSON_Delete(profile_root);
         cJSON_Delete(args);
         return tool_result_new(0, "ssh: host, command or port is invalid");
     }
     quoted = ssh_quote_arg(command->valuestring);
     if (!quoted) {
-        ssh_secret_free(task_password); ssh_vault_secret_free(vault_password); cJSON_Delete(profile_root); cJSON_Delete(args);
+        ssh_vault_secret_free(vault_password); cJSON_Delete(profile_root); cJSON_Delete(args);
         return tool_result_new(0, "ssh: command must be a single line");
     }
     if (timeout_ms < 100)
@@ -615,13 +579,13 @@ static tool_result *ssh_exec(const tool *self, const tool_ctx *ctx, const char *
         if (ssh_append_askpass(&cmd, ctx, &profile, profile_root != NULL, host_text, user_text,
                                password_text, quoted, port_no, askpass_helper, sizeof(askpass_helper),
                                askpass_secret, sizeof(askpass_secret)) != 0) {
-            ssh_secret_free(task_password); ssh_vault_secret_free(vault_password); cJSON_Delete(profile_root); cJSON_Delete(args); free(quoted); strbuf_free(&cmd);
+            ssh_vault_secret_free(vault_password); cJSON_Delete(profile_root); cJSON_Delete(args); free(quoted); strbuf_free(&cmd);
             return tool_result_new(0, "ssh: password arguments are invalid");
         }
     } else {
         if (ssh_append_options(&cmd, &profile, profile_root != NULL, host_text, user_text,
                                quoted, port_no, 1) != 0) {
-            ssh_secret_free(task_password); ssh_vault_secret_free(vault_password); cJSON_Delete(profile_root); cJSON_Delete(args); free(quoted); strbuf_free(&cmd);
+            ssh_vault_secret_free(vault_password); cJSON_Delete(profile_root); cJSON_Delete(args); free(quoted); strbuf_free(&cmd);
             return tool_result_new(0, "ssh: profile arguments are invalid");
         }
     }
@@ -637,7 +601,7 @@ static tool_result *ssh_exec(const tool *self, const tool_ctx *ctx, const char *
         if (askpass_helper[0]) fs_remove(askpass_helper);
 #endif
         if (askpass_secret[0]) fs_remove(askpass_secret);
-        ssh_secret_free(task_password); ssh_vault_secret_free(vault_password);
+        ssh_vault_secret_free(vault_password);
         cJSON_Delete(profile_root); cJSON_Delete(args);
         return tool_result_new(0, "ssh: out of memory");
     }
@@ -658,7 +622,7 @@ static tool_result *ssh_exec(const tool *self, const tool_ctx *ctx, const char *
 #endif
     if (askpass_secret[0]) fs_remove(askpass_secret);
     free(shell_args);
-    ssh_secret_free(task_password); ssh_vault_secret_free(vault_password);
+    ssh_vault_secret_free(vault_password);
     cJSON_Delete(profile_root); cJSON_Delete(args);
     return result;
 }
@@ -666,7 +630,7 @@ static tool_result *ssh_exec(const tool *self, const tool_ctx *ctx, const char *
 const tool *tool_ssh(void) {
     static const tool t = {
         "ssh",
-        "Run one remote SSH command. Always use this tool for SSH work instead of shell. After a successful login, omit host/environment to reuse this chat session's last SSH connection. Supports named environments, keys/agent, and local password authentication without sshpass or Python.",
+        "Run one remote SSH command. Always use this tool for SSH work instead of shell. Host, user, port and password supplied by the user are captured locally before planning; omit host/environment to use this chat's saved connection. Never include a password argument. Supports named environments, keys/agent, and local vault password authentication without sshpass or Python.",
         "{\"type\":\"object\",\"properties\":{\"host\":{\"type\":\"string\"},\"environment\":{\"type\":\"string\"},\"user\":{\"type\":\"string\"},"
         "\"command\":{\"type\":\"string\"},\"port\":{\"type\":\"integer\"},"
         "\"timeout_ms\":{\"type\":\"integer\"}},\"required\":[\"command\"]}",

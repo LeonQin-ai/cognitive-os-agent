@@ -812,7 +812,7 @@ panels.chat = `
       <div class="hint" style="margin-top:6px">对话模型在上方下拉切换（来自 Model routes）；新增路由请到 <a href="#" onclick="switchPanel('models');return false">Models</a> 页配置。会话支持 取消 / 恢复：运行中点「取消」，取消或失败后点「恢复」重跑上一条输入。</div>
       <details id="ssh-session-details" style="margin-top:14px;border-top:1px solid var(--border);padding-top:12px" ontoggle="if(this.open)sshSessionLoad()">
         <summary style="cursor:pointer;font-weight:650">SSH 环境与本机凭据</summary>
-        <div class="hint" style="margin:8px 0">当前会话首次成功连接后会自动记住主机和本机凭据；下次直接说“继续连接并执行…”即可复用。其他会话不会读取这里的自动凭据。</div>
+        <div class="hint" style="margin:8px 0">对话中明确提供的 SSH 主机、用户、端口会自动保存到当前会话；密码只进入本机保管箱，提交给模型前会被遮盖。下次直接说“继续连接并执行…”即可复用。其他会话不会读取这里的自动凭据。</div>
         <div id="ssh-session-list" style="display:flex;gap:6px;flex-wrap:wrap;margin:8px 0"></div>
         <details style="margin-top:10px" ontoggle="if(this.open)sshEnvironmentLoad()">
         <summary style="cursor:pointer;color:var(--muted)">手动配置共享环境（可选）</summary>

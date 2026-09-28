@@ -2594,6 +2594,17 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     safe_prompt = str_utf8_sanitize(prompt);
     if (safe_prompt)
         prompt = safe_prompt;
+    char *vault_safe_prompt = ssh_session_prepare_prompt(r->state_root, session_id, prompt);
+    free(safe_prompt);
+    safe_prompt = vault_safe_prompt;
+    if (!safe_prompt) {
+        if (answer) *answer = xstrdup("(local SSH credential storage failed)");
+        mutex_lock(&r->ss->sess_mtx);
+        if (r->cur) r->cur->in_run = 0;
+        mutex_unlock(&r->ss->sess_mtx);
+        return -1;
+    }
+    prompt = safe_prompt;
 
     if (r->router) {
         const route *rt = router_pick(r->router);
@@ -2685,6 +2696,10 @@ restart_planning:
         if (run_aborted(r)) { st = ST_FAILED; break; }
         char *messages = task_take_messages(r->run_task, &r->applied_updates);
         if (messages) {
+            char *safe_messages = ssh_session_prepare_prompt(r->state_root, session_id, messages);
+            free(messages);
+            if (!safe_messages) { st = ST_FAILED; break; }
+            messages = safe_messages;
             const char *separator = "\n\n## 用户执行中补充（最新要求优先，保留已完成工作，重新规划剩余步骤）\n";
             size_t size = strlen(prompt) + strlen(separator) + strlen(messages) + 1;
             char *updated = malloc(size);

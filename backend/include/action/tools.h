@@ -46,7 +46,7 @@ typedef struct tool_ctx {
     const char *workspace;             /* base dir for relative paths */
     const char *state_root;        /* runtime state dir (SSH environment profiles) */
     const char *session_id;        /* current chat session; scopes auto SSH credentials */
-    const char *task_input;        /* original local task text; never sent to an LLM */
+    const char *task_input;        /* local task text after credential redaction */
     metrics *metrics;              /* metrics sink (may be NULL) */
     struct skill_registry *skills; /* for the skill tool (may be NULL) */
     struct mcp_manager *mcp;       /* for MCP tools (may be NULL) */
@@ -105,6 +105,11 @@ int ssh_session_profile_record(const char *state_root, const char *session_id,
 char *ssh_session_profiles_json(const char *state_root, const char *session_id);
 int ssh_session_profile_forget(const char *state_root, const char *session_id, const char *key);
 void ssh_session_profiles_clear(const char *state_root, const char *session_id);
+/* Extract explicit SSH endpoint/password fields before a prompt is queued or
+ * persisted. Returns a malloc'd prompt with the password removed (NULL on
+ * local credential storage failure). Passwords stay in the session vault. */
+char *ssh_session_prepare_prompt(const char *state_root, const char *session_id,
+                                 const char *prompt);
 /* Windows SSH_ASKPASS entry point: returns -1 for a normal launch, otherwise
  * writes the local one-shot password to stdout and returns an exit status. */
 int ssh_askpass_run_if_requested(void);

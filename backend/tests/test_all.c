@@ -709,6 +709,39 @@ static void test_snapshot_tx(void) {
     ssh_session_profiles_clear(vault_root, "chat-one");
     CHECK(ssh_session_profile_get(vault_root, "chat-one", NULL) == NULL);
 
+    /* A chat's SSH connection and password are extracted before the input is
+     * queued, persisted, or sent to a model. The tool later reads the vault. */
+    const char *ingress_root = "state-test/ssh-prompt-ingress";
+    char *prepared = ssh_session_prepare_prompt(ingress_root, "chat-ingress",
+        "请 SSH 登录 deploy@127.0.0.1 -p 2222，密码: aB3!，执行 uname");
+    CHECK(prepared && !strstr(prepared, "aB3!"));
+    CHECK(prepared && strstr(prepared, "[LOCAL_SSH_PASSWORD]"));
+    free(prepared);
+    char *ingress_profile = ssh_session_profile_get(ingress_root, "chat-ingress", NULL);
+    CHECK(ingress_profile && strstr(ingress_profile, "127.0.0.1") &&
+          strstr(ingress_profile, "2222") && !strstr(ingress_profile, "aB3!"));
+    free(ingress_profile);
+    CHECK(ssh_session_vault_key("chat-ingress", "127.0.0.1", "deploy", 2222,
+                                host_key, sizeof(host_key)) == 0);
+    saved_secret = ssh_vault_get(ingress_root, host_key);
+    CHECK_STR(saved_secret, "aB3!");
+    ssh_vault_secret_free(saved_secret);
+    CHECK(ssh_session_profile_get(ingress_root, "other-chat", NULL) == NULL);
+    prepared = ssh_session_prepare_prompt(ingress_root, "chat-ingress", "SSH 密码是NewPass7!，继续执行 id");
+    CHECK(prepared && !strstr(prepared, "NewPass7!"));
+    free(prepared);
+    saved_secret = ssh_vault_get(ingress_root, host_key);
+    CHECK_STR(saved_secret, "NewPass7!");
+    ssh_vault_secret_free(saved_secret);
+    prepared = ssh_session_prepare_prompt(ingress_root, "other-chat", "SSH password login please");
+    CHECK(prepared && strstr(prepared, "password login"));
+    free(prepared);
+    prepared = ssh_session_prepare_prompt(ingress_root, "other-chat", "SSH 密码: Secret9!，继续");
+    CHECK(prepared == NULL); /* no host: fail closed rather than lose the password */
+    free(prepared);
+    ssh_session_profiles_clear(ingress_root, "chat-ingress");
+    CHECK(ssh_vault_get(ingress_root, host_key) == NULL);
+
     tx_manager *tm = tx_manager_new();
     tool_ctx ctx;
     memset(&ctx, 0, sizeof(ctx));
@@ -816,8 +849,13 @@ static void test_ssh_password_integration(void) {
     ctx.workspace = ".";
     ctx.state_root = "state-test/ssh-integration";
     ctx.session_id = "ssh-chat-one";
+    char intro[320];
+    snprintf(intro, sizeof(intro), "SSH 环境: local 密码: dummy@!，运行 echo SSH_OK");
+    char *safe_intro = ssh_session_prepare_prompt(ctx.state_root, ctx.session_id, intro);
+    CHECK(safe_intro && !strstr(safe_intro, "dummy@!"));
+    free(safe_intro);
     tool_result *result = tool_execute(reg, "ssh",
-        "{\"environment\":\"local\",\"password\":\"dummy@!\",\"command\":\"echo SSH_OK\",\"timeout_ms\":5000}",
+        "{\"environment\":\"local\",\"command\":\"echo SSH_OK\",\"timeout_ms\":5000}",
         &ctx);
     CHECK(result && result->ok && result->output && strstr(result->output, "SSH_OK"));
     CHECK(result && result->output && !strstr(result->output, "dummy@!"));
@@ -6146,6 +6184,23 @@ static void test_http_api(void) {
     CHECK(raw_http_request(18211, "GET", "/v1/usage", NULL, &r) == 0 && r.status == 200);
 
     test_http_api_contracts(18211);
+
+    /* The API must remove SSH passwords before scheduler input, task journal,
+     * session history and the model can observe the user message. */
+    CHECK(raw_http_request(18211, "POST", "/v1/tasks",
+                           "{\"prompt\":\"只回答准备状态：SSH deploy@127.0.0.1 密码: HttpSecret9!，暂不执行\"}",
+                           &r) == 0 && r.status == 200);
+    cJSON *ssh_task_json = cJSON_Parse(r.body);
+    cJSON *ssh_task_id = ssh_task_json ? cJSON_GetObjectItemCaseSensitive(ssh_task_json, "id") : NULL;
+    task *ssh_task = cJSON_IsNumber(ssh_task_id) ?
+        scheduler_get(ctx.scheduler, (int64_t)ssh_task_id->valuedouble) : NULL;
+    CHECK(ssh_task && ssh_task->input && !strstr(ssh_task->input, "HttpSecret9!"));
+    cJSON_Delete(ssh_task_json);
+    CHECK(scheduler_wait_idle(ctx.scheduler, 30000) == 0);
+    CHECK(ssh_task && ssh_task->output && !strstr(ssh_task->output, "HttpSecret9!"));
+    char *ssh_journal = tasklog_json(ctx.tasklog, 100);
+    CHECK(ssh_journal && !strstr(ssh_journal, "HttpSecret9!"));
+    free(ssh_journal);
 
     /* POST a task -> runs the full reasoning pipeline via the mock provider */
     CHECK(raw_http_request(18211, "POST", "/v1/tasks",

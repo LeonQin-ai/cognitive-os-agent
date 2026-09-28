@@ -246,6 +246,14 @@ or deleting the chat removes its managed credential. The optional shared named
 environments remain available through `GET` / `POST` / `DELETE`
 `/v1/ssh/environments`. `GET` / `DELETE /v1/ssh/session?session=<id>` manage
 the current chat's discovered profiles. Neither API returns a password.
+For example, `SSH deploy@10.0.0.8 -p 2222，密码: …，执行 uname` is parsed locally
+before the prompt enters the task queue: host/user/port are saved to that chat,
+the password goes to its local vault, and the prompt seen by the model contains
+`[LOCAL_SSH_PASSWORD]` instead of the value. The SSH tool retrieves the
+credential from the vault when it runs; it ignores model-supplied password
+arguments in chat sessions. A later turn can use the saved connection without
+repeating its password. If a password is given without a host or a saved
+environment, the request is rejected instead of discarding the password.
 Windows protects stored credentials with the current user's DPAPI; macOS uses
 Keychain; Linux stores them in an owner-only (`0700` directory, `0600` file)
 local vault. Profile JSON contains connection settings only. Delete the

@@ -171,8 +171,16 @@ static int h_task_create(const http_request *req, http_response *resp, void *ud)
         return 0;
     }
 
-    id = scheduler_submit(ctx->scheduler, 0, prompt, NULL, 0);
-    snprintf(prompt_copy, sizeof(prompt_copy), "%s", prompt);
+    char *safe_prompt = ssh_session_prepare_prompt(ctx->state_root, "default", prompt);
+    if (!safe_prompt) {
+        cJSON_Delete(root);
+        resp->status = 500;
+        http_resp_json(resp, "{\"error\":\"SSH credential needs a host or saved environment and a working local vault\"}");
+        return 0;
+    }
+    id = scheduler_submit(ctx->scheduler, 0, safe_prompt, NULL, 0);
+    snprintf(prompt_copy, sizeof(prompt_copy), "%s", safe_prompt);
+    free(safe_prompt);
     cJSON_Delete(root);
     if (id < 0) {
         scheduler_submit_error(resp, id);
@@ -279,7 +287,13 @@ static int h_task_message(const http_request *req, http_response *resp, void *ud
         cJSON_Delete(o); resp->status = 400;
         http_resp_json(resp, "{\"error\":\"message and matching session required\"}"); return 0;
     }
-    int revision = task_add_message(t, message);
+    char *safe_message = ssh_session_prepare_prompt(ctx->state_root, session, message);
+    if (!safe_message) {
+        cJSON_Delete(o); resp->status = 500;
+        http_resp_json(resp, "{\"error\":\"SSH credential needs a host or saved environment and a working local vault\"}"); return 0;
+    }
+    int revision = task_add_message(t, safe_message);
+    free(safe_message);
     cJSON_Delete(o);
     if (revision < 0) {
         resp->status = revision == -1 ? 409 : 413;
@@ -466,9 +480,17 @@ static int h_chat(const http_request *req, http_response *resp, void *ud) {
         return 0;
     }
 
-    id = scheduler_submit_tag_mode(ctx->scheduler, 0, msg, NULL, 0, session, thinking);
+    char *safe_msg = ssh_session_prepare_prompt(ctx->state_root, session, msg);
+    if (!safe_msg) {
+        cJSON_Delete(root);
+        resp->status = 500;
+        http_resp_json(resp, "{\"error\":\"SSH credential needs a host or saved environment and a working local vault\"}");
+        return 0;
+    }
+    id = scheduler_submit_tag_mode(ctx->scheduler, 0, safe_msg, NULL, 0, session, thinking);
     if (id >= 0)
-        reasoning_session_note_prompt(ctx->reasoning, session, msg);
+        reasoning_session_note_prompt(ctx->reasoning, session, safe_msg);
+    free(safe_msg);
     cJSON_Delete(root);
     if (id < 0) {
         scheduler_submit_error(resp, id);
@@ -637,8 +659,16 @@ static int h_orchestrate(const http_request *req, http_response *resp, void *ud)
         return 0;
     }
 
+    /* Extract SSH credentials before the scheduler journals the task. */
+    char *safe_task = ssh_session_prepare_prompt(ctx->state_root, "default", task);
+    if (!safe_task) {
+        cJSON_Delete(root); resp->status = 500;
+        http_resp_json(resp, "{\"error\":\"SSH credential needs a host or saved environment and a working local vault\"}");
+        return 0;
+    }
     /* userdata = marker so the task runner routes to orchestrate */
-    id = scheduler_submit(ctx->scheduler, 0, task, (void *)1, 0);
+    id = scheduler_submit(ctx->scheduler, 0, safe_task, (void *)1, 0);
+    free(safe_task);
     cJSON_Delete(root);
     if (id < 0) {
         scheduler_submit_error(resp, id);
@@ -881,7 +911,14 @@ static int h_flow_decompose(const http_request *req, http_response *resp, void *
         return 0;
     }
 
-    rc = flow_decompose(ctx, t->valuestring, &dag_json);
+    char *safe_task = ssh_session_prepare_prompt(ctx->state_root, "default", t->valuestring);
+    if (!safe_task) {
+        cJSON_Delete(root); resp->status = 500;
+        http_resp_json(resp, "{\"error\":\"SSH credential needs a host or saved environment and a working local vault\"}");
+        return 0;
+    }
+    rc = flow_decompose(ctx, safe_task, &dag_json);
+    free(safe_task);
     cJSON_Delete(root);
     if (rc != 0 || !dag_json) {
         resp->status = 422;

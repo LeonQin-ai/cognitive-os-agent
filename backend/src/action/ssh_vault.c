@@ -117,24 +117,33 @@ int ssh_session_profile_record(const char *state_root, const char *session_id,
     cJSON *root = ssh_session_read(state_root, session_id);
     if (!root) return -1;
     cJSON *arr = cJSON_GetObjectItemCaseSensitive(root, "profiles");
+    char *old_env = NULL, *old_identity = NULL, *old_jump = NULL, *old_known = NULL;
     for (int i = cJSON_GetArraySize(arr) - 1; i >= 0; i--) {
         cJSON *p = cJSON_GetArrayItem(arr, i);
         const char *old = ssh_field(p, "key");
-        if (old && strcmp(old, key) == 0) cJSON_DeleteItemFromArray(arr, i);
+        if (old && strcmp(old, key) == 0) {
+            const char *v;
+            v = ssh_field(p, "environment"); if (v) old_env = xstrdup(v);
+            v = ssh_field(p, "identity_file"); if (v) old_identity = xstrdup(v);
+            v = ssh_field(p, "proxy_jump"); if (v) old_jump = xstrdup(v);
+            v = ssh_field(p, "known_hosts"); if (v) old_known = xstrdup(v);
+            cJSON_DeleteItemFromArray(arr, i);
+        }
     }
     cJSON *p = cJSON_CreateObject();
     cJSON_AddStringToObject(p, "key", key);
     cJSON_AddStringToObject(p, "host", host);
     if (user && *user) cJSON_AddStringToObject(p, "user", user);
     cJSON_AddNumberToObject(p, "port", port);
-    if (environment && *environment) cJSON_AddStringToObject(p, "environment", environment);
-    if (identity && *identity) cJSON_AddStringToObject(p, "identity_file", identity);
-    if (jump && *jump) cJSON_AddStringToObject(p, "proxy_jump", jump);
-    if (known && *known) cJSON_AddStringToObject(p, "known_hosts", known);
+    if ((environment && *environment) || old_env) cJSON_AddStringToObject(p, "environment", environment && *environment ? environment : old_env);
+    if ((identity && *identity) || old_identity) cJSON_AddStringToObject(p, "identity_file", identity && *identity ? identity : old_identity);
+    if ((jump && *jump) || old_jump) cJSON_AddStringToObject(p, "proxy_jump", jump && *jump ? jump : old_jump);
+    if ((known && *known) || old_known) cJSON_AddStringToObject(p, "known_hosts", known && *known ? known : old_known);
     cJSON_AddItemToArray(arr, p);
     cJSON_DeleteItemFromObjectCaseSensitive(root, "last_key");
     cJSON_AddStringToObject(root, "last_key", key);
     int rc = ssh_session_write(state_root, session_id, root);
+    free(old_env); free(old_identity); free(old_jump); free(old_known);
     cJSON_Delete(root);
     return rc;
 }
@@ -193,6 +202,241 @@ void ssh_session_profiles_clear(const char *state_root, const char *session_id) 
     cJSON_Delete(root);
     char dir[1024], path[1152];
     if (!ssh_session_path(state_root, session_id, dir, sizeof(dir), path, sizeof(path))) fs_remove(path);
+}
+
+/* The prompt ingress parser deliberately recognizes only explicit fields.
+ * It runs before task journaling/history/LLM calls, so the original password
+ * is never retained in those surfaces. It does not infer a password from
+ * ordinary phrases such as "password login". */
+static const char *ssh_find_ascii(const char *text, const char *word) {
+    size_t n = strlen(word);
+    for (const char *p = text; *p; p++) {
+        size_t i = 0;
+        while (i < n && p[i] && tolower((unsigned char)p[i]) == tolower((unsigned char)word[i])) i++;
+        if (i == n && (p == text || (!isalnum((unsigned char)p[-1]) && p[-1] != '_')) &&
+            (!isalnum((unsigned char)p[n]) && p[n] != '_')) return p;
+    }
+    return NULL;
+}
+
+static const char *ssh_field_value_one(const char *text, const char *label, int ascii,
+                                        int allow_is) {
+    if (!label) return NULL;
+    const char *cursor = text;
+    while (*cursor) {
+        const char *found = ascii ? ssh_find_ascii(cursor, label) : strstr(cursor, label);
+        if (!found) return NULL;
+        const char *p = found + strlen(label);
+        const char *after_label = p;
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p == ':' || *p == '=') p++;
+        else if ((unsigned char)p[0] == 0xef && (unsigned char)p[1] == 0xbc &&
+                 (unsigned char)p[2] == 0x9a) p += 3;
+        else if (allow_is && strncmp(p, "是", strlen("是")) == 0) p += strlen("是");
+        else if (allow_is && strncmp(p, "is ", 3) == 0) p += 3;
+        else if (p > after_label && (!allow_is ||
+                 (strncmp(p, "login", 5) != 0 && strncmp(p, "登录", strlen("登录")) != 0 &&
+                  strncmp(p, "认证", strlen("认证")) != 0 && strncmp(p, "方式", strlen("方式")) != 0))) {
+            /* Natural language such as "host 10.0.0.1" or "密码 abc". */
+        }
+        else { cursor = found + strlen(label); continue; }
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p) return p;
+        return NULL;
+    }
+    return NULL;
+}
+
+static const char *ssh_field_value(const char *text, const char *english, const char *chinese,
+                                    int allow_is) {
+    const char *p = ssh_field_value_one(text, english, 1, allow_is);
+    const char *q = ssh_field_value_one(text, chinese, 0, allow_is);
+    return !p || (q && q < p) ? q : p;
+}
+
+static char *ssh_field_token(const char *p, size_t max_len, const char **end_out) {
+    const char *start, *end;
+    char quote = 0;
+    if (!p) return NULL;
+    if (*p == '\'' || *p == '"') quote = *p++;
+    start = p;
+    if (quote) {
+        end = strchr(p, quote);
+        if (!end) return NULL;
+    } else {
+        while (*p && !isspace((unsigned char)*p) && *p != ',' && *p != ';' &&
+               !(strncmp(p, "，", strlen("，")) == 0) &&
+               !(strncmp(p, "。", strlen("。")) == 0)) p++;
+        end = p;
+    }
+    size_t n = (size_t)(end - start);
+    if (!n || n > max_len) return NULL;
+    char *out = malloc(n + 1);
+    if (!out) return NULL;
+    memcpy(out, start, n); out[n] = 0;
+    if (end_out) *end_out = end;
+    return out;
+}
+
+static int ssh_endpoint_token_valid(const char *s, int user) {
+    if (!s || !*s) return 0;
+    for (const unsigned char *p = (const unsigned char *)s; *p; p++)
+        if (!isalnum(*p) && !strchr(user ? "._-" : "._-:[]", *p)) return 0;
+    return 1;
+}
+
+static char *ssh_replace_secret(const char *prompt, const char *secret,
+                                 const char *span_start, const char *span_end) {
+    const char *marker = "[LOCAL_SSH_PASSWORD]";
+    size_t slen = strlen(secret), mlen = strlen(marker), plen = strlen(prompt);
+    int all = slen >= 4;
+    size_t matches = 0;
+    if (all) {
+        for (const char *p = prompt; (p = strstr(p, secret)) != NULL; p += slen) matches++;
+    } else matches = 1;
+    if (!matches || matches > 128 || plen > SIZE_MAX - matches * mlen) return NULL;
+    char *out = malloc(plen + matches * mlen + 1);
+    if (!out) return NULL;
+    char *dst = out;
+    const char *p = prompt;
+    while (*p) {
+        const char *next = all ? strstr(p, secret) : (p <= span_start ? span_start : NULL);
+        if (!next) break;
+        size_t n = (size_t)(next - p);
+        memcpy(dst, p, n); dst += n;
+        memcpy(dst, marker, mlen); dst += mlen;
+        p = all ? next + slen : span_end;
+    }
+    strcpy(dst, p);
+    return out;
+}
+
+char *ssh_session_prepare_prompt(const char *state_root, const char *session_id,
+                                 const char *prompt) {
+    if (!prompt) return NULL;
+    const char *ssh_word = ssh_find_ascii(prompt, "ssh");
+    int ssh_intent = ssh_word || strstr(prompt, "远程登录") || strstr(prompt, "登录服务器") ||
+                     strstr(prompt, "连接服务器");
+    if (!ssh_intent) return xstrdup(prompt);
+    const char *password_at = ssh_field_value(prompt, "password", "密码", 1);
+    const char *password_end = NULL;
+    char *password = ssh_field_token(password_at, 256, &password_end);
+    if (password && (strncmp(password, "[REDACTED:", 10) == 0 ||
+                     strcmp(password, "[LOCAL_SSH_PASSWORD]") == 0)) {
+        ssh_vault_secret_free(password);
+        password = NULL;
+    }
+    char *safe = password ? ssh_replace_secret(prompt, password, password_at, password_end)
+                          : xstrdup(prompt);
+    if (!safe) { ssh_vault_secret_free(password); return NULL; }
+
+    if (!state_root || !*state_root) {
+        if (password) { free(safe); safe = NULL; }
+        ssh_vault_secret_free(password);
+        return safe;
+    }
+    const char *sid = session_id && *session_id ? session_id : "default";
+    char *host = NULL, *user = NULL, *environment = NULL;
+    char *identity = NULL, *jump = NULL, *known = NULL;
+    int port = 22;
+    const char *p = ssh_field_value(prompt, "host", "主机", 0);
+    if (!p) p = ssh_field_value(prompt, "server", "服务器", 0);
+    if (!p) p = ssh_field_value(prompt, "ip", "地址", 0);
+    host = ssh_field_token(p, 255, NULL);
+    p = ssh_field_value(prompt, "user", "用户名", 0);
+    if (!p) p = ssh_field_value(prompt, "username", "用户", 0);
+    user = ssh_field_token(p, 80, NULL);
+    p = ssh_field_value(prompt, "environment", "环境", 0);
+    environment = ssh_field_token(p, 80, NULL);
+    p = ssh_field_value(prompt, "port", "端口", 0);
+    if (!p && ssh_word) {
+        const char *flag = strstr(ssh_word, "-p ");
+        if (flag) p = flag + 3;
+    }
+    if (p) {
+        char *end = NULL;
+        long parsed = strtol(p, &end, 10);
+        if (end != p && parsed >= 1 && parsed <= 65535) port = (int)parsed;
+    }
+    /* Accept the common ssh user@host spelling even without labelled fields. */
+    if (!host) {
+        for (const char *at = strchr(prompt, '@'); at; at = strchr(at + 1, '@')) {
+            const char *begin = at;
+            const char *end = at + 1;
+            while (begin > prompt && (isalnum((unsigned char)begin[-1]) ||
+                   strchr("._-", begin[-1]))) begin--;
+            while (*end && (isalnum((unsigned char)*end) || strchr("._-", *end))) end++;
+            if (begin == at || end == at + 1 || (size_t)(at - begin) > 80 ||
+                (size_t)(end - at - 1) > 255) continue;
+            char *candidate_user = malloc((size_t)(at - begin) + 1);
+            char *candidate_host = malloc((size_t)(end - at));
+            if (!candidate_user || !candidate_host) { free(candidate_user); free(candidate_host); break; }
+            memcpy(candidate_user, begin, (size_t)(at - begin)); candidate_user[at - begin] = 0;
+            memcpy(candidate_host, at + 1, (size_t)(end - at - 1)); candidate_host[end - at - 1] = 0;
+            if (ssh_endpoint_token_valid(candidate_user, 1) &&
+                ssh_endpoint_token_valid(candidate_host, 0)) {
+                host = candidate_host;
+                if (!user) user = candidate_user; else free(candidate_user);
+                break;
+            }
+            free(candidate_user); free(candidate_host);
+        }
+    }
+    if (host && !ssh_endpoint_token_valid(host, 0)) { free(host); host = NULL; }
+    if (user && !ssh_endpoint_token_valid(user, 1)) { free(user); user = NULL; }
+    if (environment && !ssh_vault_name_valid(environment)) { free(environment); environment = NULL; }
+    if (!host && password) {
+        char *raw = ssh_session_profile_get(state_root, sid, environment);
+        cJSON *profile = raw ? cJSON_Parse(raw) : NULL;
+        const char *saved_host = profile ? ssh_field(profile, "host") : NULL;
+        const char *saved_user = profile ? ssh_field(profile, "user") : NULL;
+        cJSON *saved_port = profile ? cJSON_GetObjectItemCaseSensitive(profile, "port") : NULL;
+        if (saved_host) host = xstrdup(saved_host);
+        if (!user && saved_user) user = xstrdup(saved_user);
+        if (saved_port && cJSON_IsNumber(saved_port)) port = (int)saved_port->valuedouble;
+        cJSON_Delete(profile); free(raw);
+    }
+    if (!host && environment) {
+        char path[1152];
+        path_join(path, sizeof(path), state_root, "ssh/environments.json");
+        char *raw = fs_read_file(path);
+        cJSON *root = raw ? cJSON_Parse(raw) : NULL;
+        cJSON *envs = root ? cJSON_GetObjectItemCaseSensitive(root, "environments") : NULL;
+        cJSON *entry = envs ? cJSON_GetObjectItemCaseSensitive(envs, environment) : NULL;
+        const char *saved_host = entry ? ssh_field(entry, "host") : NULL;
+        const char *saved_user = entry ? ssh_field(entry, "user") : NULL;
+        const char *saved_identity = entry ? ssh_field(entry, "identity_file") : NULL;
+        const char *saved_jump = entry ? ssh_field(entry, "proxy_jump") : NULL;
+        const char *saved_known = entry ? ssh_field(entry, "known_hosts") : NULL;
+        cJSON *saved_port = entry ? cJSON_GetObjectItemCaseSensitive(entry, "port") : NULL;
+        if (saved_host) host = xstrdup(saved_host);
+        if (!user && saved_user) user = xstrdup(saved_user);
+        if (saved_identity) identity = xstrdup(saved_identity);
+        if (saved_jump) jump = xstrdup(saved_jump);
+        if (saved_known) known = xstrdup(saved_known);
+        if (saved_port && cJSON_IsNumber(saved_port)) port = (int)saved_port->valuedouble;
+        cJSON_Delete(root); free(raw);
+    }
+    if (host && !ssh_endpoint_token_valid(host, 0)) { free(host); host = NULL; }
+    if (user && !ssh_endpoint_token_valid(user, 1)) { free(user); user = NULL; }
+    if (password && !host) { free(safe); safe = NULL; }
+    if (host) {
+        if (password) {
+            char key[96];
+            if (ssh_session_vault_key(sid, host, user, port, key, sizeof(key)) ||
+                ssh_vault_put(state_root, key, password)) {
+                free(safe); safe = NULL;
+            }
+        }
+        if (safe && ssh_session_profile_record(state_root, sid, environment,
+                                               host, user, port, identity, jump, known)) {
+            free(safe); safe = NULL;
+        }
+    }
+    free(host); free(user); free(environment);
+    free(identity); free(jump); free(known);
+    ssh_vault_secret_free(password);
+    return safe;
 }
 
 void ssh_vault_secret_free(char *secret) {
