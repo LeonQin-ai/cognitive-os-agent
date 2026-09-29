@@ -217,9 +217,39 @@ static char *mock_respond(const char *msg) {
         const char *round_header = strstr(full, "## 之前轮次的动作结果 (第 ");
         if (round_header)
             sscanf(round_header, "## 之前轮次的动作结果 (第 %d/", &previous_round);
+        if (previous_round >= 20)
+            return xstrdup("长任务完成：已读取全部二十份资料。");
         char plan[128];
         snprintf(plan, sizeof(plan),
                  "[{\"tool\":\"file_read\",\"args\":{\"path\":\"round-%d.txt\"}}]",
+                 previous_round);
+        return xstrdup(plan);
+    }
+    if (has_substr(msg, "折叠后重读回归测试") &&
+        !has_substr(full, "已执行动作的观察记录")) {
+        int previous_round = 0;
+        const char *round_header = strstr(full, "## 之前轮次的动作结果 (第 ");
+        if (round_header)
+            sscanf(round_header, "## 之前轮次的动作结果 (第 %d/", &previous_round);
+        if (previous_round >= 13)
+            return xstrdup("重读完成：已恢复早期证据。");
+        char plan[128];
+        snprintf(plan, sizeof(plan),
+                 "[{\"tool\":\"file_read\",\"args\":{\"path\":\"fold-%d.txt\"}}]",
+                 previous_round < 12 ? previous_round : 0);
+        return xstrdup(plan);
+    }
+    if (has_substr(msg, "长任务写入回归测试") &&
+        !has_substr(full, "已执行动作的观察记录")) {
+        int previous_round = 0;
+        const char *round_header = strstr(full, "## 之前轮次的动作结果 (第 ");
+        if (round_header)
+            sscanf(round_header, "## 之前轮次的动作结果 (第 %d/", &previous_round);
+        if (previous_round >= 20)
+            return xstrdup("长任务完成：二十个文件已写入。");
+        char plan[160];
+        snprintf(plan, sizeof(plan),
+                 "[{\"tool\":\"file_write\",\"args\":{\"path\":\"long-%d.txt\",\"content\":\"done\"}}]",
                  previous_round);
         return xstrdup(plan);
     }

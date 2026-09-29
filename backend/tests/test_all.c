@@ -3084,7 +3084,7 @@ static void test_snapshot_bigfile(void) {
 /* ---------- agent loop: bounded multi-round plan->act->replan ---------- */
 static void test_agent_loop(void) {
     section("agent loop (multi-round)");
-    fs_mkdirs("state-test/loop-w");
+    CHECK(fs_mkdirs("state-test/loop-w") == 0);
 
     /* default rounds (8): analyze -> fix -> final text answer */
     {
@@ -3257,13 +3257,13 @@ static void test_agent_loop(void) {
         runtime_shutdown(&ctx);
     }
 
-    /* Distinct read-only plans also need a bound: otherwise a model can keep
-     * discovering new files for dozens of rounds without ever answering. */
+    /* A long research task must continue past twelve rounds while each read
+     * adds new evidence, and finish when the model actually answers. */
     {
-        for (int i = 0; i < 12; i++) {
+        for (int i = 0; i < 20; i++) {
             char path[96];
             snprintf(path, sizeof(path), "state-test/loop-w/round-%d.txt", i);
-            fs_write_file(path, "evidence", 8);
+            CHECK(fs_write_file(path, "evidence", 8) == 0);
         }
         config cfg;
         memset(&cfg, 0, sizeof(cfg));
@@ -3275,18 +3275,96 @@ static void test_agent_loop(void) {
         if (init(&ctx, &cfg) != 0) { CHECK(0); return; }
         char *ans = NULL;
         CHECK(reasoning_run(ctx.reasoning, "连续检索回归测试：分析项目后给出文字清单", &ans) == 0);
-        CHECK(ans && strstr(ans, "综合回答") != NULL);
+        CHECK(ans && strstr(ans, "长任务完成") != NULL);
         long long elapsed = 0, in = 0, out = 0;
         int round = 0, calls = 0;
         const char *tool = NULL;
         reasoning_progress(ctx.reasoning, &elapsed, &round, &calls, &tool, &in, &out);
-        CHECK(round == 12);
-        CHECK(calls == 12);
+        CHECK(round == 21);
+        CHECK(calls == 20);
+        free(ans);
+        runtime_shutdown(&ctx);
+        for (int i = 0; i < 20; i++) {
+            char path[96];
+            snprintf(path, sizeof(path), "state-test/loop-w/round-%d.txt", i);
+            fs_remove(path);
+        }
+    }
+
+    /* A long write workflow must keep executing after round twelve and only
+     * complete after all requested side effects have landed on disk. */
+    {
+        for (int i = 0; i < 20; i++) {
+            char path[96];
+            snprintf(path, sizeof(path), "state-test/loop-w/long-%d.txt", i);
+            fs_remove(path);
+        }
+        config cfg;
+        memset(&cfg, 0, sizeof(cfg));
+        cfg.state_root = "state-test/loop-write-long";
+        cfg.workspace = "state-test/loop-w";
+        cfg.provider = "mock";
+        cfg.http_port = 0;
+        runtime_ctx ctx;
+        if (init(&ctx, &cfg) != 0) { CHECK(0); return; }
+        char *ans = NULL;
+        CHECK(reasoning_run(ctx.reasoning, "长任务写入回归测试：写入二十个文件", &ans) == 0);
+        CHECK(ans && strstr(ans, "长任务完成") != NULL);
+        long long elapsed = 0, in = 0, out = 0;
+        int round = 0, calls = 0;
+        const char *tool = NULL;
+        reasoning_progress(ctx.reasoning, &elapsed, &round, &calls, &tool, &in, &out);
+        CHECK(round == 21);
+        CHECK(calls == 20);
+        free(ans);
+        runtime_shutdown(&ctx);
+        for (int i = 0; i < 20; i++) {
+            char path[96];
+            snprintf(path, sizeof(path), "state-test/loop-w/long-%d.txt", i);
+            char *content = fs_read_file(path);
+            CHECK(content && strcmp(content, "done") == 0);
+            free(content);
+            fs_remove(path);
+        }
+    }
+
+    /* Once the context log folds old observations, the agent must be able to
+     * read an earlier file again instead of treating its stale cache as data. */
+    {
+        char content[5701];
+        for (int i = 0; i < 5700; i += 3)
+            memcpy(content + i, "中", 3);
+        content[5700] = '\0';
+        for (int i = 0; i < 12; i++) {
+            char path[96];
+            snprintf(path, sizeof(path), "state-test/loop-w/fold-%d.txt", i);
+            CHECK(fs_write_file(path, content, 5700) == 0);
+        }
+        config cfg;
+        memset(&cfg, 0, sizeof(cfg));
+        cfg.state_root = "state-test/loop-fold-reread";
+        cfg.workspace = "state-test/loop-w";
+        cfg.provider = "mock";
+        cfg.http_port = 0;
+        runtime_ctx ctx;
+        if (init(&ctx, &cfg) != 0) { CHECK(0); return; }
+        char *ans = NULL;
+        CHECK(reasoning_run(ctx.reasoning, "折叠后重读回归测试：分析资料后给出答案", &ans) == 0);
+        CHECK(ans && strstr(ans, "重读完成") != NULL);
+        long long elapsed = 0, in = 0, out = 0;
+        int round = 0, calls = 0;
+        const char *tool = NULL;
+        reasoning_progress(ctx.reasoning, &elapsed, &round, &calls, &tool, &in, &out);
+        CHECK(round == 14);
+        CHECK(calls == 13);
+        char *log_tail = reasoning_round_log_tail(ctx.reasoning, 65536);
+        CHECK(log_tail && str_utf8_valid_n(log_tail, -1));
+        free(log_tail);
         free(ans);
         runtime_shutdown(&ctx);
         for (int i = 0; i < 12; i++) {
             char path[96];
-            snprintf(path, sizeof(path), "state-test/loop-w/round-%d.txt", i);
+            snprintf(path, sizeof(path), "state-test/loop-w/fold-%d.txt", i);
             fs_remove(path);
         }
     }

@@ -899,31 +899,36 @@ static void clear_actions(reasoning *r) {
 #define ROUND_LOG_TAIL_KEEP 1536
 
 /* Append text to a growable log buffer, tail-keeping: once past ROUND_LOG_CAP
- * the oldest half is dropped so recent action results always stay available. */
-static void log_append(char **buf, size_t *blen, size_t *bcap, const char *text) {
+ * the oldest half is dropped so recent action results always stay available.
+ * Returns 1 when old observations were folded away. */
+static int log_append(char **buf, size_t *blen, size_t *bcap, const char *text) {
     const char *add = text;
     char *elided = NULL;
     size_t len;
     size_t need;
 
     if (!text || !*text)
-        return;
+        return 0;
     len = strlen(text);
     if (len > ROUND_LOG_ENTRY_CAP) {
         /* head+tail keep with an explicit elision marker: the model sees
          * the beginning and end of the output, not a silent hole */
-        size_t mid = len - ROUND_LOG_HEAD_KEEP - ROUND_LOG_TAIL_KEEP;
+        size_t head = ROUND_LOG_HEAD_KEEP;
+        size_t tail_start = len - ROUND_LOG_TAIL_KEEP;
+        while (head > 0 && !str_utf8_valid_n(text, (long long)head)) head--;
+        while (tail_start < len && ((unsigned char)text[tail_start] & 0xc0) == 0x80)
+            tail_start++;
+        size_t tail = len - tail_start;
+        size_t mid = tail_start - head;
         char marker[80];
         int mlen = snprintf(marker, sizeof(marker),
                             "\n...[%zu bytes of output elided]...\n", mid);
-        elided = (char *)malloc(ROUND_LOG_HEAD_KEEP + (size_t)mlen +
-                                ROUND_LOG_TAIL_KEEP + 1);
+        elided = (char *)malloc(head + (size_t)mlen + tail + 1);
         if (elided) {
-            memcpy(elided, text, ROUND_LOG_HEAD_KEEP);
-            memcpy(elided + ROUND_LOG_HEAD_KEEP, marker, (size_t)mlen);
-            memcpy(elided + ROUND_LOG_HEAD_KEEP + mlen,
-                   text + len - ROUND_LOG_TAIL_KEEP, ROUND_LOG_TAIL_KEEP);
-            elided[ROUND_LOG_HEAD_KEEP + (size_t)mlen + ROUND_LOG_TAIL_KEEP] = '\0';
+            memcpy(elided, text, head);
+            memcpy(elided + head, marker, (size_t)mlen);
+            memcpy(elided + head + mlen, text + tail_start, tail);
+            elided[head + (size_t)mlen + tail] = '\0';
             add = elided;
             len = strlen(elided);
         }
@@ -937,7 +942,7 @@ static void log_append(char **buf, size_t *blen, size_t *bcap, const char *text)
         char *nb = (char *)realloc(*buf, ncap);
         if (!nb) {
             free(elided);
-            return;
+            return 0;
         }
         *buf = nb;
         *bcap = ncap;
@@ -948,6 +953,12 @@ static void log_append(char **buf, size_t *blen, size_t *bcap, const char *text)
     free(elided);
     if (*blen > ROUND_LOG_CAP) {
         size_t half = *blen / 2;
+        /* Keep a complete observation when possible and never start with a
+         * UTF-8 continuation byte (long Chinese tool outputs hit this path). */
+        size_t line_end = half;
+        while (line_end < *blen && (*buf)[line_end] != '\n') line_end++;
+        if (line_end < *blen) half = line_end + 1;
+        else while (half < *blen && ((unsigned char)(*buf)[half] & 0xc0) == 0x80) half++;
         memmove(*buf, *buf + half, *blen - half + 1);
         *blen -= half;
         /* tell the model the log was folded, so it knows earlier results
@@ -960,14 +971,17 @@ static void log_append(char **buf, size_t *blen, size_t *bcap, const char *text)
             memcpy(*buf, fold_note, nlen);
             *blen += nlen;
         }
+        return 1;
     }
+    return 0;
 }
 
 /* Model-facing log: everything the next planning round must see (action
  * results, narrations, system nudges). */
 static void round_log_append(reasoning *r, const char *text) {
     mutex_lock(&r->progress_mtx);
-    log_append(&r->round_log, &r->round_log_len, &r->round_log_cap, text);
+    if (log_append(&r->round_log, &r->round_log_len, &r->round_log_cap, text))
+        r->search_seen_n = 0; /* folded observations can be read again */
     mutex_unlock(&r->progress_mtx);
 }
 
@@ -2918,15 +2932,10 @@ restart_planning:
             stalled = 1;
             break;
         }
-        if (search_only_rounds >= 12 && !prompt_requires_mutation(prompt)) {
-            round_log_append(r, "[system] 已连续十二轮检索资料，停止继续收集；"
-                                "请根据已有观察整理最终答案，不足之处如实说明。");
-            stalled = 1;
-            break;
-        }
-        if (search_only_rounds == 6 && !prompt_requires_mutation(prompt))
-            round_log_append(r, "[system] 已连续六轮读取或搜索资料。请优先整理已有证据并直接回答；"
-                                "仅在缺少关键事实时继续读取不同的目标。");
+        if ((search_only_rounds == 6 || (search_only_rounds > 6 && search_only_rounds % 12 == 0)) &&
+            !prompt_requires_mutation(prompt))
+            round_log_append(r, "[system] 已连续多轮读取或搜索资料。请评估已有证据是否足够回答；"
+                                "足够就直接给出最终答案，仍缺关键事实则继续读取不同的目标。");
         /* stall detection: the LLM proposed the exact same plan twice — no
          * progress is possible. Give ONE recovery nudge ("the actions already
          * succeeded; answer from the observations instead of repeating them")
@@ -2966,6 +2975,8 @@ restart_planning:
         char tail[12288];
         size_t loglen = r->round_log ? strlen(r->round_log) : 0;
         size_t start = loglen >= sizeof(tail) - 1 ? loglen - (sizeof(tail) - 1) : 0;
+        while (start < loglen && ((unsigned char)r->round_log[start] & 0xc0) == 0x80)
+            start++;
         snprintf(tail, sizeof(tail), "%s", r->round_log + start);
         char *user = (char *)malloc(strlen(prompt) + sizeof(tail) + 64);
         if (user) {
