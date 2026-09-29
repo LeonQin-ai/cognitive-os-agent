@@ -381,7 +381,9 @@ static int ssh_append_options(strbuf *out, const ssh_profile *profile, int has_p
                               const char *host, const char *user, const char *quoted_command,
                               int port, int batch_mode) {
     char *q;
-    strbuf_appendf(out, "ssh -o BatchMode=%s -o ConnectTimeout=5 -o StrictHostKeyChecking=yes -p %d",
+    /* Trust a new host on first use, but reject changed host keys. Requiring
+     * an existing known_hosts entry made every new managed environment fail. */
+    strbuf_appendf(out, "ssh -o BatchMode=%s -o ConnectTimeout=5 -o NumberOfPasswordPrompts=1 -o StrictHostKeyChecking=accept-new -p %d",
                    batch_mode ? "yes" : "no", port);
     if (has_profile && profile->identity_file) {
         q = ssh_quote_arg(profile->identity_file); if (!q) return -1;
@@ -484,6 +486,22 @@ static int ssh_append_askpass(strbuf *out, const tool_ctx *ctx, const ssh_profil
     return 0;
 }
 
+/* A named environment is a user-managed credential. Only reuse its secret
+ * when the currently selected endpoint still matches that environment. */
+static char *ssh_named_password(const tool_ctx *ctx, const char *name,
+                                const char *host, const char *user, int port) {
+    ssh_profile managed;
+    if (!ctx || !ssh_name_valid(name)) return NULL;
+    cJSON *root = ssh_profile_load(ctx, name, &managed);
+    char *password = NULL;
+    if (root && managed.host && host && strcmp(managed.host, host) == 0 &&
+        ((!managed.user && !user) || (managed.user && user && strcmp(managed.user, user) == 0)) &&
+        managed.port == port)
+        password = ssh_vault_get(ctx->state_root, name);
+    cJSON_Delete(root);
+    return password;
+}
+
 static tool_result *ssh_exec(const tool *self, const tool_ctx *ctx, const char *args_json) {
     cJSON *args = cJSON_Parse(args_json);
     cJSON *host = args ? cJSON_GetObjectItemCaseSensitive(args, "host") : NULL;
@@ -499,10 +517,13 @@ static tool_result *ssh_exec(const tool *self, const tool_ctx *ctx, const char *
     cJSON *profile_root = NULL;
     const char *host_text = host && cJSON_IsString(host) ? host->valuestring : NULL;
     const char *user_text = user && cJSON_IsString(user) ? user->valuestring : NULL;
+    char *embedded_user = NULL;
     const char *password_text = NULL;
     char *vault_password = NULL;
-    int session_profile = 0;
+    const char *managed_environment = NULL;
+    int current_managed_profile = 0;
     char vault_key[96] = {0};
+    char pending_vault_key[96] = {0};
     char *quoted = NULL;
     char *shell_args = NULL;
     char askpass_helper[2300] = {0}, askpass_secret[2300] = {0};
@@ -510,28 +531,60 @@ static tool_result *ssh_exec(const tool *self, const tool_ctx *ctx, const char *
     strbuf cmd;
     (void)self;
 
-    if (ctx && ctx->session_id && *ctx->session_id &&
-        ((environment && cJSON_IsString(environment)) || !host_text)) {
+    /* Models commonly put user@host in the host field. Normalize it before
+     * matching a session credential, otherwise the vault lookup misses. */
+    if (host_text) {
+        const char *at = strchr(host_text, '@');
+        if (at && at != host_text && at[1] && !strchr(at + 1, '@')) {
+            size_t n = (size_t)(at - host_text);
+            if (user_text && (strlen(user_text) != n || strncmp(user_text, host_text, n))) {
+                cJSON_Delete(args);
+                return tool_result_new(0, "ssh: conflicting user and host");
+            }
+            embedded_user = malloc(n + 1);
+            if (!embedded_user) { cJSON_Delete(args); return tool_result_new(0, "ssh: out of memory"); }
+            memcpy(embedded_user, host_text, n);
+            embedded_user[n] = '\0';
+            user_text = embedded_user;
+            host_text = at + 1;
+        }
+    }
+
+    /* A staged correction wins over a named environment. Otherwise read the
+     * current managed profile, which may have changed since the last turn. */
+    if (ctx && ctx->session_id && *ctx->session_id) {
         char *raw = ssh_session_profile_get(ctx->state_root, ctx->session_id,
                                              environment && cJSON_IsString(environment) ? environment->valuestring : NULL);
         profile_root = raw ? cJSON_Parse(raw) : NULL;
         free(raw);
         if (profile_root && ssh_profile_parse(profile_root, &profile) == 0) {
-            session_profile = 1;
+            if (!host_text || strcmp(host_text, profile.host ? profile.host : "") == 0) {
+                host_text = profile.host;
+                user_text = profile.user;
+                port_no = profile.port;
+                cJSON *saved_env = cJSON_GetObjectItemCaseSensitive(profile_root, "environment");
+                if (cJSON_IsString(saved_env)) managed_environment = saved_env->valuestring;
+            } else { cJSON_Delete(profile_root); profile_root = NULL; }
+        } else { cJSON_Delete(profile_root); profile_root = NULL; }
+    }
+    if (environment && cJSON_IsString(environment) &&
+        (!profile_root || !cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(profile_root, "pending")))) {
+        ssh_profile managed_profile;
+        cJSON *managed_root = ssh_profile_load(ctx, environment->valuestring, &managed_profile);
+        if (managed_root) {
+            cJSON_Delete(profile_root);
+            profile_root = managed_root;
+            profile = managed_profile;
             host_text = profile.host;
             user_text = profile.user;
             port_no = profile.port;
-        } else { cJSON_Delete(profile_root); profile_root = NULL; }
-    }
-    if (!session_profile && environment && cJSON_IsString(environment)) {
-        profile_root = ssh_profile_load(ctx, environment->valuestring, &profile);
-        if (!profile_root) {
-            cJSON_Delete(args);
-            return tool_result_new(0, "ssh: environment profile not found or invalid");
+            managed_environment = environment->valuestring;
+            current_managed_profile = 1;
         }
-        host_text = profile.host;
-        user_text = profile.user;
-        port_no = profile.port;
+    }
+    if (!profile_root && environment && cJSON_IsString(environment)) {
+        free(embedded_user); cJSON_Delete(args);
+        return tool_result_new(0, "ssh: environment profile not found or invalid");
     }
     if (ctx && ctx->session_id && *ctx->session_id && host_text && ssh_host_valid(host_text)) {
         ssh_session_vault_key(ctx->session_id, host_text, user_text, port_no, vault_key, sizeof(vault_key));
@@ -544,9 +597,16 @@ static tool_result *ssh_exec(const tool *self, const tool_ctx *ctx, const char *
      * argument is never accepted as a credential. Direct trusted tool calls
      * without a session retain their explicit-password compatibility path. */
     if (vault_key[0] && ctx) {
-        vault_password = ssh_vault_get(ctx->state_root, vault_key);
-        if (!vault_password && profile_root && !session_profile && environment && cJSON_IsString(environment))
-            vault_password = ssh_vault_get(ctx->state_root, environment->valuestring);
+        if (ctx->session_id && *ctx->session_id &&
+            !ssh_session_pending_key(vault_key, pending_vault_key, sizeof(pending_vault_key)))
+            vault_password = ssh_vault_get(ctx->state_root, pending_vault_key);
+        if (!vault_password && current_managed_profile)
+            vault_password = ssh_named_password(ctx, managed_environment,
+                                                host_text, user_text, port_no);
+        if (!vault_password) vault_password = ssh_vault_get(ctx->state_root, vault_key);
+        if (!vault_password && managed_environment)
+            vault_password = ssh_named_password(ctx, managed_environment,
+                                                host_text, user_text, port_no);
         password_text = vault_password;
     }
     if (!password_text && (!ctx || !ctx->session_id || !*ctx->session_id) &&
@@ -561,13 +621,13 @@ static tool_result *ssh_exec(const tool *self, const tool_ctx *ctx, const char *
         (profile_root && ((profile.identity_file && !ssh_path_valid(profile.identity_file)) ||
                           (profile.known_hosts && !ssh_path_valid(profile.known_hosts)) ||
                           (profile.proxy_jump && !ssh_host_valid(profile.proxy_jump))))) {
-        ssh_vault_secret_free(vault_password); cJSON_Delete(profile_root);
+        free(embedded_user); ssh_vault_secret_free(vault_password); cJSON_Delete(profile_root);
         cJSON_Delete(args);
         return tool_result_new(0, "ssh: host, command or port is invalid");
     }
     quoted = ssh_quote_arg(command->valuestring);
     if (!quoted) {
-        ssh_vault_secret_free(vault_password); cJSON_Delete(profile_root); cJSON_Delete(args);
+        free(embedded_user); ssh_vault_secret_free(vault_password); cJSON_Delete(profile_root); cJSON_Delete(args);
         return tool_result_new(0, "ssh: command must be a single line");
     }
     if (timeout_ms < 100)
@@ -579,13 +639,13 @@ static tool_result *ssh_exec(const tool *self, const tool_ctx *ctx, const char *
         if (ssh_append_askpass(&cmd, ctx, &profile, profile_root != NULL, host_text, user_text,
                                password_text, quoted, port_no, askpass_helper, sizeof(askpass_helper),
                                askpass_secret, sizeof(askpass_secret)) != 0) {
-            ssh_vault_secret_free(vault_password); cJSON_Delete(profile_root); cJSON_Delete(args); free(quoted); strbuf_free(&cmd);
+            free(embedded_user); ssh_vault_secret_free(vault_password); cJSON_Delete(profile_root); cJSON_Delete(args); free(quoted); strbuf_free(&cmd);
             return tool_result_new(0, "ssh: password arguments are invalid");
         }
     } else {
         if (ssh_append_options(&cmd, &profile, profile_root != NULL, host_text, user_text,
                                quoted, port_no, 1) != 0) {
-            ssh_vault_secret_free(vault_password); cJSON_Delete(profile_root); cJSON_Delete(args); free(quoted); strbuf_free(&cmd);
+            free(embedded_user); ssh_vault_secret_free(vault_password); cJSON_Delete(profile_root); cJSON_Delete(args); free(quoted); strbuf_free(&cmd);
             return tool_result_new(0, "ssh: profile arguments are invalid");
         }
     }
@@ -601,13 +661,13 @@ static tool_result *ssh_exec(const tool *self, const tool_ctx *ctx, const char *
         if (askpass_helper[0]) fs_remove(askpass_helper);
 #endif
         if (askpass_secret[0]) fs_remove(askpass_secret);
-        ssh_vault_secret_free(vault_password);
+        free(embedded_user); ssh_vault_secret_free(vault_password);
         cJSON_Delete(profile_root); cJSON_Delete(args);
         return tool_result_new(0, "ssh: out of memory");
     }
     result = shell_exec_impl(NULL, ctx, shell_args, 1);
-    /* Enroll only a successful login; bad credentials must not replace a
-     * working environment secret. A retrieved secret is already enrolled. */
+    /* Only a verified login promotes a staged password. A failed correction
+     * cannot replace the last working credential or selected endpoint. */
     if (result && result->ok && ctx && vault_key[0] && password_text)
         ssh_vault_put(ctx->state_root, vault_key, password_text);
     if (result && result->ok && ctx && ctx->session_id && *ctx->session_id)
@@ -617,11 +677,20 @@ static tool_result *ssh_exec(const tool *self, const tool_ctx *ctx, const char *
             profile_root ? profile.identity_file : NULL,
             profile_root ? profile.proxy_jump : NULL,
             profile_root ? profile.known_hosts : NULL);
+    if (ctx && pending_vault_key[0]) {
+        if (result && result->ok) {
+            ssh_vault_delete(ctx->state_root, pending_vault_key);
+        } else if (ssh_session_has_verified_profile(ctx->state_root, ctx->session_id)) {
+            ssh_session_profile_discard_pending(ctx->state_root, ctx->session_id, vault_key);
+            ssh_vault_delete(ctx->state_root, pending_vault_key);
+        }
+    }
 #if !defined(_WIN32)
     if (askpass_helper[0]) fs_remove(askpass_helper);
 #endif
     if (askpass_secret[0]) fs_remove(askpass_secret);
     free(shell_args);
+    free(embedded_user);
     ssh_vault_secret_free(vault_password);
     cJSON_Delete(profile_root); cJSON_Delete(args);
     return result;

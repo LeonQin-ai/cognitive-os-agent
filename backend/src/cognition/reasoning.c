@@ -2036,6 +2036,8 @@ static int prompt_is_direct_information_request(const char *prompt) {
     };
     if (!prompt)
         return 0;
+    const char *agent_task = strstr(prompt, "## 用户任务\n");
+    if (agent_task) prompt = agent_task + strlen("## 用户任务\n");
     for (size_t i = 0; i < sizeof(actions) / sizeof(actions[0]); i++)
         if (strstr(prompt, actions[i]))
             return 0;
@@ -2054,7 +2056,10 @@ static int prompt_requires_mutation(const char *prompt) {
         "安装", "部署", "删除", "create ", "generate ", "copy ", "write ",
         "edit ", "fix ", "save ", "export ", "install ", "deploy ", "delete "
     };
-    if (!prompt || strstr(prompt, "如何") || strstr(prompt, "怎么") || strstr(prompt, "how to "))
+    if (!prompt) return 0;
+    const char *agent_task = strstr(prompt, "## 用户任务\n");
+    if (agent_task) prompt = agent_task + strlen("## 用户任务\n");
+    if (strstr(prompt, "如何") || strstr(prompt, "怎么") || strstr(prompt, "how to "))
         return 0;
     for (size_t i = 0; i < sizeof(verbs) / sizeof(verbs[0]); i++)
         if (strstr(prompt, verbs[i])) return 1;

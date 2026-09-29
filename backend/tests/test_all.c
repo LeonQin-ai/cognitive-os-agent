@@ -706,6 +706,15 @@ static void test_snapshot_tx(void) {
     CHECK(ssh_vault_get(vault_root, host_key) == NULL);
     CHECK(ssh_session_profile_record(vault_root, "chat-one", NULL, "127.0.0.1",
                                      "tester", 2222, NULL, NULL, NULL) == 0);
+    CHECK(ssh_session_profile_record(vault_root, "chat-one", NULL, "127.0.0.2",
+                                     "tester", 2222, NULL, NULL, NULL) == 0);
+    char secondary_key[96];
+    CHECK(ssh_session_vault_key("chat-one", "127.0.0.1", "tester", 2222,
+                                secondary_key, sizeof(secondary_key)) == 0);
+    CHECK(ssh_session_profile_forget(vault_root, "chat-one", secondary_key) == 0);
+    session_profile = ssh_session_profile_get(vault_root, "chat-one", NULL);
+    CHECK(session_profile && strstr(session_profile, "127.0.0.2"));
+    free(session_profile);
     ssh_session_profiles_clear(vault_root, "chat-one");
     CHECK(ssh_session_profile_get(vault_root, "chat-one", NULL) == NULL);
 
@@ -723,15 +732,43 @@ static void test_snapshot_tx(void) {
     free(ingress_profile);
     CHECK(ssh_session_vault_key("chat-ingress", "127.0.0.1", "deploy", 2222,
                                 host_key, sizeof(host_key)) == 0);
-    saved_secret = ssh_vault_get(ingress_root, host_key);
+    char pending_key[96];
+    CHECK(ssh_session_pending_key(host_key, pending_key, sizeof(pending_key)) == 0);
+    saved_secret = ssh_vault_get(ingress_root, pending_key);
     CHECK_STR(saved_secret, "aB3!");
     ssh_vault_secret_free(saved_secret);
+    CHECK(ssh_vault_get(ingress_root, host_key) == NULL);
     CHECK(ssh_session_profile_get(ingress_root, "other-chat", NULL) == NULL);
+    CHECK(!ssh_session_has_verified_profile(ingress_root, "chat-ingress"));
     prepared = ssh_session_prepare_prompt(ingress_root, "chat-ingress", "SSH 密码是NewPass7!，继续执行 id");
     CHECK(prepared && !strstr(prepared, "NewPass7!"));
     free(prepared);
-    saved_secret = ssh_vault_get(ingress_root, host_key);
+    saved_secret = ssh_vault_get(ingress_root, pending_key);
     CHECK_STR(saved_secret, "NewPass7!");
+    ssh_vault_secret_free(saved_secret);
+    ssh_session_profile_discard_pending(ingress_root, "chat-ingress", host_key);
+    CHECK(ssh_vault_delete(ingress_root, pending_key) == 0);
+    CHECK(ssh_session_profile_get(ingress_root, "chat-ingress", NULL) == NULL);
+    CHECK(ssh_session_profile_record(ingress_root, "chat-ingress", NULL,
+                                     "127.0.0.1", "deploy", 2222, NULL, NULL, NULL) == 0);
+    CHECK(ssh_session_has_verified_profile(ingress_root, "chat-ingress"));
+    CHECK(ssh_vault_put(ingress_root, host_key, "working-secret") == 0);
+    prepared = ssh_session_prepare_prompt(ingress_root, "chat-ingress",
+        "SSH 登录 other@127.0.0.1 -p 2222，密码: wrong-secret，执行 id");
+    CHECK(prepared && !strstr(prepared, "wrong-secret"));
+    free(prepared);
+    char *pending_profile = ssh_session_profile_get(ingress_root, "chat-ingress", NULL);
+    CHECK(pending_profile && strstr(pending_profile, "other"));
+    free(pending_profile);
+    char other_key[96];
+    CHECK(ssh_session_vault_key("chat-ingress", "127.0.0.1", "other", 2222,
+                                other_key, sizeof(other_key)) == 0);
+    ssh_session_profile_discard_pending(ingress_root, "chat-ingress", other_key);
+    pending_profile = ssh_session_profile_get(ingress_root, "chat-ingress", NULL);
+    CHECK(pending_profile && strstr(pending_profile, "deploy"));
+    free(pending_profile);
+    saved_secret = ssh_vault_get(ingress_root, host_key);
+    CHECK_STR(saved_secret, "working-secret");
     ssh_vault_secret_free(saved_secret);
     prepared = ssh_session_prepare_prompt(ingress_root, "other-chat", "SSH password login please");
     CHECK(prepared && strstr(prepared, "password login"));
@@ -865,9 +902,101 @@ static void test_ssh_password_integration(void) {
         &ctx);
     CHECK(result && result->ok && result->output && strstr(result->output, "SSH_SECOND_TURN"));
     tool_result_free(result);
+    /* A model can repeat stale endpoint fields after the user corrected a
+     * login. The selected local profile must remain authoritative. */
+    result = tool_execute(reg, "ssh",
+        "{\"host\":\"127.0.0.1\",\"user\":\"other\",\"port\":22,\"command\":\"echo SSH_STALE_ARGS\",\"timeout_ms\":5000}",
+        &ctx);
+    CHECK(result && result->ok && result->output && strstr(result->output, "SSH_STALE_ARGS"));
+    tool_result_free(result);
+    char *wrong = ssh_session_prepare_prompt(ctx.state_root, ctx.session_id,
+        "SSH 环境: local 用户名: testuser 密码: wrong-password，运行 id");
+    CHECK(wrong && !strstr(wrong, "wrong-password"));
+    free(wrong);
+    result = tool_execute(reg, "ssh",
+        "{\"environment\":\"local\",\"command\":\"echo SHOULD_FAIL\",\"timeout_ms\":5000}", &ctx);
+    CHECK(result && !result->ok);
+    tool_result_free(result);
+    result = tool_execute(reg, "ssh",
+        "{\"command\":\"echo SSH_AFTER_BAD_PASSWORD\",\"timeout_ms\":5000}", &ctx);
+    CHECK(result && result->ok && result->output && strstr(result->output, "SSH_AFTER_BAD_PASSWORD"));
+    tool_result_free(result);
+    wrong = ssh_session_prepare_prompt(ctx.state_root, ctx.session_id,
+        "SSH 环境: local 用户名: other 密码: dummy@!，运行 id");
+    CHECK(wrong && !strstr(wrong, "dummy@!"));
+    free(wrong);
+    result = tool_execute(reg, "ssh",
+        "{\"environment\":\"local\",\"command\":\"echo WRONG_USER\",\"timeout_ms\":5000}", &ctx);
+    CHECK(result && !result->ok);
+    tool_result_free(result);
+    result = tool_execute(reg, "ssh",
+        "{\"command\":\"echo SSH_AFTER_BAD_USER\",\"timeout_ms\":5000}", &ctx);
+    CHECK(result && result->ok && result->output && strstr(result->output, "SSH_AFTER_BAD_USER"));
+    tool_result_free(result);
+    /* A manually managed environment must still work after a successful
+     * session login, even if that chat's separately scoped secret is gone. */
+    char session_key[96];
+    CHECK(ssh_session_vault_key(ctx.session_id, "127.0.0.1", "testuser", atoi(port),
+                                session_key, sizeof(session_key)) == 0);
+    CHECK(ssh_vault_put(ctx.state_root, "local", "wrong-password") == 0);
+    result = tool_execute(reg, "ssh",
+        "{\"environment\":\"local\",\"command\":\"echo STALE_SESSION_SECRET\",\"timeout_ms\":5000}",
+        &ctx);
+    CHECK(result && !result->ok); /* current managed secret must win */
+    tool_result_free(result);
+    CHECK(ssh_vault_delete(ctx.state_root, session_key) == 0);
+    CHECK(ssh_vault_put(ctx.state_root, "local", "dummy@!") == 0);
+    result = tool_execute(reg, "ssh",
+        "{\"environment\":\"local\",\"command\":\"echo SSH_MANAGED\",\"timeout_ms\":5000}",
+        &ctx);
+    CHECK(result && result->ok && result->output && strstr(result->output, "SSH_MANAGED"));
+    tool_result_free(result);
+    result = tool_execute(reg, "ssh",
+        "{\"command\":\"echo SSH_MANAGED_NEXT_TURN\",\"timeout_ms\":5000}",
+        &ctx);
+    CHECK(result && result->ok && result->output && strstr(result->output, "SSH_MANAGED_NEXT_TURN"));
+    tool_result_free(result);
+    result = tool_execute(reg, "ssh",
+        "{\"host\":\"testuser@127.0.0.1\",\"command\":\"echo SSH_EMBEDDED_USER\",\"timeout_ms\":5000}",
+        &ctx);
+    CHECK(result && result->ok && result->output && strstr(result->output, "SSH_EMBEDDED_USER"));
+    tool_result_free(result);
     ctx.session_id = "ssh-chat-two";
     result = tool_execute(reg, "ssh", "{\"command\":\"echo WRONG_CHAT\"}", &ctx);
     CHECK(result && !result->ok);
+    tool_result_free(result);
+    /* First login fails, then the user corrects both fields in the next
+     * message. The model's old user/port args must not override the staged
+     * local correction. */
+    ctx.session_id = "ssh-chat-recovery";
+    ssh_session_profiles_clear(ctx.state_root, ctx.session_id);
+    wrong = ssh_session_prepare_prompt(ctx.state_root, ctx.session_id,
+        "SSH 环境: local 用户名: other 密码: wrong-password，执行 id");
+    CHECK(wrong && !strstr(wrong, "wrong-password"));
+    free(wrong);
+    result = tool_execute(reg, "ssh",
+        "{\"environment\":\"local\",\"command\":\"echo INITIAL_BAD_LOGIN\",\"timeout_ms\":5000}", &ctx);
+    CHECK(result && !result->ok);
+    tool_result_free(result);
+    char recovery_key[96], recovery_pending[96];
+    CHECK(ssh_session_vault_key(ctx.session_id, "127.0.0.1", "other", atoi(port),
+                                recovery_key, sizeof(recovery_key)) == 0);
+    CHECK(ssh_session_pending_key(recovery_key, recovery_pending, sizeof(recovery_pending)) == 0);
+    char *recovery_secret = ssh_vault_get(ctx.state_root, recovery_pending);
+    CHECK_STR(recovery_secret, "wrong-password");
+    ssh_vault_secret_free(recovery_secret);
+    wrong = ssh_session_prepare_prompt(ctx.state_root, ctx.session_id,
+        "用户名: testuser 密码: dummy@!，继续执行 id");
+    CHECK(wrong && !strstr(wrong, "dummy@!"));
+    free(wrong);
+    CHECK(ssh_vault_get(ctx.state_root, recovery_pending) == NULL);
+    result = tool_execute(reg, "ssh",
+        "{\"environment\":\"local\",\"user\":\"other\",\"port\":22,\"command\":\"echo SSH_RECOVERED\",\"timeout_ms\":5000}", &ctx);
+    CHECK(result && result->ok && result->output && strstr(result->output, "SSH_RECOVERED"));
+    tool_result_free(result);
+    result = tool_execute(reg, "ssh",
+        "{\"user\":\"other\",\"command\":\"echo SSH_RECOVERED_NEXT_TURN\",\"timeout_ms\":5000}", &ctx);
+    CHECK(result && result->ok && result->output && strstr(result->output, "SSH_RECOVERED_NEXT_TURN"));
     tool_result_free(result);
     dir_list leftovers = {0};
     CHECK(fs_list_dir("state-test/ssh-integration/ssh", &leftovers) == 0);
@@ -1488,6 +1617,20 @@ static void test_agent_pool(void) {
     CHECK(agent_pool_add(p, "executor", "act") >= 0);
     CHECK(agent_pool_add(p, "planner", "dup") == -1);  /* duplicate */
     CHECK(agent_pool_count(p) == 2);
+    char *role_prompt = agent_pool_task_prompt(p, "planner", "do the work");
+    CHECK(role_prompt && strstr(role_prompt, "Agent role\nplan") &&
+          strstr(role_prompt, "用户任务\ndo the work"));
+    free(role_prompt);
+    CHECK(agent_pool_task_prompt(p, "ghost", "task") == NULL);
+    CHECK(agent_pool_add(p, "ppt-expert", "交付 .pptx 文件") >= 0);
+    CHECK(!agent_pool_deliverable_valid(p, "ppt-expert", "生成 PPT", "已完成", "."));
+    CHECK(agent_pool_deliverable_valid(p, "ppt-expert", "生成 PPT 大纲", "已完成", "."));
+    char ppt_stub[1024] = {'P', 'K', 3, 4};
+    CHECK(fs_write_file("state-test/ppt-deliverable.pptx", ppt_stub, sizeof(ppt_stub)) == 0);
+    CHECK(agent_pool_deliverable_valid(p, "ppt-expert", "生成 PPT",
+                                       "文件：`state-test/ppt-deliverable.pptx`", "."));
+    fs_remove("state-test/ppt-deliverable.pptx");
+    CHECK(agent_pool_remove(p, "ppt-expert") == 0);
     /* set_model: change, then clear back to the active-model fallback */
     CHECK(agent_pool_set_model(p, "executor", "openai", "gpt-4o") == 0);
     char *snapm = agent_pool_snapshot_json(p);
@@ -3383,6 +3526,10 @@ static void test_orchestrate(void) {
         CHECK(agent_pool_add(ctx.agents, "beta", "reviewer") >= 0);
         char *a2 = NULL;
         CHECK(agent_run(&ctx, "alpha", "纯聊天模式回复即可", &a2) == 0);
+        char *agent_history = reasoning_history_json_ex(ctx.reasoning, "agent:alpha", 3);
+        CHECK(agent_history && strstr(agent_history, "Agent role") &&
+              strstr(agent_history, "writer"));
+        free(agent_history);
         char *k1 = blackboard_get(ctx.blackboard, "result:alpha");
         CHECK(k1 != NULL);
         free(k1);

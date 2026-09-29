@@ -99,9 +99,16 @@ int ssh_session_vault_key(const char *session_id, const char *host, const char *
                           int port, char *out, size_t cap);
 char *ssh_session_profile_get(const char *state_root, const char *session_id,
                               const char *environment);
+int ssh_session_has_verified_profile(const char *state_root, const char *session_id);
 int ssh_session_profile_record(const char *state_root, const char *session_id,
                                const char *environment, const char *host, const char *user,
                                int port, const char *identity, const char *jump, const char *known);
+int ssh_session_profile_stage(const char *state_root, const char *session_id,
+                              const char *environment, const char *host, const char *user,
+                              int port, const char *identity, const char *jump, const char *known);
+void ssh_session_profile_discard_pending(const char *state_root, const char *session_id,
+                                         const char *key);
+int ssh_session_pending_key(const char *key, char *out, size_t cap);
 char *ssh_session_profiles_json(const char *state_root, const char *session_id);
 int ssh_session_profile_forget(const char *state_root, const char *session_id, const char *key);
 void ssh_session_profiles_clear(const char *state_root, const char *session_id);

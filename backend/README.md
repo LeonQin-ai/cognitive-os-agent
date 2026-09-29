@@ -239,9 +239,9 @@ production hosts:
 
 Then invoke `ssh` with `{"environment":"staging","command":"uname -a"}`.
 Save this JSON as `<state_root>/ssh/environments.json`. The tool supports
-non-interactive key/agent authentication or a one-off `password` argument.
-The chat's **会话设置 → SSH 环境与本机凭据** panel shows connections discovered
-from successful SSH calls in the current chat. The next turn can call `ssh`
+non-interactive key/agent authentication or a trusted direct `password` argument.
+The chat's **会话设置 → SSH 环境与本机凭据** panel shows connections supplied
+in the current chat. The next turn can call `ssh`
 with only `command` to reuse that chat's last host and local credential.
 Automatic profiles and passwords are isolated per chat; forgetting a profile
 or deleting the chat removes its managed credential. The optional shared named
@@ -254,7 +254,13 @@ the password goes to its local vault, and the prompt seen by the model contains
 `[LOCAL_SSH_PASSWORD]` instead of the value. The SSH tool retrieves the
 credential from the vault when it runs; it ignores model-supplied password
 arguments in chat sessions. A later turn can use the saved connection without
-repeating its password. If a password is given without a host or a saved
+repeating its password. Short corrections such as `用户名: deploy 密码: …` also
+update the current chat's pending SSH credential without exposing the secret
+to the model. A failed login leaves an unverified credential available for
+retry; if a previously successful credential exists, the failed correction is
+discarded and the last working login remains selected. The current named
+environment takes precedence when it is explicitly selected, while a newly
+supplied chat correction is tried first. If a password is given without a host or a saved
 environment, the request is rejected instead of discarding the password.
 Windows protects stored credentials with the current user's DPAPI; macOS uses
 Keychain; Linux stores them in an owner-only (`0700` directory, `0600` file)

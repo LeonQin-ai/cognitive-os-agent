@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <ctype.h>
 #include <limits.h>
 #include "cJSON.h"
 
@@ -227,6 +228,78 @@ int agent_pool_find(agent_pool *p, const char *name) {
     idx = find_agent(p, name);
     mutex_unlock(&p->mtx);
     return idx;
+}
+
+char *agent_pool_role_copy(agent_pool *p, const char *name) {
+    if (!p || !name) return NULL;
+    mutex_lock(&p->mtx);
+    int idx = find_agent(p, name);
+    char *role = idx >= 0 ? xstrdup(p->agents[idx].role ? p->agents[idx].role : "") : NULL;
+    mutex_unlock(&p->mtx);
+    return role;
+}
+
+char *agent_pool_task_prompt(agent_pool *p, const char *name, const char *task) {
+    if (!task) return NULL;
+    char *role = agent_pool_role_copy(p, name);
+    if (!role) return NULL;
+    strbuf prompt;
+    strbuf_init(&prompt);
+    if (*role) strbuf_appendf(&prompt, "## Agent role\n%s\n\n", role);
+    strbuf_appendf(&prompt, "## 用户任务\n%s", task);
+    free(role);
+    return strbuf_detach(&prompt);
+}
+
+static int ppt_task_requires_file(const char *task) {
+    if (!task || (strstr(task, "大纲") && !strstr(task, ".pptx"))) return 0;
+    int format = strstr(task, "PPT") || strstr(task, "ppt") ||
+                 strstr(task, "幻灯片") || strstr(task, "演示文稿") || strstr(task, "slides");
+    int action = strstr(task, "生成") || strstr(task, "制作") || strstr(task, "创建") ||
+                 strstr(task, "做个") || strstr(task, "做一份") ||
+                 strstr(task, "导出") || strstr(task, "交付") || strstr(task, "create") ||
+                 strstr(task, "make ") || strstr(task, "build ");
+    return format && action;
+}
+
+static int pptx_path_valid(const char *workspace, const char *path) {
+    char full[2048];
+    if (!path || !*path || strlen(path) >= sizeof(full)) return 0;
+    int absolute = path[0] == '/' || path[0] == '\\' ||
+                   (isalpha((unsigned char)path[0]) && path[1] == ':');
+    if (absolute) snprintf(full, sizeof(full), "%s", path);
+    else path_join(full, sizeof(full), workspace && *workspace ? workspace : ".", path);
+    if (fs_file_size(full) < 1024) return 0;
+    size_t read_bytes = 0;
+    char *head = fs_read_file_slice(full, 0, 4, &read_bytes, NULL);
+    int valid = head && read_bytes == 4 && memcmp(head, "PK\003\004", 4) == 0;
+    free(head);
+    return valid;
+}
+
+int agent_pool_deliverable_valid(agent_pool *p, const char *name, const char *task,
+                                 const char *answer, const char *workspace) {
+    char *role = agent_pool_role_copy(p, name);
+    if (!role) return 0;
+    int required = (strcmp(name, "ppt-expert") == 0 || strstr(role, ".pptx")) &&
+                   ppt_task_requires_file(task);
+    free(role);
+    if (!required) return 1;
+    if (!answer) return 0;
+    for (const char *ext = answer; *ext; ext++) {
+        if (ext[0] != '.' || strlen(ext) < 5 || tolower((unsigned char)ext[1]) != 'p' ||
+            tolower((unsigned char)ext[2]) != 'p' ||
+            tolower((unsigned char)ext[3]) != 't' ||
+            tolower((unsigned char)ext[4]) != 'x') continue;
+        const char *start = ext;
+        while (start > answer && !strchr(" \t\r\n()[]<>\"'`,;", start[-1])) start--;
+        size_t len = (size_t)(ext + 5 - start);
+        if (!len || len >= 1024) continue;
+        char path[1024];
+        memcpy(path, start, len); path[len] = '\0';
+        if (pptx_path_valid(workspace, path)) return 1;
+    }
+    return 0;
 }
 
 blackboard *agent_pool_blackboard(agent_pool *p) {

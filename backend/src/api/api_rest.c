@@ -1533,7 +1533,7 @@ static int h_agent_add(const http_request *req, http_response *resp, void *ud) {
     root = b ? cJSON_Parse(b) : NULL;
     free(b);
     const char *name = NULL, *role = NULL, *provider = NULL, *model = NULL;
-    char name_buf[128], role_buf[256], prov_buf[128], model_buf[128];
+    char name_buf[128], role_buf[1024], prov_buf[128], model_buf[128];
     if (root && cJSON_IsObject(root)) {
         cJSON *n = cJSON_GetObjectItemCaseSensitive(root, "name");
         cJSON *r = cJSON_GetObjectItemCaseSensitive(root, "role");
@@ -1764,9 +1764,15 @@ static int h_agent_run(const http_request *req, http_response *resp, void *ud) {
     }
 
     if (rc != 0) {
+        cJSON *error = cJSON_CreateObject();
+        cJSON_AddStringToObject(error, "error", "agent run failed");
+        if (answer && *answer) cJSON_AddStringToObject(error, "detail", answer);
+        char *json = cJSON_PrintUnformatted(error);
+        cJSON_Delete(error);
         free(answer);
         resp->status = 500;
-        http_resp_json(resp, "{\"error\":\"agent run failed\"}");
+        http_resp_json(resp, json ? json : "{\"error\":\"agent run failed\"}");
+        free(json);
         return 0;
     }
 

@@ -1270,11 +1270,32 @@ int agent_run(runtime_ctx *ctx, const char *agent, const char *task, char **answ
 
     if (!ctx || !agent || !task || !ctx->reasoning || !ctx->agents)
         return -1;
-    if (agent_pool_find(ctx->agents, agent) < 0)
-        return -2; /* unknown agent */
+    char *prompt = agent_pool_task_prompt(ctx->agents, agent, task);
+    if (!prompt) return -2; /* unknown agent */
+    char session[192];
+    snprintf(session, sizeof(session), "agent:%s", agent);
     mutex_lock(&ctx->lane_mtx[0]);
-    rc = reasoning_run(ctx->reasoning, task, answer);
+    rc = reasoning_run_ex(ctx->reasoning, session, prompt, answer);
+    if (rc == 0 && !agent_pool_deliverable_valid(ctx->agents, agent, task,
+                                                    answer ? *answer : NULL, ctx->workspace)) {
+        strbuf retry;
+        strbuf_init(&retry);
+        strbuf_appendf(&retry, "原任务：%s\n上一步尚未交付可验证的 PPTX 文件。"
+                               "请现在生成文件、重新打开检查，并在最终回答中用反引号写出 .pptx 路径。", task);
+        char *retry_prompt = agent_pool_task_prompt(ctx->agents, agent, retry.buf);
+        strbuf_free(&retry);
+        free(answer ? *answer : NULL);
+        if (answer) *answer = NULL;
+        rc = retry_prompt ? reasoning_run_ex(ctx->reasoning, session, retry_prompt, answer) : -1;
+        free(retry_prompt);
+        if (rc == 0 && !agent_pool_deliverable_valid(ctx->agents, agent, task,
+                                                      answer ? *answer : NULL, ctx->workspace)) {
+            if (answer) { free(*answer); *answer = xstrdup("PPT 文件未生成，或最终回答未提供可验证的 .pptx 路径。"); }
+            rc = -1;
+        }
+    }
     mutex_unlock(&ctx->lane_mtx[0]);
+    free(prompt);
     if (rc == 0 && answer && *answer) {
         char key[160];
         snprintf(key, sizeof(key), "result:%s", agent);

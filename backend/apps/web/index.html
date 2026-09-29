@@ -366,21 +366,23 @@
 
   /* Skills / plugins discovery: quiet canvas, recognizable tiles, clear actions. */
   .market-page{max-width:1100px;margin:10px auto 48px}
-  .market-hero{display:flex;align-items:flex-start;justify-content:space-between;gap:28px;margin:18px 0 42px}
+  .market-hero{display:flex;align-items:flex-end;justify-content:space-between;gap:28px;margin:18px 0 40px;padding:6px 0 28px;border-bottom:1px solid var(--border)}
+  .market-eyebrow{display:block;margin-bottom:11px;color:var(--accent);font-size:11px;font-weight:750;letter-spacing:.16em;text-transform:uppercase}
   .market-hero h1{font-size:36px;line-height:1.15;letter-spacing:-.04em;margin:0 0 10px;font-weight:720}
   .market-hero p{font-size:16px;color:var(--muted);margin:0;line-height:1.6}
   .market-search{display:flex;align-items:center;gap:10px;width:min(340px,100%);min-width:230px;padding:0 17px;border:1px solid var(--border);border-radius:999px;background:var(--card);color:var(--muted);transition:border-color var(--tr-dur),box-shadow var(--tr-dur)}
   .market-search:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
   .market-search svg{width:18px;height:18px;flex:none}
   .market-search input{width:100%;height:48px;min-width:0;padding:0;border:0!important;outline:0!important;box-shadow:none!important;background:transparent!important;color:var(--fg);font-size:14px}
-  .market-section{margin:0 0 42px}
+  .market-section{margin:0 0 38px}
   .market-section-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px}
   .market-section-head h2{font-size:19px;font-weight:660;letter-spacing:-.02em;margin:0}
   .market-section-head .muted{font-size:12px}
   .market-installed{display:flex;flex-wrap:wrap;gap:14px;min-height:76px}
-  .market-installed-item{width:76px;padding:0;border:0;background:transparent;color:var(--fg);text-align:center;cursor:pointer}
+  .market-installed-item{width:94px;padding:10px 7px;border:1px solid transparent;border-radius:15px;background:transparent;color:var(--fg);text-align:center;cursor:pointer;transition:background var(--tr-dur),border-color var(--tr-dur)}
+  .market-installed-item:hover,.market-installed-item:focus-visible{background:var(--card);border-color:var(--border)}
   .market-installed-item .market-icon{margin:0 auto 7px}
-  .market-installed-item .market-installed-name{display:block;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .market-installed-item .market-installed-name{display:block;font-size:11px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .market-icon{width:58px;height:58px;display:grid;place-items:center;flex:none;border-radius:17px;color:#fff;font-size:25px;font-weight:750;letter-spacing:-.04em;box-shadow:inset 0 1px 0 rgba(255,255,255,.22),0 7px 16px rgba(0,0,0,.14)}
   .market-icon[data-tone="0"]{background:linear-gradient(145deg,#3678ff,#1846a8)}
   .market-icon[data-tone="1"]{background:linear-gradient(145deg,#8b5cf6,#4f27ab)}
@@ -395,21 +397,29 @@
   .market-detail h3{margin:0 0 4px;font-size:15px}
   .market-detail p{margin:0 0 12px;color:var(--muted)}
   .market-detail .row{margin:0}
-  .market-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));column-gap:40px;row-gap:10px}
-  .market-entry{display:flex;align-items:center;gap:14px;min-width:0;padding:10px 0;border-bottom:1px solid var(--border)}
+  .market-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+  .market-entry{display:flex;align-items:center;gap:14px;min-width:0;min-height:82px;padding:13px 14px;border:1px solid var(--border);border-radius:16px;background:var(--card);transition:border-color var(--tr-dur),transform var(--tr-dur),box-shadow var(--tr-dur)}
+  .market-entry:hover{border-color:var(--accent);transform:translateY(-1px);box-shadow:var(--shadow)}
   .market-entry .market-icon{width:54px;height:54px;border-radius:15px;font-size:22px}
   .market-entry-copy{min-width:0;flex:1}
   .market-entry-copy strong{display:block;font-size:14px;font-weight:650;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .market-entry-copy span{display:block;font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .market-entry-copy small{display:block;margin-top:5px;color:var(--accent);font-size:10px;font-weight:700;letter-spacing:.05em}
   .market-action{display:grid;place-items:center;width:34px;height:34px;flex:none;border:0;border-radius:9px;background:transparent;color:var(--fg);font-size:25px;line-height:1;cursor:pointer;text-decoration:none}
   .market-action:hover{background:var(--nav-hover);color:var(--accent)}
   .market-action:disabled{opacity:.5;cursor:default}
-  .market-empty{color:var(--muted);padding:16px 0;font-size:13px}
+  .market-action-label{flex:none;min-height:34px;padding:0 11px;border:1px solid var(--border);border-radius:9px;background:var(--bg);color:var(--fg);font-size:11px;font-weight:650;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;justify-content:center;white-space:nowrap}
+  .market-action-label:hover,.market-action-label:focus-visible{border-color:var(--accent);color:var(--accent);outline:none}
+  .market-empty{color:var(--muted);padding:20px 22px;font-size:13px;line-height:1.6;border:1px dashed var(--border);border-radius:14px;background:var(--card)}
+  .agent-preset-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:9px;margin:10px 0 16px}
+  .agent-preset{display:flex;flex-direction:column;align-items:flex-start;gap:5px;padding:13px;border:1px solid var(--border);border-radius:13px;background:var(--bg);color:var(--fg);text-align:left;cursor:pointer}
+  .agent-preset:hover,.agent-preset:focus-visible{border-color:var(--accent);background:var(--card);outline:none}
+  .agent-preset strong{font-size:13px}.agent-preset span{font-size:11px;color:var(--muted);line-height:1.5}
   .market-advanced{border-top:1px solid var(--border);padding-top:18px;margin-top:8px}
   .market-advanced>summary{cursor:pointer;color:var(--muted);font-size:13px;padding:7px 0;margin-bottom:12px}
   .market-advanced>summary:hover{color:var(--fg)}
   .market-advanced>.card{margin-bottom:12px}
-  @media(max-width:760px){.market-hero{flex-direction:column;gap:20px;margin:10px 0 30px}.market-hero h1{font-size:30px}.market-search{width:100%}.market-grid{grid-template-columns:1fr;gap:0}}
+  @media(max-width:760px){.market-hero{flex-direction:column;align-items:stretch;gap:20px;margin:10px 0 30px}.market-hero h1{font-size:30px}.market-search{width:100%}.market-grid{grid-template-columns:1fr}}
 
   @media (max-width:899px){
     #navToggle{display:grid}
@@ -920,16 +930,16 @@ panels.chat = `
 panels.agents = `
   <div class="card">
     <h2>Create agent</h2>
-    <div class="hint">多智能体协调器：注册命名 agent（带角色描述），通过共享黑板协同工作、可发布事实。模型从路由（Model routes）下拉选择，默认使用当前激活模型。创建完 agent 后可在下方「Flow 自动编排」中一键编排。</div>
-    <div class="hint" style="margin-top:6px">⭐ 预置专业角色（点击填入，人设已调教好）：</div>
-    <div class="chips" id="agent-presets" style="margin:4px 0 6px"></div>
+    <div class="hint">选择专业角色并填写任务。角色职责会进入该 Agent 的执行上下文，结果通过共享黑板供其他 Agent 使用。</div>
+    <div class="hint" style="margin-top:12px">专业角色模板 · 点击填入下方表单</div>
+    <div class="agent-preset-grid" id="agent-presets"></div>
     <div class="row" style="margin-bottom:8px">
       <input id="agent-team-task" type="text" placeholder="描述一个任务，按关键词自动匹配组合角色并批量创建，如：设计并开发一个导出功能，测试后写文档" style="flex:1;min-width:220px">
       <button onclick="agentTeamCompose()">🎯 智能组队</button>
     </div>
     <div class="row">
       <input id="agent-name" type="text" placeholder="name (如 writer)" style="flex:1;min-width:140px">
-      <input id="agent-role" type="text" placeholder="role (如 负责写作)" style="flex:2;min-width:200px">
+      <textarea id="agent-role" rows="3" aria-label="Agent 角色职责" placeholder="角色职责与交付要求" style="flex:2;min-width:240px;min-height:78px;resize:vertical"></textarea>
       <select id="agent-model" style="flex:2;min-width:220px">
         <option value="">（当前激活模型）</option>
       </select>
@@ -1218,11 +1228,11 @@ panels.metrics   = outPanel('Metrics (Prometheus)', 'metrics-out', 'metrics');
 panels.skills = `
   <div class="market-page">
     <div class="market-hero">
-      <div><h1>技能</h1><p>发现、安装和管理 Agent 的可复用能力。</p></div>
+      <div><span class="market-eyebrow">Agent capabilities</span><h1>技能广场</h1><p>为 Agent 配备经过筛选的可复用技能，安装后立即可用。</p></div>
       <label class="market-search" aria-label="搜索技能"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.8"/><path d="m16 16 5 5"/></svg><input id="skill-search" type="search" placeholder="搜索技能" oninput="renderSkillCatalogs()"></label>
     </div>
     <section class="market-section" aria-labelledby="skills-installed-title"><div class="market-section-head"><h2 id="skills-installed-title">已安装</h2><span class="muted" id="skills-installed-count"></span></div><div id="skills-list" class="market-installed">加载中…</div><div id="skill-detail" class="market-detail" hidden></div></section>
-    <section class="market-section" aria-labelledby="skills-popular-title"><div class="market-section-head"><h2 id="skills-popular-title">发现技能</h2><span class="muted">精选目录与市场模板</span></div><div id="skill-featured" class="market-grid"><div class="market-empty">加载中…</div></div></section>
+    <section class="market-section" aria-labelledby="skills-popular-title"><div class="market-section-head"><h2 id="skills-popular-title">发现技能</h2><span class="muted">精选目录 · 一键安装</span></div><div id="skill-featured" class="market-grid"><div class="market-empty">加载中…</div></div></section>
     <details class="market-advanced"><summary>本地安装、运行与更多来源</summary>
   <div class="card">
     <div class="card-head"><h2>本地 Skills</h2><button class="sec sm" onclick="reloadLocalSkills()">重新加载</button></div>
@@ -1277,11 +1287,11 @@ panels.skills = `
 panels.plugins = `
   <div class="market-page">
     <div class="market-hero">
-      <div><h1>插件</h1><p>为 Agent 连接更多工具，扩展工作方式。</p></div>
+      <div><span class="market-eyebrow">Extensions</span><h1>插件市场</h1><p>浏览可复用模板与开源项目，扩展 Agent 的工作方式。</p></div>
       <label class="market-search" aria-label="搜索插件"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.8"/><path d="m16 16 5 5"/></svg><input id="plugin-search" type="search" placeholder="搜索插件" oninput="renderPluginDiscovery()"></label>
     </div>
     <section class="market-section" aria-labelledby="plugins-installed-title"><div class="market-section-head"><h2 id="plugins-installed-title">已安装</h2><span class="muted" id="plugins-installed-count"></span></div><div id="plugins-installed" class="market-installed">加载中…</div><div id="plugin-detail" class="market-detail" hidden></div></section>
-    <section class="market-section" aria-labelledby="plugins-popular-title"><div class="market-section-head"><h2 id="plugins-popular-title">热门</h2><span class="muted">插件灵感与开源项目</span></div><div id="plugin-featured" class="market-grid"><div class="market-empty">加载中…</div></div></section>
+    <section class="market-section" aria-labelledby="plugins-popular-title"><div class="market-section-head"><h2 id="plugins-popular-title">发现插件</h2><span class="muted">模板与外部项目分开展示</span></div><div id="plugin-featured" class="market-grid"><div class="market-empty">加载中…</div></div></section>
     <details class="market-advanced" id="plugin-advanced"><summary>创建、发布与管理插件</summary>
   <div class="card">
     <h2>⭐ Create plugin (AI 自生成)</h2>
@@ -1790,19 +1800,19 @@ async function agentSetModel(name, btn){
 /* 常用角色的人设模板：点击填入创建表单，或按任务关键词「智能组队」批量注册 */
 const AGENT_PRESETS = [
   {key:'architect', name:'architect', label:'🏗️ 架构设计', kw:['架构','设计','方案','选型','模块','拆分','结构','重构','技术路线'],
-   role:'资深软件架构师：负责需求分析与技术方案设计，输出模块划分、接口约定与数据流设计；对关键取舍给出明确理由与备选方案，不负责具体编码实现。'},
+   hint:'模块边界、接口与设计取舍', role:'你是资深软件架构师。先确认需求和约束，再交付可实施的模块边界、接口契约、数据流和关键取舍；需要文档时写入文件并检查内容，明确未验证的假设。'},
   {key:'coder', name:'coder', label:'💻 代码开发', kw:['开发','编码','实现','写代码','功能','修复','bug','脚本','编程','交付'],
-   role:'资深开发工程师：负责按架构约定高质量编码实现，遵循项目现有代码风格与规范；小步交付、改动自测通过后才提交，对边界条件与异常路径负责。'},
+   hint:'实现、边界处理与本地验证', role:'你是资深开发工程师。先定位现有实现，再完成真实代码改动；处理边界与异常路径，运行相关测试，最终给出修改文件、验证结果和剩余限制。不要用计划或伪代码代替交付。'},
   {key:'reviewer', name:'reviewer', label:'🔍 代码检视', kw:['检视','审查','评审','review','质量','审计','走查','code review'],
-   role:'资深代码审查员：负责对代码变更做严格检视，重点检查正确性、边界条件、资源泄漏、并发安全与安全漏洞；输出分级问题清单（阻塞项/建议项）并给出修改建议。'},
+   hint:'正确性、安全与可复现证据', role:'你是资深代码审查员。阅读具体代码和调用链，重点检查正确性、边界条件、资源泄漏、并发和安全；每条问题给出文件位置、触发条件、影响与修复建议，避免无证据的泛泛评价。'},
   {key:'tester', name:'tester', label:'🧪 测试', kw:['测试','用例','单测','test','qa','验证','回归','冒烟','自动化测试'],
-   role:'资深测试工程师：负责制定测试计划、编写并执行测试用例，覆盖正常路径、边界值与异常场景；发现缺陷时输出可复现步骤、实际/期望结果与严重级别。'},
+   hint:'覆盖正常、边界与失败路径', role:'你是资深测试工程师。设计并执行能发现缺陷的测试，覆盖正常、边界和失败路径；记录实际命令与结果。发现缺陷时提供复现步骤、预期与实际行为，并在修复后复测。'},
   {key:'ppt', name:'ppt-expert', label:'📊 PPT专家', kw:['ppt','幻灯片','演示','汇报','slides','路演','宣讲','答辩'],
-   role:'资深演示设计专家：负责把主题内容提炼为结构清晰的演示文稿大纲与逐页内容；逻辑严密、要点突出、语言精炼，并根据受众调整表达深度与详略。'},
+   hint:'交付可打开的 .pptx 文件', role:'你是演示设计与制作专家。用户要求制作演示文稿时，必须实际生成可打开的 .pptx 文件，不能只给大纲或逐页文字。按受众组织叙事、控制每页信息量，优先使用 python-pptx 生成；按用户指定路径保存，未指定则保存到 deliverables/presentation.pptx。生成后重新打开文件核对页数、标题和文件大小，最终回复用反引号单独标出文件路径并给出页数；未生成时明确说明失败。'},
   {key:'docs', name:'docs-writer', label:'📝 文档', kw:['文档','readme','说明','手册','注释','教程','guide','使用指南'],
-   role:'资深技术文档工程师：负责编写与维护项目文档（README、API 说明、使用指南）；内容准确、结构清晰、示例可直接运行，并随代码变更保持同步。'},
+   hint:'准确文档与可运行示例', role:'你是资深技术文档工程师。以当前代码和配置为依据编写文档，直接修改目标文件；核对命令、路径、链接和示例，区分已实现与规划功能，并报告验证结果。'},
   {key:'researcher', name:'researcher', label:'🔬 调研分析', kw:['调研','分析','调查','竞品','评估','对比','可行性','报告'],
-   role:'资深调研分析师：负责收集资料并交叉验证，输出结论先行的结构化调研报告；论据充分、标注来源与置信度，最后给出可执行的建议。'}
+   hint:'来源、判断与可执行建议', role:'你是资深调研分析师。先核对资料来源，再给出结论、证据、限制与可执行建议；需要报告文件时实际写入并检查，清楚标识推断与未确认事实。'}
 ];
 
 function renderAgentPresets(){
@@ -1810,14 +1820,14 @@ function renderAgentPresets(){
   if(box.dataset.init) return;
   box.dataset.init = '1';
   box.innerHTML = AGENT_PRESETS.map(p =>
-    '<button class="sec sm" onclick="agentPresetFill(\'' + p.key + '\')" title="' + esc(p.role) + '">' + esc(p.label) + '</button>').join(' ');
+    '<button class="agent-preset" type="button" onclick="agentPresetFill(\'' + p.key + '\')" title="' + esc(p.role) + '"><strong>' + esc(p.label) + '</strong><span>' + esc(p.hint) + '</span></button>').join('');
 }
 
 function agentPresetFill(key){
   const p = AGENT_PRESETS.find(x => x.key === key); if(!p) return;
   $('agent-name').value = p.name;
   $('agent-role').value = p.role;
-  $('agent-name').focus();
+  $('agent-role').focus();
   if($('agent-stat')) $('agent-stat').textContent = '已填入「' + p.label + '」人设，可直接 Add';
 }
 
@@ -2460,8 +2470,8 @@ function renderSkillDiscovery(){
       items.push({x:{name:x.id,description:x.description,kind:x.kind},action:'catalogSkillInstall(' + i + ')',label:installed.has(x.id) ? '重新安装技能' : '安装技能',done:installed.has(x.id)});
   });
   box.innerHTML = items.length ? items.map(({x,action,label,done}) =>
-    '<div class="market-entry">' + marketIcon(x.name) + '<div class="market-entry-copy"><strong>' + esc(x.name) + '</strong><span title="' + esc(x.description || '') + '">' + esc(x.description || x.kind || '可运行技能') + '</span></div>' +
-    '<button class="market-action" type="button" aria-label="' + esc(label + ' ' + x.name) + '" title="' + esc(label) + '" onclick="' + action + '">' + (done ? '↻' : '+') + '</button></div>').join('') :
+    '<div class="market-entry">' + marketIcon(x.name) + '<div class="market-entry-copy"><strong>' + esc(x.name) + '</strong><span title="' + esc(x.description || '') + '">' + esc(x.description || '可运行技能') + '</span><small>' + esc(x.kind || 'SKILL') + (done ? ' · 已安装' : ' · 可安装') + '</small></div>' +
+    '<button class="market-action-label" type="button" aria-label="' + esc(label + ' ' + x.name) + '" onclick="' + action + '">' + (done ? '更新' : '安装') + '</button></div>').join('') :
     '<div class="market-empty">' + (q ? '没有匹配的技能，试试其他关键词。' : '暂无可发现的技能。') + '</div>';
 }
 
@@ -2544,11 +2554,11 @@ function renderPluginDiscovery(){
   const github = (PLUGIN_MARKET.github || []).filter(x => marketHit(x,q));
   let html = templates.map((x,i) => {
     const index = (PLUGIN_MARKET.templates || []).indexOf(x);
-    return '<div class="market-entry">' + marketIcon(x.name) + '<div class="market-entry-copy"><strong>' + esc(x.name) + '</strong><span title="' + esc(x.description || '') + '">' + esc(x.description || '插件模板') + '</span></div>' +
-      '<button class="market-action" type="button" aria-label="以 ' + esc(x.name) + ' 为起点创建插件" title="以此模板创建" onclick="usePluginTemplate(' + index + ')">+</button></div>';
+    return '<div class="market-entry">' + marketIcon(x.name) + '<div class="market-entry-copy"><strong>' + esc(x.name) + '</strong><span title="' + esc(x.description || '') + '">' + esc(x.description || '插件模板') + '</span><small>创作模板 · ' + esc(x.kind || 'PLUGIN') + '</small></div>' +
+      '<button class="market-action-label" type="button" aria-label="以 ' + esc(x.name) + ' 为起点创建插件" onclick="usePluginTemplate(' + index + ')">使用模板</button></div>';
   }).join('');
-  html += github.map(x => '<div class="market-entry">' + marketIcon(x.name) + '<div class="market-entry-copy"><strong>' + esc(x.name) + '</strong><span title="' + esc(x.description || '') + '">' + esc(x.description || x.kind || '开源项目') + '</span></div>' +
-    '<a class="market-action" href="' + esc(marketUrl(x.repo)) + '" target="_blank" rel="noopener noreferrer" aria-label="查看 ' + esc(x.name) + ' 仓库" title="查看仓库">↗</a></div>').join('');
+  html += github.map(x => '<div class="market-entry">' + marketIcon(x.name) + '<div class="market-entry-copy"><strong>' + esc(x.name) + '</strong><span title="' + esc(x.description || '') + '">' + esc(x.description || x.kind || '开源项目') + '</span><small>外部项目 · GitHub</small></div>' +
+    '<a class="market-action-label" href="' + esc(marketUrl(x.repo)) + '" target="_blank" rel="noopener noreferrer" aria-label="查看 ' + esc(x.name) + ' 仓库">查看仓库 ↗</a></div>').join('');
   featured.innerHTML = html || '<div class="market-empty">' + (q ? '没有匹配的插件，试试其他关键词。' : '暂无推荐插件。') + '</div>';
 }
 function selectInstalledPlugin(i){

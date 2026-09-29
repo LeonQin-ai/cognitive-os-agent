@@ -41,6 +41,14 @@ blackboard *agent_pool_blackboard(agent_pool *p);
 
 /* Index of the named agent, or -1 if unknown. */
 int agent_pool_find(agent_pool *p, const char *name);
+/* Copy a role while holding the roster lock. Caller frees the result. */
+char *agent_pool_role_copy(agent_pool *p, const char *name);
+/* Combine the registered role and a concrete task for a worker run. */
+char *agent_pool_task_prompt(agent_pool *p, const char *name, const char *task);
+/* A PPT production task is complete only when the reported .pptx exists and
+ * has a ZIP package header. Returns 1 when no PPT artifact is required. */
+int agent_pool_deliverable_valid(agent_pool *p, const char *name, const char *task,
+                                 const char *answer, const char *workspace);
 
 /* Publish a key/value fact tagged with an agent. Returns 0 ok, -1 if the agent
  * is unknown or args are NULL/empty. */

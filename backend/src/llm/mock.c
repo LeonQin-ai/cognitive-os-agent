@@ -199,6 +199,9 @@ static char *mock_respond(const char *msg) {
     const char *cur = strstr(msg, "## Current request\n");
     if (cur)
         msg = cur + strlen("## Current request\n");
+    const char *agent_task = strstr(msg, "## 用户任务\n");
+    if (agent_task)
+        msg = agent_task + strlen("## 用户任务\n");
 
     /* Reproduce issue #68: reading files followed by a narrated promise to
      * generate a PPT, with no action that actually creates the artifact. */

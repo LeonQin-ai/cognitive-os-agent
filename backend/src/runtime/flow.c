@@ -464,10 +464,30 @@ static void flow_worker(void *arg) {
     flow_prog_node_mark(j->task_id, j->nd->id, FP_RUNNING);
     r = flow_reasoning_new(j->ctx);
     if (r) {
+        char *prompt = agent_pool_task_prompt(j->ctx->agents, j->nd->agent, j->task);
         reasoning_set_trace_task_id(r, j->task_id);
         flow_prog_node_attach(j->task_id, j->nd->id, r);
-        j->rc = reasoning_run(r, j->task, &j->out);
+        j->rc = prompt ? reasoning_run(r, prompt, &j->out) : -1;
+        if (j->rc == 0 && !agent_pool_deliverable_valid(j->ctx->agents, j->nd->agent,
+                                                           j->task, j->out, j->ctx->workspace)) {
+            strbuf retry;
+            strbuf_init(&retry);
+            strbuf_appendf(&retry, "原任务：%s\n尚未交付可验证的 PPTX 文件。"
+                                   "请实际生成并检查文件，最终用反引号写出 .pptx 路径。", j->task);
+            char *retry_prompt = agent_pool_task_prompt(j->ctx->agents, j->nd->agent, retry.buf);
+            strbuf_free(&retry);
+            free(j->out); j->out = NULL;
+            j->rc = retry_prompt ? reasoning_run(r, retry_prompt, &j->out) : -1;
+            free(retry_prompt);
+            if (j->rc == 0 && !agent_pool_deliverable_valid(j->ctx->agents, j->nd->agent,
+                                                               j->task, j->out, j->ctx->workspace)) {
+                free(j->out);
+                j->out = xstrdup("PPT 文件未生成，或最终回答未提供可验证的 .pptx 路径。");
+                j->rc = -1;
+            }
+        }
         flow_prog_node_attach(j->task_id, j->nd->id, NULL);
+        free(prompt);
         reasoning_free(r);
     } else {
         j->rc = -1;

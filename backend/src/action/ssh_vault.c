@@ -50,6 +50,11 @@ int ssh_session_vault_key(const char *session_id, const char *host, const char *
                     (unsigned long long)hash64(session_id, strlen(session_id)), endpoint) < (int)cap ? 0 : -1;
 }
 
+int ssh_session_pending_key(const char *key, char *out, size_t cap) {
+    return ssh_vault_name_valid(key) && out &&
+           snprintf(out, cap, "pending-%s", key) < (int)cap ? 0 : -1;
+}
+
 static int ssh_session_path(const char *state_root, const char *session_id,
                             char *dir, size_t dcap, char *path, size_t pcap) {
     if (!state_root || !*state_root || !session_id || !*session_id) return -1;
@@ -95,12 +100,16 @@ char *ssh_session_profile_get(const char *state_root, const char *session_id,
     cJSON *root = ssh_session_read(state_root, session_id);
     if (!root) return NULL;
     cJSON *arr = cJSON_GetObjectItemCaseSensitive(root, "profiles"), *p;
+    const char *pending = ssh_field(root, "pending_key");
     const char *last = ssh_field(root, "last_key");
     char *out = NULL;
-    cJSON_ArrayForEach(p, arr) {
+    for (int i = cJSON_GetArraySize(arr) - 1; i >= 0; i--) {
+        p = cJSON_GetArrayItem(arr, i);
         const char *name = ssh_field(p, "environment"), *key = ssh_field(p, "key");
         if ((environment && name && strcmp(name, environment) == 0) ||
-            (!environment && last && key && strcmp(key, last) == 0)) {
+            (!environment && key && ((pending && strcmp(key, pending) == 0) ||
+                                    (!pending && last && strcmp(key, last) == 0) ||
+                                    (!pending && !last && i == cJSON_GetArraySize(arr) - 1)))) {
             out = cJSON_PrintUnformatted(p);
             break;
         }
@@ -109,24 +118,53 @@ char *ssh_session_profile_get(const char *state_root, const char *session_id,
     return out;
 }
 
-int ssh_session_profile_record(const char *state_root, const char *session_id,
-                               const char *environment, const char *host, const char *user,
-                               int port, const char *identity, const char *jump, const char *known) {
+int ssh_session_has_verified_profile(const char *state_root, const char *session_id) {
+    cJSON *root = ssh_session_read(state_root, session_id);
+    if (!root) return 0;
+    const char *last = ssh_field(root, "last_key");
+    cJSON *arr = cJSON_GetObjectItemCaseSensitive(root, "profiles");
+    int found = 0;
+    cJSON *p;
+    cJSON_ArrayForEach(p, arr) {
+        const char *key = ssh_field(p, "key");
+        if (last && key && strcmp(last, key) == 0 &&
+            cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(p, "verified"))) {
+            found = 1;
+            break;
+        }
+    }
+    cJSON_Delete(root);
+    return found;
+}
+
+static int ssh_session_profile_record_ex(const char *state_root, const char *session_id,
+                                         const char *environment, const char *host, const char *user,
+                                         int port, const char *identity, const char *jump,
+                                         const char *known, int pending) {
     char key[96];
     if (ssh_session_vault_key(session_id, host, user, port, key, sizeof(key))) return -1;
     cJSON *root = ssh_session_read(state_root, session_id);
     if (!root) return -1;
     cJSON *arr = cJSON_GetObjectItemCaseSensitive(root, "profiles");
+    const char *prior_pending = ssh_field(root, "pending_key");
+    char *obsolete_pending = pending && prior_pending && strcmp(prior_pending, key) != 0
+                                 ? xstrdup(prior_pending) : NULL;
     char *old_env = NULL, *old_identity = NULL, *old_jump = NULL, *old_known = NULL;
+    int was_verified = 0;
     for (int i = cJSON_GetArraySize(arr) - 1; i >= 0; i--) {
         cJSON *p = cJSON_GetArrayItem(arr, i);
         const char *old = ssh_field(p, "key");
         if (old && strcmp(old, key) == 0) {
+            was_verified = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(p, "verified"));
             const char *v;
             v = ssh_field(p, "environment"); if (v) old_env = xstrdup(v);
             v = ssh_field(p, "identity_file"); if (v) old_identity = xstrdup(v);
             v = ssh_field(p, "proxy_jump"); if (v) old_jump = xstrdup(v);
             v = ssh_field(p, "known_hosts"); if (v) old_known = xstrdup(v);
+            cJSON_DeleteItemFromArray(arr, i);
+        } else if (pending && obsolete_pending && old &&
+                   strcmp(old, obsolete_pending) == 0 &&
+                   !cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(p, "verified"))) {
             cJSON_DeleteItemFromArray(arr, i);
         }
     }
@@ -135,17 +173,68 @@ int ssh_session_profile_record(const char *state_root, const char *session_id,
     cJSON_AddStringToObject(p, "host", host);
     if (user && *user) cJSON_AddStringToObject(p, "user", user);
     cJSON_AddNumberToObject(p, "port", port);
+    if (!pending || was_verified) cJSON_AddBoolToObject(p, "verified", 1);
+    if (pending) cJSON_AddBoolToObject(p, "pending", 1);
     if ((environment && *environment) || old_env) cJSON_AddStringToObject(p, "environment", environment && *environment ? environment : old_env);
     if ((identity && *identity) || old_identity) cJSON_AddStringToObject(p, "identity_file", identity && *identity ? identity : old_identity);
     if ((jump && *jump) || old_jump) cJSON_AddStringToObject(p, "proxy_jump", jump && *jump ? jump : old_jump);
     if ((known && *known) || old_known) cJSON_AddStringToObject(p, "known_hosts", known && *known ? known : old_known);
     cJSON_AddItemToArray(arr, p);
-    cJSON_DeleteItemFromObjectCaseSensitive(root, "last_key");
-    cJSON_AddStringToObject(root, "last_key", key);
+    if (pending) {
+        cJSON_DeleteItemFromObjectCaseSensitive(root, "pending_key");
+        cJSON_AddStringToObject(root, "pending_key", key);
+    } else {
+        cJSON_DeleteItemFromObjectCaseSensitive(root, "last_key");
+        cJSON_AddStringToObject(root, "last_key", key);
+        cJSON_DeleteItemFromObjectCaseSensitive(root, "pending_key");
+    }
     int rc = ssh_session_write(state_root, session_id, root);
+    if (!rc && obsolete_pending) {
+        char old_secret[96];
+        if (!ssh_session_pending_key(obsolete_pending, old_secret, sizeof(old_secret)))
+            ssh_vault_delete(state_root, old_secret);
+    }
+    free(obsolete_pending);
     free(old_env); free(old_identity); free(old_jump); free(old_known);
     cJSON_Delete(root);
     return rc;
+}
+
+int ssh_session_profile_record(const char *state_root, const char *session_id,
+                               const char *environment, const char *host, const char *user,
+                               int port, const char *identity, const char *jump, const char *known) {
+    return ssh_session_profile_record_ex(state_root, session_id, environment, host, user,
+                                         port, identity, jump, known, 0);
+}
+
+int ssh_session_profile_stage(const char *state_root, const char *session_id,
+                              const char *environment, const char *host, const char *user,
+                              int port, const char *identity, const char *jump, const char *known) {
+    return ssh_session_profile_record_ex(state_root, session_id, environment, host, user,
+                                         port, identity, jump, known, 1);
+}
+
+void ssh_session_profile_discard_pending(const char *state_root, const char *session_id,
+                                         const char *key) {
+    cJSON *root = ssh_session_read(state_root, session_id);
+    if (!root) return;
+    const char *pending = ssh_field(root, "pending_key");
+    if (pending && key && strcmp(pending, key) == 0) {
+        cJSON *arr = cJSON_GetObjectItemCaseSensitive(root, "profiles");
+        for (int i = cJSON_GetArraySize(arr) - 1; i >= 0; i--) {
+            cJSON *p = cJSON_GetArrayItem(arr, i);
+            const char *saved = ssh_field(p, "key");
+            if (saved && strcmp(saved, key) == 0) {
+                if (cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(p, "verified")))
+                    cJSON_DeleteItemFromObjectCaseSensitive(p, "pending");
+                else
+                    cJSON_DeleteItemFromArray(arr, i);
+            }
+        }
+        cJSON_DeleteItemFromObjectCaseSensitive(root, "pending_key");
+        ssh_session_write(state_root, session_id, root);
+    }
+    cJSON_Delete(root);
 }
 
 char *ssh_session_profiles_json(const char *state_root, const char *session_id) {
@@ -157,6 +246,11 @@ char *ssh_session_profiles_json(const char *state_root, const char *session_id) 
         cJSON *item = cJSON_Duplicate(p, 1);
         const char *key = ssh_field(p, "key");
         char *secret = key ? ssh_vault_get(state_root, key) : NULL;
+        if (!secret && key) {
+            char pending_key[96];
+            if (!ssh_session_pending_key(key, pending_key, sizeof(pending_key)))
+                secret = ssh_vault_get(state_root, pending_key);
+        }
         cJSON_AddBoolToObject(item, "has_password", secret != NULL);
         ssh_vault_secret_free(secret);
         cJSON_AddItemToArray(out, item);
@@ -178,16 +272,30 @@ int ssh_session_profile_forget(const char *state_root, const char *session_id, c
         if (old && strcmp(old, key) == 0) { cJSON_DeleteItemFromArray(arr, i); found = 1; }
     }
     if (found) {
-        cJSON_DeleteItemFromObjectCaseSensitive(root, "last_key");
-        int n = cJSON_GetArraySize(arr);
-        if (n) {
-            const char *last = ssh_field(cJSON_GetArrayItem(arr, n - 1), "key");
-            if (last) cJSON_AddStringToObject(root, "last_key", last);
+        const char *pending = ssh_field(root, "pending_key");
+        if (pending && strcmp(pending, key) == 0)
+            cJSON_DeleteItemFromObjectCaseSensitive(root, "pending_key");
+        const char *last_key = ssh_field(root, "last_key");
+        if (last_key && strcmp(last_key, key) == 0) {
+            cJSON_DeleteItemFromObjectCaseSensitive(root, "last_key");
+            for (int i = cJSON_GetArraySize(arr) - 1; i >= 0; i--) {
+                cJSON *candidate = cJSON_GetArrayItem(arr, i);
+                const char *candidate_key = ssh_field(candidate, "key");
+                if (candidate_key && cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(candidate, "verified"))) {
+                    cJSON_AddStringToObject(root, "last_key", candidate_key);
+                    break;
+                }
+            }
         }
     }
     int rc = found ? ssh_session_write(state_root, session_id, root) : -1;
     cJSON_Delete(root);
-    if (!rc) ssh_vault_delete(state_root, key);
+    if (!rc) {
+        char pending_key[96];
+        ssh_vault_delete(state_root, key);
+        if (!ssh_session_pending_key(key, pending_key, sizeof(pending_key)))
+            ssh_vault_delete(state_root, pending_key);
+    }
     return rc;
 }
 
@@ -197,7 +305,12 @@ void ssh_session_profiles_clear(const char *state_root, const char *session_id) 
     cJSON *arr = cJSON_GetObjectItemCaseSensitive(root, "profiles"), *p;
     cJSON_ArrayForEach(p, arr) {
         const char *key = ssh_field(p, "key");
-        if (key) ssh_vault_delete(state_root, key);
+        if (key) {
+            char pending_key[96];
+            ssh_vault_delete(state_root, key);
+            if (!ssh_session_pending_key(key, pending_key, sizeof(pending_key)))
+                ssh_vault_delete(state_root, pending_key);
+        }
     }
     cJSON_Delete(root);
     char dir[1024], path[1152];
@@ -317,6 +430,17 @@ char *ssh_session_prepare_prompt(const char *state_root, const char *session_id,
     const char *ssh_word = ssh_find_ascii(prompt, "ssh");
     int ssh_intent = ssh_word || strstr(prompt, "远程登录") || strstr(prompt, "登录服务器") ||
                      strstr(prompt, "连接服务器");
+    /* After a failed login, a short follow-up often says only "用户名/密码是…".
+     * Treat it as an SSH correction when this chat already has an endpoint. */
+    if (!ssh_intent && state_root && *state_root &&
+        (ssh_field_value(prompt, "password", "密码", 1) ||
+         ssh_field_value(prompt, "username", "用户名", 0) ||
+         ssh_field_value(prompt, "account", "账号", 0))) {
+        char *saved = ssh_session_profile_get(state_root,
+            session_id && *session_id ? session_id : "default", NULL);
+        ssh_intent = saved != NULL;
+        free(saved);
+    }
     if (!ssh_intent) return xstrdup(prompt);
     const char *password_at = ssh_field_value(prompt, "password", "密码", 1);
     const char *password_end = NULL;
@@ -345,6 +469,7 @@ char *ssh_session_prepare_prompt(const char *state_root, const char *session_id,
     host = ssh_field_token(p, 255, NULL);
     p = ssh_field_value(prompt, "user", "用户名", 0);
     if (!p) p = ssh_field_value(prompt, "username", "用户", 0);
+    if (!p) p = ssh_field_value(prompt, "account", "账号", 0);
     user = ssh_field_token(p, 80, NULL);
     p = ssh_field_value(prompt, "environment", "环境", 0);
     environment = ssh_field_token(p, 80, NULL);
@@ -385,14 +510,22 @@ char *ssh_session_prepare_prompt(const char *state_root, const char *session_id,
     if (host && !ssh_endpoint_token_valid(host, 0)) { free(host); host = NULL; }
     if (user && !ssh_endpoint_token_valid(user, 1)) { free(user); user = NULL; }
     if (environment && !ssh_vault_name_valid(environment)) { free(environment); environment = NULL; }
-    if (!host && password) {
+    if (!host && (password || user)) {
         char *raw = ssh_session_profile_get(state_root, sid, environment);
         cJSON *profile = raw ? cJSON_Parse(raw) : NULL;
         const char *saved_host = profile ? ssh_field(profile, "host") : NULL;
         const char *saved_user = profile ? ssh_field(profile, "user") : NULL;
+        const char *saved_env = profile ? ssh_field(profile, "environment") : NULL;
+        const char *saved_identity = profile ? ssh_field(profile, "identity_file") : NULL;
+        const char *saved_jump = profile ? ssh_field(profile, "proxy_jump") : NULL;
+        const char *saved_known = profile ? ssh_field(profile, "known_hosts") : NULL;
         cJSON *saved_port = profile ? cJSON_GetObjectItemCaseSensitive(profile, "port") : NULL;
         if (saved_host) host = xstrdup(saved_host);
         if (!user && saved_user) user = xstrdup(saved_user);
+        if (!environment && saved_env) environment = xstrdup(saved_env);
+        if (saved_identity) identity = xstrdup(saved_identity);
+        if (saved_jump) jump = xstrdup(saved_jump);
+        if (saved_known) known = xstrdup(saved_known);
         if (saved_port && cJSON_IsNumber(saved_port)) port = (int)saved_port->valuedouble;
         cJSON_Delete(profile); free(raw);
     }
@@ -421,15 +554,13 @@ char *ssh_session_prepare_prompt(const char *state_root, const char *session_id,
     if (user && !ssh_endpoint_token_valid(user, 1)) { free(user); user = NULL; }
     if (password && !host) { free(safe); safe = NULL; }
     if (host) {
-        if (password) {
-            char key[96];
-            if (ssh_session_vault_key(sid, host, user, port, key, sizeof(key)) ||
-                ssh_vault_put(state_root, key, password)) {
-                free(safe); safe = NULL;
-            }
-        }
-        if (safe && ssh_session_profile_record(state_root, sid, environment,
-                                               host, user, port, identity, jump, known)) {
+        char key[96] = {0}, pending_key[96];
+        if (ssh_session_vault_key(sid, host, user, port, key, sizeof(key)) ||
+            ssh_session_pending_key(key, pending_key, sizeof(pending_key)) ||
+            ssh_session_profile_stage(state_root, sid, environment,
+                                      host, user, port, identity, jump, known) ||
+            (password && ssh_vault_put(state_root, pending_key, password))) {
+            if (*key) ssh_session_profile_discard_pending(state_root, sid, key);
             free(safe); safe = NULL;
         }
     }
