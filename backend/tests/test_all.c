@@ -2719,7 +2719,8 @@ static void test_edit_search(void) {
     tool_ctx docs_ctx = tctx;
     docs_ctx.workspace = ".";
     r = tool_execute(reg, "glob", "{\"pattern\":\"docs/**/*\"}", &docs_ctx);
-    CHECK(r && r->ok && r->output && strstr(r->output, "docs/architecture-v1.0.md"));
+    CHECK(r && r->ok && r->output &&
+          strstr(r->output, "docs/COGNITIVE_OS_ARCHITECTURE_BASELINE_V3.0.md"));
     tool_result_free(r);
 
     /* --- grep --- */
