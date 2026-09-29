@@ -616,7 +616,8 @@ static void test_snapshot_tx(void) {
     CHECK(tool_registry_count(reg) == 11); /* file_read/list_dir/write/edit, shell, ssh, git, mcp, skill, glob, grep */
     CHECK(tool_find(reg, "file_read") != NULL);
     CHECK(tool_find(reg, "list_dir") != NULL);
-    fs_write_file("state-test/w/list-probe.txt", "x", 1);
+    CHECK(fs_mkdirs("state-test/w") == 0);
+    CHECK(fs_write_file("state-test/w/list-probe.txt", "x", 1) == 0);
     tool_result *listing = tool_execute(reg, "list_dir", "{\"path\":\"state-test/w\"}", NULL);
     CHECK(listing && listing->ok == 1 && strstr(listing->output, "list-probe.txt") != NULL);
     tool_result_free(listing);
