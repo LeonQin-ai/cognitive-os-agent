@@ -340,6 +340,7 @@ mock 规划器对照：BFCL 7/22、enf 4/4（mock 对违规请求本就不产生
 ./build/cognitive-os-agent-bench-gaia --real          # GAIA 风格 mini（9 条）
 ./build/cognitive-os-agent-bench-gaia --real --vision # 视觉模型（如 GLM）加跑图片任务
 # 真实工程任务（serve 后提交 /v1/orchestrate，用 UTF-8 JSON 文件体）
+python tools/gen_spec_docx.py  # 需要 python-docx；生成本地需求输入 project_spec.docx
 ./build/cognitive-os-agent.exe serve 18530
 curl -s -X POST http://127.0.0.1:18530/v1/orchestrate -H "Content-Type: application/json" --data-binary @orch_task.json
 ```

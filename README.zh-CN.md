@@ -349,7 +349,7 @@ cognitive-os-agent/
 │   ├── cli/                 交互式 CLI
 │   ├── tools/               mock-llm-server · 桌面壳 (WebView2) · 安装包素材
 │   ├── tests/               单元 · 场景 · e2e · 适配器 · BFCL 风格基准
-│   ├── docs/                架构 v1.0 · v2 控制/数据面 · 基准报告
+│   ├── docs/                架构 v3.0 · 详细设计 v3.1 · 密钥安全设计 · 基准报告
 │   └── third_party/         cJSON (MIT) · wasm3 (MIT) · webview (MIT)
 ├── LICENSE
 └── README.md
@@ -477,9 +477,11 @@ macOS 可运行 `bash package-macos.sh`，在 `dist/Cognitive OS.app` 生成原�
 
 ## 文档
 
+设计文档描述目标架构；是否已实现应参照详细设计中的实现状态章节。
+
 | 文档 | 内容 |
 |---|---|
-| [`backend/docs/COGNITIVE_OS_ARCHITECTURE_BASELINE_V3.0.md`](backend/docs/COGNITIVE_OS_ARCHITECTURE_BASELINE_V3.0.md) | 当前架构基线与组件边界 |
+| [`backend/docs/COGNITIVE_OS_ARCHITECTURE_BASELINE_V3.0.md`](backend/docs/COGNITIVE_OS_ARCHITECTURE_BASELINE_V3.0.md) | 目标架构基线与组件边界 |
 | [`backend/docs/COGNITIVE_OS_DETAILED_DESIGN_V3.1.md`](backend/docs/COGNITIVE_OS_DETAILED_DESIGN_V3.1.md) | 详细设计、实现状态与剩余差距 |
 | [`backend/docs/COGNITIVE_OS_SECRET_SECURITY_DDD_V1.0.md`](backend/docs/COGNITIVE_OS_SECRET_SECURITY_DDD_V1.0.md) | 密钥安全设计与验收标准 |
 | [`backend/docs/BENCHMARK_RESULTS.md`](backend/docs/BENCHMARK_RESULTS.md) | 纯净基准分数表（GAIA / SWE-bench / BFCL / 策略遵循） |

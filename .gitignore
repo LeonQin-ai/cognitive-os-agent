@@ -37,6 +37,30 @@ backend/caps_gate_out.txt
 # local design notes (not part of the open-source repo)
 /docs/
 
+# local validation workspaces and generated presentation output
+/.codex-ppt-build/
+/deliverables/
+/*.pptx
+backend/gaia-browser/
+backend/gaia/
+backend/hw_audit.json
+backend/tools/hw_audit.json
+backend/progress-*.txt
+/backend/project_spec.docx
+/backend/project_report.pptx
+/backend/todo_cli/
+/backend/huawei_c_std.pdf
+/UI.png
+/真实项目验证*.png
+
+# local WebView and crash diagnostics, outside the supported build targets
+backend/third_party/webview/webview_test.h
+backend/tools/crash_sym.c
+backend/tools/desktop_old_test.cc
+backend/tools/replica_test.cc
+backend/tools/wvrun_b.cc
+backend/tools/wvrun_c.cc
+
 # GAIA validation workspace (dataset + attachments + scratch server)
 backend/gaia-dataset/
 backend/gaia-full/

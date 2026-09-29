@@ -1,4 +1,4 @@
-# Cognitive OS Architecture Baseline v1.0
+# Cognitive OS Architecture Baseline v3.0
 
 > C-native Runtime for Autonomous AI Agents
 >

@@ -18,7 +18,7 @@ static const char web_index_html[] =
     "    --sans:system-ui,-apple-system,\"Segoe UI\",Roboto,\"Microsoft YaHei\",\"PingFang SC\",sans-serif;\n"
     "    --side-w:248px;\n"
     "  }\n"
-    "  /* base = dark theme (ChatGPT-style palette per UI.png) */\n"
+    "  /* base = dark theme palette */\n"
     "  body{\n"
     "    margin:0; font-family:var(--sans); font-size:13px; line-height:1.5;\n"
     "    color-scheme:dark;\n"

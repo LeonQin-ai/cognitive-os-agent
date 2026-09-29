@@ -352,7 +352,7 @@ cognitive-os-agent/
 │   ├── cli/                 interactive CLI
 │   ├── tools/               mock-llm-server · desktop shell (WebView2) · installer assets
 │   ├── tests/               unit · scenario · e2e · adapters · BFCL-style benchmark
-│   ├── docs/                architecture v1.0 · v2 control/data plane · benchmark report
+│   ├── docs/                architecture v3.0 · detailed design v3.1 · security design · benchmarks
 │   └── third_party/         cJSON (MIT) · wasm3 (MIT) · webview (MIT)
 ├── LICENSE
 └── README.md
@@ -483,10 +483,12 @@ Benchmark scorecard: [`backend/docs/BENCHMARK_RESULTS.md`](backend/docs/BENCHMAR
 
 ## Documentation
 
+The design documents describe target architecture; the detailed design's implementation-status section distinguishes shipped features from roadmap work.
+
 | Doc | Content |
 |---|---|
 | [`backend/docs/BENCHMARK_RESULTS.md`](backend/docs/BENCHMARK_RESULTS.md) | Clean benchmark scorecard (GAIA / SWE-bench / BFCL / policy compliance) |
-| [`backend/docs/COGNITIVE_OS_ARCHITECTURE_BASELINE_V3.0.md`](backend/docs/COGNITIVE_OS_ARCHITECTURE_BASELINE_V3.0.md) | Current architecture baseline and component boundaries |
+| [`backend/docs/COGNITIVE_OS_ARCHITECTURE_BASELINE_V3.0.md`](backend/docs/COGNITIVE_OS_ARCHITECTURE_BASELINE_V3.0.md) | Proposed architecture baseline and component boundaries |
 | [`backend/docs/COGNITIVE_OS_DETAILED_DESIGN_V3.1.md`](backend/docs/COGNITIVE_OS_DETAILED_DESIGN_V3.1.md) | Detailed design, implementation status, and remaining gaps |
 | [`backend/docs/COGNITIVE_OS_SECRET_SECURITY_DDD_V1.0.md`](backend/docs/COGNITIVE_OS_SECRET_SECURITY_DDD_V1.0.md) | Secret-security design and acceptance criteria |
 | [`backend/docs/benchmark-report-2026-08-31.md`](backend/docs/benchmark-report-2026-08-31.md) | Agent benchmark methodology and real-LLM results (detailed record behind the scorecard) |

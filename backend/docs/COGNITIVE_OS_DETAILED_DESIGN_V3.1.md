@@ -1,4 +1,4 @@
-# Cognitive OS Detailed Design Document (DDD) v1.1
+# Cognitive OS Detailed Design Document (DDD) v3.1
 
 > Status: Architecture Baseline / Design Review Candidate  
 > Scope: Personal Edition + Enterprise Edition shared runtime  
@@ -10,7 +10,7 @@
 
 ## 1. Document Purpose
 
-This document freezes the v1.1 architecture baseline for Cognitive OS and is intended to be directly consumable by developers, AI coding agents, reviewers and QA.
+This document describes the v3.1 architecture baseline for Cognitive OS and is intended to be directly consumable by developers, AI coding agents, reviewers and QA.
 
 The document defines:
 
