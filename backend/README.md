@@ -370,10 +370,11 @@ POST /v1/local/start             # body {"engine":"ollama"} 或 {"engine":"llama
 ./build/cognitive-os-agent-e2e                   # full pipeline, both providers
 ```
 
-Current unit result (verified locally on Windows, 2026-09-28):
+Latest local check (Windows, 2026-09-29):
 
 ```
-unit:       2514 passed, 0 failed
+unit:       2583 passed, 0 failed
+scenario:   91 passed, 0 failed
 adapters:   ADAPTER PASS (openai + anthropic, chat + stream)
 e2e:        E2E PASS (openai + anthropic)
 bench:      --mock tool-selection accuracy 100%

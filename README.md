@@ -7,7 +7,6 @@
 [![Language](https://img.shields.io/badge/language-C11-blue.svg)](https://en.wikipedia.org/wiki/C11_(C_standard_revision))
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)](#quick-start)
 [![Dependencies](https://img.shields.io/badge/external%20deps-0-green.svg)](#project-structure)
-[![Tests](https://img.shields.io/badge/tests-1622%20passing-brightgreen.svg)](#testing)
 [![CI](https://github.com/LeonQin-ai/cognitive-os-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/LeonQin-ai/cognitive-os-agent/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
 
@@ -81,25 +80,27 @@ All numbers are real full-agent-loop runs. Clean scorecard: [`backend/docs/BENCH
 
 Notable: the same runtime reaches **78.79% on GAIA** and **72.7% on SWE-bench mini** with a mid-tier GLM-5.3-flash — and policy compliance goes **0/4 → 4/4** when rules move from the prompt into the runtime policy engine. The LLM is the accelerator; the runtime provides the guarantees.
 
-## Showcase
+## Web Console
 
-### Web UI
+The embedded console supports persistent chat sessions, observable agent runs,
+task steering, multi-agent flows, scheduled jobs, and local Skills/MCP/plugins.
+Screenshots below use a local demo configuration and mock execution.
 
-Chat with sessions (create / switch / cancel / resume, shared-memory toggle), multi-agent & flow orchestration, cron jobs, plugins — served as a single embedded page by the C binary.
+![Current chat console](screenshots/ui.png)
 
-![Web UI](screenshots/ui.png)
+Execution history shows model and tool milestones, touched files, timing, and
+expandable action details. The Skills and Plugins pages provide searchable
+discovery and installed-item management.
 
-### Real project built by the runtime: [Nerve](https://github.com/LeonQin-ai/Nerve)
+![Agent execution](screenshots/execution.png)
 
-An AI-powered SSH terminal (Xshell-like, C++20), developed **end-to-end by the multi-agent pipeline** (design → coder → tester agents coordinating over a shared blackboard, GLM-5.3-flash as the LLM). Zero human-written code:
+<details>
+<summary>Skills and Plugins screens</summary>
 
-- Plain-language design doc in → **architecture & layering doc** out (L0–L4 layers, module boundaries, C++ interfaces, event topics)
-- Full codebase: event bus, SSH engine, terminal emulator, input router, command injector, LLM gateway, context collector, packaging GUI
-- **Self-verified**: found and fixed 3 interface inconsistencies across compile rounds, 12/12 translation units compiled (exit 0), smoke test passed, verification report written
-- **Packaged & shipped**: v0.1.0 zip built by the agent's own packaging tool, 2 commits / 44 files pushed to GitHub
+![Skills](screenshots/skills.png)
 
-![Multi-agent pool](screenshots/agent-pool.png)
-![Agent self-verification report](screenshots/nerve-verification.png)
+![Plugins](screenshots/plugins.png)
+</details>
 
 ## Architecture
 
@@ -422,10 +423,10 @@ Point it at a real LLM (or run fully offline with the mock provider):
 
 ## Testing
 
-Quality gate: **every change is verified on both Windows (zig cc) and Linux (gcc 12), including an AddressSanitizer-clean run.**
+Quality gate: CI builds and tests on Windows (zig cc), Linux (gcc and AddressSanitizer), macOS Apple Silicon, and macOS Intel.
 
 ```
-unit:      1609 passed, 0 failed   (Windows/zig cc, 0 external runtime deps)
+unit:      2583 passed, 0 failed   (local Windows verification, 2026-09-29)
 scenario:  91 checks, 0 failed     (HTTP server, plugins, MCP stdio, flows)
 e2e:       E2E PASS                (real HTTP, both protocols)
 adapters:  ADAPTER PASS            (chat + SSE stream, openai + anthropic)
@@ -442,7 +443,7 @@ All suites are self-contained and need **no API key, no network, no external ser
 ```bash
 cd backend
 make                # builds all test binaries (or: make test/scenario to build+run one)
-make test           # unit tests          → "1609 passed, 0 failed"
+make test           # unit tests; prints the current pass count
 make scenario       # scenario checks     → "SCENARIO PASS"
 ./build/test-adapters            # adapter checks      → "ADAPTER PASS"
 ./build/cognitive-os-agent-bench --mock   # benchmark sanity (offline mock)
@@ -476,7 +477,7 @@ On macOS, `bash package-macos.sh` creates a native Cocoa/WebKit app in
 
 > The bench-real / bench-bfcl binaries also run offline with `--mock`. With `--real` they hit a real LLM via `COA_LLM_*` environment variables (provider / base_url / model / api_key) — use them only when you have an API key.
 
-**CI** runs the same suites on every push and pull request — Linux (gcc), Linux (AddressSanitizer) and Windows (zig cc). See [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
+**CI** runs on every push and pull request across Windows, Linux, Linux AddressSanitizer, macOS Apple Silicon, and macOS Intel. See [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
 
 Benchmark scorecard: [`backend/docs/BENCHMARK_RESULTS.md`](backend/docs/BENCHMARK_RESULTS.md) · methodology and real-LLM results: [`backend/docs/benchmark-report-2026-08-31.md`](backend/docs/benchmark-report-2026-08-31.md).
 
@@ -485,8 +486,9 @@ Benchmark scorecard: [`backend/docs/BENCHMARK_RESULTS.md`](backend/docs/BENCHMAR
 | Doc | Content |
 |---|---|
 | [`backend/docs/BENCHMARK_RESULTS.md`](backend/docs/BENCHMARK_RESULTS.md) | Clean benchmark scorecard (GAIA / SWE-bench / BFCL / policy compliance) |
-| [`backend/docs/architecture-v1.0.md`](backend/docs/architecture-v1.0.md) | Architecture baseline: diagrams, cognitive loop, Memory OS, Context MMU, hooks, sequence diagrams, module mapping |
-| [`backend/docs/architecture-design-v2.md`](backend/docs/architecture-design-v2.md) | Control plane / data plane split, enterprise roadmap (multi-tenant, cluster, deployment) |
+| [`backend/docs/COGNITIVE_OS_ARCHITECTURE_BASELINE_V3.0.md`](backend/docs/COGNITIVE_OS_ARCHITECTURE_BASELINE_V3.0.md) | Current architecture baseline and component boundaries |
+| [`backend/docs/COGNITIVE_OS_DETAILED_DESIGN_V3.1.md`](backend/docs/COGNITIVE_OS_DETAILED_DESIGN_V3.1.md) | Detailed design, implementation status, and remaining gaps |
+| [`backend/docs/COGNITIVE_OS_SECRET_SECURITY_DDD_V1.0.md`](backend/docs/COGNITIVE_OS_SECRET_SECURITY_DDD_V1.0.md) | Secret-security design and acceptance criteria |
 | [`backend/docs/benchmark-report-2026-08-31.md`](backend/docs/benchmark-report-2026-08-31.md) | Agent benchmark methodology and real-LLM results (detailed record behind the scorecard) |
 | [`backend/README.md`](backend/README.md) | Developer docs: build, concurrency model, API, configuration, marketplace, local models |
 

@@ -7,7 +7,6 @@
 [![Language](https://img.shields.io/badge/language-C11-blue.svg)](https://en.wikipedia.org/wiki/C11_(C_standard_revision))
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)](#快速开始)
 [![Dependencies](https://img.shields.io/badge/external%20deps-0-green.svg)](#项目结构)
-[![Tests](https://img.shields.io/badge/tests-1609%20passing-brightgreen.svg)](#测试与验证)
 [![CI](https://github.com/LeonQin-ai/cognitive-os-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/LeonQin-ai/cognitive-os-agent/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
 
@@ -81,25 +80,24 @@ Cognitive OS 把这些职责**从提示词里搬进运行时**：
 
 值得注意：同一套运行时用中端模型 GLM-5.3-flash 即可达到 **GAIA 78.79%**、**SWE-bench mini 72.7%**；把规则从提示词移进运行时策略引擎后，策略遵循从 **0/4 变 4/4**。LLM 是加速器，运行时提供保证。
 
-## 项目展示
+## Web 控制台
 
-### Web UI
+内嵌控制台支持持久化会话、可观测的 Agent 执行过程、执行中补充要求、多 Agent Flow、定时任务，以及本地 Skills/MCP/插件管理。
+以下截图使用本地演示配置和 mock 执行任务。
 
-多会话聊天（新建/切换/取消/恢复、共享记忆开关）、多 Agent & Flow 编排、定时任务、插件——全部由 C 二进制内嵌单页提供。
+![当前聊天界面](screenshots/ui.png)
 
-![Web UI](screenshots/ui.png)
+执行历史展示模型与工具阶段、修改的文件、耗时和可展开的动作详情；Skills 与插件页面支持搜索、发现和已安装项管理。
 
-### 运行时真实开发的项目：[Nerve](https://github.com/LeonQin-ai/Nerve)
+![Agent 执行历史](screenshots/execution.png)
 
-一个 AI 加持的 SSH 终端（类 Xshell，C++20），由多 Agent 流水线（design → coder → tester，共享黑板协同，GLM-5.3-flash）**端到端开发，零人工代码**：
+<details>
+<summary>查看 Skills 与插件界面</summary>
 
-- 自然语言设计文档进 → **架构与分层设计文档**出（L0–L4 分层、模块职责边界、C++ 接口、事件主题）
-- 完整代码库：事件总线、SSH 引擎、终端仿真器、输入路由、命令注入器、LLM 网关、上下文采集、打包 GUI
-- **自我验证**：编译轮次中发现并修复 3 处接口不一致，12/12 个源文件全量编译 exit 0，冒烟测试通过，产出验证报告
-- **打包交付**：agent 自研打包工具产出 v0.1.0 zip，2 个 commit / 44 个文件推送至 GitHub
+![Skills](screenshots/skills.png)
 
-![多 Agent 池](screenshots/agent-pool.png)
-![Agent 自验证报告](screenshots/nerve-verification.png)
+![插件](screenshots/plugins.png)
+</details>
 
 ## 架构
 
@@ -420,10 +418,10 @@ curl localhost:8080/metrics       # 指标：context.bytes_*、memory.*、tx.*
 
 ## 测试与验证
 
-质量门槛：**每次改动都在 Windows（zig cc）与 Linux（gcc 12）双平台验证，包含 AddressSanitizer 无报错运行。**
+质量门槛：CI 在 Windows（zig cc）、Linux（gcc 和 AddressSanitizer）、macOS Apple Silicon 与 macOS Intel 上构建和测试。
 
 ```
-unit:      1609 passed, 0 failed   （Windows/zig cc，0 外部运行时依赖）
+unit:      2583 passed, 0 failed   （2026-09-29 本地 Windows 验证）
 scenario:  91 checks, 0 failed     （HTTP 服务器、插件、MCP stdio、Flow）
 e2e:       E2E PASS                （真实 HTTP，双协议）
 adapters:  ADAPTER PASS            （chat + SSE 流式，openai + anthropic）
@@ -440,7 +438,7 @@ ASAN:      0 内存错误
 ```bash
 cd backend
 make                # 构建全部测试二进制（或 make test / make scenario 构建并运行单项）
-make test           # 单元测试            → "1609 passed, 0 failed"
+make test           # 单元测试；输出当前通过数量
 make scenario       # 场景检查            → "SCENARIO PASS"
 ./build/test-adapters            # 适配器检查          → "ADAPTER PASS"
 ./build/cognitive-os-agent-bench --mock   # 基准 sanity（离线 mock）
@@ -473,7 +471,7 @@ macOS 可运行 `bash package-macos.sh`，在 `dist/Cognitive OS.app` 生成原�
 
 > bench-real / bench-bfcl 用 `--mock` 也是离线的；`--real` 会通过 `COA_LLM_*` 环境变量（provider / base_url / model / api_key）访问真实 LLM——仅在你有 API key 时使用。
 
-**CI** 在每次 push 和 pull request 时运行同样的套件——Linux（gcc）、Linux（AddressSanitizer）、Windows（zig cc）。见 [`.github/workflows/ci.yml`](.github/workflows/ci.yml)。
+**CI** 在每次 push 和 pull request 时运行 Windows、Linux、Linux AddressSanitizer、macOS Apple Silicon 和 macOS Intel 门禁。见 [`.github/workflows/ci.yml`](.github/workflows/ci.yml)。
 
 基准评测纯净分数表：[`backend/docs/BENCHMARK_RESULTS.md`](backend/docs/BENCHMARK_RESULTS.md) · 方法论与真实 LLM 结果：[`backend/docs/benchmark-report-2026-08-31.md`](backend/docs/benchmark-report-2026-08-31.md)。
 
@@ -481,8 +479,9 @@ macOS 可运行 `bash package-macos.sh`，在 `dist/Cognitive OS.app` 生成原�
 
 | 文档 | 内容 |
 |---|---|
-| [`backend/docs/architecture-v1.0.md`](backend/docs/architecture-v1.0.md) | 架构基线：总体图、认知闭环、Memory OS、Context MMU、Hook、时序图、模块映射 |
-| [`backend/docs/architecture-design-v2.md`](backend/docs/architecture-design-v2.md) | 控制面/数据面分离、企业级路线（多租户、集群、部署） |
+| [`backend/docs/COGNITIVE_OS_ARCHITECTURE_BASELINE_V3.0.md`](backend/docs/COGNITIVE_OS_ARCHITECTURE_BASELINE_V3.0.md) | 当前架构基线与组件边界 |
+| [`backend/docs/COGNITIVE_OS_DETAILED_DESIGN_V3.1.md`](backend/docs/COGNITIVE_OS_DETAILED_DESIGN_V3.1.md) | 详细设计、实现状态与剩余差距 |
+| [`backend/docs/COGNITIVE_OS_SECRET_SECURITY_DDD_V1.0.md`](backend/docs/COGNITIVE_OS_SECRET_SECURITY_DDD_V1.0.md) | 密钥安全设计与验收标准 |
 | [`backend/docs/BENCHMARK_RESULTS.md`](backend/docs/BENCHMARK_RESULTS.md) | 纯净基准分数表（GAIA / SWE-bench / BFCL / 策略遵循） |
 | [`backend/docs/benchmark-report-2026-08-31.md`](backend/docs/benchmark-report-2026-08-31.md) | Agent 基准评测方法与真实 LLM 结果（分数表背后的详细记录） |
 | [`backend/README.md`](backend/README.md) | 开发者文档：构建、并发模型、API、配置、市场、本地模型 |
