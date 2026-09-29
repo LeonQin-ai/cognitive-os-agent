@@ -208,6 +208,9 @@ static char *mock_respond(const char *msg) {
     if (has_substr(msg, "重复读取回归测试") &&
         !has_substr(full, "已执行动作的观察记录"))
         return xstrdup("[{\"tool\":\"file_read\",\"args\":{\"path\":\"readme.txt\"}}]");
+    if (has_substr(msg, "目录读取回归测试") &&
+        !has_substr(full, "已执行动作的观察记录"))
+        return xstrdup("[{\"tool\":\"list_dir\",\"args\":{\"path\":\".\"}}]");
     if (has_substr(msg, "连续检索回归测试") &&
         !has_substr(full, "已执行动作的观察记录")) {
         int previous_round = 0;

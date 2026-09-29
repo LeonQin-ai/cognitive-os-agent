@@ -332,6 +332,51 @@ static tool_result *file_edit_exec(const tool *self, const tool_ctx *ctx, const 
     return tool_result_new(1, out);
 }
 
+static tool_result *list_dir_exec(const tool *self, const tool_ctx *ctx, const char *args_json) {
+    (void)self;
+    cJSON *args = cJSON_Parse(args_json ? args_json : "{}");
+    if (!args || !cJSON_IsObject(args)) {
+        cJSON_Delete(args);
+        return tool_result_new(0, "list_dir: invalid args JSON");
+    }
+    cJSON *path_j = cJSON_GetObjectItemCaseSensitive(args, "path");
+    const char *path = path_j && cJSON_IsString(path_j) ? path_j->valuestring : ".";
+    char *rp = resolve_path(ctx, path);
+    cJSON_Delete(args);
+    if (!rp || !fs_is_dir(rp)) {
+        free(rp);
+        return tool_result_new(0, "list_dir: directory does not exist");
+    }
+    dir_list dl = {0};
+    if (fs_list_dir(rp, &dl) != 0) {
+        free(rp);
+        return tool_result_new(0, "list_dir: cannot read directory");
+    }
+    strbuf sb;
+    strbuf_init(&sb);
+    strbuf_appendf(&sb, "Directory listing of %s:\n", rp);
+    for (size_t i = 0; i < dl.count; i++)
+        strbuf_appendf(&sb, "%s%s\n", dl.items[i].name, dl.items[i].is_dir ? "/" : "");
+    fs_list_free(&dl);
+    free(rp);
+    char *out = strbuf_detach(&sb);
+    tool_result *r = tool_result_new(1, out ? out : "");
+    free(out);
+    return r;
+}
+
+const tool *tool_list_dir(void) {
+    static const tool t = {
+        "list_dir",
+        "List files and subdirectories in a directory (default: workspace root).",
+        "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}}}",
+        0,
+        list_dir_exec,
+        NULL,
+    };
+    return &t;
+}
+
 const tool *tool_file_read(void) {
     static const tool t = {
         "file_read",

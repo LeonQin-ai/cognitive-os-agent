@@ -613,8 +613,14 @@ static void test_snapshot_tx(void) {
 
     tool_registry *reg = tool_registry_new();
     tool_register_builtins(reg);
-    CHECK(tool_registry_count(reg) == 10); /* file_read/write/edit, shell, ssh, git, mcp, skill, glob, grep */
+    CHECK(tool_registry_count(reg) == 11); /* file_read/list_dir/write/edit, shell, ssh, git, mcp, skill, glob, grep */
     CHECK(tool_find(reg, "file_read") != NULL);
+    CHECK(tool_find(reg, "list_dir") != NULL);
+    fs_write_file("state-test/w/list-probe.txt", "x", 1);
+    tool_result *listing = tool_execute(reg, "list_dir", "{\"path\":\"state-test/w\"}", NULL);
+    CHECK(listing && listing->ok == 1 && strstr(listing->output, "list-probe.txt") != NULL);
+    tool_result_free(listing);
+    fs_remove("state-test/w/list-probe.txt");
     CHECK(tool_find(reg, "ssh") != NULL);
     tool_result *bad_ssh = tool_execute(reg, "ssh", "{\"host\":\"bad host\",\"command\":\"uname\"}", NULL);
     CHECK(bad_ssh != NULL && bad_ssh->ok == 0);
@@ -2749,6 +2755,11 @@ static void test_generated_tool(void) {
     /* rebinding the same tool name is idempotent (already registered) */
     CHECK(tool_register_generated(reg, skills, "auto_fixed_tool", name) == 0);
     CHECK(tool_find(reg, "auto_fixed_tool") != NULL);
+    /* A stale generated_tools.json mapping must not hijack a built-in read
+     * tool (a real list_dir -> unrelated skill mapping returned "hello"). */
+    tool_register_builtins(reg);
+    CHECK(tool_register_generated(reg, skills, "list_dir", name) == 0);
+    CHECK(tool_find(reg, "list_dir") == tool_list_dir());
 
     /* bad args */
     CHECK(tool_register_generated(NULL, skills, "x", name) == -1);
@@ -3214,6 +3225,35 @@ static void test_agent_loop(void) {
         free(ans);
         runtime_shutdown(&ctx);
         fs_remove("state-test/loop-w/readme.txt");
+    }
+
+    /* Directory browsing is read-only. It must use the same
+     * duplicate guard and cannot count as proof that a PPT was written. */
+    {
+        config cfg;
+        memset(&cfg, 0, sizeof(cfg));
+        cfg.state_root = "state-test/loop-list-dir";
+        cfg.workspace = "state-test/loop-w";
+        cfg.provider = "mock";
+        cfg.http_port = 0;
+        runtime_ctx ctx;
+        if (init(&ctx, &cfg) != 0) { CHECK(0); return; }
+        CHECK(tool_find(ctx.tools, "list_dir") != NULL);
+        char *ans = NULL;
+        CHECK(reasoning_run(ctx.reasoning, "目录读取回归测试：分析项目并给出清单", &ans) == 0);
+        CHECK(ans && strstr(ans, "综合回答") != NULL);
+        long long elapsed = 0, in = 0, out = 0;
+        int round = 0, calls = 0;
+        const char *tool = NULL;
+        reasoning_progress(ctx.reasoning, &elapsed, &round, &calls, &tool, &in, &out);
+        CHECK(round <= 3);
+        CHECK(calls == 1);
+        free(ans);
+        ans = NULL;
+        CHECK(reasoning_run(ctx.reasoning, "目录读取回归测试：生成 PPT 文件", &ans) != 0);
+        CHECK(ans && strstr(ans, "任务未完成") != NULL);
+        free(ans);
+        runtime_shutdown(&ctx);
     }
 
     /* Distinct read-only plans also need a bound: otherwise a model can keep

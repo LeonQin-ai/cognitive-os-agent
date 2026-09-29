@@ -1557,7 +1557,8 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
                              r->actions[i].args_json ? strlen(r->actions[i].args_json) : 0);
         int is_search = strcmp(r->actions[i].tool, "glob") == 0 ||
                         strcmp(r->actions[i].tool, "grep") == 0 ||
-                        strcmp(r->actions[i].tool, "file_read") == 0;
+                        strcmp(r->actions[i].tool, "file_read") == 0 ||
+                        strcmp(r->actions[i].tool, "list_dir") == 0;
         if (is_search) {
             int repeated = 0;
             for (int j = 0; j < r->search_seen_n && !repeated; j++)
@@ -2092,7 +2093,7 @@ static int run_has_mutating_action(const reasoning *r) {
         const struct run_step *step = &r->steps[i];
         if (step->ok != 1) continue;
         if (strcmp(step->tool, "file_read") == 0 || strcmp(step->tool, "glob") == 0 ||
-            strcmp(step->tool, "grep") == 0) continue;
+            strcmp(step->tool, "grep") == 0 || strcmp(step->tool, "list_dir") == 0) continue;
         return 1;
     }
     return 0;
@@ -2908,7 +2909,8 @@ restart_planning:
         for (int i = 0; i < r->n_actions; i++)
             if (strcmp(r->actions[i].tool, "glob") != 0 &&
                 strcmp(r->actions[i].tool, "grep") != 0 &&
-                strcmp(r->actions[i].tool, "file_read") != 0) search_only = 0;
+                strcmp(r->actions[i].tool, "file_read") != 0 &&
+                strcmp(r->actions[i].tool, "list_dir") != 0) search_only = 0;
         search_only_rounds = search_only ? search_only_rounds + 1 : 0;
         if (r->n_actions > 0 && r->round_search_skips == r->n_actions) {
             round_log_append(r, "[system] 本轮读取或搜索均与已完成的动作重复，停止空转；"
