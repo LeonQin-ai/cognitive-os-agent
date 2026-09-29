@@ -262,6 +262,56 @@ static int ppt_task_requires_file(const char *task) {
     return format && action;
 }
 
+static unsigned zip_u16(const unsigned char *p) {
+    return (unsigned)p[0] | ((unsigned)p[1] << 8);
+}
+
+static uint32_t zip_u32(const unsigned char *p) {
+    return (uint32_t)zip_u16(p) | ((uint32_t)zip_u16(p + 2) << 16);
+}
+
+static int pptx_archive_valid(const char *path, uint64_t size) {
+    size_t tail_size = size < 65557 ? (size_t)size : 65557;
+    size_t got = 0;
+    unsigned char *tail = (unsigned char *)fs_read_file_slice(path, size - tail_size,
+                                                              tail_size, &got, NULL);
+    if (!tail || got != tail_size) { free(tail); return 0; }
+    uint32_t cd_offset = 0, cd_size = 0;
+    int eocd_found = 0;
+    for (size_t i = tail_size - 22; ; i--) {
+        if (memcmp(tail + i, "PK\005\006", 4) == 0 &&
+            i + 22 + zip_u16(tail + i + 20) == tail_size &&
+            zip_u16(tail + i + 4) == 0 && zip_u16(tail + i + 6) == 0) {
+            cd_size = zip_u32(tail + i + 12);
+            cd_offset = zip_u32(tail + i + 16);
+            eocd_found = 1;
+            break;
+        }
+        if (i == 0) break;
+    }
+    free(tail);
+    if (!eocd_found || !cd_size || cd_size > 16 * 1024 * 1024 ||
+        (uint64_t)cd_offset + cd_size > size) return 0;
+    unsigned char *cd = (unsigned char *)fs_read_file_slice(path, cd_offset, cd_size,
+                                                            &got, NULL);
+    if (!cd || got != cd_size) { free(cd); return 0; }
+    int types = 0, presentation = 0;
+    for (size_t i = 0; i + 46 <= cd_size;) {
+        if (memcmp(cd + i, "PK\001\002", 4) != 0) break;
+        size_t name_len = zip_u16(cd + i + 28);
+        size_t entry_len = 46 + name_len + zip_u16(cd + i + 30) + zip_u16(cd + i + 32);
+        if (!name_len || entry_len > cd_size - i) break;
+        const unsigned char *name = cd + i + 46;
+        if (name_len == sizeof("[Content_Types].xml") - 1 &&
+            memcmp(name, "[Content_Types].xml", name_len) == 0) types = 1;
+        if (name_len == sizeof("ppt/presentation.xml") - 1 &&
+            memcmp(name, "ppt/presentation.xml", name_len) == 0) presentation = 1;
+        i += entry_len;
+    }
+    free(cd);
+    return types && presentation;
+}
+
 static int pptx_path_valid(const char *workspace, const char *path) {
     char full[2048];
     if (!path || !*path || strlen(path) >= sizeof(full)) return 0;
@@ -269,10 +319,12 @@ static int pptx_path_valid(const char *workspace, const char *path) {
                    (isalpha((unsigned char)path[0]) && path[1] == ':');
     if (absolute) snprintf(full, sizeof(full), "%s", path);
     else path_join(full, sizeof(full), workspace && *workspace ? workspace : ".", path);
-    if (fs_file_size(full) < 1024) return 0;
+    long long size = fs_file_size(full);
+    if (size < 1024) return 0;
     size_t read_bytes = 0;
     char *head = fs_read_file_slice(full, 0, 4, &read_bytes, NULL);
-    int valid = head && read_bytes == 4 && memcmp(head, "PK\003\004", 4) == 0;
+    int valid = head && read_bytes == 4 && memcmp(head, "PK\003\004", 4) == 0 &&
+                pptx_archive_valid(full, (uint64_t)size);
     free(head);
     return valid;
 }

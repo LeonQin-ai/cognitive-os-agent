@@ -119,7 +119,7 @@ int ssh_askpass_run_if_requested(void) { return -1; }
 #endif
 
 static tool_result *shell_exec_impl(const tool *self, const tool_ctx *ctx, const char *args_json,
-                                    int native_shell) {
+                                    int native_shell, int *exit_code_out, int *timed_out_out) {
     cJSON *args;
     cJSON *cmd_j;
     int timeout_ms = 15000;
@@ -130,6 +130,8 @@ static tool_result *shell_exec_impl(const tool *self, const tool_ctx *ctx, const
     tool_result *r;
 
     (void)self;
+    if (exit_code_out) *exit_code_out = -1;
+    if (timed_out_out) *timed_out_out = 0;
     args = cJSON_Parse(args_json);
     if (!args)
         return tool_result_new(0, "shell: invalid args JSON");
@@ -174,6 +176,8 @@ static tool_result *shell_exec_impl(const tool *self, const tool_ctx *ctx, const
     cJSON_Delete(args);
     if (!pr)
         return tool_result_new(0, "shell: failed to spawn process");
+    if (exit_code_out) *exit_code_out = pr->exit_code;
+    if (timed_out_out) *timed_out_out = pr->timed_out;
 
     /* Normalize output encoding: prefer the OEM->UTF-8 conversion on Windows
      * when the raw bytes are not valid UTF-8; last resort is lossy sanitize
@@ -212,7 +216,7 @@ static tool_result *shell_exec_impl(const tool *self, const tool_ctx *ctx, const
 }
 
 static tool_result *shell_exec(const tool *self, const tool_ctx *ctx, const char *args_json) {
-    return shell_exec_impl(self, ctx, args_json, 0);
+    return shell_exec_impl(self, ctx, args_json, 0, NULL, NULL);
 }
 
 const tool *tool_shell(void) {
@@ -522,6 +526,7 @@ static tool_result *ssh_exec(const tool *self, const tool_ctx *ctx, const char *
     char *vault_password = NULL;
     const char *managed_environment = NULL;
     int current_managed_profile = 0;
+    int ssh_exit_code = -1, ssh_timed_out = 0;
     char vault_key[96] = {0};
     char pending_vault_key[96] = {0};
     char *quoted = NULL;
@@ -537,7 +542,8 @@ static tool_result *ssh_exec(const tool *self, const tool_ctx *ctx, const char *
         const char *at = strchr(host_text, '@');
         if (at && at != host_text && at[1] && !strchr(at + 1, '@')) {
             size_t n = (size_t)(at - host_text);
-            if (user_text && (strlen(user_text) != n || strncmp(user_text, host_text, n))) {
+            if (user_text && (strlen(user_text) != n || strncmp(user_text, host_text, n)) &&
+                (!ctx || !ctx->session_id || !*ctx->session_id)) {
                 cJSON_Delete(args);
                 return tool_result_new(0, "ssh: conflicting user and host");
             }
@@ -558,7 +564,8 @@ static tool_result *ssh_exec(const tool *self, const tool_ctx *ctx, const char *
         profile_root = raw ? cJSON_Parse(raw) : NULL;
         free(raw);
         if (profile_root && ssh_profile_parse(profile_root, &profile) == 0) {
-            if (!host_text || strcmp(host_text, profile.host ? profile.host : "") == 0) {
+            if (!host_text || strcmp(host_text, profile.host ? profile.host : "") == 0 ||
+                cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(profile_root, "pending"))) {
                 host_text = profile.host;
                 user_text = profile.user;
                 port_no = profile.port;
@@ -665,12 +672,15 @@ static tool_result *ssh_exec(const tool *self, const tool_ctx *ctx, const char *
         cJSON_Delete(profile_root); cJSON_Delete(args);
         return tool_result_new(0, "ssh: out of memory");
     }
-    result = shell_exec_impl(NULL, ctx, shell_args, 1);
-    /* Only a verified login promotes a staged password. A failed correction
-     * cannot replace the last working credential or selected endpoint. */
-    if (result && result->ok && ctx && vault_key[0] && password_text)
+    result = shell_exec_impl(NULL, ctx, shell_args, 1, &ssh_exit_code, &ssh_timed_out);
+    /* OpenSSH uses 255 for transport/authentication errors and otherwise
+     * returns the remote command's exit status. A remote `false` is still a
+     * successful login, so keep the credential while reporting tool failure. */
+    int login_ok = result && !ssh_timed_out &&
+                   (result->ok || (ssh_exit_code >= 0 && ssh_exit_code != 255));
+    if (login_ok && ctx && vault_key[0] && password_text)
         ssh_vault_put(ctx->state_root, vault_key, password_text);
-    if (result && result->ok && ctx && ctx->session_id && *ctx->session_id)
+    if (login_ok && ctx && ctx->session_id && *ctx->session_id)
         ssh_session_profile_record(ctx->state_root, ctx->session_id,
             environment && cJSON_IsString(environment) ? environment->valuestring : NULL,
             host_text, user_text, port_no,
@@ -678,7 +688,7 @@ static tool_result *ssh_exec(const tool *self, const tool_ctx *ctx, const char *
             profile_root ? profile.proxy_jump : NULL,
             profile_root ? profile.known_hosts : NULL);
     if (ctx && pending_vault_key[0]) {
-        if (result && result->ok) {
+        if (login_ok) {
             ssh_vault_delete(ctx->state_root, pending_vault_key);
         } else if (ssh_session_has_verified_profile(ctx->state_root, ctx->session_id)) {
             ssh_session_profile_discard_pending(ctx->state_root, ctx->session_id, vault_key);

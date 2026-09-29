@@ -262,6 +262,8 @@ discarded and the last working login remains selected. The current named
 environment takes precedence when it is explicitly selected, while a newly
 supplied chat correction is tried first. If a password is given without a host or a saved
 environment, the request is rejected instead of discarding the password.
+An authenticated SSH command that exits nonzero still returns a tool failure,
+but keeps the verified login for the next turn.
 Windows protects stored credentials with the current user's DPAPI; macOS uses
 Keychain; Linux stores them in an owner-only (`0700` directory, `0600` file)
 local vault. Profile JSON contains connection settings only. Delete the

@@ -513,6 +513,8 @@ char *ssh_session_prepare_prompt(const char *state_root, const char *session_id,
     if (!host && (password || user)) {
         char *raw = ssh_session_profile_get(state_root, sid, environment);
         cJSON *profile = raw ? cJSON_Parse(raw) : NULL;
+        int use_saved = !environment ||
+            cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(profile, "pending"));
         const char *saved_host = profile ? ssh_field(profile, "host") : NULL;
         const char *saved_user = profile ? ssh_field(profile, "user") : NULL;
         const char *saved_env = profile ? ssh_field(profile, "environment") : NULL;
@@ -520,13 +522,15 @@ char *ssh_session_prepare_prompt(const char *state_root, const char *session_id,
         const char *saved_jump = profile ? ssh_field(profile, "proxy_jump") : NULL;
         const char *saved_known = profile ? ssh_field(profile, "known_hosts") : NULL;
         cJSON *saved_port = profile ? cJSON_GetObjectItemCaseSensitive(profile, "port") : NULL;
-        if (saved_host) host = xstrdup(saved_host);
-        if (!user && saved_user) user = xstrdup(saved_user);
-        if (!environment && saved_env) environment = xstrdup(saved_env);
-        if (saved_identity) identity = xstrdup(saved_identity);
-        if (saved_jump) jump = xstrdup(saved_jump);
-        if (saved_known) known = xstrdup(saved_known);
-        if (saved_port && cJSON_IsNumber(saved_port)) port = (int)saved_port->valuedouble;
+        if (use_saved) {
+            if (saved_host) host = xstrdup(saved_host);
+            if (!user && saved_user) user = xstrdup(saved_user);
+            if (!environment && saved_env) environment = xstrdup(saved_env);
+            if (saved_identity) identity = xstrdup(saved_identity);
+            if (saved_jump) jump = xstrdup(saved_jump);
+            if (saved_known) known = xstrdup(saved_known);
+            if (saved_port && cJSON_IsNumber(saved_port)) port = (int)saved_port->valuedouble;
+        }
         cJSON_Delete(profile); free(raw);
     }
     if (!host && environment) {
@@ -549,6 +553,23 @@ char *ssh_session_prepare_prompt(const char *state_root, const char *session_id,
         if (saved_known) known = xstrdup(saved_known);
         if (saved_port && cJSON_IsNumber(saved_port)) port = (int)saved_port->valuedouble;
         cJSON_Delete(root); free(raw);
+    }
+    if (!host && (password || user)) {
+        char *raw = ssh_session_profile_get(state_root, sid, environment);
+        cJSON *profile = raw ? cJSON_Parse(raw) : NULL;
+        const char *saved_host = profile ? ssh_field(profile, "host") : NULL;
+        const char *saved_user = profile ? ssh_field(profile, "user") : NULL;
+        const char *saved_identity = profile ? ssh_field(profile, "identity_file") : NULL;
+        const char *saved_jump = profile ? ssh_field(profile, "proxy_jump") : NULL;
+        const char *saved_known = profile ? ssh_field(profile, "known_hosts") : NULL;
+        cJSON *saved_port = profile ? cJSON_GetObjectItemCaseSensitive(profile, "port") : NULL;
+        if (saved_host) host = xstrdup(saved_host);
+        if (!user && saved_user) user = xstrdup(saved_user);
+        if (saved_identity) identity = xstrdup(saved_identity);
+        if (saved_jump) jump = xstrdup(saved_jump);
+        if (saved_known) known = xstrdup(saved_known);
+        if (saved_port && cJSON_IsNumber(saved_port)) port = (int)saved_port->valuedouble;
+        cJSON_Delete(profile); free(raw);
     }
     if (host && !ssh_endpoint_token_valid(host, 0)) { free(host); host = NULL; }
     if (user && !ssh_endpoint_token_valid(user, 1)) { free(user); user = NULL; }

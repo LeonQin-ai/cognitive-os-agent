@@ -886,6 +886,10 @@ static void test_ssh_password_integration(void) {
     ctx.workspace = ".";
     ctx.state_root = "state-test/ssh-integration";
     ctx.session_id = "ssh-chat-one";
+    ssh_session_profiles_clear(ctx.state_root, ctx.session_id);
+    CHECK(ssh_session_profile_record(ctx.state_root, ctx.session_id, "local",
+                                     "127.0.0.1", "testuser", 1,
+                                     NULL, NULL, NULL) == 0);
     char intro[320];
     snprintf(intro, sizeof(intro), "SSH 环境: local 密码: dummy@!，运行 echo SSH_OK");
     char *safe_intro = ssh_session_prepare_prompt(ctx.state_root, ctx.session_id, intro);
@@ -902,6 +906,25 @@ static void test_ssh_password_integration(void) {
         &ctx);
     CHECK(result && result->ok && result->output && strstr(result->output, "SSH_SECOND_TURN"));
     tool_result_free(result);
+    ctx.session_id = "ssh-chat-command-failure";
+    ssh_session_profiles_clear(ctx.state_root, ctx.session_id);
+    char nonzero_input[320];
+    snprintf(nonzero_input, sizeof(nonzero_input),
+             "SSH testuser@127.0.0.1 -p %s 密码: dummy@!，执行命令", port);
+    char *nonzero_prompt = ssh_session_prepare_prompt(ctx.state_root, ctx.session_id,
+                                                      nonzero_input);
+    CHECK(nonzero_prompt && !strstr(nonzero_prompt, "dummy@!"));
+    free(nonzero_prompt);
+    result = tool_execute(reg, "ssh",
+        "{\"port\":9999,\"command\":\"SSH_EXIT_ONE\",\"timeout_ms\":5000}", &ctx);
+    CHECK(result && !result->ok);
+    tool_result_free(result);
+    CHECK(ssh_session_has_verified_profile(ctx.state_root, ctx.session_id));
+    result = tool_execute(reg, "ssh",
+        "{\"command\":\"echo SSH_AFTER_REMOTE_FAILURE\",\"timeout_ms\":5000}", &ctx);
+    CHECK(result && result->ok && result->output && strstr(result->output, "SSH_AFTER_REMOTE_FAILURE"));
+    tool_result_free(result);
+    ctx.session_id = "ssh-chat-one";
     /* A model can repeat stale endpoint fields after the user corrected a
      * login. The selected local profile must remain authoritative. */
     result = tool_execute(reg, "ssh",
@@ -909,6 +932,19 @@ static void test_ssh_password_integration(void) {
         &ctx);
     CHECK(result && result->ok && result->output && strstr(result->output, "SSH_STALE_ARGS"));
     tool_result_free(result);
+    ctx.session_id = "ssh-chat-stale-host";
+    ssh_session_profiles_clear(ctx.state_root, ctx.session_id);
+    char stale_prompt[320];
+    snprintf(stale_prompt, sizeof(stale_prompt),
+             "SSH testuser@127.0.0.1 -p %s 密码: dummy@!，执行命令", port);
+    char *safe_stale = ssh_session_prepare_prompt(ctx.state_root, ctx.session_id, stale_prompt);
+    CHECK(safe_stale && !strstr(safe_stale, "dummy@!"));
+    free(safe_stale);
+    result = tool_execute(reg, "ssh",
+        "{\"host\":\"127.0.0.2\",\"user\":\"other\",\"command\":\"echo SSH_CORRECT_HOST\",\"timeout_ms\":5000}", &ctx);
+    CHECK(result && result->ok && result->output && strstr(result->output, "SSH_CORRECT_HOST"));
+    tool_result_free(result);
+    ctx.session_id = "ssh-chat-one";
     char *wrong = ssh_session_prepare_prompt(ctx.state_root, ctx.session_id,
         "SSH 环境: local 用户名: testuser 密码: wrong-password，运行 id");
     CHECK(wrong && !strstr(wrong, "wrong-password"));
@@ -1627,9 +1663,15 @@ static void test_agent_pool(void) {
     CHECK(agent_pool_deliverable_valid(p, "ppt-expert", "生成 PPT 大纲", "已完成", "."));
     char ppt_stub[1024] = {'P', 'K', 3, 4};
     CHECK(fs_write_file("state-test/ppt-deliverable.pptx", ppt_stub, sizeof(ppt_stub)) == 0);
-    CHECK(agent_pool_deliverable_valid(p, "ppt-expert", "生成 PPT",
-                                       "文件：`state-test/ppt-deliverable.pptx`", "."));
+    CHECK(!agent_pool_deliverable_valid(p, "ppt-expert", "生成 PPT",
+                                        "文件：`state-test/ppt-deliverable.pptx`", "."));
     fs_remove("state-test/ppt-deliverable.pptx");
+    const char *real_pptx = getenv("COA_PPTX_TEST_PATH");
+    if (real_pptx) {
+        char answer[2048];
+        snprintf(answer, sizeof(answer), "文件：`%s`", real_pptx);
+        CHECK(agent_pool_deliverable_valid(p, "ppt-expert", "生成 PPT", answer, "."));
+    }
     CHECK(agent_pool_remove(p, "ppt-expert") == 0);
     /* set_model: change, then clear back to the active-model fallback */
     CHECK(agent_pool_set_model(p, "executor", "openai", "gpt-4o") == 0);
