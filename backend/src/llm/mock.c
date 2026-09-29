@@ -203,6 +203,24 @@ static char *mock_respond(const char *msg) {
     if (agent_task)
         msg = agent_task + strlen("## 用户任务\n");
 
+    if (has_substr(msg, "面试清单回归测试"))
+        return xstrdup("面试清单：项目介绍、优势、关键模块及实现细节。");
+    if (has_substr(msg, "重复读取回归测试") &&
+        !has_substr(full, "已执行动作的观察记录"))
+        return xstrdup("[{\"tool\":\"file_read\",\"args\":{\"path\":\"readme.txt\"}}]");
+    if (has_substr(msg, "连续检索回归测试") &&
+        !has_substr(full, "已执行动作的观察记录")) {
+        int previous_round = 0;
+        const char *round_header = strstr(full, "## 之前轮次的动作结果 (第 ");
+        if (round_header)
+            sscanf(round_header, "## 之前轮次的动作结果 (第 %d/", &previous_round);
+        char plan[128];
+        snprintf(plan, sizeof(plan),
+                 "[{\"tool\":\"file_read\",\"args\":{\"path\":\"round-%d.txt\"}}]",
+                 previous_round);
+        return xstrdup(plan);
+    }
+
     /* Reproduce issue #68: reading files followed by a narrated promise to
      * generate a PPT, with no action that actually creates the artifact. */
     if (has_substr(msg, "未完成PPT回归测试")) {

@@ -3168,6 +3168,88 @@ static void test_agent_loop(void) {
         fs_remove("state-test/loop-w/readme.txt");
     }
 
+    /* A requested interview checklist is a chat deliverable. The verb
+     * "生成" alone must not require file_write; an explicit filename does. */
+    {
+        config cfg;
+        memset(&cfg, 0, sizeof(cfg));
+        cfg.state_root = "state-test/loop-checklist";
+        cfg.workspace = "state-test/loop-w";
+        cfg.provider = "mock";
+        cfg.http_port = 0;
+        runtime_ctx ctx;
+        if (init(&ctx, &cfg) != 0) { CHECK(0); return; }
+        char *ans = NULL;
+        CHECK(reasoning_run(ctx.reasoning, "面试清单回归测试：根据代码生成一份面试清单", &ans) == 0);
+        CHECK(ans && strstr(ans, "面试清单：") != NULL);
+        free(ans);
+        ans = NULL;
+        CHECK(reasoning_run(ctx.reasoning, "面试清单回归测试：生成清单并保存为 interview.md 文件", &ans) != 0);
+        CHECK(ans && strstr(ans, "任务未完成") != NULL);
+        free(ans);
+        runtime_shutdown(&ctx);
+    }
+
+    /* Re-reading the same file must stop promptly and produce a synthesis
+     * rather than burning the configured round budget on duplicate reads. */
+    {
+        fs_write_file("state-test/loop-w/readme.txt", "project evidence", 16);
+        config cfg;
+        memset(&cfg, 0, sizeof(cfg));
+        cfg.state_root = "state-test/loop-repeat-read";
+        cfg.workspace = "state-test/loop-w";
+        cfg.provider = "mock";
+        cfg.http_port = 0;
+        runtime_ctx ctx;
+        if (init(&ctx, &cfg) != 0) { CHECK(0); return; }
+        char *ans = NULL;
+        CHECK(reasoning_run(ctx.reasoning, "重复读取回归测试：分析项目", &ans) == 0);
+        CHECK(ans && strstr(ans, "综合回答") != NULL);
+        long long elapsed = 0, in = 0, out = 0;
+        int round = 0, calls = 0;
+        const char *tool = NULL;
+        reasoning_progress(ctx.reasoning, &elapsed, &round, &calls, &tool, &in, &out);
+        CHECK(round <= 3);
+        CHECK(calls == 1);
+        free(ans);
+        runtime_shutdown(&ctx);
+        fs_remove("state-test/loop-w/readme.txt");
+    }
+
+    /* Distinct read-only plans also need a bound: otherwise a model can keep
+     * discovering new files for dozens of rounds without ever answering. */
+    {
+        for (int i = 0; i < 12; i++) {
+            char path[96];
+            snprintf(path, sizeof(path), "state-test/loop-w/round-%d.txt", i);
+            fs_write_file(path, "evidence", 8);
+        }
+        config cfg;
+        memset(&cfg, 0, sizeof(cfg));
+        cfg.state_root = "state-test/loop-discovery-bound";
+        cfg.workspace = "state-test/loop-w";
+        cfg.provider = "mock";
+        cfg.http_port = 0;
+        runtime_ctx ctx;
+        if (init(&ctx, &cfg) != 0) { CHECK(0); return; }
+        char *ans = NULL;
+        CHECK(reasoning_run(ctx.reasoning, "连续检索回归测试：分析项目后给出文字清单", &ans) == 0);
+        CHECK(ans && strstr(ans, "综合回答") != NULL);
+        long long elapsed = 0, in = 0, out = 0;
+        int round = 0, calls = 0;
+        const char *tool = NULL;
+        reasoning_progress(ctx.reasoning, &elapsed, &round, &calls, &tool, &in, &out);
+        CHECK(round == 12);
+        CHECK(calls == 12);
+        free(ans);
+        runtime_shutdown(&ctx);
+        for (int i = 0; i < 12; i++) {
+            char path[96];
+            snprintf(path, sizeof(path), "state-test/loop-w/round-%d.txt", i);
+            fs_remove(path);
+        }
+    }
+
     /* plain chat is unchanged: no plan on round 1 -> answer is the LLM text */
     {
         config cfg;
