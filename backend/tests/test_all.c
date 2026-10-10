@@ -783,6 +783,35 @@ static void test_snapshot_tx(void) {
     prepared = ssh_session_prepare_prompt(ingress_root, "other-chat", "SSH 密码: Secret9!，继续");
     CHECK(prepared == NULL); /* no host: fail closed rather than lose the password */
     free(prepared);
+    /* #69/#70: natural Chinese labels need no separator. An IP after 环境
+     * is an endpoint, and punctuation in the password must survive locally. */
+    const char *ssh_inputs[] = {
+        "登录环境127.0.0.1 用户名root 密码P@!#$%^&*()! 查看CPU",
+        "连接环境 127.0.0.1 用户名 root 密码 P@!#$%^&*()! 查看CPU",
+        "链接环境127.0.0.1 账号root 密码是P@!#$%^&*()! 查看CPU"
+    };
+    for (size_t i = 0; i < sizeof(ssh_inputs) / sizeof(ssh_inputs[0]); i++) {
+        const char *sid = "natural-ssh";
+        ssh_session_profiles_clear(ingress_root, sid);
+        prepared = ssh_session_prepare_prompt(ingress_root, sid, ssh_inputs[i]);
+        CHECK(prepared && !strstr(prepared, "P@!#$%^&*()!") &&
+              strstr(prepared, "[LOCAL_SSH_PASSWORD]"));
+        free(prepared);
+        char *profile = ssh_session_profile_get(ingress_root, sid, NULL);
+        CHECK(profile && strstr(profile, "127.0.0.1") && strstr(profile, "root"));
+        free(profile);
+        char natural_key[96], natural_pending[96];
+        CHECK(ssh_session_vault_key(sid, "127.0.0.1", "root", 22,
+                                    natural_key, sizeof(natural_key)) == 0);
+        CHECK(ssh_session_pending_key(natural_key, natural_pending, sizeof(natural_pending)) == 0);
+        char *secret = ssh_vault_get(ingress_root, natural_pending);
+        CHECK_STR(secret, "P@!#$%^&*()!");
+        ssh_vault_secret_free(secret);
+        ssh_session_profiles_clear(ingress_root, sid);
+    }
+    prepared = ssh_session_prepare_prompt(ingress_root, "no-target", "SSH 密码: OnlyPass@host");
+    CHECK(prepared == NULL); /* password's @ is not a user@host endpoint */
+    free(prepared);
     ssh_session_profiles_clear(ingress_root, "chat-ingress");
     CHECK(ssh_vault_get(ingress_root, host_key) == NULL);
 
@@ -898,7 +927,7 @@ static void test_ssh_password_integration(void) {
                                      "127.0.0.1", "testuser", 1,
                                      NULL, NULL, NULL) == 0);
     char intro[320];
-    snprintf(intro, sizeof(intro), "SSH 环境: local 密码: dummy@!，运行 echo SSH_OK");
+    snprintf(intro, sizeof(intro), "登录环境local 用户名testuser 密码dummy@!，运行 echo SSH_OK");
     char *safe_intro = ssh_session_prepare_prompt(ctx.state_root, ctx.session_id, intro);
     CHECK(safe_intro && !strstr(safe_intro, "dummy@!"));
     free(safe_intro);
@@ -3082,6 +3111,18 @@ static void test_snapshot_bigfile(void) {
 }
 
 /* ---------- agent loop: bounded multi-round plan->act->replan ---------- */
+struct test_progress_counts { int model_failures; int recoveries; };
+static void test_progress_observer(const char *json, void *ud) {
+    struct test_progress_counts *counts = ud;
+    cJSON *o = cJSON_Parse(json);
+    cJSON *failures = cJSON_GetObjectItemCaseSensitive(o, "model_failures");
+    if (cJSON_IsNumber(failures) && failures->valueint > counts->model_failures)
+        counts->model_failures = failures->valueint;
+    const char *stage = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(o, "stage"));
+    if (stage && strcmp(stage, "recovering") == 0) counts->recoveries++;
+    cJSON_Delete(o);
+}
+
 static void test_agent_loop(void) {
     section("agent loop (multi-round)");
     CHECK(fs_mkdirs("state-test/loop-w") == 0);
@@ -3406,14 +3447,20 @@ static void test_agent_loop(void) {
         reasoning_progress(ctx.reasoning, &el, &rnd, &tc, &cur_tool, &tin, &tout);
         CHECK(rnd == 1 && tc == 0);
         free(ans);
-        /* The same intent-style response may take a second planning pass only
-         * when the caller explicitly requests deep-thinking mode. */
+        /* Deep thinking does not turn a completed information answer into
+         * a pending tool operation. */
         reasoning_set_thinking_mode(ctx.reasoning, 1);
         ans = NULL;
         CHECK(reasoning_run(ctx.reasoning, "工具清单意向回答：你有什么工具", &ans) == 0);
         reasoning_progress(ctx.reasoning, &el, &rnd, &tc, &cur_tool, &tin, &tout);
-        CHECK(ans && strstr(ans, "任务完成") != NULL);
-        CHECK(rnd == 2 && tc == 0);
+        CHECK(ans && strstr(ans, "工具清单") != NULL);
+        CHECK(rnd == 1 && tc == 0);
+        free(ans);
+        ans = NULL;
+        CHECK(reasoning_run(ctx.reasoning, "脱敏解释回归测试：为啥脱敏了复制", &ans) == 0);
+        CHECK(ans && strstr(ans, "脱敏原因") != NULL && !strstr(ans, "任务未完成"));
+        reasoning_progress(ctx.reasoning, &el, &rnd, &tc, &cur_tool, &tin, &tout);
+        CHECK(rnd == 1 && tc == 0);
         free(ans);
         runtime_shutdown(&ctx);
     }
@@ -3429,6 +3476,8 @@ static void test_agent_loop(void) {
         cfg.http_port = 0;
         runtime_ctx ctx;
         if (init(&ctx, &cfg) != 0) { CHECK(0); return; }
+        struct test_progress_counts counts = {0};
+        reasoning_set_observer(ctx.reasoning, test_progress_observer, &counts);
         char *ans = NULL;
         CHECK(reasoning_run(ctx.reasoning, "SSH连续失败测试", &ans) != 0);
         long long el = 0, tin = 0, tout = 0;
@@ -3437,6 +3486,8 @@ static void test_agent_loop(void) {
         reasoning_progress(ctx.reasoning, &el, &rnd, &tc, &cur_tool, &tin, &tout);
         CHECK(tc == 3);
         CHECK(rnd == 3);
+        CHECK(counts.model_failures == 0);
+        CHECK(counts.recoveries >= 1);
         free(ans);
         runtime_shutdown(&ctx);
     }
@@ -4926,6 +4977,26 @@ static void test_security(void) {
     CHECK(red && strstr(red, "[REDACTED:secret]") != NULL);
     free(red);
     red = NULL;
+
+    /* #71: URL route parameters and log paths are evidence, not secrets.
+     * Real credentials in the same URL still redact only their own value. */
+    const char *log_url = "http://127.0.0.1/#/task/jobLogView?filePath=aB91xC42dE73fG04hJ85kL16mN27pQ38rS49&task_id=123";
+    red = secret_redact_text(log_url, strlen(log_url), NULL);
+    CHECK(red && strcmp(red, log_url) == 0);
+    free(red);
+    const char *log_path = "filePath=aB91xC42dE73fG04hJ85kL16mN27pQ38rS49";
+    red = secret_redact_text(log_path, strlen(log_path), NULL);
+    CHECK(red && strcmp(red, log_path) == 0);
+    free(red);
+    const char *token_url = "https://localhost/log?token=S3nsiTivePass_0123456789&filePath=/logs/job-123";
+    red = secret_redact_text(token_url, strlen(token_url), NULL);
+    CHECK(red && !strstr(red, "S3nsiTivePass_0123456789") &&
+          strstr(red, "&filePath=/logs/job-123"));
+    free(red);
+    const char *key_url = "https://localhost/log?api_key=sk-abcdefghijklmnopqrstuvwxyz1234567890&filePath=/logs/job-123";
+    red = secret_redact_text(key_url, strlen(key_url), NULL);
+    CHECK(red && !strstr(red, "sk-abcdefghijklmnopqrstuvwxyz") && strstr(red, "&filePath=/logs/job-123"));
+    free(red);
 
     /* clean text passes through unchanged */
     red = secret_redact_text("no secrets here", strlen("no secrets here"), NULL);

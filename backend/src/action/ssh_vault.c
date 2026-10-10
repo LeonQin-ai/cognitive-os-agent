@@ -352,6 +352,12 @@ static const char *ssh_field_value_one(const char *text, const char *label, int 
                   strncmp(p, "认证", strlen("认证")) != 0 && strncmp(p, "方式", strlen("方式")) != 0))) {
             /* Natural language such as "host 10.0.0.1" or "密码 abc". */
         }
+        else if (!ascii && p == after_label && (unsigned char)*p > 0 &&
+                 (unsigned char)*p < 0x80) {
+            /* Chinese labels also accept adjacent ASCII values: 用户名root,
+             * 密码@!$..., 环境127.0.0.1. Chinese prose such as 密码登录
+             * remains excluded rather than being captured as a credential. */
+        }
         else { cursor = found + strlen(label); continue; }
         while (*p == ' ' || *p == '\t') p++;
         if (*p) return p;
@@ -429,7 +435,8 @@ char *ssh_session_prepare_prompt(const char *state_root, const char *session_id,
     if (!prompt) return NULL;
     const char *ssh_word = ssh_find_ascii(prompt, "ssh");
     int ssh_intent = ssh_word || strstr(prompt, "远程登录") || strstr(prompt, "登录服务器") ||
-                     strstr(prompt, "连接服务器");
+                     strstr(prompt, "连接服务器") || strstr(prompt, "登录环境") ||
+                     strstr(prompt, "连接环境") || strstr(prompt, "链接环境");
     /* After a failed login, a short follow-up often says only "用户名/密码是…".
      * Treat it as an SSH correction when this chat already has an endpoint. */
     if (!ssh_intent && state_root && *state_root &&
@@ -473,6 +480,11 @@ char *ssh_session_prepare_prompt(const char *state_root, const char *session_id,
     user = ssh_field_token(p, 80, NULL);
     p = ssh_field_value(prompt, "environment", "环境", 0);
     environment = ssh_field_token(p, 80, NULL);
+    if (!host && environment && ssh_endpoint_token_valid(environment, 0) &&
+        (strchr(environment, '.') || strchr(environment, ':'))) {
+        host = environment;
+        environment = NULL;
+    }
     p = ssh_field_value(prompt, "port", "端口", 0);
     if (!p && ssh_word) {
         const char *flag = strstr(ssh_word, "-p ");
@@ -486,6 +498,8 @@ char *ssh_session_prepare_prompt(const char *state_root, const char *session_id,
     /* Accept the common ssh user@host spelling even without labelled fields. */
     if (!host) {
         for (const char *at = strchr(prompt, '@'); at; at = strchr(at + 1, '@')) {
+            if (password_at && password_end && at >= password_at && at < password_end)
+                continue;
             const char *begin = at;
             const char *end = at + 1;
             while (begin > prompt && (isalnum((unsigned char)begin[-1]) ||

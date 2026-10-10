@@ -263,6 +263,8 @@ static void progress_emit(reasoning *r, const char *stage) {
         snprintf(activity, sizeof(activity), "模型已返回答复，正在整理结果");
     else if (strcmp(stage, "reconnecting") == 0)
         snprintf(activity, sizeof(activity), "模型请求第 %d 次失败，正在重试", r->prog_model_failures);
+    else if (strcmp(stage, "recovering") == 0)
+        snprintf(activity, sizeof(activity), "工具执行失败，正在分析错误并调整下一步");
     else if (strcmp(stage, "preparing_context") == 0)
         snprintf(activity, sizeof(activity), "正在整理会话上下文、已完成工作和可用工具");
     else if (strcmp(stage, "executing") == 0 && r->prog_tool[0])
@@ -1315,6 +1317,7 @@ static int h_reason(state_machine *sm, void *ud, const char *input, char **out) 
 
     (void)sm;
     clear_actions(r);
+    r->had_plan = 0;
     r->ok_actions = 0;
     r->denied_actions = 0;
     r->prog_tool[0] = 0;
@@ -2051,7 +2054,8 @@ static int looks_like_intent(const char *text) {
 static int prompt_is_direct_information_request(const char *prompt) {
     static const char *const questions[] = {
         "有什么工具", "有哪些工具", "什么工具", "有什么技能", "有哪些技能", "什么技能",
-        "你会什么", "帮助", "help", "what tools", "what skills", "capabilities"
+        "你会什么", "帮助", "help", "what tools", "what skills", "capabilities",
+        "为什么", "为啥", "为何", "why "
     };
     static const char *const actions[] = {
         "修复", "修改", "创建", "写入", "执行", "运行", "检查", "分析", "搜索", "查找",
@@ -2081,6 +2085,7 @@ static int prompt_requires_mutation(const char *prompt) {
         "edit ", "fix ", "save ", "export ", "install ", "deploy ", "delete "
     };
     if (!prompt) return 0;
+    if (prompt_is_direct_information_request(prompt)) return 0;
     const char *agent_task = strstr(prompt, "## 用户任务\n");
     if (agent_task) prompt = agent_task + strlen("## 用户任务\n");
     if (strstr(prompt, "如何") || strstr(prompt, "怎么") || strstr(prompt, "how to "))
@@ -2819,10 +2824,10 @@ restart_planning:
              * retry with a fixed path). Terminal only when the budget is
              * exhausted, and the report stays in the answer either way. */
             consec_fail++;
-            r->prog_model_failures++;
+            if (!r->had_plan) r->prog_model_failures++;
             round_log_append(r, result && *result ? result : "(run failed)");
             obs_log_append(r, result && *result ? result : "(run failed)");
-            progress_emit(r, "reconnecting");
+            progress_emit(r, r->had_plan ? "recovering" : "reconnecting");
             if (r->round_idx >= r->max_rounds)
                 break;
             /* Circuit breaker: a PERSISTENT failure (LLM endpoint down /
@@ -2862,7 +2867,7 @@ restart_planning:
              * not recover. Exhaustion must report an incomplete task. */
             const char *txt = strip_nudge_echo(result);
             int needs_action = prompt_requires_mutation(prompt) && !run_has_mutating_action(r);
-            int narrating = (r->thinking_mode || !prompt_is_direct_information_request(prompt)) &&
+            int narrating = !prompt_is_direct_information_request(prompt) &&
                             looks_like_intent(txt);
             if (needs_action || narrating) {
                 /* Repeating the same intention is not evidence of completion.
@@ -3049,7 +3054,7 @@ restart_planning:
     }
 
     if (fail_aborted)
-        strbuf_appendf(&out, "\n(连续 %s 轮阶段失败，任务中止 — 请检查模型服务/网络可用性后重试)",
+        strbuf_appendf(&out, "\n(连续 %s 轮阶段失败，任务中止 — 请根据执行记录中的真实错误修正后重试)",
                        REASONING_CONSEC_FAIL_ABORT_STR);
 
     free(final_text);

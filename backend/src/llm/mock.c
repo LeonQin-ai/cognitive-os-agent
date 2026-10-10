@@ -205,6 +205,8 @@ static char *mock_respond(const char *msg) {
 
     if (has_substr(msg, "面试清单回归测试"))
         return xstrdup("面试清单：项目介绍、优势、关键模块及实现细节。");
+    if (has_substr(msg, "脱敏解释回归测试"))
+        return xstrdup("我需要说明脱敏原因：系统曾将普通 URL 路径误判为凭据。现在路径参数会保留。");
     if (has_substr(msg, "重复读取回归测试") &&
         !has_substr(full, "已执行动作的观察记录"))
         return xstrdup("[{\"tool\":\"file_read\",\"args\":{\"path\":\"readme.txt\"}}]");

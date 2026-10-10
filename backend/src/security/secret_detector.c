@@ -288,6 +288,16 @@ static void scan_patterns(const char *text, size_t len, matchvec *mv) {
             const char *hit = find_ci(p, end, keys[k]);
             while (hit) {
                 const char *c = hit + strlen(keys[k]);
+                if ((hit > text && (isalnum((unsigned char)hit[-1]) || hit[-1] == '_' || hit[-1] == '-')) ||
+                    (c < end && (isalnum((unsigned char)*c) || *c == '_' || *c == '-'))) {
+                    hit = find_ci(c, end, keys[k]);
+                    continue;
+                }
+                const char *token_start = hit;
+                while (token_start > text && !isspace((unsigned char)token_start[-1]) &&
+                       token_start[-1] != '"' && token_start[-1] != '\'') token_start--;
+                int url_value = find_ci(token_start, hit, "http://") != NULL ||
+                                find_ci(token_start, hit, "https://") != NULL;
                 /* JSON and quoted shell keys: "password":"value". */
                 if (hit > text && c < end && (hit[-1] == '"' || hit[-1] == '\'') &&
                     *c == hit[-1])
@@ -308,6 +318,7 @@ static void scan_patterns(const char *text, size_t len, matchvec *mv) {
                     }
                     v = c;
                     while (c < end && *c != '\n' && *c != '\r' &&
+                           (!url_value || (*c != '&' && *c != '#')) &&
                            (quote ? *c != quote : *c != '"' && *c != '\'' &&
                                                       *c != ' ' && *c != '\t' &&
                                                       *c != ',' && *c != ';' &&
@@ -334,15 +345,29 @@ static void scan_patterns(const char *text, size_t len, matchvec *mv) {
 
 static void scan_entropy(const char *text, size_t len, matchvec *mv) {
     size_t run_start = 0, i = 0;
+    size_t url_end = 0;
     int in_attachment_name = 0;
     while (i <= len) {
+        if (i < len && ((len - i >= 7 && memcmp(text + i, "http://", 7) == 0) ||
+                        (len - i >= 8 && memcmp(text + i, "https://", 8) == 0))) {
+            url_end = i;
+            while (url_end < len && !isspace((unsigned char)text[url_end]) &&
+                   text[url_end] != '"' && text[url_end] != '\'' && text[url_end] != '`')
+                url_end++;
+        }
         if (i < len && text[i] == '[' && len - i >= strlen("[附件:") &&
             memcmp(text + i, "[附件:", strlen("[附件:")) == 0)
             in_attachment_name = 1;
         int cls = (i < len && (is_b64ish(text[i]) || text[i] == '.'));
         if (!cls) {
             size_t rl = i - run_start;
-            if (rl >= 28 && !in_attachment_name) {
+            int reference_field = (rl >= 9 && find_ci(text + run_start, text + i, "filepath=") == text + run_start) ||
+                                  (rl >= 8 && find_ci(text + run_start, text + i, "task_id=") == text + run_start) ||
+                                  (rl >= 7 && find_ci(text + run_start, text + i, "job_id=") == text + run_start);
+            /* Routing URLs often contain encoded paths, UUIDs and job IDs.
+             * Entropy is not evidence of a secret there. Deterministic
+             * password/token/API-key rules still scan the entire URL. */
+            if (rl >= 28 && !in_attachment_name && !reference_field && run_start >= url_end) {
                 double h = shannon(text + run_start, rl);
                 if (h >= 4.5)
                     mv_push_nonoverlapping(mv, run_start, i,
