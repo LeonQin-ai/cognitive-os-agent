@@ -224,6 +224,7 @@ struct reasoning {
     uint64_t last_failed_action_sig;
     int same_action_failures;
     int tool_fail_aborted;
+    int run_mutated; /* successful effects retained; independent of UI step cap */
     uint64_t search_seen[512]; /* successful read-only discoveries in this run */
     int search_seen_n;
     int round_search_skips;
@@ -1439,6 +1440,7 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
     tool_ctx tctx;
     tx *tx = NULL;
     executor *exec;
+    int round_mutated = 0;
 
     (void)sm;
     r->all_actions_ok = 1;
@@ -1653,6 +1655,7 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
             r->last_failed_action_sig = 0;
             r->same_action_failures = 0;
             r->ok_actions++;
+            if (!is_search) round_mutated = 1;
             if (is_search) {
                 const int seen_cap = (int)(sizeof(r->search_seen) / sizeof(r->search_seen[0]));
                 if (r->search_seen_n == seen_cap) {
@@ -1706,6 +1709,7 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
     if (tx) {
         if (r->all_actions_ok && tx_validate(tx)) {
             tx_commit(tx);
+            if (round_mutated) r->run_mutated = 1;
             log_info("reasoning: transaction committed");
         } else {
             tx_rollback(tx);
@@ -1718,7 +1722,7 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
             free(safe);
         }
         tx_free(tx);
-    }
+    } else if (round_mutated) r->run_mutated = 1;
 
     if (r->metrics)
         metrics_add(r->metrics, "actions.executed", (double)r->n_actions);
@@ -2108,14 +2112,7 @@ static int prompt_requires_mutation(const char *prompt) {
 }
 
 static int run_has_mutating_action(const reasoning *r) {
-    for (int i = 0; i < r->n_steps; i++) {
-        const struct run_step *step = &r->steps[i];
-        if (step->ok != 1) continue;
-        if (strcmp(step->tool, "file_read") == 0 || strcmp(step->tool, "glob") == 0 ||
-            strcmp(step->tool, "grep") == 0 || strcmp(step->tool, "list_dir") == 0) continue;
-        return 1;
-    }
-    return 0;
+    return r->run_mutated;
 }
 
 /* The model sometimes echoes the injected "[system] …" nudge text at the
@@ -2740,6 +2737,7 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     r->last_failed_action_sig = 0;
     r->same_action_failures = 0;
     r->tool_fail_aborted = 0;
+    r->run_mutated = 0;
     r->search_seen_n = 0;
     r->round_search_skips = 0;
 

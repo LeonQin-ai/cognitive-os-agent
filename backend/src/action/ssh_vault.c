@@ -497,7 +497,7 @@ char *ssh_session_prepare_prompt(const char *state_root, const char *session_id,
     p = ssh_field_value(prompt, "environment", "环境", 0);
     environment = ssh_field_token(p, 80, NULL);
     if (!host && environment && ssh_endpoint_token_valid(environment, 0) &&
-        (strchr(environment, '.') || strchr(environment, ':'))) {
+        strchr(environment, ':')) {
         host = environment;
         environment = NULL;
     }
@@ -540,7 +540,7 @@ char *ssh_session_prepare_prompt(const char *state_root, const char *session_id,
     if (host && !ssh_endpoint_token_valid(host, 0)) { free(host); host = NULL; }
     if (user && !ssh_endpoint_token_valid(user, 1)) { free(user); user = NULL; }
     if (environment && !ssh_vault_name_valid(environment)) { free(environment); environment = NULL; }
-    if (!host && (password || user)) {
+    if (!host && (password || user || environment)) {
         char *raw = ssh_session_profile_get(state_root, sid, environment);
         cJSON *profile = raw ? cJSON_Parse(raw) : NULL;
         int use_saved = !environment ||
@@ -584,7 +584,7 @@ char *ssh_session_prepare_prompt(const char *state_root, const char *session_id,
         if (saved_port && cJSON_IsNumber(saved_port)) port = (int)saved_port->valuedouble;
         cJSON_Delete(root); free(raw);
     }
-    if (!host && (password || user)) {
+    if (!host && (password || user || environment)) {
         char *raw = ssh_session_profile_get(state_root, sid, environment);
         cJSON *profile = raw ? cJSON_Parse(raw) : NULL;
         const char *saved_host = profile ? ssh_field(profile, "host") : NULL;
@@ -600,6 +600,12 @@ char *ssh_session_prepare_prompt(const char *state_root, const char *session_id,
         if (saved_known) known = xstrdup(saved_known);
         if (saved_port && cJSON_IsNumber(saved_port)) port = (int)saved_port->valuedouble;
         cJSON_Delete(profile); free(raw);
+    }
+    /* Environment names may contain dots (qa.eu). Resolve configured and
+     * session profiles before treating an unknown dotted value as a host. */
+    if (!host && environment && ssh_endpoint_token_valid(environment, 0) && strchr(environment, '.')) {
+        host = environment;
+        environment = NULL;
     }
     if (host && !ssh_endpoint_token_valid(host, 0)) { free(host); host = NULL; }
     if (user && !ssh_endpoint_token_valid(user, 1)) { free(user); user = NULL; }

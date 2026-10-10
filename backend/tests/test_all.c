@@ -833,6 +833,31 @@ static void test_snapshot_tx(void) {
     CHECK(prepared && !strstr(prepared, long_password) && strstr(prepared, "[LOCAL_SSH_PASSWORD]"));
     free(prepared);
     ssh_session_profiles_clear(ingress_root, "long-password");
+    /* Dotted environment names must resolve their configured/session host,
+     * user and port before the fallback that accepts an IP/hostname. */
+    const char *dotted_config = "{\"environments\":{\"qa.eu\":{\"host\":\"127.0.0.1\",\"user\":\"deploy\",\"port\":2222}}}";
+    CHECK(fs_write_file("state-test/ssh-prompt-ingress/ssh/environments.json",
+                        dotted_config, strlen(dotted_config)) == 0);
+    const char *dotted_sessions[] = {"dotted-config", "dotted-session"};
+    for (int i = 0; i < 2; i++) {
+        const char *sid = dotted_sessions[i];
+        ssh_session_profiles_clear(ingress_root, sid);
+        if (i == 1) {
+            fs_remove("state-test/ssh-prompt-ingress/ssh/environments.json");
+            CHECK(ssh_session_profile_record(ingress_root, sid, "qa.eu",
+                    "127.0.0.1", "deploy", 2222, NULL, NULL, NULL) == 0);
+        }
+        prepared = ssh_session_prepare_prompt(ingress_root, sid, "登录环境qa.eu 执行 id");
+        CHECK(prepared != NULL);
+        free(prepared);
+        char *raw = ssh_session_profile_get(ingress_root, sid, "qa.eu");
+        cJSON *profile = raw ? cJSON_Parse(raw) : NULL;
+        CHECK_STR(cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(profile, "host")), "127.0.0.1");
+        CHECK_STR(cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(profile, "user")), "deploy");
+        CHECK(cJSON_GetNumberValue(cJSON_GetObjectItemCaseSensitive(profile, "port")) == 2222);
+        cJSON_Delete(profile); free(raw);
+        ssh_session_profiles_clear(ingress_root, sid);
+    }
     ssh_session_profiles_clear(ingress_root, "chat-ingress");
     CHECK(ssh_vault_get(ingress_root, host_key) == NULL);
 
@@ -3388,6 +3413,38 @@ static void test_agent_loop(void) {
             free(content);
             fs_remove(path);
         }
+    }
+
+    /* Completion evidence survives the 256-step UI ring, while a rolled-back
+     * write is never evidence that the requested artifact was created. */
+    {
+        char evidence[512]; memset(evidence, 'x', sizeof(evidence));
+        CHECK(fs_write_file("state-test/loop-w/long-proof.txt", evidence, sizeof(evidence)) == 0);
+        fs_remove("state-test/loop-w/proof-result.txt");
+        fs_remove("state-test/loop-w/rollback-proof.txt");
+        config cfg;
+        memset(&cfg, 0, sizeof(cfg));
+        cfg.state_root = "state-test/loop-completion-proof";
+        cfg.workspace = "state-test/loop-w";
+        cfg.provider = "mock";
+        cfg.http_port = 0;
+        runtime_ctx ctx;
+        if (init(&ctx, &cfg) != 0) { CHECK(0); return; }
+        char *ans = NULL;
+        CHECK(reasoning_run(ctx.reasoning, "执行证据截断回归测试：写入产物并检查资料", &ans) == 0);
+        CHECK(ans && strstr(ans, "任务完成") != NULL);
+        free(ans);
+        char *content = fs_read_file("state-test/loop-w/proof-result.txt");
+        CHECK(content && strcmp(content, "done") == 0);
+        free(content);
+        ans = NULL;
+        CHECK(reasoning_run(ctx.reasoning, "回滚写入证据回归测试：写入产物", &ans) != 0);
+        CHECK(ans && strstr(ans, "任务未完成") != NULL);
+        free(ans);
+        CHECK(!fs_exists("state-test/loop-w/rollback-proof.txt"));
+        runtime_shutdown(&ctx);
+        fs_remove("state-test/loop-w/long-proof.txt");
+        fs_remove("state-test/loop-w/proof-result.txt");
     }
 
     /* Once the context log folds old observations, the agent must be able to

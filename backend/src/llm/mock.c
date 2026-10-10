@@ -205,6 +205,32 @@ static char *mock_respond(const char *msg) {
 
     if (has_substr(msg, "面试清单回归测试"))
         return xstrdup("面试清单：项目介绍、优势、关键模块及实现细节。");
+    if (has_substr(msg, "执行证据截断回归测试")) {
+        if (in_loop) return xstrdup("任务完成：产物已写入。");
+        cJSON *plan = cJSON_CreateArray();
+        cJSON *write = cJSON_CreateObject();
+        cJSON_AddStringToObject(write, "tool", "file_write");
+        cJSON *args = cJSON_AddObjectToObject(write, "args");
+        cJSON_AddStringToObject(args, "path", "proof-result.txt");
+        cJSON_AddStringToObject(args, "content", "done");
+        cJSON_AddItemToArray(plan, write);
+        for (int i = 0; i < 257; i++) {
+            cJSON *read = cJSON_CreateObject();
+            cJSON_AddStringToObject(read, "tool", "file_read");
+            args = cJSON_AddObjectToObject(read, "args");
+            cJSON_AddStringToObject(args, "path", "long-proof.txt");
+            cJSON_AddNumberToObject(args, "offset_bytes", i);
+            cJSON_AddItemToArray(plan, read);
+        }
+        char *out = cJSON_PrintUnformatted(plan);
+        cJSON_Delete(plan);
+        return out;
+    }
+    if (has_substr(msg, "回滚写入证据回归测试")) {
+        if (in_loop) return xstrdup("任务完成。");
+        return xstrdup("[{\"tool\":\"file_write\",\"args\":{\"path\":\"rollback-proof.txt\",\"content\":\"done\"}},"
+                       "{\"tool\":\"shell\",\"args\":{\"command\":\"exit 1\"}}]");
+    }
     if (has_substr(msg, "脱敏解释回归测试"))
         return xstrdup("我需要说明脱敏原因：系统曾将普通 URL 路径误判为凭据。现在路径参数会保留。");
     if (has_substr(msg, "重复读取回归测试") &&
