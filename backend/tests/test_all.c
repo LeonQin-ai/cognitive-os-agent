@@ -812,6 +812,27 @@ static void test_snapshot_tx(void) {
     prepared = ssh_session_prepare_prompt(ingress_root, "no-target", "SSH 密码: OnlyPass@host");
     CHECK(prepared == NULL); /* password's @ is not a user@host endpoint */
     free(prepared);
+    prepared = ssh_session_prepare_prompt(ingress_root, "malformed", "SSH root@127.0.0.1 密码: \"Unclosed9!");
+    CHECK(prepared == NULL);
+    free(prepared);
+    char oversized[1200];
+    prepared = ssh_session_prepare_prompt(ingress_root, "ambiguous",
+        "SSH root@127.0.0.1 密码FirstPass9! 另一个密码SecondPass8!");
+    CHECK(prepared == NULL); /* never leak an additional credential */
+    free(prepared);
+    memset(oversized, 'A', sizeof(oversized));
+    memcpy(oversized, "SSH root@127.0.0.1 password=", strlen("SSH root@127.0.0.1 password="));
+    oversized[sizeof(oversized) - 1] = '\0';
+    prepared = ssh_session_prepare_prompt(ingress_root, "oversized", oversized);
+    CHECK(prepared == NULL);
+    free(prepared);
+    char long_password[301], long_prompt[420];
+    memset(long_password, 'B', 300); long_password[300] = '\0';
+    snprintf(long_prompt, sizeof(long_prompt), "SSH root@127.0.0.1 password=%s", long_password);
+    prepared = ssh_session_prepare_prompt(ingress_root, "long-password", long_prompt);
+    CHECK(prepared && !strstr(prepared, long_password) && strstr(prepared, "[LOCAL_SSH_PASSWORD]"));
+    free(prepared);
+    ssh_session_profiles_clear(ingress_root, "long-password");
     ssh_session_profiles_clear(ingress_root, "chat-ingress");
     CHECK(ssh_vault_get(ingress_root, host_key) == NULL);
 
@@ -4937,6 +4958,21 @@ static void test_security(void) {
     secret_matches_free(ms);
     ms = NULL;
 
+    /* A token ending exactly at the minimum recognized length still needs
+     * HIGH-confidence detection, including when it ends the input buffer. */
+    const char *prefixes[] = {"sk-", "ghp_", "xoxb-", "AIza"};
+    const size_t token_sizes[] = {23, 36, 20, 39};
+    for (size_t i = 0; i < 4; i++) {
+        char token[64];
+        size_t plen = strlen(prefixes[i]);
+        memcpy(token, prefixes[i], plen);
+        for (size_t j = plen; j < token_sizes[i]; j++) token[j] = (char)('a' + j % 26);
+        token[token_sizes[i]] = '\0';
+        n = secret_scan_text(token, token_sizes[i], &ms);
+        CHECK(n >= 1 && ms[0].severity == SECRET_SEV_HIGH);
+        secret_matches_free(ms); ms = NULL;
+    }
+
     /* false positives (§7.3): placeholders, short ids, docs */
     n = secret_scan_text("password=${DB_PASSWORD} in config", strlen("password=${DB_PASSWORD} in config"), &ms);
     CHECK(n == 0);
@@ -4983,6 +5019,10 @@ static void test_security(void) {
     const char *log_url = "http://127.0.0.1/#/task/jobLogView?filePath=aB91xC42dE73fG04hJ85kL16mN27pQ38rS49&task_id=123";
     red = secret_redact_text(log_url, strlen(log_url), NULL);
     CHECK(red && strcmp(red, log_url) == 0);
+    free(red);
+    const char *upper_url = "HTTPS://localhost/log?filePath=aB91xC42dE73fG04hJ85kL16mN27pQ38rS49";
+    red = secret_redact_text(upper_url, strlen(upper_url), NULL);
+    CHECK(red && strcmp(red, upper_url) == 0);
     free(red);
     const char *log_path = "filePath=aB91xC42dE73fG04hJ85kL16mN27pQ38rS49";
     red = secret_redact_text(log_path, strlen(log_path), NULL);

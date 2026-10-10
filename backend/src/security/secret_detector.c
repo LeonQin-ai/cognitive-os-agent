@@ -231,7 +231,7 @@ static void scan_patterns(const char *text, size_t len, matchvec *mv) {
                 c = e;
                 continue;
             }
-            if (rem > 23 && strncmp(c, "sk-", 3) == 0) {
+            if (rem >= 23 && strncmp(c, "sk-", 3) == 0) {
                 const char *e = c + 3;
                 while (e < end && is_tokish(*e))
                     e++;
@@ -241,7 +241,7 @@ static void scan_patterns(const char *text, size_t len, matchvec *mv) {
                 c = e;
                 continue;
             }
-            if (rem > 36 && strncmp(c, "ghp_", 4) == 0) {
+            if (rem >= 36 && strncmp(c, "ghp_", 4) == 0) {
                 const char *e = c + 4;
                 while (e < end && is_tokish(*e))
                     e++;
@@ -251,7 +251,7 @@ static void scan_patterns(const char *text, size_t len, matchvec *mv) {
                 c = e;
                 continue;
             }
-            if (rem > 20 && (strncmp(c, "xoxb-", 5) == 0 || strncmp(c, "xoxp-", 5) == 0 ||
+            if (rem >= 20 && (strncmp(c, "xoxb-", 5) == 0 || strncmp(c, "xoxp-", 5) == 0 ||
                              strncmp(c, "xoxa-", 5) == 0 || strncmp(c, "xoxr-", 5) == 0)) {
                 const char *e = c + 5;
                 while (e < end && is_tokish(*e))
@@ -262,7 +262,7 @@ static void scan_patterns(const char *text, size_t len, matchvec *mv) {
                 c = e;
                 continue;
             }
-            if (rem > 39 && strncmp(c, "AIza", 4) == 0) {
+            if (rem >= 39 && strncmp(c, "AIza", 4) == 0) {
                 const char *e = c + 4;
                 while (e < end && (is_tokish(*e) || *e == '_') && e - c < 39)
                     e++;
@@ -348,8 +348,8 @@ static void scan_entropy(const char *text, size_t len, matchvec *mv) {
     size_t url_end = 0;
     int in_attachment_name = 0;
     while (i <= len) {
-        if (i < len && ((len - i >= 7 && memcmp(text + i, "http://", 7) == 0) ||
-                        (len - i >= 8 && memcmp(text + i, "https://", 8) == 0))) {
+        if (i < len && ((len - i >= 7 && find_ci(text + i, text + i + 7, "http://") == text + i) ||
+                        (len - i >= 8 && find_ci(text + i, text + i + 8, "https://") == text + i))) {
             url_end = i;
             while (url_end < len && !isspace((unsigned char)text[url_end]) &&
                    text[url_end] != '"' && text[url_end] != '\'' && text[url_end] != '`')

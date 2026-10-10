@@ -451,7 +451,23 @@ char *ssh_session_prepare_prompt(const char *state_root, const char *session_id,
     if (!ssh_intent) return xstrdup(prompt);
     const char *password_at = ssh_field_value(prompt, "password", "密码", 1);
     const char *password_end = NULL;
-    char *password = ssh_field_token(password_at, 256, &password_end);
+    char *password = ssh_field_token(password_at, 1024, &password_end);
+    /* Explicit but malformed/oversized credentials must never fall through
+     * as unmodified model input. The vault accepts up to 1024 bytes. */
+    if (password_at && !password) return NULL;
+    /* One message can describe only one credential update unambiguously.
+     * Never send a second, different labelled password to the model. */
+    if (password) {
+        const char *next = password_end;
+        while (next && (next = ssh_field_value(next, "password", "密码", 1)) != NULL) {
+            const char *next_end = NULL;
+            char *other = ssh_field_token(next, 1024, &next_end);
+            int same = other && strlen(password) >= 4 && strcmp(password, other) == 0;
+            ssh_vault_secret_free(other);
+            if (!same) { ssh_vault_secret_free(password); return NULL; }
+            next = next_end;
+        }
+    }
     if (password && (strncmp(password, "[REDACTED:", 10) == 0 ||
                      strcmp(password, "[LOCAL_SSH_PASSWORD]") == 0)) {
         ssh_vault_secret_free(password);
