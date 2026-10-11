@@ -17,6 +17,7 @@ void vectorstore_free(vectorstore *v);
 int vectorstore_add(vectorstore *v, const char *id, const char *text, const char *meta);
 /* Remove an entry by id. Returns 1 removed, 0 not found, -1 bad args. */
 int vectorstore_remove(vectorstore *v, const char *id);
+int vectorstore_remove_prefix(vectorstore *v, const char *prefix);
 int vectorstore_count(vectorstore *v);
 
 /* Top-k nearest entries to `query` by cosine similarity.

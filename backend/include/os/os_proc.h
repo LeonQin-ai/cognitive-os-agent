@@ -45,6 +45,8 @@ proc_popen *proc_popen_new(char *const argv[]);
  * connection tests) where error text is more valuable than a clean stream;
  * keep 0 for protocol sessions where stderr noise would corrupt parsing. */
 proc_popen *proc_popen_new_ex(char *const argv[], int merge_stderr);
+/* Direct executable invocation (no Windows cmd/batch shim); no shell expansion. */
+proc_popen *proc_popen_new_direct(char *const argv[], int merge_stderr);
 
 /* Write bytes to the child's stdin. Returns 0 ok, -1 error/pipe closed. */
 int proc_popen_write(proc_popen *p, const char *data, size_t len);

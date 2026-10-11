@@ -10,7 +10,7 @@
 ;   ISCC.exe tools/setup.iss
 
 #define MyAppName "cognitive-os-agent"
-#define MyAppVersion "0.7.0"
+#define MyAppVersion "0.8.0"
 #define MyAppPublisher "Cognitive OS"
 #define MyAppExeName "cognitive-os-agent-desktop.exe"
 
@@ -20,6 +20,10 @@ AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
 DefaultDirName={localappdata}\cognitive-os-agent
+; Always offer destination selection, including when upgrading an existing install.
+DisableDirPage=no
+UsePreviousAppDir=yes
+AlwaysShowDirOnReadyPage=yes
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest

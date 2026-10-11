@@ -41,6 +41,12 @@
 
 static const int kPort = 18300;
 static const int kChromeHeight = 40;
+static UINT g_dpi = 96;
+static HWND g_caption_buttons[3] = {};
+static WNDPROC g_button_proc = nullptr;
+static HWND g_hover_button = nullptr;
+static int scaled(int value) { return MulDiv(value, g_dpi, 96); }
+static int chrome_height() { return scaled(kChromeHeight); }
 static const UINT WM_APP_NAV = WM_APP + 1; /* wParam 1 = console, 2 = error page */
 
 static HWND g_hwnd = nullptr;
@@ -421,15 +427,137 @@ static DWORD WINAPI boot_waiter(LPVOID) {
     }
 }
 
+/* Real button controls retain keyboard, capture and accessibility behavior.
+ * Paint the symbols with lines so they do not depend on installed glyph fonts. */
+static LRESULT CALLBACK caption_button_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    if (msg == WM_MOUSEMOVE && g_hover_button != hwnd) {
+        g_hover_button = hwnd;
+        TRACKMOUSEEVENT track = { sizeof(track), TME_LEAVE, hwnd, 0 };
+        TrackMouseEvent(&track);
+        InvalidateRect(hwnd, nullptr, FALSE);
+    } else if (msg == WM_MOUSELEAVE) {
+        if (g_hover_button == hwnd) g_hover_button = nullptr;
+        InvalidateRect(hwnd, nullptr, FALSE);
+    }
+    return CallWindowProcW(g_button_proc, hwnd, msg, wp, lp);
+}
+
+static void layout_chrome(HWND hwnd) {
+    RECT rc;
+    GetClientRect(hwnd, &rc);
+    for (int i = 0; i < 3; ++i)
+        if (g_caption_buttons[i])
+            MoveWindow(g_caption_buttons[i], rc.right - scaled(46) * (3 - i),
+                       0, scaled(46), chrome_height(), TRUE);
+    if (g_caption_buttons[1])
+        SetWindowTextW(g_caption_buttons[1], IsZoomed(hwnd) ? L"还原" : L"最大化");
+    if (g_ctrl && !IsIconic(hwnd)) {
+        rc.top = chrome_height();
+        g_ctrl->put_Bounds(rc);
+    }
+    RECT bar = {0, 0, rc.right, chrome_height()};
+    InvalidateRect(hwnd, &bar, FALSE);
+}
+
+static void draw_caption_button(HWND hwnd, const DRAWITEMSTRUCT *item) {
+    const int id = (int)item->CtlID - 100;
+    const bool highlighted = item->hwndItem == g_hover_button || (item->itemState & ODS_SELECTED);
+    const COLORREF background = highlighted ? (id == 2 ? RGB(196, 43, 28) : RGB(226, 232, 240))
+                                            : RGB(248, 250, 252);
+    HBRUSH brush = CreateSolidBrush(background);
+    FillRect(item->hDC, &item->rcItem, brush);
+    DeleteObject(brush);
+    int cx = (item->rcItem.left + item->rcItem.right) / 2;
+    int cy = (item->rcItem.top + item->rcItem.bottom) / 2;
+    int half = scaled(5);
+    HPEN pen = CreatePen(PS_SOLID, scaled(1), highlighted && id == 2 ? RGB(255,255,255) : RGB(51,65,85));
+    HGDIOBJ oldpen = SelectObject(item->hDC, pen);
+    HGDIOBJ oldbrush = SelectObject(item->hDC, GetStockObject(NULL_BRUSH));
+    if (id == 0) {
+        MoveToEx(item->hDC, cx-half, cy, nullptr); LineTo(item->hDC, cx+half+1, cy);
+    } else if (id == 1) {
+        if (IsZoomed(hwnd)) {
+            int offset = scaled(3);
+            Rectangle(item->hDC, cx-half+offset, cy-half, cx+half+1, cy+half-offset+1);
+            HBRUSH fill = CreateSolidBrush(background);
+            RECT front = {cx-half, cy-half+offset, cx+half-offset+1, cy+half+1};
+            FillRect(item->hDC, &front, fill); DeleteObject(fill);
+            Rectangle(item->hDC, front.left, front.top, front.right, front.bottom);
+        } else Rectangle(item->hDC, cx-half, cy-half, cx+half+1, cy+half+1);
+    } else {
+        MoveToEx(item->hDC, cx-half, cy-half, nullptr); LineTo(item->hDC, cx+half+1, cy+half+1);
+        MoveToEx(item->hDC, cx+half, cy-half, nullptr); LineTo(item->hDC, cx-half-1, cy+half+1);
+    }
+    SelectObject(item->hDC, oldpen); SelectObject(item->hDC, oldbrush); DeleteObject(pen);
+    if (item->itemState & ODS_FOCUS) {
+        RECT focus = item->rcItem; InflateRect(&focus, -scaled(5), -scaled(5));
+        DrawFocusRect(item->hDC, &focus);
+    }
+}
+
 static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
+    case WM_NCCALCSIZE:
+        /* Keep WS_THICKFRAME for native resize/snap behavior, but make the
+         * custom chrome and WebView occupy the whole window. DefWindowProc
+         * otherwise reserves a system frame that shows as black side strips
+         * when our maximized outer rectangle is aligned to the work area. */
+        return 0;
+    case WM_CREATE: {
+        g_dpi = GetDpiForWindow(hwnd);
+        const wchar_t *names[] = {L"最小化", L"最大化", L"关闭"};
+        for (int i = 0; i < 3; ++i) {
+            g_caption_buttons[i] = CreateWindowW(L"BUTTON", names[i],
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
+                0, 0, 0, 0, hwnd, (HMENU)(INT_PTR)(100+i), GetModuleHandleW(nullptr), nullptr);
+            WNDPROC original = (WNDPROC)SetWindowLongPtrW(g_caption_buttons[i], GWLP_WNDPROC,
+                                                        (LONG_PTR)caption_button_proc);
+            if (!g_button_proc) g_button_proc = original;
+        }
+        layout_chrome(hwnd);
+        return 0;
+    }
+    case WM_COMMAND:
+        if (HIWORD(wp) == BN_CLICKED && LOWORD(wp) >= 100 && LOWORD(wp) <= 102) {
+            if (LOWORD(wp) == 102) PostMessageW(hwnd, WM_CLOSE, 0, 0);
+            else ShowWindow(hwnd, LOWORD(wp) == 100 ? SW_MINIMIZE :
+                            (IsZoomed(hwnd) ? SW_RESTORE : SW_MAXIMIZE));
+            return 0;
+        }
+        break;
+    case WM_DRAWITEM:
+        if (wp >= 100 && wp <= 102) {
+            draw_caption_button(hwnd, (const DRAWITEMSTRUCT *)lp);
+            return TRUE;
+        }
+        break;
+    case WM_DPICHANGED: {
+        g_dpi = HIWORD(wp);
+        const RECT *rc = (const RECT *)lp;
+        SetWindowPos(hwnd, nullptr, rc->left, rc->top, rc->right-rc->left, rc->bottom-rc->top,
+                     SWP_NOZORDER | SWP_NOACTIVATE);
+        layout_chrome(hwnd);
+        return 0;
+    }
+    case WM_GETMINMAXINFO: {
+        MINMAXINFO *info = (MINMAXINFO *)lp;
+        info->ptMinTrackSize = {scaled(640), scaled(480)};
+        MONITORINFO monitor = {sizeof(monitor)};
+        if (GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &monitor)) {
+            info->ptMaxPosition = {monitor.rcWork.left-monitor.rcMonitor.left,
+                                   monitor.rcWork.top-monitor.rcMonitor.top};
+            info->ptMaxSize = {monitor.rcWork.right-monitor.rcWork.left,
+                               monitor.rcWork.bottom-monitor.rcWork.top};
+        }
+        return 0;
+    }
     case WM_NCHITTEST: {
         /* The desktop shell is frameless. Only the native window controls
          * consume clicks; the rest of this strip is a drag target. */
         POINT pt = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
         RECT wr;
         GetWindowRect(hwnd, &wr);
-        const int edge = 8;
+        const int edge = scaled(6);
         const bool left = pt.x < wr.left + edge, right = pt.x >= wr.right - edge;
         const bool top = pt.y < wr.top + edge, bottom = pt.y >= wr.bottom - edge;
         if (!IsZoomed(hwnd)) {
@@ -443,52 +571,34 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (bottom) return HTBOTTOM;
         }
         ScreenToClient(hwnd, &pt);
-        if (pt.y >= 0 && pt.y < kChromeHeight) {
+        if (pt.y >= 0 && pt.y < chrome_height()) {
             RECT cr;
             GetClientRect(hwnd, &cr);
-            return pt.x >= cr.right - 132 ? HTCLIENT : HTCAPTION;
+            return pt.x >= cr.right - scaled(138) ? HTCLIENT : HTCAPTION;
         }
         return HTCLIENT;
-    }
-    case WM_LBUTTONUP: {
-        POINT pt = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
-        RECT cr;
-        GetClientRect(hwnd, &cr);
-        if (pt.y >= 0 && pt.y < kChromeHeight) {
-            if (pt.x >= cr.right - 44)
-                PostMessageA(hwnd, WM_CLOSE, 0, 0);
-            else if (pt.x >= cr.right - 88)
-                ShowWindow(hwnd, IsZoomed(hwnd) ? SW_RESTORE : SW_MAXIMIZE);
-            else if (pt.x >= cr.right - 132)
-                ShowWindow(hwnd, SW_MINIMIZE);
-            return 0;
-        }
-        break;
     }
     case WM_PAINT: {
         PAINTSTRUCT ps;
         HDC dc = BeginPaint(hwnd, &ps);
         RECT cr;
         GetClientRect(hwnd, &cr);
-        HBRUSH bg = CreateSolidBrush(RGB(250, 246, 240));
-        RECT bar = { 0, 0, cr.right, kChromeHeight };
+        HBRUSH bg = CreateSolidBrush(RGB(248, 250, 252));
+        RECT bar = { 0, 0, cr.right, chrome_height() };
         FillRect(dc, &bar, bg);
         DeleteObject(bg);
         SetBkMode(dc, TRANSPARENT);
         SetTextColor(dc, RGB(103, 100, 96));
-        HFONT font = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
+        HFONT font = CreateFontW(-scaled(13), 0, 0, 0, FW_MEDIUM, FALSE, FALSE, FALSE,
+            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+            DEFAULT_PITCH, L"Segoe UI");
         HGDIOBJ old = SelectObject(dc, font);
-        RECT title = { 16, 0, cr.right - 140, kChromeHeight };
-        DrawTextW(dc, L"Cognitive OS", -1, &title, DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_NOPREFIX);
-        RECT min = { cr.right - 132, 0, cr.right - 88, kChromeHeight };
-        RECT max = { cr.right - 88, 0, cr.right - 44, kChromeHeight };
-        RECT close = { cr.right - 44, 0, cr.right, kChromeHeight };
-        /* Use the Unicode entry point throughout: DrawTextA interprets UTF-8
-         * bytes with the current ANSI code page and produced mojibake here. */
-        DrawTextW(dc, L"−", -1, &min, DT_SINGLELINE | DT_VCENTER | DT_CENTER);
-        DrawTextW(dc, IsZoomed(hwnd) ? L"▣" : L"□", -1, &max, DT_SINGLELINE | DT_VCENTER | DT_CENTER);
-        DrawTextW(dc, L"×", -1, &close, DT_SINGLELINE | DT_VCENTER | DT_CENTER);
+        if (g_icon_small) DrawIconEx(dc, scaled(14), scaled(10), g_icon_small,
+                                     scaled(20), scaled(20), 0, nullptr, DI_NORMAL);
+        RECT title = { scaled(g_icon_small ? 44 : 16), 0, cr.right-scaled(154), chrome_height() };
+        DrawTextW(dc, L"Cognitive OS", -1, &title, DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_NOPREFIX | DT_END_ELLIPSIS);
         SelectObject(dc, old);
+        DeleteObject(font);
         EndPaint(hwnd, &ps);
         return 0;
     }
@@ -499,12 +609,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             navigate_error();
         return 0;
     case WM_SIZE: {
-        if (g_ctrl && wp != SIZE_MINIMIZED) {
-            RECT rc;
-            GetClientRect(hwnd, &rc);
-            rc.top += kChromeHeight;
-            g_ctrl->put_Bounds(rc);
-        }
+        if (wp != SIZE_MINIMIZED) layout_chrome(hwnd);
         return 0;
     }
     case WM_DESTROY:
@@ -515,6 +620,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 }
 
 int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
+    SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     std::wstring dir = exe_dir();
     std::wstring exe = dir + L"\\cognitive-os-agent.exe";
 
@@ -555,7 +661,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
     wc.lpszClassName = "cognitive-os-agent";
     RegisterClassA(&wc);
     g_hwnd = CreateWindowA("cognitive-os-agent", "cognitive-os-agent",
-                           WS_POPUP | WS_THICKFRAME | WS_MINIMIZEBOX |
+                           WS_POPUP | WS_THICKFRAME | WS_CLIPCHILDREN | WS_MINIMIZEBOX |
                            WS_MAXIMIZEBOX | WS_SYSMENU,
                            CW_USEDEFAULT, CW_USEDEFAULT,
                            1280, 800, nullptr, nullptr, wc.hInstance, nullptr);
@@ -649,7 +755,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 
     RECT rc;
     GetClientRect(g_hwnd, &rc);
-    rc.top += kChromeHeight;
+    rc.top += chrome_height();
     g_ctrl->put_Bounds(rc);
 
     /* Starting page first, then the boot watcher takes over. */
@@ -666,6 +772,11 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
     /* UI message loop */
     MSG msg;
     while (GetMessageA(&msg, nullptr, 0, 0) > 0) {
+        if ((msg.hwnd == g_hwnd && msg.message == WM_KEYDOWN && msg.wParam == VK_TAB) ||
+            (GetFocus() == g_caption_buttons[0] || GetFocus() == g_caption_buttons[1] ||
+             GetFocus() == g_caption_buttons[2])) {
+            if (IsDialogMessageW(g_hwnd, &msg)) continue;
+        }
         TranslateMessage(&msg);
         DispatchMessageA(&msg);
     }

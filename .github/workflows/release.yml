@@ -94,23 +94,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          cat > release-notes.md <<'EOF'
-          ## v0.7.0
-
-          - 支持将 SKILL.md 和 MCP JSON 直接复制到本地 state/skills、state/mcp 目录，并在界面中重新加载
-          - 支持从配置文件直接启动 CLI；增强 SSH 密码登录、命名环境和会话隔离
-          - 优化聊天会话切换后的输入焦点、Skills/MCP 页面和 Agent 执行反馈
-          - 修复共享记忆提交时机、任务恢复与调度相关问题
-
-          发布前 CI 已覆盖 Windows、Linux、macOS Apple Silicon/Intel 和 AddressSanitizer。
-
-          ### 安装包
-          - Windows：`cognitive-os-agent-setup.exe`
-          - Linux：`cognitive-os-agent-linux-x64.tar.gz`
-          - macOS Apple Silicon：`cognitive-os-agent-macos-arm64.zip`
-          - macOS Intel：`cognitive-os-agent-macos-x64.zip`
-          EOF
+          NOTES="backend/docs/releases/${GITHUB_REF_NAME}.md"
+          test -f "$NOTES"
           gh release create "${GITHUB_REF_NAME}" release-assets/* \
             --repo "${GITHUB_REPOSITORY}" \
             --title "${GITHUB_REF_NAME}" \
-            --notes-file release-notes.md
+            --notes-file "$NOTES"

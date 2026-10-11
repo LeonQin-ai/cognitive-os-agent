@@ -1,3 +1,4 @@
+#include "api/attachment.h"
 /* cognitive-os-agent.c — runtime context assembly: wires config, bus, metrics, policy,
  * memory, snapshot, tools, LLM, transactions, reasoning, scheduler and the
  * HTTP API into a single runtime_ctx. */
@@ -246,13 +247,14 @@ static int chat_lane_run(runtime_ctx *ctx, const char *session_id, int64_t task_
         lane = 0;
     }
     ctx->lane_task[lane] = task_id;
-    progress_binding binding = {ctx, scheduler_get(ctx->scheduler, task_id)};
+    progress_binding binding = {ctx, scheduler_acquire(ctx->scheduler, task_id)};
     reasoning_set_task(ctx->chat_lanes[lane], binding.t);
     reasoning_set_thinking_mode(ctx->chat_lanes[lane], thinking_mode);
     reasoning_set_observer(ctx->chat_lanes[lane], chat_progress, &binding);
     int rc = reasoning_run_ex(ctx->chat_lanes[lane], session_id, prompt, answer);
     reasoning_set_observer(ctx->chat_lanes[lane], NULL, NULL);
     reasoning_set_task(ctx->chat_lanes[lane], NULL);
+    scheduler_release(ctx->scheduler, binding.t);
     ctx->lane_task[lane] = 0;
     mutex_unlock(&ctx->lane_mtx[lane]);
     lane_sess_lock_release(se);
@@ -693,6 +695,7 @@ int init(runtime_ctx *ctx, const config *cfg) {
         char uploads[600];
         path_join(uploads, sizeof(uploads), ctx->state_root, "uploads");
         int nch = memory_index_uploads(ctx->memory, uploads);
+        attachment_reindex(ctx->state_root, ctx->memory);
         if (nch > 0)
             log_info("memory: reindexed %d chunk(s) from uploads", nch);
     }
@@ -953,6 +956,10 @@ int init(runtime_ctx *ctx, const config *cfg) {
     scheduler_set_completion_cb(ctx->scheduler, task_done, ctx);
 
     /* scheduled tasks (定时任务): load persisted jobs and start the tick thread */
+    int history_count = config_get_int(ctx->config, "scheduler.history.count", 1024);
+    int history_bytes = config_get_int(ctx->config, "scheduler.history.bytes", 16 * 1024 * 1024);
+    scheduler_set_history_limits(ctx->scheduler, history_count>=0 ? (size_t)history_count : 1024,
+        history_bytes>=0 ? (size_t)history_bytes : 16 * 1024 * 1024);
     ctx->cron = cron_new(ctx->scheduler, ctx->state_root);
     if (ctx->cron)
         cron_start(ctx->cron);
@@ -997,21 +1004,14 @@ void runtime_shutdown(runtime_ctx *ctx) {
     if (!ctx)
         return;
     stop(ctx);
-    if (ctx->http) {
-        http_server_free(ctx->http);
-        ctx->http = NULL;
+    /* Stop submitters first; callbacks may still broadcast through ctx->http. */
+    if (ctx->cron) { cron_free(ctx->cron); ctx->cron = NULL; }
+    if (ctx->scheduler && scheduler_shutdown(ctx->scheduler, 3000) != 0) {
+        log_warn("runtime shutdown timed out; preserving resources for running workers");
+        return;
     }
+    if (ctx->http) { http_server_free(ctx->http); ctx->http = NULL; }
     secret_audit_close();
-
-    if (ctx->scheduler) {
-        scheduler_shutdown(ctx->scheduler, 3000);
-    }
-
-    /* stop the tick thread before the scheduler it submits into dies */
-    if (ctx->cron) {
-        cron_free(ctx->cron);
-        ctx->cron = NULL;
-    }
 
     if (ctx->tasklog) {
         tasklog_free(ctx->tasklog);

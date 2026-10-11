@@ -321,41 +321,41 @@ int memory_index_document(memory *m, const char *id, const char *text, const cha
 }
 
 #define UPLOAD_CHUNK_TARGET 600             /* chunk chars before flushing a paragraph run */
-#define UPLOAD_MAX_FILE (8LL * 1024 * 1024) /* skip files above 8MB */
+#define UPLOAD_MAX_FILE (64LL * 1024 * 1024) /* legacy file import cap */
 
 /* Split `text` into ~UPLOAD_CHUNK_TARGET chunks at paragraph boundaries
  * (blank lines) and index each with id "<base>#<i>". Returns chunks added. */
+void memory_remove_document(memory *m, const char *base) {
+    if (!m || !base) return;
+    char *prefix = malloc(strlen(base)+2);
+    if (!prefix) return;
+    sprintf(prefix, "%s#", base);
+    vectorstore_remove_prefix(m->vectors, prefix);
+    free(prefix);
+}
+
 int memory_index_text(memory *m, const char *base, const char *text) {
-    strbuf cur;
+    if (!m || !base || !text) return -1;
+    char *id = malloc(strlen(base)+32);
+    if (!id) return -1;
+    memory_remove_document(m, base);
+    int n = 0;
     const char *p = text;
-
-    strbuf_init(&cur);
-    int n = 0, idx = 0;
-    while (*p) {
-        /* one paragraph: up to a blank line or EOF */
-        const char *nl = strstr(p, "\n\n");
-        size_t plen = nl ? (size_t)(nl - p) : strlen(p);
-        if (cur.len > 0 && cur.len + plen > UPLOAD_CHUNK_TARGET) {
-            char id[128];
-            snprintf(id, sizeof(id), "%s#%d", base, idx++);
-            memory_index_document(m, id, cur.buf, "upload");
-            n++;
-            strbuf_free(&cur);
-            strbuf_init(&cur);
+    size_t remaining = strlen(text);
+    while (remaining) {
+        size_t len = remaining;
+        if (len > UPLOAD_CHUNK_TARGET) len = UPLOAD_CHUNK_TARGET;
+        while (len && ((unsigned char)p[len] & 0xc0) == 0x80) len--;
+        if (!len) { free(id); memory_remove_document(m, base); return -1; }
+        char chunk[UPLOAD_CHUNK_TARGET+1];
+        memcpy(chunk, p, len); chunk[len] = 0;
+        sprintf(id, "%s#%d", base, n);
+        if (memory_index_document(m, id, chunk, "upload") != 0) {
+            free(id); memory_remove_document(m, base); return -1;
         }
-        strbuf_append_n(&cur, p, plen);
-        strbuf_append(&cur, "\n");
-        p += nl ? (size_t)(nl - p) + 2 : plen;
+        n++; p += len; remaining -= len;
     }
-
-    if (cur.len > 0) {
-        char id[128];
-        snprintf(id, sizeof(id), "%s#%d", base, idx++);
-        memory_index_document(m, id, cur.buf, "upload");
-        n++;
-    }
-
-    strbuf_free(&cur);
+    free(id);
     return n;
 }
 
@@ -375,9 +375,18 @@ int memory_index_uploads(memory *m, const char *dir) {
         long long sz = fs_file_size(fpath);
         if (sz <= 0 || sz > UPLOAD_MAX_FILE)
             continue;
+        /* New attachments are restored from their manifests, not raw storage. */
+        if (strlen(dl.items[i].name) == 36 &&
+            (strcmp(dl.items[i].name+32, ".raw") == 0 || strcmp(dl.items[i].name+32, ".txt") == 0)) continue;
+        if (strlen(dl.items[i].name) == 37 && strcmp(dl.items[i].name+32, ".json") == 0) continue;
+        if (strlen(dl.items[i].name) == 43 && !strncmp(dl.items[i].name+32, ".frame", 6)) continue;
         char *text = fs_read_file(fpath);
         if (!text)
             continue;
+        if (memchr(text, 0, (size_t)sz)) { free(text); continue; }
+        char *clean = str_utf8_sanitize(text);
+        free(text); text = clean;
+        if (!text) continue;
         char base[256];
         snprintf(base, sizeof(base), "upload:%s", dl.items[i].name);
         total += memory_index_text(m, base, text);

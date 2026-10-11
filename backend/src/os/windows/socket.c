@@ -183,6 +183,7 @@ sock *sock_connect(const char *host, uint16_t port, int timeout_ms) {
         return NULL;
     }
 
+    SetHandleInformation((HANDLE)(uintptr_t)(SOCKET)fd, HANDLE_FLAG_INHERIT, 0);
     s->fd = fd;
     g_err[0] = '\0';
     return s;
@@ -287,6 +288,7 @@ listener *listen_addr(const char *host, uint16_t port) {
         return NULL;
     }
 
+    SetHandleInformation((HANDLE)(uintptr_t)(SOCKET)fd, HANDLE_FLAG_INHERIT, 0);
     l->fd = fd;
     g_err[0] = '\0';
     return l;
@@ -329,6 +331,7 @@ sock *sock_accept(listener *l, int timeout_ms) {
         return NULL;
     }
 
+    SetHandleInformation((HANDLE)(uintptr_t)(SOCKET)fd, HANDLE_FLAG_INHERIT, 0);
     s->fd = fd;
     /* SO_RCVTIMEO so a half-open connection (connected but never sends a
      * complete request) cannot wedge the single-threaded HTTP server: recv()
@@ -346,6 +349,13 @@ void sock_close(sock *s) {
         return;
     CLOSEFD(s->fd);
     free(s);
+}
+
+void sock_shutdown(sock *s) { if (s) shutdown(s->fd, SD_BOTH); }
+void sock_set_timeout(sock *s, int ms) {
+    DWORD t = (DWORD)ms;
+    setsockopt(s->fd, SOL_SOCKET, SO_RCVTIMEO, (const char *)&t, sizeof(t));
+    setsockopt(s->fd, SOL_SOCKET, SO_SNDTIMEO, (const char *)&t, sizeof(t));
 }
 
 void listener_close(listener *l) {

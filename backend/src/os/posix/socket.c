@@ -331,6 +331,13 @@ void sock_close(sock *s) {
     free(s);
 }
 
+void sock_shutdown(sock *s) { if (s) shutdown(s->fd, SHUT_RDWR); }
+void sock_set_timeout(sock *s, int ms) {
+    struct timeval t = {ms / 1000, (ms % 1000) * 1000};
+    setsockopt(s->fd, SOL_SOCKET, SO_RCVTIMEO, &t, sizeof(t));
+    setsockopt(s->fd, SOL_SOCKET, SO_SNDTIMEO, &t, sizeof(t));
+}
+
 void listener_close(listener *l) {
     if (!l)
         return;

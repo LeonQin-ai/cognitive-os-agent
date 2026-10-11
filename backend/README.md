@@ -469,3 +469,19 @@ apps/web/            embedded web UI (regenerated into include/api/web_ui.h)
 third_party/         cJSON (MIT) · wasm3 (MIT)
 state/               runtime data (generated): logs, memory, snapshots, audit, skills, plugins
 ```
+
+
+## 图片、文档和视频附件
+
+聊天附件支持图片、Word（DOC/DOCX）、PPT（PPT/PPTX）、普通/扫描 PDF 和常见视频格式。
+文档提取文字并提供采样页面图片；视频提供带时间点的采样画面。每个文件最大 64 MiB。
+图片、页面和视频画面需要视觉模型；视频音轨转写尚未实现。
+
+解析依赖和完整格式表见 [附件格式与验证](docs/attachment-formats.md)。可运行：
+
+```powershell
+python -m pip install -r tools/requirements-attachments.txt
+```
+
+旧版 Office 与完整 Word/PPT 页面渲染需要 Word/PowerPoint 或 LibreOffice。
+上传结果会区分可读取、解析失败和不支持的状态；缺少转换器不会误报可分析。

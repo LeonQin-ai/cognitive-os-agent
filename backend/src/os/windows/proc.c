@@ -387,8 +387,8 @@ proc_popen *proc_popen_new(char *const argv[]) {
     return proc_popen_new_ex(argv, 0);
 }
 
-proc_popen *proc_popen_new_ex(char *const argv[], int merge_stderr) {
-    char cmdline[4096];
+static proc_popen *popen_spawn(char *const argv[], int merge_stderr, int direct) {
+    char cmdline[32768];
     size_t off;
     proc_popen *p;
 
@@ -402,8 +402,25 @@ proc_popen *proc_popen_new_ex(char *const argv[], int merge_stderr) {
      * breaks cmd's PATH-search semantics (%~dp0 inside the resolved .cmd
      * shim then resolves to the CWD instead of the shim's directory, which
      * crashes nvm4w/npm shims instantly). */
-    off = (size_t)snprintf(cmdline, sizeof(cmdline), "cmd.exe /s /c \"");
+    off = direct ? 0 : (size_t)snprintf(cmdline, sizeof(cmdline), "cmd.exe /s /c \"");
     for (int i = 0; argv[i] && off < sizeof(cmdline); i++) {
+        if (direct) {
+            if (off + 4 >= sizeof cmdline) return NULL;
+            if (i) cmdline[off++] = ' ';
+            cmdline[off++] = '"';
+            const char *a = argv[i];
+            while (*a) {
+                size_t slashes = 0;
+                while (*a == '\\') { slashes++; a++; }
+                size_t emit = (*a == '"' || !*a) ? slashes*2 : slashes;
+                if (off + emit + 4 >= sizeof cmdline) return NULL;
+                while (emit--) cmdline[off++] = '\\';
+                if (*a == '"') cmdline[off++] = '\\';
+                if (*a) cmdline[off++] = *a++;
+            }
+            cmdline[off++] = '"'; cmdline[off] = 0;
+            continue;
+        }
         char q[800];
         if (i == 0 && !strchr(argv[i], ' ') && !strchr(argv[i], '"'))
             snprintf(q, sizeof(q), "%s", argv[i]);
@@ -424,7 +441,7 @@ proc_popen *proc_popen_new_ex(char *const argv[], int merge_stderr) {
         off += (size_t)wr;
     }
 
-    if (off < sizeof(cmdline) - 1) {
+    if (!direct && off < sizeof(cmdline) - 1) {
         cmdline[off++] = '"';
         cmdline[off] = '\0';
     }
@@ -500,6 +517,13 @@ proc_popen *proc_popen_new_ex(char *const argv[], int merge_stderr) {
 
     p->buf[0] = '\0';
     return p;
+}
+
+proc_popen *proc_popen_new_ex(char *const argv[], int merge_stderr) {
+    return popen_spawn(argv, merge_stderr, 0);
+}
+proc_popen *proc_popen_new_direct(char *const argv[], int merge_stderr) {
+    return popen_spawn(argv, merge_stderr, 1);
 }
 
 int proc_popen_write(proc_popen *p, const char *data, size_t len) {

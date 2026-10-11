@@ -34,6 +34,9 @@ listener *listen_addr(const char *host, uint16_t port);
 sock *sock_accept(listener *l, int timeout_ms);
 
 void sock_close(sock *s);
+/* Interrupt pending I/O without freeing the socket. */
+void sock_shutdown(sock *s);
+void sock_set_timeout(sock *s, int ms);
 void listener_close(listener *l);
 const char *sock_error(void);
 

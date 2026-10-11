@@ -54,14 +54,17 @@ void vectorstore_free(vectorstore *v) {
 int vectorstore_add(vectorstore *v, const char *id, const char *text, const char *meta) {
     if (!v || !id || !text)
         return -1;
+    char *new_id=xstrdup(id), *new_text=xstrdup(text), *new_meta=xstrdup(meta ? meta : "");
+    if(!new_id || !new_text || !new_meta) { free(new_id); free(new_text); free(new_meta); return -1; }
     mutex_lock(&v->mtx);
     /* update existing id */
     for (size_t i = 0; i < v->count; i++) {
         if (strcmp(v->items[i].id, id) == 0) {
             free(v->items[i].text);
             free(v->items[i].meta);
-            v->items[i].text = xstrdup(text);
-            v->items[i].meta = xstrdup(meta ? meta : "");
+            v->items[i].text = new_text;
+            v->items[i].meta = new_meta;
+            free(new_id);
             embed_text(text, v->items[i].vec);
             mutex_unlock(&v->mtx);
             return 0;
@@ -73,6 +76,7 @@ int vectorstore_add(vectorstore *v, const char *id, const char *text, const char
         vec_entry *ni = (vec_entry *)realloc(v->items, cap * sizeof(vec_entry));
         if (!ni) {
             mutex_unlock(&v->mtx);
+            free(new_id); free(new_text); free(new_meta);
             return -1;
         }
         v->items = ni;
@@ -81,9 +85,9 @@ int vectorstore_add(vectorstore *v, const char *id, const char *text, const char
 
     vec_entry *e = &v->items[v->count++];
     memset(e, 0, sizeof(*e));
-    e->id = xstrdup(id);
-    e->text = xstrdup(text);
-    e->meta = xstrdup(meta ? meta : "");
+    e->id = new_id;
+    e->text = new_text;
+    e->meta = new_meta;
     embed_text(text, e->vec);
     mutex_unlock(&v->mtx);
     return 0;
@@ -117,6 +121,20 @@ int vectorstore_count(vectorstore *v) {
     n = (int)v->count;
     mutex_unlock(&v->mtx);
     return n;
+}
+
+int vectorstore_remove_prefix(vectorstore *v, const char *prefix) {
+    if (!v || !prefix || !*prefix) return -1;
+    int removed = 0;
+    mutex_lock(&v->mtx);
+    for (size_t i = 0; i < v->count;) {
+        if (strncmp(v->items[i].id, prefix, strlen(prefix)) != 0) { i++; continue; }
+        entry_clear(&v->items[i]);
+        memmove(v->items+i, v->items+i+1, (v->count-i-1)*sizeof(vec_entry));
+        v->count--; removed++;
+    }
+    mutex_unlock(&v->mtx);
+    return removed;
 }
 
 char *vectorstore_nearest(vectorstore *v, const char *query, int k) {

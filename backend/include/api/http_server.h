@@ -1,7 +1,7 @@
-/* http_server.h — minimal single-threaded HTTP/1.1 server.
+/* http_server.h — bounded HTTP/1.1 server.
  * Route table of (method, path prefix) -> handler, one request per connection
  * (Connection: close). Backed by the os_socket listener/accept primitives.
- * Handlers run on the accepting thread, so the server is safe without locks. */
+ * Connection I/O is concurrent (up to 16); handlers default to serialized. */
 #pragma once
 #include <stddef.h>
 #include <stdint.h>
@@ -40,6 +40,9 @@ void http_server_free(http_server *s);
 /* Register a route. First matching (method, prefix) wins; method "*" matches all. */
 void http_server_route(http_server *s, const char *method, const char *path_prefix, http_handler fn,
                            void *ud);
+/* Opt in only for handlers that synchronize all shared state themselves. */
+void http_server_route_concurrent(http_server *s, const char *method, const char *path_prefix,
+                                  http_handler fn, void *ud);
 
 /* Register a WebSocket upgrade path (e.g. "/ws"). Inbound text messages are
  * forwarded to on_msg. Broadcast pushes events to every connected client. */

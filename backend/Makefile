@@ -76,3 +76,14 @@ clean:
 	rm -rf build
 
 .PHONY: all test scenario clean bench
+
+build/test-review: $(SRCS) tests/test_review.c
+	@mkdir -p build
+	$(CC) $(CFLAGS) -o $@ $(SRCS) tests/test_review.c $(LDLIBS)
+
+include/api/attachment_extractor.h: tools/attachment_extract.py tools/gen_attachment_extractor.py
+	python3 tools/gen_attachment_extractor.py
+
+$(SRCS): | include/api/attachment_extractor.h
+
+build/cognitive-os-agent build/cognitive-os-agent-test build/cognitive-os-agent-scenario build/mock-llm-server build/test-adapters build/cognitive-os-agent-e2e build/cognitive-os-agent-bench build/test-review: include/api/attachment_extractor.h

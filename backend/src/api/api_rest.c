@@ -1,3 +1,4 @@
+#include "api/attachment.h"
 /* api_rest.c — REST API handlers wired to the cognitive-os-agent runtime context. */
 #include "api/api_rest.h"
 #include "api/http_server.h"
@@ -137,9 +138,12 @@ static int h_scheduler(const http_request *req, http_response *resp, void *ud) {
     scheduler_get_stats(ctx->scheduler, &stats);
     http_resp_appendf(resp,
         "{\"workers\":%d,\"max_workers\":%d,\"active\":%d,\"max_active\":%d,"
-        "\"queued\":%llu,\"rejected\":%llu}", stats.workers, stats.max_workers,
+        "\"queued\":%llu,\"rejected\":%llu,\"retained\":%llu,\"retained_bytes\":%llu,"
+        "\"history_count\":%llu,\"history_bytes\":%llu}", stats.workers, stats.max_workers,
         stats.active, stats.max_active, (unsigned long long)stats.queued,
-        (unsigned long long)stats.rejected);
+        (unsigned long long)stats.rejected, (unsigned long long)stats.retained,
+        (unsigned long long)stats.retained_bytes, (unsigned long long)stats.history_count,
+        (unsigned long long)stats.history_bytes);
     return 0;
 }
 
@@ -210,11 +214,11 @@ static int h_task_get(const http_request *req, http_response *resp, void *ud) {
     }
 
     id = atoll(suffix);
-    t = scheduler_get(ctx->scheduler, id);
+    t = scheduler_acquire(ctx->scheduler, id);
     if (!t) {
         resp->status = 404;
         http_resp_json(resp, "{\"error\":\"task not found\"}");
-        return 0;
+        scheduler_release(ctx->scheduler, t); return 0;
     }
 
     o = cJSON_CreateObject();
@@ -260,7 +264,7 @@ static int h_task_get(const http_request *req, http_response *resp, void *ud) {
         free(s);
     }
 
-    return 0;
+    scheduler_release(ctx->scheduler, t); return 0;
 }
 
 /* DELETE /v1/tasks/<id> — request cancellation of a queued/running task.
@@ -275,9 +279,9 @@ static int h_task_message(const http_request *req, http_response *resp, void *ud
     if (end == suffix || id < 0 || strcmp(end, "/messages") != 0) {
         resp->status = 404; http_resp_json(resp, "{\"error\":\"unknown task route\"}"); return 0;
     }
-    task *t = scheduler_get(ctx->scheduler, id);
-    if (!t) { resp->status = 404; http_resp_json(resp, "{\"error\":\"task not found\"}"); return 0; }
-    if (t->userdata) { resp->status = 409; http_resp_json(resp, "{\"error\":\"only chat tasks accept messages\"}"); return 0; }
+    task *t = scheduler_acquire(ctx->scheduler, id);
+    if (!t) { resp->status = 404; http_resp_json(resp, "{\"error\":\"task not found\"}"); scheduler_release(ctx->scheduler, t); return 0; }
+    if (t->userdata) { resp->status = 409; http_resp_json(resp, "{\"error\":\"only chat tasks accept messages\"}"); scheduler_release(ctx->scheduler, t); return 0; }
     char *body = body_str(req);
     cJSON *o = body ? cJSON_Parse(body) : NULL;
     free(body);
@@ -285,12 +289,12 @@ static int h_task_message(const http_request *req, http_response *resp, void *ud
     const char *session = o ? json_str(o, "session") : NULL;
     if (!message || !*message || !session || strcmp(session, t->tag ? t->tag : "default") != 0) {
         cJSON_Delete(o); resp->status = 400;
-        http_resp_json(resp, "{\"error\":\"message and matching session required\"}"); return 0;
+        http_resp_json(resp, "{\"error\":\"message and matching session required\"}"); scheduler_release(ctx->scheduler, t); return 0;
     }
     char *safe_message = ssh_session_prepare_prompt(ctx->state_root, session, message);
     if (!safe_message) {
         cJSON_Delete(o); resp->status = 500;
-        http_resp_json(resp, "{\"error\":\"SSH credential needs a host or saved environment and a working local vault\"}"); return 0;
+        http_resp_json(resp, "{\"error\":\"SSH credential needs a host or saved environment and a working local vault\"}"); scheduler_release(ctx->scheduler, t); return 0;
     }
     int revision = task_add_message(t, safe_message);
     free(safe_message);
@@ -302,7 +306,7 @@ static int h_task_message(const http_request *req, http_response *resp, void *ud
         resp->status = 202;
         http_resp_appendf(resp, "{\"id\":%lld,\"revision\":%d,\"status\":\"accepted\"}", id, revision);
     }
-    return 0;
+    scheduler_release(ctx->scheduler, t); return 0;
 }
 
 static int h_task_cancel(const http_request *req, http_response *resp, void *ud) {
@@ -320,11 +324,11 @@ static int h_task_cancel(const http_request *req, http_response *resp, void *ud)
     }
 
     id = atoll(suffix);
-    t = scheduler_get(ctx->scheduler, id);
+    t = scheduler_acquire(ctx->scheduler, id);
     if (!t) {
         resp->status = 404;
         http_resp_json(resp, "{\"error\":\"task not found\"}");
-        return 0;
+        scheduler_release(ctx->scheduler, t); return 0;
     }
 
     if (t->status == TS_RUNNING || t->status == TS_QUEUED) {
@@ -333,7 +337,7 @@ static int h_task_cancel(const http_request *req, http_response *resp, void *ud)
     } else {
         http_resp_appendf(resp, "{\"id\":%lld,\"status\":\"%s\"}", (long long)id, task_status_str(t->status));
     }
-    return 0;
+    scheduler_release(ctx->scheduler, t); return 0;
 }
 
 /* GET /v1/tasks/journal — durable task journal (checkpoint history). Serves
@@ -480,17 +484,25 @@ static int h_chat(const http_request *req, http_response *resp, void *ud) {
         return 0;
     }
 
+    cJSON *ids=cJSON_GetObjectItemCaseSensitive(root,"attachments");
+    char *attachments=ids ? attachment_snapshot(ctx->state_root,session,ids) : NULL;
+    if(ids && !attachments) {
+        cJSON_Delete(root); resp->status=400;
+        http_resp_json(resp,"{\"error\":\"attachments must be ready, belong to this session, and number at most four\"}"); return 0;
+    }
     char *safe_msg = ssh_session_prepare_prompt(ctx->state_root, session, msg);
     if (!safe_msg) {
+        free(attachments);
         cJSON_Delete(root);
         resp->status = 500;
         http_resp_json(resp, "{\"error\":\"SSH credential needs a host or saved environment and a working local vault\"}");
         return 0;
     }
-    id = scheduler_submit_tag_mode(ctx->scheduler, 0, safe_msg, NULL, 0, session, thinking);
+    id = scheduler_submit_attachments(ctx->scheduler, 0, safe_msg, NULL, 0, session, thinking, attachments);
     if (id >= 0)
         reasoning_session_note_prompt(ctx->reasoning, session, safe_msg);
     free(safe_msg);
+    free(attachments);
     cJSON_Delete(root);
     if (id < 0) {
         scheduler_submit_error(resp, id);
@@ -1136,7 +1148,7 @@ static int h_hook_delete(const http_request *req, http_response *resp, void *ud)
 /* Copy `in` (the ?name= parameter) into `out`, percent-decoding and replacing
  * unsafe characters so the result is a plain basename (no traversal). */
 static void sanitize_upload_name(const char *in, char *out, size_t cap) {
-    char dec[256];
+    char dec[512];
     size_t di = 0;
     size_t oi = 0;
     /* strip leading dots: no hidden entries, no "." / ".." */
@@ -1168,11 +1180,6 @@ static void sanitize_upload_name(const char *in, char *out, size_t cap) {
         strip++;
     if (strip)
         memmove(out, out + strip, oi - strip + 1);
-}
-
-static void uploads_dir_of(const runtime_ctx *ctx, char *dir, size_t cap) {
-    path_join(dir, cap, ctx->state_root, "uploads");
-    fs_mkdirs(dir);
 }
 
 /* GET /v1/chat/history[?session=<id>] — recent conversation turns (oldest
@@ -1248,111 +1255,54 @@ static int h_chat_history(const http_request *req, http_response *resp, void *ud
  * stored under <state_root>/uploads/<name>; text content is chunked into the
  * vector store so later prompts recall it via "## Retrieved context". */
 static int h_upload(const http_request *req, http_response *resp, void *ud) {
+    static atomic_int processing;
     runtime_ctx *ctx = (runtime_ctx *)ud;
-    char name[192];
-    /* text files (no NUL byte) go into the vector store */
-    int chunks = 0;
-
-    if (!authz_ok(ctx, req, resp))
-        return 0;
+    char name[512], session[512] = "default";
+    if (!authz_ok(ctx, req, resp)) return 0;
     const char *nmp = strstr(req->query, "name=");
-    sanitize_upload_name(nmp ? nmp + 5 : req->query, name, sizeof(name));
-    if (!name[0] || !req->body || req->body_len == 0) {
-        resp->status = 400;
-        http_resp_json(resp, "{\"error\":\"need ?name=<file> and a non-empty body\"}");
+    const char *sp = strstr(req->query, "session=");
+    sanitize_upload_name(nmp ? nmp+5 : req->query, name, sizeof name);
+    if (sp) sanitize_upload_name(sp+8, session, sizeof session);
+    if (!*name || !req->body || !req->body_len) {
+        resp->status=400; http_resp_json(resp,"{\"error\":\"name and non-empty file required\"}"); return 0;
+    }
+    if(req->body_len>ATTACHMENT_MAX_BYTES) {
+        resp->status=413; http_resp_json(resp,"{\"error\":\"attachment exceeds 64 MiB limit\"}"); return 0;
+    }
+    if(atomic_fetch_add(&processing,1)>=2) {
+        atomic_fetch_sub(&processing,1);
+        resp->status=429; http_resp_json(resp,"{\"error\":\"attachment processors busy; retry after a current upload completes\"}");
         return 0;
     }
-
-    char dir[600], fpath[820];
-    uploads_dir_of(ctx, dir, sizeof(dir));
-    path_join(fpath, sizeof(fpath), dir, name);
-    if (fs_write_file(fpath, req->body, req->body_len) != 0) {
-        resp->status = 500;
-        http_resp_json(resp, "{\"error\":\"write failed\"}");
-        return 0;
-    }
-
-    if (!memchr(req->body, 0, req->body_len) && ctx->memory) {
-        char *text = malloc(req->body_len + 1);
-        if (text) {
-            memcpy(text, req->body, req->body_len);
-            text[req->body_len] = '\0';
-            char *clean = str_utf8_sanitize(text); /* GBK/invalid bytes guard */
-            if (clean) {
-                free(text);
-                text = clean;
-            }
-            char base[224];
-            snprintf(base, sizeof(base), "upload:%s", name);
-            chunks = memory_index_text(ctx->memory, base, text);
-            free(text);
-        }
-    }
-
-    http_resp_appendf(resp, "{\"ok\":true,\"name\":\"%s\",\"size\":%d,\"chunks\":%d}", name, (int)req->body_len,
-                          chunks);
-    return 0;
+    cJSON *o=attachment_store(ctx->state_root,ctx->memory,name,session,req->body,req->body_len);
+    atomic_fetch_sub(&processing,1);
+    char *text=o ? cJSON_PrintUnformatted(o) : NULL;
+    if (!text) { resp->status=500; http_resp_json(resp,"{\"error\":\"attachment storage failed\"}"); }
+    else http_resp_json(resp,text);
+    free(text); cJSON_Delete(o); return 0;
 }
 
 /* GET /v1/uploads — uploaded files with sizes. */
 static int h_uploads(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
-    char dir[600];
-    dir_list dl;
-    cJSON *arr;
-    char *s;
-
-    if (!authz_ok(ctx, req, resp))
-        return 0;
-    (void)req;
-    uploads_dir_of(ctx, dir, sizeof(dir));
-    arr = cJSON_CreateArray();
-    if (fs_list_dir(dir, &dl) == 0) {
-        for (size_t i = 0; i < dl.count; i++) {
-            if (dl.items[i].is_dir)
-                continue;
-            char fpath[820];
-            path_join(fpath, sizeof(fpath), dir, dl.items[i].name);
-            cJSON *o = cJSON_CreateObject();
-            cJSON_AddStringToObject(o, "name", dl.items[i].name);
-            cJSON_AddNumberToObject(o, "size", (double)fs_file_size(fpath));
-            cJSON_AddItemToArray(arr, o);
-        }
-        fs_list_free(&dl);
-    }
-
-    s = cJSON_PrintUnformatted(arr);
-    cJSON_Delete(arr);
-    http_resp_appendf(resp, "{\"files\":%s}", s ? s : "[]");
-    free(s);
-    return 0;
+    if (!authz_ok(ctx, req, resp)) return 0;
+    cJSON *o=cJSON_CreateObject();
+    cJSON_AddItemToObject(o,"files",attachment_list(ctx->state_root));
+    char *text=cJSON_PrintUnformatted(o);
+    http_resp_json(resp,text ? text : "{\"files\":[]}");
+    free(text); cJSON_Delete(o); return 0;
 }
 
-/* DELETE /v1/uploads/<name> — remove an uploaded file (its vectors stay until
- * the next startup rebuild, which scans the directory). */
+/* DELETE /v1/uploads/<id> — remove the file, manifest and retrieval chunks.
+ * Unique legacy display names are accepted for compatibility. */
 static int h_upload_delete(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
-    char name[192];
-
-    if (!authz_ok(ctx, req, resp))
-        return 0;
-    sanitize_upload_name(req->path + strlen("/v1/uploads/"), name, sizeof(name));
-    if (!name[0]) {
-        resp->status = 400;
-        http_resp_json(resp, "{\"error\":\"missing file name\"}");
-        return 0;
-    }
-
-    char dir[600], fpath[820];
-    path_join(dir, sizeof(dir), ctx->state_root, "uploads");
-    snprintf(fpath, sizeof(fpath), "%s/%s", dir, name);
-    if (fs_remove(fpath) != 0) {
-        resp->status = 404;
-        http_resp_json(resp, "{\"error\":\"not found\"}");
-        return 0;
-    }
-
-    http_resp_json(resp, "{\"ok\":true}");
+    char name[512];
+    if (!authz_ok(ctx, req, resp)) return 0;
+    sanitize_upload_name(req->path+strlen("/v1/uploads/"),name,sizeof name);
+    if (!*name) { resp->status=400; http_resp_json(resp,"{\"error\":\"missing attachment ID\"}"); return 0; }
+    resp->status=attachment_delete(ctx->state_root,ctx->memory,name);
+    http_resp_json(resp,resp->status==200 ? "{\"ok\":true}" : "{\"error\":\"delete failed or ambiguous name; use attachment ID\"}");
     return 0;
 }
 
@@ -5237,7 +5187,7 @@ int api_attach(runtime_ctx *ctx) {
     http_server_route(ctx->http, "GET", "/v1/hooks", h_hooks, ctx);
     http_server_route(ctx->http, "POST", "/v1/hooks", h_hook_add, ctx);
     http_server_route(ctx->http, "DELETE", "/v1/hooks/", h_hook_delete, ctx);
-    http_server_route(ctx->http, "POST", "/v1/upload", h_upload, ctx);
+    http_server_route_concurrent(ctx->http, "POST", "/v1/upload", h_upload, ctx);
     http_server_route(ctx->http, "GET", "/v1/uploads", h_uploads, ctx);
     http_server_route(ctx->http, "DELETE", "/v1/uploads/", h_upload_delete, ctx);
     http_server_route(ctx->http, "GET", "/v1/usage", h_usage, ctx);

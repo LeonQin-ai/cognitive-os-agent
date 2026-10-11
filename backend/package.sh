@@ -89,7 +89,8 @@ if [ -f "$OUT" ]; then
     echo "  installer : $OUT"
     echo "  size      : $sz"
     echo ""
-    echo "  Run it to install to %LOCALAPPDATA%\\cognitive-os-agent with desktop + start-menu"
+    echo "  Choose the installation folder in the wizard (default: %LOCALAPPDATA%\\cognitive-os-agent)."
+    echo "  Includes desktop + start-menu"
     echo "  shortcuts and an uninstaller. The installed app opens the web console"
     echo "  in a single native window (no console, no browser)."
 else

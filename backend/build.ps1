@@ -1,9 +1,11 @@
-param([ValidateSet('all','cli','test','scenario','mock','e2e','adapters','bench')][string]$Target='all')
+param([ValidateSet('all','cli','test','scenario','mock','e2e','adapters','bench','review')][string]$Target='all')
 $ErrorActionPreference='Stop'
 Push-Location $PSScriptRoot
 try {
     $zigCompiler = Join-Path $PSScriptRoot 'tools/zig/zig.exe'
     if (!(Test-Path -LiteralPath $zigCompiler)) { $zigCompiler = (Get-Command zig -ErrorAction Stop).Source }
+    python tools/gen_attachment_extractor.py
+    if ($LASTEXITCODE) { throw 'Attachment processor generation failed' }
     python tools/gen_web_ui.py
     if ($LASTEXITCODE) { throw 'UI generation failed' }
     New-Item -ItemType Directory -Force build | Out-Null
@@ -15,6 +17,7 @@ try {
         cli=@('cognitive-os-agent','cli/main.c'); test=@('cognitive-os-agent-test','tests/test_all.c')
         scenario=@('cognitive-os-agent-scenario','tests/test_scenario.c'); mock=@('mock-llm-server','tools/mock_llm_server.c')
         adapters=@('test-adapters','tests/test_adapters.c'); e2e=@('cognitive-os-agent-e2e','tests/test_e2e.c')
+        review=@('test-review','tests/test_review.c')
         bench=@('cognitive-os-agent-bench','tests/bench_agent.c')
     }
     foreach ($name in $targets.Keys) {

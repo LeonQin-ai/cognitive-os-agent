@@ -455,15 +455,31 @@
 .chat-copy{position:absolute;right:4px;top:-10px;opacity:0;padding:3px 8px;border:1px solid var(--border);border-radius:8px;background:var(--card);color:var(--muted);font-size:11px;cursor:pointer;transition:opacity var(--tr-dur)}
 .chat-message:hover .chat-copy,.chat-copy:focus-visible{opacity:1}
 .chat-answer{font-family:var(--sans);font-size:14px;line-height:1.85;white-space:pre-wrap;overflow-wrap:anywhere;margin:18px 0 0}
-.run-card{border-left:2px solid var(--border);margin:6px 0 0 6px;padding-left:18px;background:transparent}
-.run-card>summary{display:flex;align-items:center;gap:10px;padding:8px 0;cursor:pointer;list-style:none;font-size:13px}
-.run-card>summary::-webkit-details-marker{display:none}
-.run-card>summary::after{content:'⌄';color:var(--muted);font-size:16px;transition:transform 150ms;margin-left:4px}
-.run-card[open]>summary::after{transform:rotate(180deg)}
+.run-card{margin:8px 0;padding:18px 20px;border:1px solid var(--border);border-radius:16px;background:color-mix(in srgb,var(--card) 85%,transparent)}
+.run-header{display:flex;align-items:center;gap:10px;font-size:13px}
+.run-card[data-active=true]{border-color:color-mix(in srgb,var(--accent) 24%,var(--border))}
 .run-label{flex:1;font-weight:590}.run-time{color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums}
 .run-dot{width:7px;height:7px;border-radius:50%;background:var(--ok);flex-shrink:0}
 .run-dot.active{background:var(--accent);animation:run-breathe 1.8s ease-in-out infinite}.run-dot.error{background:var(--danger)}
-.run-context{margin:4px 0 13px;color:var(--fg);font-size:13px;line-height:1.7}
+.run-context{margin:8px 0 16px;color:var(--muted);font-size:12px;line-height:1.7}
+.run-outline{list-style:none;padding:0;margin:0;display:grid;gap:0}
+.run-outline>li{position:relative;padding:0 0 15px 23px;min-width:0}
+.run-outline>li:last-child{padding-bottom:0}
+.run-outline>li::before{content:'';position:absolute;left:1px;top:7px;width:7px;height:7px;border-radius:50%;background:var(--border);z-index:1}
+.run-outline>li:not(:last-child)::after{content:'';position:absolute;left:4px;top:17px;bottom:3px;width:1px;background:var(--border)}
+.run-outline>li[data-state=done]::before{background:var(--ok)}
+.run-outline>li[data-state=running]::before{background:var(--accent);animation:run-breathe 1.8s ease-in-out infinite}
+.run-outline>li[data-state=failed]::before{background:var(--danger)}
+.run-outline-title{font-size:12px;font-weight:600;color:var(--fg)}
+.run-outline>li[data-state=idle] .run-outline-title{color:var(--muted);font-weight:400}
+.run-outline-note{margin:2px 0 0;font-size:12px;line-height:1.65;color:var(--muted);overflow-wrap:anywhere}
+.run-details{margin-top:16px;border-top:1px solid var(--border);padding-top:10px}
+.run-details>summary{display:flex;align-items:center;gap:7px;cursor:pointer;list-style:none;color:var(--muted);font-size:12px;padding:3px 0}
+.run-details>summary::-webkit-details-marker{display:none}
+.run-details>summary::before{content:'›';font-size:17px;transition:transform .15s}
+.run-details[open]>summary::before{transform:rotate(90deg)}
+.run-details[open]>.run-metrics{margin-top:14px}
+.run-context .run-stage-time{white-space:nowrap;font-variant-numeric:tabular-nums;color:var(--muted)}
 .run-context b{font-weight:620}.run-metrics{display:flex;flex-wrap:wrap;gap:7px;margin:0 0 16px}.run-metrics span{color:var(--muted);font-size:11px;font-variant-numeric:tabular-nums}.run-metrics span+span::before{content:'·';margin-right:7px;color:var(--muted)}
 .run-steps-title{margin:14px 0 7px;color:var(--muted);font-size:11px;letter-spacing:.35px}
 .run-steps{list-style:none;margin:0 0 16px;padding:0 0 0 17px;border-left:1px solid var(--border)}
@@ -503,7 +519,7 @@
 @keyframes flow-spin{to{transform:rotate(360deg)}}
 @media(prefers-reduced-motion:reduce){.flow-spinner{animation:none}}
 @keyframes run-breathe{50%{opacity:.35;box-shadow:0 0 0 4px var(--accent-soft)}}
-@media(prefers-reduced-motion:reduce){.run-dot.active{animation:none}*{scroll-behavior:auto!important}}
+@media(prefers-reduced-motion:reduce){.run-dot.active,.run-outline>li[data-state=running]::before,.run-steps li[data-state=running]::before{animation:none}*{scroll-behavior:auto!important}}
   @media(max-width:640px){.chat-wrap{padding:16px 12px}#chat-hero{min-height:140px!important;padding:18px 0}.run-card>summary{padding:9px 0}.run-steps li{flex-wrap:wrap;gap:3px}.chat-message.user{max-width:92%}}
   @media(max-width:640px){.chat-toolbar{align-items:flex-start;flex-direction:column;gap:9px}.chat-toolbar-actions{width:100%}.chat-toolbar #chat-model{flex:1;width:auto}.chat-toolbar .sec{flex-shrink:0}}
 
@@ -907,7 +923,7 @@ panels.chat = `
         <summary style="cursor:pointer;font-weight:650">已上传文件</summary>
         <div class="row" style="justify-content:flex-end;margin:8px 0"><button class="sec sm" onclick="loadUploads()">刷新</button></div>
         <div class="chips" id="uploads-list">加载中…</div>
-        <div class="hint" style="margin:8px 0 0">文本类文件自动分块入库（RAG）；上传的文件保存在 state/uploads/。</div>
+        <div class="hint" style="margin:8px 0 0">支持图片、Word、PPT、PDF 和视频。文档提取文字与页面，视频抽取带时间点的画面；每个附件最多 64 MiB。</div>
       </details>
     </div>
     <div id="chat-box" style="display:flex;flex-direction:column;gap:8px;max-height:52vh;overflow-y:auto;padding:4px 2px"></div>
@@ -2094,7 +2110,7 @@ async function loadDashboard(){
     const tot = usg.obj && usg.obj.total ? usg.obj.total : {prompt:0, completion:0};
     const cells = st.querySelectorAll('.stat .num');
     if(cells.length >= 7){
-      cells[0].textContent = '0.7.0';
+      cells[0].textContent = '0.8.0';
       cells[1].textContent = provider;
       cells[2].textContent = agents;
       cells[3].textContent = wmem;
@@ -3340,6 +3356,7 @@ async function chatSwitchSession(id){
   if(id === CHAT_SESSION){ switchPanel('chat'); chatFocusComposer(id); return; }
   chatCacheStore(); // 保存当前会话消息，切回时即时回放
   CHAT_SESSION = id;
+  chatAttachActivate(id);
   if($('ssh-session-details')?.open) void sshSessionLoad();
   CHAT_NEW_SESSION = false;
   CHAT_MSGS = CHAT_CACHE[id] || [];
@@ -3370,6 +3387,7 @@ async function chatNewSession(){
   const r = await call('POST', '/v1/chat/sessions');
   const id = r.obj && r.obj.id;
   CHAT_SESSION = id || ('s-' + Date.now());
+  chatAttachActivate(CHAT_SESSION);
   if($('ssh-session-details')?.open) void sshSessionLoad();
   CHAT_NEW_SESSION = !id; /* 后端已注册时无需等首条消息 */
   CHAT_MSGS = [];
@@ -3387,6 +3405,8 @@ async function chatNewSession(){
 async function chatClearSession(id){
   if(chatIsBusy(id)){ toast('该会话任务执行中，请先取消或等待完成'); return; }
   await call('DELETE', '/v1/chat/sessions/' + encodeURIComponent(id));
+  CHAT_ATTACH_DRAFTS.delete(id);
+  if(id===CHAT_SESSION) chatAttachActivate(id);
   if(id === CHAT_SESSION){
     CHAT_MSGS = [];
     const box = $('chat-box'); if(box) box.innerHTML = '';
@@ -3419,6 +3439,7 @@ async function chatDeleteSession(id){
 
 function chatAddBubble(role, text, push = true){
   const box = $('chat-box'); if(!box) return null;
+  const follow = CHAT_FOLLOW || chatNearBottom();
   const wrap = document.createElement('div');
   wrap.className = 'chat-message ' + role;
   if(role === 'bot'){
@@ -3437,7 +3458,7 @@ function chatAddBubble(role, text, push = true){
   box.appendChild(wrap);
   if(push) CHAT_MSGS.push({role, text, pending:false, el:wrap});
   updateChatHero();
-  chatScroll();
+  if(follow) chatScroll(true);
   return wrap;
 }
 
@@ -3454,9 +3475,25 @@ function chatSuggest(text){
   chatSend();
 }
 
+let CHAT_FOLLOW = true;
 function chatScroll(force = false){
   const box = $('chat-box');
-  if(box && (force || chatNearBottom())) box.scrollTop = box.scrollHeight;
+  if(!box) return;
+  if(!box.dataset.scrollFollow){
+    box.dataset.scrollFollow='1';
+    let previous=box.scrollTop;
+    box.addEventListener('scroll',()=>{
+      if(box.scrollTop < previous-2) CHAT_FOLLOW=false;
+      if(chatNearBottom()) CHAT_FOLLOW=true;
+      previous=box.scrollTop;
+    },{passive:true});
+    box.addEventListener('wheel',e=>{if(e.deltaY<0) CHAT_FOLLOW=false;},{passive:true});
+  }
+  if(force) CHAT_FOLLOW=true;
+  if(CHAT_FOLLOW){
+    box.scrollTop=box.scrollHeight;
+    requestAnimationFrame(()=>{if(CHAT_FOLLOW && box.isConnected) box.scrollTop=box.scrollHeight;});
+  }
 }
 
 let CHAT_ROUND = 0;
@@ -3581,13 +3618,26 @@ async function uploadFile(inp){
 /* ===== 聊天附件：粘贴图片 / 拖拽文件 / ＋按钮 统一走这里 =====
  * 上传成功后加入待发送队列（chip 展示），发送时在消息前附 [附件: ...]，
  * 让 agent 知道有哪些文件（内容已由 /v1/upload 入库 RAG）。 */
+function attachmentSummary(a){
+  if(a.status==='uploading') return '上传与解析中';
+  if(a.status!=='ready') return a.status==='failed'?'解析失败':'暂不可用';
+  if(a.kind==='video') return '视频 · '+(a.framesCount || a.frames?.length || 0)+' 个画面';
+  if(a.pageCount || a.page_count) return '文档 · '+(a.pageCount || a.page_count)+' 页';
+  return a.kind==='image'?'图片':'可读取';
+}
 let CHAT_ATTACH = [];
+const CHAT_ATTACH_DRAFTS = new Map();
+function chatAttachActivate(session){
+  CHAT_ATTACH = CHAT_ATTACH_DRAFTS.get(session) || [];
+  CHAT_ATTACH_DRAFTS.set(session,CHAT_ATTACH);
+  chatAttachRender();
+}
 
 function chatAttachRender(){
   const el = $('chat-attach'); if(!el) return;
   el.style.display = CHAT_ATTACH.length ? 'flex' : 'none';
   el.innerHTML = CHAT_ATTACH.map((a, i) =>
-    '<span class="tag" style="cursor:pointer" onclick="chatAttachRemove(' + i + ')" title="点击移除">📎 ' + esc(a.name) + ' ×</span>').join('');
+    '<span class="tag" style="cursor:pointer" onclick="chatAttachRemove(' + i + ')" title="点击移除">📎 ' + esc(a.name) + ' · ' + esc(attachmentSummary(a)) + ' ×</span>').join('');
 }
 
 function chatAttachRemove(i){
@@ -3596,20 +3646,27 @@ function chatAttachRemove(i){
 }
 
 async function uploadBlob(name, blob){
-  const st = $('chat-status');
-  if(st) st.textContent = '上传中: ' + name + '…';
-  try {
-    const resp = await fetch('/v1/upload?name=' + encodeURIComponent(name), {method:'POST', body: blob});
-    const obj = await resp.json().catch(() => ({}));
-    if(resp.ok && obj.ok){
-      CHAT_ATTACH.push({name: obj.name || name});
-      chatAttachRender();
-      toast('已添加附件 ' + (obj.name || name));
-    } else {
-      toast('上传失败: ' + (obj.error || ('HTTP ' + resp.status)));
-    }
-  } catch(e) { toast('上传失败: ' + e); }
-  if(st) st.textContent = '';
+  if(blob.size > 64*1024*1024){ toast('附件不能超过 64 MiB'); return; }
+  const session = CHAT_SESSION;
+  const draft = CHAT_ATTACH_DRAFTS.get(session) || CHAT_ATTACH;
+  CHAT_ATTACH_DRAFTS.set(session,draft);
+  const entry = {name,status:'uploading'};
+  draft.push(entry); chatAttachRender();
+  entry.upload = (async () => {
+    const controller = new AbortController();
+    const timer = setTimeout(()=>controller.abort(),90000);
+    try {
+      const resp = await fetch('/v1/upload?name=' + encodeURIComponent(name) + '&session=' + encodeURIComponent(session),
+        {method:'POST',body:blob,signal:controller.signal});
+      const obj = await resp.json().catch(()=>({}));
+      if(!resp.ok || !obj.ok) throw new Error(obj.error || ('HTTP ' + resp.status));
+      Object.assign(entry,{id:obj.id,name:obj.name || name,status:obj.status || 'unsupported',kind:obj.kind,
+        framesCount:obj.frames?.length || 0,pageCount:obj.page_count || 0});
+      toast(entry.status === 'ready' ? '附件已就绪 ' + entry.name : '文件已保存，但无法用于对话：' + (obj.error || entry.status));
+    } catch(e){ entry.status='failed'; toast('上传失败: ' + e.message); }
+    finally { clearTimeout(timer); if(CHAT_SESSION===session) chatAttachRender(); }
+  })();
+  await entry.upload;
 }
 
 /* 粘贴图片（clipboardData 里的文件项）+ 整个聊天区拖拽文件 */
@@ -3652,7 +3709,7 @@ async function loadUploads(){
   const r = await call('GET', '/v1/uploads');
   const files = (r.obj && Array.isArray(r.obj.files)) ? r.obj.files : [];
   el.innerHTML = files.length
-    ? files.map(f => '<span class="chip">' + esc(f.name) + ' <span class="muted">(' + (f.size/1024).toFixed(1) + ' KB)</span> <button class="sec sm" onclick="delUpload(\'' + esc(f.name).replace(/'/g,"\\'") + '\')">✕</button></span>').join('')
+    ? files.map(f => '<span class="chip">' + esc(f.name) + ' <span class="muted">' + esc(attachmentSummary(f)) + ' (' + (f.size/1024).toFixed(1) + ' KB)</span> <button class="sec sm" onclick="delUpload(\'' + esc(f.id || f.name).replace(/'/g,"\\'") + '\')">✕</button></span>').join('')
     : '<span class="muted">（暂无上传）</span>';
 }
 
@@ -4503,7 +4560,7 @@ const STAGE_LABELS = {
   preparing_context:'正在准备会话上下文', planning:'正在等待模型回复', plan_ready:'已收到执行计划',
   response_ready:'已收到模型答复', executing:'正在执行',
   summarizing:'正在整理结果', completed:'执行完成', failed:'执行失败',
-  cancelled:'已取消', timed_out:'执行超时', reconnecting:'连接中断，正在重试', recovering:'正在调整执行计划',
+  cancelled:'已取消', timed_out:'执行超时', reconnecting:'连接中断，正在重试', recovering:'正在调整执行计划', rolled_back:'本轮文件修改已回滚',
   cancelling:'正在取消，等待当前操作结束'
 };
 const STAGE_NOTES = {
@@ -4519,9 +4576,11 @@ const STAGE_NOTES = {
   steering:'已收到补充，当前操作结束后会重新规划。',
   cancelling:'正在安全停止当前任务。', reconnecting:'连接暂时中断，正在恢复任务状态。', recovering:'工具执行失败，正在分析错误并调整下一步。',
   completed:'任务已完成，结果已整理。', failed:'任务未能完成，已保留执行记录。',
-  cancelled:'任务已取消。', timed_out:'任务执行超时。'
+  cancelled:'任务已取消。', timed_out:'任务执行超时。',
+  rolled_back:'本轮操作失败，事务内的文件修改已回滚；正在检查后续处理方式。'
 };
 const TOOL_LABELS = {file_read:'读取文件', file_write:'写入文件', file_edit:'修改文件',
+  list_dir:'浏览目录',
   shell:'运行命令', ssh:'远程执行', git:'检查代码仓库', glob:'查找文件', grep:'搜索代码',
   search:'检索资料', web_search:'搜索网页', mcp:'调用连接工具', skill:'执行技能'};
 function toolLabel(name){ return TOOL_LABELS[name] || (name && name.startsWith('file_') ? '处理文件' : name || '执行操作'); }
@@ -4532,6 +4591,8 @@ function durationLabel(ms){
 }
 function progressLabel(p){
   if(['completed','failed','cancelled','timed_out'].includes(p.stage)) return STAGE_LABELS[p.stage];
+  if(p.stage === 'planning') return '正在规划下一步';
+  if(p.stage === 'executing' && p.cur_tool) return '正在' + toolLabel(p.cur_tool);
   if(p.activity) return p.activity;
   if(p.stage === 'planning' || p.stage === 'preparing_context'){
     return (p.round > 0 ? '第 ' + p.round + ' 轮 · ' : '') + STAGE_LABELS[p.stage];
@@ -4553,10 +4614,55 @@ function progressNarrative(p){
   if(p.stage === 'executing' && p.cur_tool) note = '正在' + toolLabel(p.cur_tool) + '（' + p.cur_tool + '），完成后会继续下一步。';
   return note;
 }
+function progressPhase(stage){
+  if(['planning','plan_ready','steering','replanning','reconnecting'].includes(stage)) return 1;
+  if(['executing','recovering','rolled_back'].includes(stage)) return 2;
+  if(['response_ready','summarizing','completed'].includes(stage)) return 3;
+  return 0;
+}
+function progressOutline(entry,p){
+  const steps = Array.isArray(p.steps) ? p.steps : [];
+  const events = entry.progressEvents || [];
+  const terminal = ['completed','failed','cancelled','timed_out'].includes(p.stage);
+  const last = terminal ? [...events].reverse().find(e => !['completed','failed','cancelled','timed_out'].includes(e.stage)) : p;
+  const phase = progressPhase(last?.stage || p.stage);
+  const reads = steps.filter(s => ['file_read','list_dir','glob','grep','search','web_search'].includes(s.tool));
+  const operations = steps.filter(s => !reads.includes(s));
+  const failed = steps.filter(s => s.ok === 0).length;
+  const plans = (p.planned_tools || [...events].reverse().find(e => e.planned_tools?.length)?.planned_tools || []).map(toolLabel);
+  const lastTarget = [...steps].reverse().find(s => s.target)?.target;
+  const planNote = p.stage === 'planning'
+    ? '等待 ' + (p.model || '模型') + ' 回复' + (p.model_call ? ' · 第 ' + p.model_call + ' 次请求' : '')
+    : plans.length ? '计划：' + [...new Set(plans)].join('、') : '结合任务要求与执行结果，确定下一步。';
+  const actionNotes = [];
+  if(reads.length) actionNotes.push('读取与检索 ' + reads.length + ' 次');
+  if(operations.length) actionNotes.push('执行操作 ' + operations.length + ' 次');
+  if(failed) actionNotes.push(failed + ' 次失败已记录');
+  let actionNote = actionNotes.join(' · ');
+  if(lastTarget) actionNote += (actionNote ? '。最近处理：' : '最近处理：') + lastTarget;
+  if(!actionNote) actionNote = terminal ? '本次未调用工具。' : '收到计划后开始操作，结果会持续记录。';
+  const rows = [
+    ['梳理目标与上下文','整理当前要求、会话信息和可用能力。'],
+    [p.stage === 'replanning' || p.stage === 'steering' ? '根据补充调整计划' : '规划下一步',planNote],
+    ['执行与核对',actionNote],
+    ['整理结果',terminal ? STAGE_NOTES[p.stage] : '根据实际执行结果整理答复和未完成项。']
+  ];
+  return rows.map(([title,note],index) => ({title,note,state:
+    p.stage === 'completed' ? 'done' : terminal ? (index === phase ? 'failed' : index < phase ? 'done' : 'idle') :
+    index === phase ? 'running' : index < phase || (index === 2 && steps.length) ? 'done' : 'idle'}));
+}
+function chatProgressClock(entry){
+  const p = entry.progress;
+  if(!p || !entry.el?.isConnected) return;
+  const elapsed = entry.el.querySelector('.run-time');
+  if(elapsed) elapsed.textContent = '用时 ' + durationLabel(entry.pending && p.started_ms ? Date.now()-p.started_ms : p.elapsed_ms || 0);
+  const waiting = entry.el.querySelector('.run-stage-time');
+  if(waiting && entry.pending && entry.stageSince) waiting.textContent = ' · 已等待 ' + durationLabel(Date.now()-entry.stageSince);
+}
 function chatPersist(){
   try {
     const records = Object.entries(CHAT_CACHE).slice(-12).map(([session, msgs]) => [session,
-      msgs.slice(-40).map(({role,text,pending,progress,progressEvents,taskId}) => ({role,text,pending,progress,progressEvents,taskId}))]);
+      msgs.slice(-40).map(({role,text,pending,progress,progressEvents,taskId,detailsOpen,timelineOpen,actionsOpen,expandedSteps,stageSince}) => ({role,text,pending,progress,progressEvents,taskId,detailsOpen,timelineOpen,actionsOpen,expandedSteps,stageSince}))]);
     sessionStorage.setItem('cognitive-progress-v1', JSON.stringify({records,tasks:CHAT_TASKS}));
   } catch(e) { /* storage quota/private mode: in-memory state remains usable */ }
 }
@@ -4580,29 +4686,50 @@ function chatRestore(){
 function renderChatEntry(entry){
   const el = entry.el;
   if(!el?.isConnected || entry.role !== 'bot') return;
-  const follow = chatNearBottom();
-  const previous = el.querySelector('details');
-  const wasOpen = previous?.open;
-  const actionsOpen = previous?.querySelector('.run-actions')?.open;
-  const timelineOpen = previous?.querySelector('.run-timeline')?.open;
-  const expandedSteps = new Set([...el.querySelectorAll('.run-step-detail[open]')].map(d => d.dataset.step));
+  const follow = CHAT_FOLLOW || chatNearBottom();
+  const previous = el.querySelector('.run-details');
+  const wasOpen = previous?.open ?? entry.detailsOpen ?? false;
+  const actionsOpen = previous?.querySelector('.run-actions')?.open ?? entry.actionsOpen ?? true;
+  const timelineOpen = previous?.querySelector('.run-timeline')?.open ?? entry.timelineOpen ?? true;
+  const expandedSteps = new Set(entry.expandedSteps || []);
+  for(const d of el.querySelectorAll('.run-step-detail')){
+    if(d.open) expandedSteps.add(d.dataset.step); else expandedSteps.delete(d.dataset.step);
+  }
   el.replaceChildren();
   const p = entry.progress;
   if(p){
-    const panel = document.createElement('details'); panel.className = 'run-card';
-    panel.open = wasOpen === undefined ? !!entry.pending || !!entry.progressEvents?.length : wasOpen;
-    const summary = document.createElement('summary');
+    const panel = document.createElement('section'); panel.className = 'run-card';
+    panel.dataset.active = String(!!entry.pending);
+    const summary = document.createElement('div'); summary.className = 'run-header';
     const dot = document.createElement('span');
-    dot.className = 'run-dot' + (entry.pending ? ' active' : '') + (p.stage === 'failed' ? ' error' : '');
+    dot.className = 'run-dot' + (entry.pending ? ' active' : '') + (['failed','timed_out'].includes(p.stage) ? ' error' : '');
     const label = document.createElement('span'); label.className = 'run-label';
     label.textContent = progressLabel(p);
     label.setAttribute('role','status'); label.setAttribute('aria-live','polite');
     const elapsed = document.createElement('span'); elapsed.className = 'run-time';
     const ms = entry.pending && p.started_ms ? Math.max(0,Date.now()-p.started_ms) : (p.elapsed_ms || 0);
-    elapsed.textContent = ms ? '总耗时 ' + durationLabel(ms) : '';
+    elapsed.textContent = '用时 ' + durationLabel(ms);
     summary.append(dot,label,elapsed); panel.append(summary);
     const context = document.createElement('div'); context.className = 'run-context';
-    context.textContent = progressNarrative(p); panel.append(context);
+    context.textContent = p.stage === 'planning' ? '正在结合任务要求和已有结果，规划下一步。' : progressNarrative(p);
+    if(entry.pending && ['planning','queued','reconnecting'].includes(p.stage)){
+      const waiting = document.createElement('span'); waiting.className = 'run-stage-time'; context.append(waiting);
+    }
+    panel.append(context);
+    const outline = document.createElement('ol'); outline.className = 'run-outline';
+    outline.setAttribute('aria-label','思考与执行脉络');
+    for(const row of progressOutline(entry,p)){
+      const item = document.createElement('li'); item.dataset.state = row.state;
+      const title = document.createElement('div'); title.className = 'run-outline-title'; title.textContent = row.title;
+      const note = document.createElement('p'); note.className = 'run-outline-note'; note.textContent = row.note;
+      item.append(title,note); outline.append(item);
+    }
+    panel.append(outline);
+    const detailBody = document.createElement('details'); detailBody.className = 'run-details'; detailBody.open = wasOpen;
+    const detailSummary = document.createElement('summary');
+    detailSummary.textContent = '详细执行记录' + (p.tool_calls ? ' · ' + p.tool_calls + ' 个动作' : '');
+    detailBody.append(detailSummary);
+    detailBody.addEventListener('toggle', () => { if(detailBody.isConnected){entry.detailsOpen = detailBody.open; chatPersist();} });
     const metrics = document.createElement('div'); metrics.className = 'run-metrics';
     if(p.round) { const m = document.createElement('span'); m.textContent = '规划轮次 ' + p.round; metrics.append(m); }
     if(p.tool_calls) { const m = document.createElement('span'); m.textContent = p.tool_calls + ' 个动作'; metrics.append(m); }
@@ -4613,11 +4740,12 @@ function renderChatEntry(entry){
     if(p.model_call) { const m = document.createElement('span'); m.textContent = '模型请求 ' + p.model_call + ' 次'; metrics.append(m); }
     if(p.model_failures) { const m = document.createElement('span'); m.textContent = '请求失败 ' + p.model_failures + ' 次'; metrics.append(m); }
     if(p.tool_ms) { const m = document.createElement('span'); m.textContent = '工具 ' + durationLabel(p.tool_ms); metrics.append(m); }
-    if(metrics.children.length) panel.append(metrics);
+    if(metrics.children.length) detailBody.append(metrics);
     const events = Array.isArray(entry.progressEvents) ? entry.progressEvents : [];
     const milestones = events.filter(e => !['executing','preparing_context','completed'].includes(e.stage));
     const timeline = document.createElement('details'); timeline.className = 'run-timeline';
-    timeline.open = timelineOpen === undefined ? !!entry.pending : timelineOpen;
+    timeline.open = timelineOpen;
+    timeline.addEventListener('toggle', () => { if(timeline.isConnected){entry.timelineOpen = timeline.open; chatPersist();} });
     const timelineTitle = document.createElement('summary');
     timelineTitle.textContent = entry.pending ? '正在执行 · ' + milestones.length + ' 个阶段' : '执行过程 · ' + milestones.length + ' 个阶段';
     timeline.append(timelineTitle);
@@ -4642,7 +4770,7 @@ function renderChatEntry(entry){
       const name = document.createElement('span'); name.className = 'run-step-name';
       name.textContent = '正在' + toolLabel(p.cur_tool); item.append(name); list.append(item);
     }
-    if(list.children.length){ timeline.append(list); panel.append(timeline); }
+    if(list.children.length){ timeline.append(list); detailBody.append(timeline); }
     const steps = Array.isArray(p.steps) ? p.steps : [];
     const files = new Map();
     for(const s of steps){
@@ -4661,11 +4789,12 @@ function renderChatEntry(entry){
         const status = document.createElement('span'); status.textContent = action;
         row.append(name,status); fileCard.append(row);
       }
-      panel.append(fileCard);
+      detailBody.append(fileCard);
     }
     if(steps.length){
       const actions = document.createElement('details'); actions.className = 'run-actions';
-      actions.open = actionsOpen === undefined ? false : actionsOpen;
+      actions.open = actionsOpen;
+      actions.addEventListener('toggle', () => { if(actions.isConnected){entry.actionsOpen = actions.open; chatPersist();} });
       const actionSummary = document.createElement('summary'); actionSummary.textContent = '查看 ' + steps.length + ' 个工具动作'; actions.append(actionSummary);
       const actionList = document.createElement('ol'); actionList.className = 'run-steps';
     for(const [index,s] of steps.entries()){
@@ -4677,8 +4806,14 @@ function renderChatEntry(entry){
       main.append(title);
       if(s.args || s.out){
         const detail = document.createElement('details'); detail.className = 'run-step-detail';
-        detail.dataset.step = String(index);
+        detail.dataset.step = String(s.id ?? index);
         detail.open = expandedSteps.has(detail.dataset.step);
+        detail.addEventListener('toggle', () => {
+          if(!detail.isConnected) return;
+          const expanded = new Set(entry.expandedSteps || []);
+          if(detail.open) expanded.add(detail.dataset.step); else expanded.delete(detail.dataset.step);
+          entry.expandedSteps = [...expanded]; chatPersist();
+        });
         const ds = document.createElement('summary'); ds.textContent = '查看参数与结果摘要'; detail.append(ds);
         const body = document.createElement('div');
         body.textContent = [s.args ? '参数：' + s.args : '', s.out ? '结果：' + s.out : ''].filter(Boolean).join('\n');
@@ -4688,13 +4823,15 @@ function renderChatEntry(entry){
       meta.textContent = (s.ok === 1 ? '已完成' : s.ok === 0 ? '失败' : '已跳过') + ' · ' + ((s.ms || 0)/1000).toFixed(1) + ' 秒';
       item.append(main,meta); actionList.append(item);
     }
-      actions.append(actionList); panel.append(actions);
+      actions.append(actionList); detailBody.append(actions);
     }
     if(entry.pending && !events.length && !p.cur_tool){
       const item = document.createElement('div'); item.className = 'run-steps-title';
-      item.textContent = '正在建立执行记录…'; panel.append(item);
+      item.textContent = '正在建立执行记录…'; detailBody.append(item);
     }
+    panel.append(detailBody);
     el.append(panel);
+    chatProgressClock(entry);
   }
   if(entry.text && !entry.pending){
     const answer = document.createElement('pre'); answer.className = 'chat-answer';
@@ -4711,12 +4848,17 @@ function chatApplyProgress(session,id,p){
   const entry = binding.entry;
   if(p.session_id && p.session_id !== session) return;
   if(p.seq && entry.progress?.seq > p.seq) return;
+  if(p.seq && entry.progress?.seq === p.seq && entry.progress.stage === p.stage){
+    entry.progress = {...entry.progress,...p}; chatProgressClock(entry); return;
+  }
+  if(!entry.stageSince || entry.progress?.stage !== p.stage ||
+     (p.stage === 'planning' && entry.progress?.model_call !== p.model_call)) entry.stageSince = Date.now();
   if(p.seq && (!entry.progressEvents?.length || entry.progressEvents[entry.progressEvents.length-1].seq !== p.seq)){
     entry.progressEvents = [...(entry.progressEvents || []), {
       seq:p.seq, stage:p.stage, activity:p.activity, round:p.round, model:p.model, thinking:p.thinking,
       model_call:p.model_call, model_failures:p.model_failures, elapsed_ms:p.elapsed_ms,
-      cur_tool:p.cur_tool, tool_calls:p.tool_calls
-    }].slice(-24);
+      cur_tool:p.cur_tool, tool_calls:p.tool_calls, planned_tools:p.planned_tools
+    }].slice(-64);
   }
   entry.progress = {...entry.progress, ...p};
   if(entry.steeringRevision > (p.applied_updates || 0)) entry.progress.stage = 'steering';
@@ -4795,18 +4937,26 @@ async function chatSubmit(resume = false){
   if(!resume && input?.disabled) { toast('请先配置对话模型'); return; }
   const msg = input?.value.trim() || '';
   if(!resume && !msg && !CHAT_ATTACH.length) return;
-  const attachments = CHAT_ATTACH.slice();
+  const attachments = resume ? [] : CHAT_ATTACH.slice();
+  CHAT_SUBMITTING.add(session); chatBusyUI(true);
+  await Promise.all(attachments.map(a=>a.upload).filter(Boolean));
+  if(attachments.some(a=>a.status !== 'ready' || !a.id)){
+    CHAT_SUBMITTING.delete(session);
+    if(CHAT_SESSION===session) chatBusyUI(chatIsBusy(session));
+    toast('附件尚不可用，请移除失败的附件后重试'); return;
+  }
   const full = resume ? '（恢复）继续上一次任务' :
     (attachments.length ? '[附件: ' + attachments.map(a=>a.name).join(', ') + ']\n' : '') + msg;
   CHAT_SUBMITTING.add(session); chatBusyUI(true);
   if(input && !resume) input.value = '';
+  CHAT_FOLLOW=true;
   chatAddBubble('user',full);
   chatAddBubble('bot','');
   const entry = CHAT_MSGS[CHAT_MSGS.length-1];
   entry.pending = true; entry.progress = {stage:'submitting'};
   CHAT_CACHE[session] = CHAT_MSGS; renderChatEntry(entry);
   const r = await call('POST',resume ? '/v1/chat/sessions/' + encodeURIComponent(session) + '/resume' : '/v1/chat',
-    resume ? {thinking:chatThinkingEnabled()} : {message:full,session,thinking:chatThinkingEnabled()});
+    resume ? {thinking:chatThinkingEnabled()} : {message:full,session,thinking:chatThinkingEnabled(),attachments:attachments.map(a=>a.id)});
   CHAT_SUBMITTING.delete(session);
   if(!Number.isInteger(r.obj?.id)){
     entry.pending = false; entry.progress.stage = 'failed';
@@ -4815,11 +4965,12 @@ async function chatSubmit(resume = false){
     if(CHAT_SESSION === session) chatBusyUI(false);
     return;
   }
+  CHAT_ATTACH_DRAFTS.set(session,(CHAT_ATTACH_DRAFTS.get(session)||[]).filter(a=>!attachments.includes(a)));
   const id = r.obj.id; entry.taskId = id; entry.progress = {stage:'queued'};
   CHAT_TASKS[session] = id; CHAT_ENTRIES.set(id,{session,entry});
   if(CHAT_SESSION === session){
     CHAT_TASK_ID = id; CHAT_NEW_SESSION = false; CHAT_RESUME_OK = false;
-    CHAT_ATTACH = CHAT_ATTACH.filter(a=>!attachments.includes(a)); chatAttachRender(); chatBusyUI(true);
+    CHAT_ATTACH = CHAT_ATTACH_DRAFTS.get(session) || []; chatAttachRender(); chatBusyUI(true);
   }
   renderChatEntry(entry); chatPersist(); void loadChatSessions();
   await chatPollTask(session,id,entry);
@@ -4867,6 +5018,7 @@ async function pingServer(){
   if(txt) txt.textContent = ok ? '已连接' : '离线';
 }
 setInterval(pingServer, 8000);
+setInterval(() => { for(const {entry} of CHAT_ENTRIES.values()) if(entry.pending) chatProgressClock(entry); }, 1000);
 setInterval(() => { if(current === 'trace' && !document.hidden) loadTrace(); }, 3000);
 
 /* ================= 初始化 ================= */

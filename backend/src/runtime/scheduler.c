@@ -3,6 +3,7 @@
 #include "os/os_time.h"
 #include "os/os_coro.h"
 #include "infra/util.h"
+#include "runtime/task.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -13,6 +14,8 @@ typedef struct worker_slot {
 } worker_slot;
 
 struct scheduler {
+    int exited;
+    size_t history_count, history_bytes;
     int workers;
     int max_workers;
     int max_active;
@@ -23,7 +26,7 @@ struct scheduler {
     task **queue; /* min-heap by (priority asc, id asc) */
     size_t qlen, qcap;
 
-    task **all; /* all tasks ever, for lookup */
+    task **all; /* active and retained tasks, sorted by monotonically assigned ID */
     size_t alen, acap;
 
     mutex_t mtx;
@@ -111,6 +114,30 @@ static int add_all(scheduler *s, task *t) {
     return 0;
 }
 
+static size_t task_bytes(task *t) {
+    return sizeof(*t) + (t->attachments_json ? strlen(t->attachments_json) : 0) + (t->input ? strlen(t->input) : 0) +
+        (t->output ? strlen(t->output) : 0) + (t->tag ? strlen(t->tag) : 0) +
+        (t->progress_json ? strlen(t->progress_json) : 0) +
+        (t->trace_json ? strlen(t->trace_json) : 0);
+}
+/* Completion callbacks must finish before a task becomes reclaimable. */
+static void prune_history(scheduler *s) {
+    size_t count = 0, bytes = 0;
+    for (size_t i = 0; i < s->alen; i++) if (s->all[i]->completed) {
+        count++; bytes += task_bytes(s->all[i]);
+    }
+    for (size_t i = 0; i < s->alen;) {
+        task *t = s->all[i];
+        if ((!s->history_count || count <= s->history_count) &&
+            (!s->history_bytes || bytes <= s->history_bytes)) break;
+        if (!t->completed || t->references || t->borrowed) { i++; continue; }
+        count--; bytes -= task_bytes(t);
+        task_free(t);
+        memmove(s->all + i, s->all + i + 1, (s->alen-i-1)*sizeof(task *));
+        s->alen--;
+    }
+}
+
 /* Coroutine body: run the task's runner to completion (or yield). */
 static void task_coro_entry(void *arg) {
     task *t = (task *)arg;
@@ -144,6 +171,8 @@ static void worker_main(void *arg) {
         while (!s->shutdown_flag && s->qlen == 0 && !slot->yield_head)
             cond_wait(&s->not_empty, &s->mtx);
         if (s->shutdown_flag && s->qlen == 0 && !slot->yield_head) {
+            s->exited++;
+            cond_broadcast(&s->idle);
             mutex_unlock(&s->mtx);
             break;
         }
@@ -188,6 +217,9 @@ static void worker_main(void *arg) {
             cb(t, cud);
         if (done) {
             mutex_lock(&s->mtx);
+            free(t->attachments_json); t->attachments_json = NULL;
+            t->completed = 1;
+            prune_history(s);
             if (s->active == 0)
                 cond_broadcast(&s->idle);
             mutex_unlock(&s->mtx);
@@ -264,13 +296,19 @@ void scheduler_get_stats(scheduler *s, scheduler_stats *out) {
     out->max_active = s->max_active;
     out->queued = s->qlen;
     out->rejected = s->rejected;
+    out->history_count = s->history_count; out->history_bytes = s->history_bytes;
+    for (size_t i=0;i<s->alen;i++) if (s->all[i]->completed) {
+        out->retained++; out->retained_bytes += task_bytes(s->all[i]);
+    }
     mutex_unlock(&s->mtx);
 }
 
 void scheduler_free(scheduler *s) {
     if (!s)
         return;
+    for (int i = 0; i < s->workers; i++) if (s->threads[i]) return; /* still owned by workers */
     for (size_t i = 0; i < s->alen; i++) {
+        free(s->all[i]->attachments_json);
         free(s->all[i]->input);
         free(s->all[i]->output);
         free(s->all[i]->progress_json);
@@ -302,6 +340,10 @@ int64_t scheduler_submit_tag(scheduler *s, int priority, const char *input, void
 
 int64_t scheduler_submit_tag_mode(scheduler *s, int priority, const char *input, void *userdata, int64_t timeout_ms,
                                   const char *tag, int thinking_mode) {
+    return scheduler_submit_attachments(s, priority, input, userdata, timeout_ms, tag, thinking_mode, NULL);
+}
+int64_t scheduler_submit_attachments(scheduler *s, int priority, const char *input, void *userdata,
+    int64_t timeout_ms, const char *tag, int thinking_mode, const char *attachments) {
     task *t = calloc(1, sizeof(task));
     int64_t id;
 
@@ -329,18 +371,19 @@ int64_t scheduler_submit_tag_mode(scheduler *s, int priority, const char *input,
     t->status = TS_QUEUED;
     t->input = input ? xstrdup(input) : xstrdup("");
     t->tag = tag ? xstrdup(tag) : NULL;
+    t->attachments_json = attachments ? xstrdup(attachments) : NULL;
     t->thinking_mode = thinking_mode != 0;
     t->userdata = userdata;
     t->sched = s;
-    if (!t->input || (tag && !t->tag) || add_all(s, t) != 0) {
+    if (!t->input || (tag && !t->tag) || (attachments && !t->attachments_json) || add_all(s, t) != 0) {
         mutex_unlock(&s->mtx);
-        free(t->input); free(t->tag); mutex_destroy(&t->progress_mtx); free(t);
+        free(t->attachments_json); free(t->input); free(t->tag); mutex_destroy(&t->progress_mtx); free(t);
         return -1;
     }
     if (queue_insert(s, t) != 0) {
         s->alen--; /* the new task is still the last index entry */
         mutex_unlock(&s->mtx);
-        free(t->input); free(t->tag); mutex_destroy(&t->progress_mtx); free(t);
+        free(t->attachments_json); free(t->input); free(t->tag); mutex_destroy(&t->progress_mtx); free(t);
         return -1;
     }
     s->next_id++;
@@ -359,14 +402,40 @@ int64_t scheduler_submit_tag_mode(scheduler *s, int priority, const char *input,
     return id;
 }
 
+static task *find_task(scheduler *s, int64_t id) {
+    size_t lo = 0, hi = s->alen;
+    while (lo < hi) {
+        size_t mid = lo + (hi-lo)/2;
+        if (s->all[mid]->id < id) lo = mid+1; else hi = mid;
+    }
+    return lo < s->alen && s->all[lo]->id == id ? s->all[lo] : NULL;
+}
 task *scheduler_get(scheduler *s, int64_t id) {
-    task *r = NULL;
     mutex_lock(&s->mtx);
-    if (id >= 0 && (uint64_t)id < s->alen)
-        r = s->all[id]; /* IDs are monotonically assigned at append time */
-
+    task *t = find_task(s, id);
+    if (t) t->borrowed = 1; /* legacy borrowed pointers live until free */
     mutex_unlock(&s->mtx);
-    return r;
+    return t;
+}
+task *scheduler_acquire(scheduler *s, int64_t id) {
+    mutex_lock(&s->mtx);
+    task *t = find_task(s, id);
+    if (t) t->references++;
+    mutex_unlock(&s->mtx);
+    return t;
+}
+void scheduler_release(scheduler *s, task *t) {
+    if (!t) return;
+    mutex_lock(&s->mtx);
+    if (t->references) t->references--;
+    prune_history(s);
+    mutex_unlock(&s->mtx);
+}
+void scheduler_set_history_limits(scheduler *s, size_t count, size_t bytes) {
+    mutex_lock(&s->mtx);
+    s->history_count = count; s->history_bytes = bytes;
+    prune_history(s);
+    mutex_unlock(&s->mtx);
 }
 
 int scheduler_total(scheduler *s) {
@@ -408,9 +477,14 @@ int scheduler_shutdown(scheduler *s, int timeout_ms) {
     mutex_unlock(&s->mtx);
 
     deadline = timeout_ms > 0 ? time_now_ms() + timeout_ms : 0;
+    mutex_lock(&s->mtx);
+    while (s->exited < s->workers) {
+        int64_t left = deadline ? deadline - time_now_ms() : 50;
+        if (deadline && left <= 0) { mutex_unlock(&s->mtx); return -1; }
+        cond_timedwait_ms(&s->idle, &s->mtx, left > 50 ? 50 : (int)left);
+    }
+    mutex_unlock(&s->mtx);
     for (int i = 0; i < s->workers; i++) {
-        if (timeout_ms > 0 && time_now_ms() >= deadline)
-            return -1;
         if (s->threads[i]) {
             thread_join(s->threads[i]);
             s->threads[i] = NULL;

@@ -43,6 +43,8 @@ if [ -f apps/web/index.html ] && { [ apps/web/index.html -nt include/api/web_ui.
   python3 tools/gen_web_ui.py
 fi
 
+python3 tools/gen_attachment_extractor.py
+
 TARGET="${1:-all}"
 case "$TARGET" in
   all)

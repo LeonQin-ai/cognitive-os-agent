@@ -26,6 +26,8 @@ typedef enum task_status {
 } task_status;
 
 typedef struct task {
+    unsigned references;
+    int completed, borrowed;
     int64_t id;
     int priority;       /* lower = higher priority */
     int64_t timeout_ms; /* 0 = none */
@@ -35,6 +37,7 @@ typedef struct task {
     TASK_ATOMIC(int) cancel_flag; /* set by cancel() */
     int timed_out;            /* set when deadline passed */
     TASK_ATOMIC(task_status) status;
+    char *attachments_json; /* owned immutable task snapshot; never in history */
     char *input;  /* task description / prompt */
     char *output; /* set by runner */
     mutex_t progress_mtx;
@@ -70,7 +73,7 @@ scheduler *scheduler_new_limited(int workers, int max_workers, int max_active,
 #define SCHEDULER_FULL (-2)
 typedef struct scheduler_stats {
     int workers, max_workers, active, max_active;
-    size_t queued;
+    size_t queued, retained, retained_bytes, history_count, history_bytes;
     uint64_t rejected;
 } scheduler_stats;
 void scheduler_get_stats(scheduler *s, scheduler_stats *out);
@@ -88,9 +91,16 @@ int64_t scheduler_submit_tag(scheduler *s, int priority, const char *input, void
 int64_t scheduler_submit_tag_mode(scheduler *s, int priority, const char *input, void *userdata, int64_t timeout_ms,
                                   const char *tag, int thinking_mode);
 
+int64_t scheduler_submit_attachments(scheduler *s, int priority, const char *input, void *userdata,
+    int64_t timeout_ms, const char *tag, int thinking_mode, const char *attachments);
+
 /* Look up a task by id (borrowed pointer, valid until scheduler_free). */
 task *scheduler_get(scheduler *s, int64_t id);
 
+/* Production readers release acquired tasks; legacy get pins the task. */
+task *scheduler_acquire(scheduler *s, int64_t id);
+void scheduler_release(scheduler *s, task *t);
+void scheduler_set_history_limits(scheduler *s, size_t count, size_t bytes);
 int scheduler_total(scheduler *s);
 void task_set_progress(task *t, const char *json);
 char *task_progress_copy(task *t);

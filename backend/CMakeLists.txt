@@ -13,6 +13,10 @@ add_custom_command(OUTPUT ${CMAKE_CURRENT_SOURCE_DIR}/include/api/web_ui.h
   COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/gen_web_ui.py
   DEPENDS apps/web/index.html tools/gen_web_ui.py VERBATIM)
 add_custom_target(web-ui DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/include/api/web_ui.h)
+add_custom_command(OUTPUT ${CMAKE_CURRENT_SOURCE_DIR}/include/api/attachment_extractor.h
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/gen_attachment_extractor.py
+  DEPENDS tools/attachment_extract.py tools/gen_attachment_extractor.py VERBATIM)
+add_custom_target(attachment-extractor DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/include/api/attachment_extractor.h)
 file(GLOB_RECURSE CAGENT_SOURCES CONFIGURE_DEPENDS src/*.c)
 list(FILTER CAGENT_SOURCES EXCLUDE REGEX "/os/(windows|linux|macos|posix)/")
 if(WIN32)
@@ -33,7 +37,7 @@ else()
 endif()
 list(APPEND CAGENT_SOURCES ${PLATFORM_SRCS} third_party/cJSON/cJSON.c third_party/wasm3/wasm3_all.c)
 add_library(cagent STATIC ${CAGENT_SOURCES})
-add_dependencies(cagent web-ui)
+add_dependencies(cagent web-ui attachment-extractor)
 target_include_directories(cagent PUBLIC include third_party/cJSON third_party/wasm3)
 target_link_libraries(cagent PUBLIC ${PLATFORM_LIBS})
 

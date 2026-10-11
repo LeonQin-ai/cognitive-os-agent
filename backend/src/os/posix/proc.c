@@ -178,6 +178,10 @@ proc_popen *proc_popen_new(char *const argv[]) {
     return proc_popen_new_ex(argv, 0);
 }
 
+proc_popen *proc_popen_new_direct(char *const argv[], int merge_stderr) {
+    return proc_popen_new_ex(argv, merge_stderr);
+}
+
 proc_popen *proc_popen_new_ex(char *const argv[], int merge_stderr) {
     pid_t pid;
     /* non-blocking read end for polling */

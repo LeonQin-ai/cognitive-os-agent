@@ -24,6 +24,7 @@ task *task_new(int64_t id, int priority, const char *input, int64_t timeout_ms) 
 void task_free(task *t) {
     if (!t)
         return;
+    free(t->attachments_json);
     free(t->input);
     free(t->output);
     free(t->tag);

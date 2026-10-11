@@ -36,9 +36,10 @@ void memory_record_experience(memory *m, const char *task, const char *result);
  * recallable via memory_retrieve / the "## Retrieved context" prompt
  * section. id and meta may be NULL. Returns 0 ok, -1 bad args/OOM. */
 int memory_index_document(memory *m, const char *id, const char *text, const char *meta);
-/* Split `text` into ~600-char chunks at paragraph boundaries and index each
+/* Split `text` into <=600-byte chunks at UTF-8 boundaries and index each
  * with id "<base>#<i>" / meta "upload". Returns the number of chunks added. */
 int memory_index_text(memory *m, const char *base, const char *text);
+void memory_remove_document(memory *m, const char *base);
 /* (Re)index the text files under `dir` (the uploads folder) into the vector
  * store — called at startup so uploaded documents survive restarts. A missing
  * directory is not an error. Returns the number of chunks indexed. */

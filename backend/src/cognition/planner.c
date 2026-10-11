@@ -417,7 +417,7 @@ static int parse_tagged_tool_calls(const char *plan, planned_action **actions, i
 
 /* Shared planning core. Takes ownership of nothing; frees sys_prompt. */
 static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_action **actions, int *n_actions,
-                     char **raw_out, char **err_out) {
+                     char **raw_out, char **err_out, const char *attachments) {
     llm_request req = {0};
     llm_response resp = {0};
     int rc;
@@ -440,12 +440,57 @@ static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_act
         return -1;
     }
 
-    llm_message msgs[2] = {
+    llm_message msgs[30] = {
         {.role = "system", .content = sys_prompt ? sys_prompt : SYS_PROMPT},
         {.role = "user", .content = prompt},
     };
+    cJSON *files = attachments ? cJSON_Parse(attachments) : NULL;
+    cJSON *file;
+    char *owned[28] = {0};
+    int count = 2;
+    cJSON_ArrayForEach(file, files) {
+        if (count == 30) break;
+        cJSON *name = cJSON_GetObjectItemCaseSensitive(file, "name");
+        cJSON *text = cJSON_GetObjectItemCaseSensitive(file, "text");
+        cJSON *image = cJSON_GetObjectItemCaseSensitive(file, "image_b64");
+        cJSON *mime = cJSON_GetObjectItemCaseSensitive(file, "mime");
+        cJSON *path = cJSON_GetObjectItemCaseSensitive(file, "path");
+        cJSON *original = cJSON_GetObjectItemCaseSensitive(file,"original_path");
+        cJSON *warnings = cJSON_GetObjectItemCaseSensitive(file,"warnings");
+        strbuf content; strbuf_init(&content);
+        strbuf_appendf(&content, "User attachment: %s\n", cJSON_IsString(name) ? name->valuestring : "file");
+        if (cJSON_IsString(path)) strbuf_appendf(&content, "Extracted file path: %s\n", path->valuestring);
+        if(cJSON_IsString(original)) strbuf_appendf(&content,"Original file path: %s\n",original->valuestring);
+        cJSON *warning; cJSON_ArrayForEach(warning,warnings) if(cJSON_IsString(warning)) strbuf_appendf(&content,"Processing note: %s\n",warning->valuestring);
+        if (cJSON_IsString(text)) {
+            size_t len=strlen(text->valuestring), preview=len>32000?32000:len;
+            while(preview<len && ((unsigned char)text->valuestring[preview]&0xc0)==0x80) preview--;
+            strbuf_append_n(&content,text->valuestring,preview);
+            if(preview<len) strbuf_append(&content,"\n[Text preview truncated. Read the extracted file for remaining content.]\n");
+        }
+        owned[count-2] = strbuf_detach(&content);
+        msgs[count] = (llm_message){.role="user", .content=owned[count-2],
+            .image_b64=cJSON_IsString(image) ? image->valuestring : NULL,
+            .image_mime=cJSON_IsString(mime) ? mime->valuestring : NULL};
+        count++;
+        cJSON *frames=cJSON_GetObjectItemCaseSensitive(file,"frames"), *frame;
+        cJSON_ArrayForEach(frame,frames) {
+            if(count==30) break;
+            cJSON *b64=cJSON_GetObjectItemCaseSensitive(frame,"image_b64");
+            cJSON *label=cJSON_GetObjectItemCaseSensitive(frame,"label");
+            cJSON *type=cJSON_GetObjectItemCaseSensitive(frame,"mime");
+            if(!cJSON_IsString(b64)) continue;
+            strbuf caption; strbuf_init(&caption);
+            strbuf_appendf(&caption,"Attachment %s - %s",cJSON_IsString(name)?name->valuestring:"file",
+                cJSON_IsString(label)?label->valuestring:"Page/frame");
+            owned[count-2]=strbuf_detach(&caption);
+            msgs[count]=(llm_message){.role="user",.content=owned[count-2],.image_b64=b64->valuestring,
+                .image_mime=cJSON_IsString(type)?type->valuestring:"image/jpeg"};
+            count++;
+        }
+    }
     req.messages = msgs;
-    req.num_messages = 2;
+    req.num_messages = count;
     req.temperature = 0.2;
     req.max_tokens = 32768; /* tool plans carrying file_write content (whole
                              * scripts) need real headroom; 2048 truncated the
@@ -455,6 +500,8 @@ static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_act
                              * invisible reasoning and returned empty content
                              * (finish_reason=length) */
     rc = llm_chat(llm, &req, &resp);
+    for (int i=0;i<28;i++) free(owned[i]);
+    cJSON_Delete(files);
     free(sys_prompt);
     if (rc != 0) {
         if (err_out)
@@ -571,12 +618,19 @@ void planner_actions_free(planned_action *a, int n) {
 
 int planner_plan(llm *llm, const char *prompt, planned_action **actions, int *n_actions, char **raw_out,
                      char **err_out) {
-    return plan_with(llm, NULL, prompt, actions, n_actions, raw_out, err_out);
+    return plan_with(llm, NULL, prompt, actions, n_actions, raw_out, err_out, NULL);
 }
 
 int planner_plan_ex(llm *llm, const struct tool_registry *tools, struct skill_registry *skills,
                         struct policy_engine *policy, const char *prompt, planned_action **actions,
                         int *n_actions, char **raw_out, char **err_out) {
     char *sys = build_catalog_prompt(tools, skills, policy);
-    return plan_with(llm, sys, prompt, actions, n_actions, raw_out, err_out);
+    return plan_with(llm, sys, prompt, actions, n_actions, raw_out, err_out, NULL);
+}
+
+int planner_plan_attachments_ex(llm *llm, const struct tool_registry *tools, struct skill_registry *skills,
+    struct policy_engine *policy, const char *prompt, planned_action **actions,
+    int *n_actions, char **raw_out, char **err_out, const char *attachments) {
+    return plan_with(llm, build_catalog_prompt(tools,skills,policy), prompt, actions,
+        n_actions, raw_out, err_out, attachments);
 }

@@ -124,6 +124,7 @@ struct sess_store {
 
 /* One executed action of the current/most recent run (step registry). */
 struct run_step {
+    unsigned id;
     char tool[48];
     char args[160];
     char out[240];
@@ -185,6 +186,7 @@ struct reasoning {
      * "● Tool(args) ⎿ out-head". ok: 1 ok, 0 failed, -1 skipped. */
     struct run_step *steps;
     int n_steps, steps_cap;
+    unsigned step_sequence;
 
     /* code index: touched files are indexed for term -> file:line recall */
     struct ret_index *index;
@@ -266,6 +268,8 @@ static void progress_emit(reasoning *r, const char *stage) {
         snprintf(activity, sizeof(activity), "模型请求第 %d 次失败，正在重试", r->prog_model_failures);
     else if (strcmp(stage, "recovering") == 0)
         snprintf(activity, sizeof(activity), "工具执行失败，正在分析错误并调整下一步");
+    else if (strcmp(stage, "rolled_back") == 0)
+        snprintf(activity, sizeof(activity), "本轮操作失败，事务内的文件修改已回滚");
     else if (strcmp(stage, "preparing_context") == 0)
         snprintf(activity, sizeof(activity), "正在整理会话上下文、已完成工作和可用工具");
     else if (strcmp(stage, "executing") == 0 && r->prog_tool[0])
@@ -289,6 +293,13 @@ static void progress_emit(reasoning *r, const char *stage) {
     cJSON_AddNumberToObject(o, "round", r->round_idx);
     cJSON_AddNumberToObject(o, "tool_calls", r->prog_tool_calls);
     cJSON_AddStringToObject(o, "cur_tool", r->prog_tool);
+    cJSON *plan_tools = cJSON_AddArrayToObject(o, "planned_tools");
+    for (int i = 0; i < r->n_actions; i++) {
+        int repeated = 0;
+        for (int j = 0; j < i; j++)
+            if (strcmp(r->actions[j].tool, r->actions[i].tool) == 0) { repeated = 1; break; }
+        if (!repeated) cJSON_AddItemToArray(plan_tools, cJSON_CreateString(r->actions[i].tool));
+    }
     cJSON_AddNumberToObject(o, "llm_ms", (double)r->prog_llm_ms);
     cJSON_AddNumberToObject(o, "tool_ms", (double)r->prog_tool_ms);
     cJSON_AddNumberToObject(o, "llm_calls", r->prog_llm_calls);
@@ -1333,8 +1344,8 @@ static int h_reason(state_machine *sm, void *ud, const char *input, char **out) 
     long long t_llm0 = time_now_ms();
     progress_emit(r, "planning");
     int64_t llm_span = trace_begin_task(r->trace, r->run_task ? r->run_task->id : r->trace_task_id, "llm.plan");
-    int rc = planner_plan_ex(r->llm, r->tools, r->skills, r->policy, aug ? aug : input, &r->actions, &r->n_actions,
-                                 &raw, &plan_err);
+    int rc = planner_plan_attachments_ex(r->llm, r->tools, r->skills, r->policy, aug ? aug : input, &r->actions, &r->n_actions,
+                                 &raw, &plan_err, r->run_task ? r->run_task->attachments_json : NULL);
     trace_end(r->trace, llm_span, rc == 0 && raw ? 1 : -1);
     r->prog_llm_ms += time_now_ms() - t_llm0;
     r->prog_llm_calls++;
@@ -1417,6 +1428,7 @@ static void run_step_add(reasoning *r, const char *tool, const char *args, const
     }
     st = &r->steps[r->n_steps++];
     memset(st, 0, sizeof(*st));
+    st->id = ++r->step_sequence;
     utf8_head_copy(st->tool, sizeof(st->tool), tool ? tool : "?");
     utf8_head_copy(st->args, sizeof(st->args), args ? args : "");
     utf8_head_copy(st->out, sizeof(st->out), out ? out : "");
@@ -1714,6 +1726,7 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
         } else {
             tx_rollback(tx);
             log_warn("reasoning: transaction rolled back");
+            progress_emit(r, "rolled_back");
         }
         const char *tout = tx_output(tx);
         if (tout && *tout) {
@@ -2636,6 +2649,7 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     /* fresh step registry for this run (keep the buffer) */
     mutex_lock(&r->progress_mtx);
     r->n_steps = 0;
+    r->step_sequence = 0;
     mutex_unlock(&r->progress_mtx);
     r->progress_seq = 0;
     r->applied_updates = 0;
@@ -3212,6 +3226,7 @@ char *reasoning_steps_json(reasoning *r) {
         if (!o)
             break;
         cJSON_AddStringToObject(o, "tool", st->tool);
+        cJSON_AddNumberToObject(o, "id", st->id);
         char *args = secret_redact_text(st->args, strlen(st->args), NULL);
         char *output = secret_redact_text(st->out, strlen(st->out), NULL);
         cJSON_AddStringToObject(o, "args", args ? args : "");

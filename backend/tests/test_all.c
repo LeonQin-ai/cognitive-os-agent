@@ -3437,6 +3437,12 @@ static void test_agent_loop(void) {
         char *content = fs_read_file("state-test/loop-w/proof-result.txt");
         CHECK(content && strcmp(content, "done") == 0);
         free(content);
+        char *steps_json = reasoning_steps_json(ctx.reasoning);
+        cJSON *steps = steps_json ? cJSON_Parse(steps_json) : NULL;
+        CHECK(steps && cJSON_GetArraySize(steps) == 256);
+        CHECK(cJSON_GetNumberValue(cJSON_GetObjectItemCaseSensitive(cJSON_GetArrayItem(steps, 0), "id")) == 3);
+        CHECK(cJSON_GetNumberValue(cJSON_GetObjectItemCaseSensitive(cJSON_GetArrayItem(steps, 255), "id")) == 258);
+        cJSON_Delete(steps); free(steps_json);
         ans = NULL;
         CHECK(reasoning_run(ctx.reasoning, "回滚写入证据回归测试：写入产物", &ans) != 0);
         CHECK(ans && strstr(ans, "任务未完成") != NULL);
@@ -3755,7 +3761,7 @@ static void test_chat_upload_evolve(void) {
         runtime_ctx ctx;
         if (init(&ctx, &cfg) != 0) { CHECK(0); return; }
         CHECK(ctx.memory != NULL);
-        /* two long paragraphs (each > the ~600-byte chunk target) -> 2 chunks */
+        /* Long paragraphs must also split into bounded UTF-8 chunks. */
         strbuf doc;
         strbuf_init(&doc);
         for (int i = 0; i < 20; i++)
@@ -3765,7 +3771,7 @@ static void test_chat_upload_evolve(void) {
             strbuf_append(&doc, "今天股市收盘上涨百分之二，成交量明显放大。");
         int n = memory_index_text(ctx.memory, "upload:notes.txt", doc.buf);
         strbuf_free(&doc);
-        CHECK(n == 2);
+        CHECK(n > 2);
         char *hits = memory_retrieve(ctx.memory, "埃菲尔铁塔在哪里", 3);
         CHECK(hits && strstr(hits, "埃菲尔铁塔") != NULL);
         free(hits);

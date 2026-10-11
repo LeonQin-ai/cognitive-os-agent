@@ -1,0 +1,8 @@
+Pillow>=10.4
+PyMuPDF>=1.24
+pypdf>=5
+opencv-python-headless>=4.10
+imageio-ffmpeg>=0.5
+pillow-heif>=0.18
+pywin32>=306; sys_platform == "win32"
+# Legacy Office rendering also needs Word/PowerPoint or LibreOffice installed.
