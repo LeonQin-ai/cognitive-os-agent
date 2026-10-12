@@ -105,6 +105,9 @@
   }
   #side-recent{padding:0 8px 8px}
   .side-recent-row{display:flex;align-items:center;gap:2px;border-radius:8px}
+  .side-recent-row > button:first-child{flex:1;min-width:0;width:auto!important}
+  .recent-task-status{flex:none;white-space:nowrap}
+  .recent-session-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   #side-recent button{
     display:flex; align-items:center; gap:8px; width:100%;
     background:none; border:0; border-radius:8px; color:var(--muted);
@@ -3118,7 +3121,8 @@ function sideRecent(list){
     const b = document.createElement('button');
     b.className = id === CHAT_SESSION ? 'on' : '';
     const label = (info && info.title) ? info.title : (id === 'default' ? '默认会话' : id);
-    b.textContent = label.length > 16 ? label.slice(0, 16) + '…' : label;
+    const title = document.createElement('span'); title.className = 'recent-session-title';
+    title.textContent = label;
     const messages = CHAT_CACHE[id] || [];
     const latest = [...messages].reverse().find(m => m.role === 'bot' && m.progress);
     const active = chatTaskOf(id) !== null || info?.running === true;
@@ -3128,7 +3132,7 @@ function sideRecent(list){
     taskStatus.textContent = active ? '执行中' : stage === 'completed' ? '已完成' :
       stage === 'failed' ? '失败' : stage === 'timed_out' ? '超时' : stage === 'cancelled' ? '已取消' : '空闲';
     taskStatus.style.color = active ? 'var(--accent)' : stage === 'failed' ? 'var(--danger)' : 'var(--muted)';
-    taskStatus.style.marginLeft = '8px'; b.append(taskStatus);
+    b.append(taskStatus, title);
     b.title = chatSessionTip(info, id);
     b.onclick = () => chatSwitchSession(id);
     row.appendChild(b);

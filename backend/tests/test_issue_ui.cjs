@@ -31,6 +31,20 @@ const assert = require('node:assert/strict');
     });
     assert.match(await page.locator('#side-recent').innerText(),/执行中/);
     await page.evaluate(()=>{
+      CHAT_TABS_CACHE[0].title='这是一个非常长的源码阅读任务标题需要验证状态不会被遮住';
+      $('side-recent').style.width='180px'; sideRecent(CHAT_TABS_CACHE);
+    });
+    const status=page.locator('.recent-task-status').filter({hasText:'执行中'});
+    const statusBox=await status.boundingBox();
+    const row=status.locator('..');
+    const titleBox=await row.locator('.recent-session-title').boundingBox();
+    const buttonBox=await row.boundingBox();
+    assert(statusBox && titleBox && buttonBox);
+    assert(statusBox.x>=buttonBox.x && statusBox.x+statusBox.width<=buttonBox.x+buttonBox.width);
+    assert(statusBox.x+statusBox.width<=titleBox.x, 'Status must precede the clipped title');
+    assert.equal(await status.evaluate(el=>getComputedStyle(el).flexShrink),'0');
+    console.log('PASS #111: left status remains fully visible with a long title in a narrow sidebar');
+    await page.evaluate(()=>{
       delete CHAT_TASKS['status-test']; CHAT_CACHE['status-test'][0].progress.stage='failed'; sideRecent(CHAT_TABS_CACHE);
     });
     assert.match(await page.locator('#side-recent').innerText(),/失败/);
