@@ -24,12 +24,21 @@ static tool_result *file_read_exec(const tool *self, const tool_ctx *ctx, const 
     size_t read_bytes = 0;
     int has_more = 0;
     uint64_t offset = 0;
+    size_t page_bytes = 4000;
 
     (void)self;
     args = cJSON_Parse(args_json);
     if (!args)
         return tool_result_new(0, "file_read: invalid args JSON");
     path_j = cJSON_GetObjectItemCaseSensitive(args, "path");
+    cJSON *size_j=cJSON_GetObjectItemCaseSensitive(args,"max_bytes");
+    if (size_j) {
+        if (!cJSON_IsNumber(size_j) || size_j->valuedouble<4 || size_j->valuedouble>4000 ||
+            size_j->valuedouble != (int)size_j->valuedouble) {
+            cJSON_Delete(args); return tool_result_new(0,"file_read: max_bytes must be an integer from 4 to 4000");
+        }
+        page_bytes=(size_t)size_j->valueint;
+    }
     if (!path_j || !cJSON_IsString(path_j)) {
         cJSON_Delete(args);
         return tool_result_new(0, "file_read: missing string arg 'path'");
@@ -70,7 +79,7 @@ static tool_result *file_read_exec(const tool *self, const tool_ctx *ctx, const 
 
     /* Leave space for metadata and tool wrappers in the 6144-byte observation
      * budget. A page must reach the model intact, rather than lose its middle. */
-    content = fs_read_file_slice(rp, offset, 4000, &read_bytes, &has_more);
+    content = fs_read_file_slice(rp, offset, page_bytes, &read_bytes, &has_more);
     cJSON_Delete(args);
     if (!content) {
         char msg[1024];
@@ -393,7 +402,7 @@ const tool *tool_file_read(void) {
     static const tool t = {
         "file_read",
         "Read a text file in bounded chunks; offset_bytes pages through large files. Directories return listings.",
-        "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"offset_bytes\":{\"type\":\"integer\"}},\"required\":[\"path\"]}",
+        "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"offset_bytes\":{\"type\":\"integer\"},\"max_bytes\":{\"type\":\"integer\"}},\"required\":[\"path\"]}",
         0,
         file_read_exec,
         NULL,

@@ -878,6 +878,12 @@ static void test_snapshot_tx(void) {
     CHECK(first_page && first_page->ok && strstr(first_page->output, "more available") &&
           strstr(first_page->output, "AAAA"));
     tool_result_free(first_page);
+    tool_result *small_page=tool_execute(reg,"file_read","{\"path\":\"large-read.txt\",\"max_bytes\":128}",&ctx);
+    CHECK(small_page && small_page->ok && strstr(small_page->output,"next_offset_bytes=128"));
+    CHECK(small_page && small_page->output && strlen(strchr(small_page->output,'\n')+1)==128);
+    tool_result_free(small_page);
+    tool_result *bad_page=tool_execute(reg,"file_read","{\"path\":\"large-read.txt\",\"max_bytes\":1}",&ctx);
+    CHECK(bad_page && !bad_page->ok); tool_result_free(bad_page);
     tool_result *next_page = tool_execute(reg, "file_read",
         "{\"path\":\"large-read.txt\",\"offset_bytes\":7000}", &ctx);
     CHECK(next_page && next_page->ok && strstr(next_page->output, "BBBB"));
@@ -7309,6 +7315,10 @@ int main(int argc, char **argv) {
     int askpass_rc = ssh_askpass_run_if_requested();
     if (askpass_rc >= 0) return askpass_rc;
     setvbuf(stdout, NULL, _IONBF, 0); /* unbuffered: survive crashes mid-run */
+    if (argc==2 && !strcmp(argv[1],"--file-tools")) {
+        test_snapshot_tx();
+        printf("%d passed, %d failed\n",g_pass,g_fail); return g_fail?1:0;
+    }
     if (argc == 2 && strcmp(argv[1], "--agent-loop") == 0) {
         test_agent_loop();
         printf("\n%d passed, %d failed\n", g_pass, g_fail);
