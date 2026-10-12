@@ -3390,6 +3390,10 @@ static void test_agent_loop(void) {
         char *steps=reasoning_steps_json(ctx.reasoning);
         CHECK(steps && strstr(steps,"project evidence") && !strstr(steps,"previous search result reused"));
         free(steps);
+        free(ans); ans=NULL;
+        CHECK(reasoning_run(ctx.reasoning,"思考标签回归测试：读取readme.txt",&ans)==0);
+        CHECK(ans && strstr(ans,"文件读取完成") && !strstr(ans,"</think>"));
+        CHECK(!fs_exists("state-test/loop-w/DO_NOT_WRITE.txt"));
         free(ans);
         runtime_shutdown(&ctx);
         fs_remove("state-test/loop-w/readme.txt");

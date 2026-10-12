@@ -523,6 +523,19 @@ static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_act
             *err_out = xstrdup("LLM returned an empty response");
         return -1;
     }
+    /* Some providers include reasoning tags in content. Never parse a tool
+     * example from their hidden preamble as the executable plan. JSON replies
+     * are left intact, including literal tags inside file contents. */
+    const char *visible=plan;
+    while (*visible==' ' || *visible=='\n' || *visible=='\r') ++visible;
+    if (*visible!='[' && *visible!='{') {
+        const char *close=NULL, *scan=visible;
+        while ((scan=strstr(scan,"</think>"))!=NULL) { close=scan+8; scan+=8; }
+        if (close) {
+            char *clean=xstrdup(close);
+            if (clean) { free(plan); plan=clean; }
+        }
+    }
 
     if (raw_out)
         *raw_out = plan; /* ownership moves to the caller */
