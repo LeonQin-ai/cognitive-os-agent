@@ -3382,7 +3382,14 @@ static void test_agent_loop(void) {
         const char *tool = NULL;
         reasoning_progress(ctx.reasoning, &elapsed, &round, &calls, &tool, &in, &out);
         CHECK(round <= 3);
-        CHECK(calls == 1);
+        CHECK(calls == 3);
+        free(ans); ans=NULL;
+        CHECK(reasoning_run(ctx.reasoning,"重读观察恢复回归测试：重新读取文件",&ans)==0);
+        reasoning_progress(ctx.reasoning,&elapsed,&round,&calls,&tool,&in,&out);
+        CHECK(calls==2);
+        char *steps=reasoning_steps_json(ctx.reasoning);
+        CHECK(steps && strstr(steps,"project evidence") && !strstr(steps,"previous search result reused"));
+        free(steps);
         free(ans);
         runtime_shutdown(&ctx);
         fs_remove("state-test/loop-w/readme.txt");

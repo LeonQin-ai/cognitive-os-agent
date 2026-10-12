@@ -250,6 +250,12 @@ static char *mock_respond(const char *msg) {
                        "{\"tool\":\"file_read\",\"args\":{\"path\":\"batch-1.c\"}},"
                        "{\"tool\":\"file_read\",\"args\":{\"path\":\"batch-2.c\"}}]");
     }
+    if (has_substr(msg,"重读观察恢复回归测试")) {
+        int previous=0; const char *header=strstr(full,"## 之前轮次的动作结果 (第 ");
+        if(header) sscanf(header,"## 之前轮次的动作结果 (第 %d/",&previous);
+        if(previous>=2) return xstrdup("重读观察已恢复。");
+        return xstrdup("[{\"tool\":\"file_read\",\"args\":{\"path\":\"readme.txt\"}}]");
+    }
     if (has_substr(msg, "重复读取回归测试") &&
         !has_substr(full, "已执行动作的观察记录"))
         return xstrdup("[{\"tool\":\"file_read\",\"args\":{\"path\":\"readme.txt\"}}]");

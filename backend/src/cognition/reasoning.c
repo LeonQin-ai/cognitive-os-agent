@@ -1664,7 +1664,7 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
                         strcmp(r->actions[i].tool, "grep") == 0 ||
                         strcmp(r->actions[i].tool, "file_read") == 0 ||
                         strcmp(r->actions[i].tool, "list_dir") == 0;
-        if (is_search) {
+        if (is_search && strcmp(r->actions[i].tool,"file_read") != 0) {
             int repeated = 0;
             for (int j = 0; j < r->search_seen_n && !repeated; j++)
                 repeated = r->search_seen[j] == action_sig;
