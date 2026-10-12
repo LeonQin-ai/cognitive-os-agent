@@ -7,6 +7,7 @@
 #include "os/os_fs.h"
 #include "infra/util.h"
 #include "cJSON.h"
+#include "../../third_party/tiny-regex/re.h"
 #include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
@@ -326,7 +327,7 @@ static const char *ssh_find_ascii(const char *text, const char *word) {
     for (const char *p = text; *p; p++) {
         size_t i = 0;
         while (i < n && p[i] && tolower((unsigned char)p[i]) == tolower((unsigned char)word[i])) i++;
-        if (i == n && (p == text || (!isalnum((unsigned char)p[-1]) && p[-1] != '_')) &&
+        if (i == n && (p == text || (!isalnum((unsigned char)p[-1]) && !strchr("_.-", p[-1]))) &&
             (!isalnum((unsigned char)p[n]) && p[n] != '_')) return p;
     }
     return NULL;
@@ -341,14 +342,17 @@ static const char *ssh_field_value_one(const char *text, const char *label, int 
         if (!found) return NULL;
         const char *p = found + strlen(label);
         const char *after_label = p;
-        while (*p == ' ' || *p == '\t') p++;
-        if (*p == ':' || *p == '=') p++;
+        int separator_len = 0;
+        re_match("^\\s*", p, &separator_len);
+        p += separator_len;
+        if (re_match("^[:=]\\s*", p, &separator_len) == 0) p += separator_len;
         else if ((unsigned char)p[0] == 0xef && (unsigned char)p[1] == 0xbc &&
                  (unsigned char)p[2] == 0x9a) p += 3;
-        else if (allow_is && strncmp(p, "是", strlen("是")) == 0) p += strlen("是");
-        else if (allow_is && strncmp(p, "is ", 3) == 0) p += 3;
+        else if (strncmp(p, "是", strlen("是")) == 0 ||
+                 strncmp(p, "为", strlen("为")) == 0) p += strlen("是");
+        else if (re_match("^[iI][sS]\\s+", p, &separator_len) == 0) p += separator_len;
         else if (p > after_label && (!allow_is ||
-                 (strncmp(p, "login", 5) != 0 && strncmp(p, "登录", strlen("登录")) != 0 &&
+                 (ssh_find_ascii(p, "login") != p && strncmp(p, "登录", strlen("登录")) != 0 &&
                   strncmp(p, "认证", strlen("认证")) != 0 && strncmp(p, "方式", strlen("方式")) != 0))) {
             /* Natural language such as "host 10.0.0.1" or "密码 abc". */
         }
@@ -359,7 +363,11 @@ static const char *ssh_field_value_one(const char *text, const char *label, int 
              * remains excluded rather than being captured as a credential. */
         }
         else { cursor = found + strlen(label); continue; }
-        while (*p == ' ' || *p == '\t') p++;
+        re_match("^\\s*", p, &separator_len);
+        p += separator_len;
+        if (re_match("^[:=]\\s*", p, &separator_len) == 0) p += separator_len;
+        else if (strncmp(p, "：", strlen("：")) == 0) p += strlen("：");
+        re_match("^\\s*", p, &separator_len); p += separator_len;
         if (*p) return p;
         return NULL;
     }
@@ -370,6 +378,17 @@ static const char *ssh_field_value(const char *text, const char *english, const 
                                     int allow_is) {
     const char *p = ssh_field_value_one(text, english, 1, allow_is);
     const char *q = ssh_field_value_one(text, chinese, 0, allow_is);
+    /* Aliases share the same regex separator and original-value span. */
+    const char *aliases[5] = {NULL};
+    if (english && strcmp(english, "password") == 0) {
+        aliases[0] = "passwd"; aliases[1] = "pwd"; aliases[2] = "口令";
+    } else if (english && strcmp(english, "account") == 0) {
+        aliases[0] = "账户"; aliases[1] = "帐号";
+    }
+    for (int i = 0; aliases[i]; i++) {
+        const char *v = ssh_field_value_one(text, aliases[i], (unsigned char)aliases[i][0] < 128, allow_is);
+        if (v && (!p || v < p)) p = v;
+    }
     return !p || (q && q < p) ? q : p;
 }
 
@@ -385,7 +404,8 @@ static char *ssh_field_token(const char *p, size_t max_len, const char **end_out
     } else {
         while (*p && !isspace((unsigned char)*p) && *p != ',' && *p != ';' &&
                !(strncmp(p, "，", strlen("，")) == 0) &&
-               !(strncmp(p, "。", strlen("。")) == 0)) p++;
+               !(strncmp(p, "。", strlen("。")) == 0) &&
+               !(strncmp(p, "；", strlen("；")) == 0)) p++;
         end = p;
     }
     size_t n = (size_t)(end - start);
@@ -399,9 +419,46 @@ static char *ssh_field_token(const char *p, size_t max_len, const char **end_out
 
 static int ssh_endpoint_token_valid(const char *s, int user) {
     if (!s || !*s) return 0;
+    int n = 0;
+    if (user) return re_match("^[\\-a-zA-Z0-9_.]+$", s, &n) == 0;
     for (const unsigned char *p = (const unsigned char *)s; *p; p++)
         if (!isalnum(*p) && !strchr(user ? "._-" : "._-:[]", *p)) return 0;
     return 1;
+}
+
+static int ssh_ipv4_valid(const char *s, size_t n) {
+    size_t i = 0;
+    for (int part = 0; part < 4; part++) {
+        unsigned value = 0; size_t start = i;
+        while (i < n && s[i] >= '0' && s[i] <= '9') value = value * 10 + (unsigned)(s[i++] - '0');
+        if (i == start || i - start > 3 || value > 255) return 0;
+        if (part < 3 && (i >= n || s[i++] != '.')) return 0;
+    }
+    return i == n;
+}
+
+/* Scan redacted input only: an IP inside a password is never a target.
+ * More than one distinct address (or malformed numeric address) is ambiguous. */
+static char *ssh_prompt_ipv4(const char *text, int *invalid) {
+    char *host = NULL;
+    const char *cursor = text;
+    int n = 0, pos;
+    while ((pos = re_match("\\d+\\.\\d+\\.\\d+\\.\\d+", cursor, &n)) >= 0) {
+        const char *p = cursor + pos;
+        if ((p > text && (isalnum((unsigned char)p[-1]) || strchr("._-", p[-1]))) ||
+            isalnum((unsigned char)p[n]) || (p[n] && strchr("._-", p[n]))) {
+            cursor = p + n; continue;
+        }
+        if (!ssh_ipv4_valid(p, (size_t)n)) { *invalid = 1; break; }
+        if (host && (strlen(host) != (size_t)n || strncmp(host, p, (size_t)n))) {
+            *invalid = 1; break;
+        }
+        if (!host) { host = malloc((size_t)n + 1); if (!host) { *invalid = 1; break; }
+            memcpy(host, p, (size_t)n); host[n] = 0; }
+        cursor = p + n;
+    }
+    if (*invalid) { free(host); return NULL; }
+    return host;
 }
 
 static char *ssh_replace_secret(const char *prompt, const char *secret,
@@ -436,7 +493,16 @@ char *ssh_session_prepare_prompt(const char *state_root, const char *session_id,
     const char *ssh_word = ssh_find_ascii(prompt, "ssh");
     int ssh_intent = ssh_word || strstr(prompt, "远程登录") || strstr(prompt, "登录服务器") ||
                      strstr(prompt, "连接服务器") || strstr(prompt, "登录环境") ||
-                     strstr(prompt, "连接环境") || strstr(prompt, "链接环境");
+                     strstr(prompt, "连接环境") || strstr(prompt, "链接环境") ||
+                     ((strstr(prompt, "登录") || strstr(prompt, "连接")) &&
+                      ssh_field_value(prompt, "password", "密码", 1));
+    if (!ssh_intent && ssh_field_value(prompt, "password", "密码", 1) &&
+        (ssh_field_value(prompt, "host", "主机", 0) ||
+         ssh_field_value(prompt, "ip", "地址", 0) ||
+         ssh_field_value(prompt, "server", "服务器", 0) ||
+         ssh_field_value(prompt, "username", "用户名", 0) ||
+         ssh_field_value(prompt, "user", "用户", 0) ||
+         ssh_field_value(prompt, "account", "账号", 0))) ssh_intent = 1;
     /* After a failed login, a short follow-up often says only "用户名/密码是…".
      * Treat it as an SSH correction when this chat already has an endpoint. */
     if (!ssh_intent && state_root && *state_root &&
@@ -486,30 +552,39 @@ char *ssh_session_prepare_prompt(const char *state_root, const char *session_id,
     char *host = NULL, *user = NULL, *environment = NULL;
     char *identity = NULL, *jump = NULL, *known = NULL;
     int port = 22;
-    const char *p = ssh_field_value(prompt, "host", "主机", 0);
-    if (!p) p = ssh_field_value(prompt, "server", "服务器", 0);
-    if (!p) p = ssh_field_value(prompt, "ip", "地址", 0);
+    /* Endpoint fields must not be extracted from credential bytes. */
+    const char *p = ssh_field_value(safe, "host", "主机", 0);
+    if (!p) p = ssh_field_value(safe, "server", "服务器", 0);
+    if (!p) p = ssh_field_value(safe, "ip", "地址", 0);
     host = ssh_field_token(p, 255, NULL);
-    p = ssh_field_value(prompt, "user", "用户名", 0);
-    if (!p) p = ssh_field_value(prompt, "username", "用户", 0);
-    if (!p) p = ssh_field_value(prompt, "account", "账号", 0);
+    p = ssh_field_value(safe, "user", "用户名", 0);
+    if (!p) p = ssh_field_value(safe, "username", "用户", 0);
+    if (!p) p = ssh_field_value(safe, "account", "账号", 0);
     user = ssh_field_token(p, 80, NULL);
-    p = ssh_field_value(prompt, "environment", "环境", 0);
+    if (!user && ssh_word) {
+        const char *flag = strstr(safe, "-l ");
+        if (flag) user = ssh_field_token(flag + 3, 80, NULL);
+    }
+    p = ssh_field_value(safe, "environment", "环境", 0);
     environment = ssh_field_token(p, 80, NULL);
     if (!host && environment && ssh_endpoint_token_valid(environment, 0) &&
         strchr(environment, ':')) {
         host = environment;
         environment = NULL;
     }
-    p = ssh_field_value(prompt, "port", "端口", 0);
+    int invalid_target = 0;
+    char *bare_ip = ssh_prompt_ipv4(safe, &invalid_target);
+    p = ssh_field_value(safe, "port", "端口", 0);
     if (!p && ssh_word) {
-        const char *flag = strstr(ssh_word, "-p ");
+        const char *flag = strstr(safe, "-p ");
         if (flag) p = flag + 3;
     }
     if (p) {
         char *end = NULL;
         long parsed = strtol(p, &end, 10);
-        if (end != p && parsed >= 1 && parsed <= 65535) port = (int)parsed;
+        if (end != p && parsed >= 1 && parsed <= 65535 &&
+            !isalnum((unsigned char)*end) && *end != '.' && *end != '_') port = (int)parsed;
+        else invalid_target = 1;
     }
     /* Accept the common ssh user@host spelling even without labelled fields. */
     if (!host) {
@@ -537,8 +612,10 @@ char *ssh_session_prepare_prompt(const char *state_root, const char *session_id,
             free(candidate_user); free(candidate_host);
         }
     }
-    if (host && !ssh_endpoint_token_valid(host, 0)) { free(host); host = NULL; }
-    if (user && !ssh_endpoint_token_valid(user, 1)) { free(user); user = NULL; }
+    if (!host && bare_ip) { host = bare_ip; bare_ip = NULL; }
+    free(bare_ip);
+    if (host && !ssh_endpoint_token_valid(host, 0)) { free(host); host = NULL; invalid_target = 1; }
+    if (user && !ssh_endpoint_token_valid(user, 1)) { free(user); user = NULL; invalid_target = 1; }
     if (environment && !ssh_vault_name_valid(environment)) { free(environment); environment = NULL; }
     if (!host && (password || user || environment)) {
         char *raw = ssh_session_profile_get(state_root, sid, environment);
@@ -609,8 +686,8 @@ char *ssh_session_prepare_prompt(const char *state_root, const char *session_id,
     }
     if (host && !ssh_endpoint_token_valid(host, 0)) { free(host); host = NULL; }
     if (user && !ssh_endpoint_token_valid(user, 1)) { free(user); user = NULL; }
-    if (password && !host) { free(safe); safe = NULL; }
-    if (host) {
+    if (invalid_target || (password && !host)) { free(safe); safe = NULL; }
+    if (host && safe) {
         char key[96] = {0}, pending_key[96];
         if (ssh_session_vault_key(sid, host, user, port, key, sizeof(key)) ||
             ssh_session_pending_key(key, pending_key, sizeof(pending_key)) ||

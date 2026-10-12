@@ -972,6 +972,69 @@ static void test_snapshot_tx(void) {
 /* Optional local SSH server integration: set COA_SSH_TEST_PORT and
  * COA_SSH_TEST_KNOWN_HOSTS. The test executable also serves as askpass on
  * Windows, just as the production CLI does. */
+static void test_ssh_prompt_regex(void) {
+    section("SSH description regex extraction (#110)");
+    const char *root = "state-test/ssh-regex";
+    const char *sid = "regex-chat";
+    const struct { const char *prompt, *host, *user, *password; int port; } cases[] = {
+        {"请登录 127.0.0.1，账户为 deploy，口令为 P@!#$%^&*()!，查看CPU", "127.0.0.1", "deploy", "P@!#$%^&*()!", 22},
+        {"SSH\nIP：127.0.0.1\n用户名是root\n密码：\n'A b,;@!123'\n端口为2222", "127.0.0.1", "root", "A b,;@!123", 2222},
+        {"SSH PWD = 'keep\\slashes!@#' ; USERNAME IS test-user ; HOST IS 127.0.0.1", "127.0.0.1", "test-user", "keep\\slashes!@#", 22},
+        {"连接服务器 127.0.0.1；帐号：root；passwd=Abc123!", "127.0.0.1", "root", "Abc123!", 22},
+        {"SSH 密码=Pass@10.0.0.7 用户名=admin 主机=127.0.0.1", "127.0.0.1", "admin", "Pass@10.0.0.7", 22},
+        {"ssh admin@127.0.0.1 -p 2222 password is 'ends!()^%'", "127.0.0.1", "admin", "ends!()^%", 2222},
+        {"SSH -l test-user 127.0.0.1 用户名是：test-user 口令为：'Quoted#9!'", "127.0.0.1", "test-user", "Quoted#9!", 22},
+        {"地址：127.0.0.1\n账户：root\n密码：'Mixed#8!'", "127.0.0.1", "root", "Mixed#8!", 22},
+        {"127.0.0.1 user=root pwd='NoSSH#7!'", "127.0.0.1", "root", "NoSSH#7!", 22},
+        {"SSH root@127.0.0.1 密码='keep -p 3333 user=other 10.0.0.7'", "127.0.0.1", "root", "keep -p 3333 user=other 10.0.0.7", 22},
+    };
+    for (size_t i = 0; i < sizeof(cases)/sizeof(cases[0]); i++) {
+        ssh_session_profiles_clear(root, sid);
+        char *safe = ssh_session_prepare_prompt(root, sid, cases[i].prompt);
+        CHECK(safe && !strstr(safe, cases[i].password) && strstr(safe, "[LOCAL_SSH_PASSWORD]"));
+        free(safe);
+        char *raw = ssh_session_profile_get(root, sid, NULL);
+        cJSON *profile = raw ? cJSON_Parse(raw) : NULL;
+        cJSON *host = cJSON_GetObjectItemCaseSensitive(profile, "host");
+        cJSON *user = cJSON_GetObjectItemCaseSensitive(profile, "user");
+        cJSON *port = cJSON_GetObjectItemCaseSensitive(profile, "port");
+        CHECK(host && cJSON_IsString(host) && !strcmp(host->valuestring, cases[i].host));
+        if (!user || !cJSON_IsString(user) || strcmp(user->valuestring, cases[i].user))
+            fprintf(stderr, "SSH parser fixture %zu user mismatch: %s\n", i, user && cJSON_IsString(user) ? user->valuestring : "missing");
+        CHECK(user && cJSON_IsString(user) && !strcmp(user->valuestring, cases[i].user));
+        CHECK(port && port->valueint == cases[i].port);
+        cJSON_Delete(profile); free(raw);
+        char key[96], pending[96];
+        CHECK(ssh_session_vault_key(sid, cases[i].host, cases[i].user, cases[i].port, key, sizeof(key)) == 0);
+        CHECK(ssh_session_pending_key(key, pending, sizeof(pending)) == 0);
+        char *secret = ssh_vault_get(root, pending);
+        CHECK_STR(secret, cases[i].password);
+        ssh_vault_secret_free(secret);
+    }
+    const char *bad[] = {
+        "SSH 999.1.2.3 用户名=root pwd=Secret123!",
+        "SSH 127.0.0.1 或 10.0.0.2 用户名=root 口令=Secret123!",
+        "SSH pwd=Pass@10.0.0.7", /* credential IP must not become target */
+        "SSH 127.0.0.1 用户名=root pwd=Secret123! 密码=Different123!",
+        "SSH 127.0.0.1 用户名=root pwd='Unclosed123!",
+        "SSH 127.0.0.1 用户名=root pwd=Secret123! 端口=99999",
+        "SSH 127.0.0.1 用户名=root pwd=Secret123! 端口=22oops",
+        "SSH 127.0.0.1 用户名='root;whoami' pwd=Secret123!",
+    };
+    for (size_t i = 0; i < sizeof(bad)/sizeof(bad[0]); i++) {
+        ssh_session_profiles_clear(root, sid);
+        char *safe = ssh_session_prepare_prompt(root, sid, bad[i]);
+        CHECK(safe == NULL); free(safe);
+        char *profile = ssh_session_profile_get(root, sid, NULL);
+        CHECK(profile == NULL); free(profile);
+    }
+    char *safe = ssh_session_prepare_prompt(root, sid, "SSH password login please");
+    CHECK_STR(safe, "SSH password login please"); free(safe);
+    safe = ssh_session_prepare_prompt(root, sid, "SSH PASSWORD LOGIN please");
+    CHECK_STR(safe, "SSH PASSWORD LOGIN please"); free(safe);
+    ssh_session_profiles_clear(root, sid);
+}
+
 static void test_ssh_password_integration(void) {
     const char *port = getenv("COA_SSH_TEST_PORT");
     const char *known_hosts = getenv("COA_SSH_TEST_KNOWN_HOSTS");
@@ -7355,7 +7418,7 @@ int main(int argc, char **argv) {
         cJSON_AddStringToObject(profile,"known_hosts",known); cJSON_AddItemToObject(envs,"fixture",profile);
         cJSON_AddItemToObject(envroot,"environments",envs); char *envjson=cJSON_PrintUnformatted(envroot);
         fs_write_file("state-test/issue70/ssh/environments.json",envjson,strlen(envjson)); free(envjson); cJSON_Delete(envroot);
-        char intro[400]; snprintf(intro,sizeof(intro),"登录环境fixture SSH testuser@127.0.0.1 -p %s 密码%s 查看CPU",port,password);
+        char intro[400]; snprintf(intro,sizeof(intro),"请登录 127.0.0.1\n账户为testuser\n端口为%s\n口令：'%s'\n查看CPU",port,password);
         char *safe=ssh_session_prepare_prompt(ctx.state_root,ctx.session_id,intro);
         CHECK(safe && !strstr(safe,password)); free(safe);
         char args[300]; snprintf(args,sizeof(args),"{\"environment\":\"fixture\",\"command\":\"nproc | wc -l\",\"timeout_ms\":10000}");
@@ -7373,6 +7436,10 @@ int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0); /* unbuffered: survive crashes mid-run */
     if (argc==2 && !strcmp(argv[1],"--file-tools")) {
         test_snapshot_tx();
+        printf("%d passed, %d failed\n",g_pass,g_fail); return g_fail?1:0;
+    }
+    if (argc==2 && !strcmp(argv[1],"--ssh-prompt")) {
+        test_ssh_prompt_regex();
         printf("%d passed, %d failed\n",g_pass,g_fail); return g_fail?1:0;
     }
     if (argc == 2 && strcmp(argv[1], "--agent-loop") == 0) {
@@ -7398,6 +7465,7 @@ int main(int argc, char **argv) {
     test_utf8_paths();
     test_memory();
     test_snapshot_tx();
+    test_ssh_prompt_regex();
     test_ssh_password_integration();
     test_llm_mock();
     test_incomplete_run_memory_gate();

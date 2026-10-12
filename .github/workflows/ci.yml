@@ -104,6 +104,7 @@ jobs:
       - name: SSH argument and private password regressions
         run: |
           ./build/cognitive-os-agent-test.exe --ssh-args
+          ./build/cognitive-os-agent-test.exe --ssh-prompt
           python -m pip install paramiko
           python tests/test_ssh_password_e2e.py
       - name: Source read completion API regressions
