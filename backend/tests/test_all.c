@@ -2980,6 +2980,38 @@ static void test_memory_graph(void) {
 }
 
 /* ---------- file_edit / glob / grep tools (Claude Code ports) ---------- */
+static void test_discovery_read_paths(void) {
+    section("discovered paths round-trip from nested search roots (#112)");
+    tool_registry *reg = tool_registry_new(); tool_register_builtins(reg);
+    tool_ctx ctx = {0}; ctx.reg = reg; ctx.workspace = "state-test/discovery";
+    fs_mkdirs("state-test/discovery/backend/src/memory");
+    fs_mkdirs("state-test/discovery/backend/include/memory");
+    fs_write_file("state-test/discovery/backend/src/memory/kv.c", "NESTED_SOURCE_EVIDENCE", 22);
+    fs_write_file("state-test/discovery/backend/include/memory/kv.h", "HEADER_EVIDENCE", 15);
+    const char *tools[] = {"glob", "list_dir", "file_read"};
+    const char *args[] = {"{\"path\":\"backend\",\"pattern\":\"**/kv.c\"}",
+        "{\"path\":\"backend/src/memory\"}", "{\"path\":\"backend/src/memory\"}"};
+    char *expected = fs_absolute_path("state-test/discovery/backend/src/memory/kv.c");
+    for (int i = 0; i < 3; i++) {
+        tool_result *r = tool_execute(reg, tools[i], args[i], &ctx);
+        CHECK(r && r->ok && expected && strstr(r->output, expected));
+        const char *found = r && expected ? strstr(r->output, expected) : NULL;
+        cJSON *j = cJSON_CreateObject();
+        if (found) cJSON_AddStringToObject(j, "path", expected);
+        char *read_args = cJSON_PrintUnformatted(j); cJSON_Delete(j);
+        tool_result *read = tool_execute(reg, "file_read", read_args, &ctx);
+        CHECK(read && read->ok && strstr(read->output, "NESTED_SOURCE_EVIDENCE"));
+        free(read_args); tool_result_free(read); tool_result_free(r);
+    }
+    tool_result *missing = tool_execute(reg, "file_read", "{\"path\":\"src/memory/kv.c\"}", &ctx);
+    CHECK(missing && !missing->ok && strstr(missing->output, "workspace") &&
+          strstr(missing->output, "glob/list_dir") && strstr(missing->output, "path does not exist"));
+    tool_result_free(missing);
+    missing = tool_execute(reg, "file_read", "{\"path\":\"backend/src/memory/kv.h\"}", &ctx);
+    CHECK(missing && !missing->ok && strstr(missing->output, "include/")); tool_result_free(missing);
+    free(expected); tool_registry_free(reg);
+}
+
 static void test_edit_search(void) {
     section("file_edit + glob + grep");
     /* hermetic start: a killed earlier run may have left files behind */
@@ -7436,6 +7468,7 @@ int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0); /* unbuffered: survive crashes mid-run */
     if (argc==2 && !strcmp(argv[1],"--file-tools")) {
         test_snapshot_tx();
+        test_discovery_read_paths();
         printf("%d passed, %d failed\n",g_pass,g_fail); return g_fail?1:0;
     }
     if (argc==2 && !strcmp(argv[1],"--ssh-prompt")) {
@@ -7465,6 +7498,7 @@ int main(int argc, char **argv) {
     test_utf8_paths();
     test_memory();
     test_snapshot_tx();
+    test_discovery_read_paths();
     test_ssh_prompt_regex();
     test_ssh_password_integration();
     test_llm_mock();

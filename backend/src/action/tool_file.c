@@ -53,6 +53,8 @@ static tool_result *file_read_exec(const tool *self, const tool_ctx *ctx, const 
         free(rp); cJSON_Delete(args);
         return tool_result_new(0, "file_read: path is empty or too long");
     }
+    char *absolute_path = fs_absolute_path(rp);
+    if (absolute_path) { free(rp); rp = absolute_path; }
     /* Reading a directory is common (the planner often probes a path before
      * reading a file). Instead of failing, return a listing so the agent can
      * continue — a single mis-targeted file_read must not fail the whole task. */
@@ -64,7 +66,9 @@ static tool_result *file_read_exec(const tool *self, const tool_ctx *ctx, const 
             strbuf_init(&sb);
             strbuf_appendf(&sb, "Directory listing of %s:\n", rp);
             for (size_t i = 0; i < dl.count; i++) {
-                strbuf_appendf(&sb, "%s%s\n", dl.items[i].name, dl.items[i].is_dir ? "/" : "");
+                char full[2048]; path_join(full, sizeof(full), rp, dl.items[i].name);
+                for (char *p = full; *p; p++) if (*p == '\\') *p = '/';
+                strbuf_appendf(&sb, "%s%s\n", full, dl.items[i].is_dir ? "/" : "");
             }
             fs_list_free(&dl);
             char *out = strbuf_detach(&sb);
@@ -82,8 +86,14 @@ static tool_result *file_read_exec(const tool *self, const tool_ctx *ctx, const 
     content = fs_read_file_slice(rp, offset, page_bytes, &read_bytes, &has_more);
     cJSON_Delete(args);
     if (!content) {
-        char msg[1024];
-        snprintf(msg, sizeof(msg), "file_read: cannot read %s (check path and permissions)", rp);
+        char msg[4096];
+        char *absolute = fs_absolute_path(rp);
+        snprintf(msg, sizeof(msg), "file_read: %s %s. Relative paths resolve against workspace '%s'. "
+                 "Do not retry the same missing path; use glob/list_dir to discover its actual location "
+                 "(headers may be under include/, not src/) and pass the returned absolute path unchanged.",
+                 fs_exists(rp) ? "cannot read" : "path does not exist:", absolute ? absolute : rp,
+                 ctx && ctx->workspace ? ctx->workspace : ".");
+        free(absolute);
         free(rp);
         return tool_result_new(0, msg);
     }
@@ -363,6 +373,8 @@ static tool_result *list_dir_exec(const tool *self, const tool_ctx *ctx, const c
     cJSON *path_j = cJSON_GetObjectItemCaseSensitive(args, "path");
     const char *path = path_j && cJSON_IsString(path_j) ? path_j->valuestring : ".";
     char *rp = resolve_path(ctx, path);
+    char *absolute = rp ? fs_absolute_path(rp) : NULL;
+    if (absolute) { free(rp); rp = absolute; }
     cJSON_Delete(args);
     if (!rp || !fs_is_dir(rp)) {
         free(rp);
@@ -376,8 +388,11 @@ static tool_result *list_dir_exec(const tool *self, const tool_ctx *ctx, const c
     strbuf sb;
     strbuf_init(&sb);
     strbuf_appendf(&sb, "Directory listing of %s:\n", rp);
-    for (size_t i = 0; i < dl.count; i++)
-        strbuf_appendf(&sb, "%s%s\n", dl.items[i].name, dl.items[i].is_dir ? "/" : "");
+    for (size_t i = 0; i < dl.count; i++) {
+        char full[2048]; path_join(full, sizeof(full), rp, dl.items[i].name);
+        for (char *p = full; *p; p++) if (*p == '\\') *p = '/';
+        strbuf_appendf(&sb, "%s%s\n", full, dl.items[i].is_dir ? "/" : "");
+    }
     fs_list_free(&dl);
     free(rp);
     char *out = strbuf_detach(&sb);

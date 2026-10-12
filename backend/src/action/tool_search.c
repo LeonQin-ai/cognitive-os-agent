@@ -27,6 +27,8 @@ static void resolve_root(const tool_ctx *ctx, const char *maybe_rel, char *out, 
         snprintf(out, n, "%s", ctx->workspace);
     else
         snprintf(out, n, ".");
+    char *absolute = fs_absolute_path(out);
+    if (absolute) { snprintf(out, n, "%s", absolute); free(absolute); }
 }
 
 static long long file_mtime(const char *path) {
@@ -246,8 +248,11 @@ static tool_result *glob_exec(const tool *self, const tool_ctx *ctx, const char 
     if (fl.count == 0)
         strbuf_append(&sb, "No files found");
     shown = fl.count < LIMIT ? fl.count : LIMIT;
-    for (size_t i = 0; i < shown; i++)
-        strbuf_appendf(&sb, "%s\n", fl.items[i].path);
+    for (size_t i = 0; i < shown; i++) {
+        char full[2048]; path_join(full, sizeof(full), root, fl.items[i].path);
+        for (char *p = full; *p; p++) if (*p == '\\') *p = '/';
+        strbuf_appendf(&sb, "%s\n", full);
+    }
     if (truncated)
         strbuf_appendf(&sb, "(Results are truncated from %zu. Consider using a more specific path or pattern.)\n",
                            fl.count);
@@ -461,6 +466,7 @@ const tool *tool_glob(void) {
         "Fast file pattern matching tool that works with any codebase size. Supports glob "
         "patterns like \"**/*.js\" or \"src/**/*.ts\" (** matches zero or more directories). "
         "Returns matching file paths sorted by modification time (newest first), truncated at 100. "
+        "Paths are absolute and can be passed unchanged to file_read; preserve their search root. "
         "Use this tool when you need to find files by name patterns.",
         "{\"type\":\"object\",\"properties\":{\"pattern\":{\"type\":\"string\"},"
         "\"path\":{\"type\":\"string\"}},\"required\":[\"pattern\"]}",

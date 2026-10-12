@@ -55,6 +55,17 @@ static char *fs_utf8_from_wide(const wchar_t *w) {
     return s;
 }
 
+char *fs_absolute_path(const char *path) {
+    wchar_t *w = fs_wpath(path && *path ? path : ".");
+    DWORD size = w ? GetFullPathNameW(w, 0, NULL, NULL) : 0;
+    wchar_t *full = size ? malloc((size_t)size * sizeof(wchar_t)) : NULL;
+    DWORD got = full ? GetFullPathNameW(w, size, full, NULL) : 0;
+    char *out = got && got < size ? fs_utf8_from_wide(full) : NULL;
+    free(full); free(w);
+    if (out) for (char *p = out; *p; p++) if (*p == '\\') *p = '/';
+    return out;
+}
+
 char *fs_read_file(const char *path) {
     wchar_t *w = fs_wpath(path);
     FILE *f = w ? _wfopen(w, L"rb") : NULL;

@@ -41,6 +41,20 @@ class Provider(BaseHTTPRequestHandler):
                 answer='批量源码完整保留。'
         elif '长答案历史回归测试' in current:
             answer='源码资料：'+'文'*5000+'REPORT_END_MARKER'
+        elif '嵌套根目录发现回归测试' in current:
+            count=counts.get('discovery',0); counts['discovery']=count+1
+            discovered=(state/'backend/src/memory/kv.c').as_posix()
+            if count==0:
+                answer=json.dumps([{'tool':'file_read','args':{'path':'src/memory/kv.c'}}])
+            elif count==1:
+                assert 'glob/list_dir' in text and 'workspace' in text
+                answer=json.dumps([{'tool':'glob','args':{'path':'backend','pattern':'**/kv.c'}}])
+            elif count==2:
+                assert discovered in text
+                answer=json.dumps([{'tool':'file_read','args':{'path':discovered}}])
+            else:
+                assert 'NESTED_SOURCE_EVIDENCE' in text
+                answer='已基于实际发现的源码整理面试题。'
         else:
             tool='list_dir' if '目录读取回归测试' in current else 'file_read'
             answer=json.dumps([{'tool':tool, 'args':{'path':'.' if tool=='list_dir' else 'readme.txt'}}])
@@ -54,6 +68,8 @@ with tempfile.TemporaryDirectory(prefix='coa-source-read-') as directory:
     state = Path(directory)
     (state / 'source.c').write_text('x' * 7970 + 'END_SOURCE' + 'x' * 20, encoding='utf-8')
     (state / 'readme.txt').write_text('source evidence', encoding='utf-8')
+    (state/'backend/src/memory').mkdir(parents=True)
+    (state/'backend/src/memory/kv.c').write_text('NESTED_SOURCE_EVIDENCE',encoding='utf-8')
     for i in range(3):
         (state / f'batch-{i}.c').write_text('x' * 1900 +
             ('MIDDLE_SOURCE_PROOF' if i == 1 else 'x' * 19) + 'x' * 1981, encoding='utf-8')
@@ -90,6 +106,7 @@ with tempfile.TemporaryDirectory(prefix='coa-source-read-') as directory:
                 ('重复读取回归测试：完整阅读源码', 'FAILED', '任务未完成'),
                 ('目录读取回归测试：完整阅读源码', 'FAILED', '任务未完成'),
                 ('长答案历史回归测试：输出详细面试资料', 'DONE', 'REPORT_END_MARKER'),
+                ('嵌套根目录发现回归测试：阅读代码整理面试题', 'DONE', '实际发现'),
             ]
             for index, (message, expected, marker) in enumerate(cases):
                 started = request('/v1/chat', {'message': message, 'session': f'read-test-{index}'})
@@ -106,9 +123,11 @@ with tempfile.TemporaryDirectory(prefix='coa-source-read-') as directory:
                     assert any('MIDDLE_SOURCE_PROOF' in step.get('out','') for step in task.get('steps',[])), task
                     for step in task.get('steps',[]):
                         assert json.loads(step['args'])['path'].startswith('batch-')
+                if index == 4:
+                    long_output=task['output']
                 print('PASS:', expected, message, flush=True)
             history=request('/v1/chat/history?session=read-test-4')
-            assert history['turns'][-1]['a']==task['output'], 'Chat history truncated the answer'
+            assert history['turns'][-1]['a']==long_output, 'Chat history truncated the answer'
             process.terminate(); process.wait(timeout=10)
             process=subprocess.Popen([str(backend / 'build' / 'cognitive-os-agent.exe'),
                 '--state',str(state),'--workspace',str(state),'serve',str(port)],
@@ -118,7 +137,7 @@ with tempfile.TemporaryDirectory(prefix='coa-source-read-') as directory:
                 try: restored=request('/v1/chat/history?session=read-test-4'); break
                 except OSError:
                     assert time.monotonic()<deadline; time.sleep(.1)
-            assert restored['turns'][-1]['a']==task['output'], 'Restart truncated the saved answer'
+            assert restored['turns'][-1]['a']==long_output, 'Restart truncated the saved answer'
             print('PASS #107: long Unicode answer survives history reload and server restart')
             print(f'PASS: {len(cases)} real API scenarios, no paid model calls.')
         finally:

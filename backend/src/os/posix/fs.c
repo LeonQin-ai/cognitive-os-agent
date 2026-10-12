@@ -16,6 +16,19 @@
 #include <unistd.h>
 #include <errno.h>
 
+char *fs_absolute_path(const char *path) {
+    if (!path || !*path) path = ".";
+    char *out = realpath(path, NULL);
+    if (out) return out;
+    if (path[0] == '/') return xstrdup(path);
+    char *cwd = getcwd(NULL, 0);
+    if (!cwd) return NULL;
+    size_t n = strlen(cwd) + strlen(path) + 2;
+    out = malloc(n);
+    if (out) path_join(out, n, cwd, path);
+    free(cwd); return out;
+}
+
 char *fs_read_file(const char *path) {
     FILE *f = fopen(path, "rb");
     long n;

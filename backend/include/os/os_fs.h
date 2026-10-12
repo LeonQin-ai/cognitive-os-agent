@@ -9,6 +9,8 @@ extern "C" {
 
 /* Read an entire file into a NUL-terminated malloc'd string. NULL on error. */
 char *fs_read_file(const char *path);
+/* Absolute UTF-8 path suitable for passing back to file tools. Caller frees. */
+char *fs_absolute_path(const char *path);
 /* Read at most max_bytes from offset without loading the whole file. Returns a
  * NUL-terminated buffer, or NULL on open/seek/read error. */
 char *fs_read_file_slice(const char *path, uint64_t offset, size_t max_bytes,
