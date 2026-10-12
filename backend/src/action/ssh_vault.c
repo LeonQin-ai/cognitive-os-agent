@@ -7,6 +7,7 @@
 #include "os/os_fs.h"
 #include "infra/util.h"
 #include "cJSON.h"
+#include "security/secret.h"
 #include "../../third_party/tiny-regex/re.h"
 #include <ctype.h>
 #include <stdlib.h>
@@ -724,6 +725,7 @@ int ssh_vault_put(const char *state_root, const char *name, const char *password
     OSStatus rc;
     if (!state_root || !*state_root || !ssh_vault_name_valid(name) || !password ||
         !*password || strlen(password) > 1024 || keychain_key(state_root, name, key, sizeof(key))) return -1;
+    if (secret_register_ssh_password(password)) return -1;
     rc = SecKeychainFindGenericPassword(NULL, 18, "cognitive-os-agent", (UInt32)strlen(key), key,
                                          &old_len, &old_data, &item);
     if (old_data) SecKeychainItemFreeContent(NULL, old_data);
@@ -749,6 +751,7 @@ char *ssh_vault_get(const char *state_root, const char *name) {
         if (out) { memcpy(out, data, len); out[len] = 0; }
     }
     SecKeychainItemFreeContent(NULL, data);
+    if (out && secret_register_ssh_password(out)) { ssh_vault_secret_free(out); out = NULL; }
     return out;
 }
 
@@ -788,6 +791,7 @@ int ssh_vault_put(const char *state_root, const char *name, const char *password
     char dir[1024], path[1152];
     size_t len = password ? strlen(password) : 0;
     if (!len || len > 1024 || vault_path(state_root, name, dir, sizeof(dir), path, sizeof(path))) return -1;
+    if (secret_register_ssh_password(password)) return -1;
     if (fs_mkdirs(dir)) return -1;
 #if defined(_WIN32)
     DATA_BLOB input = {(DWORD)len, (BYTE *)password}, encrypted = {0};
@@ -844,6 +848,7 @@ char *ssh_vault_get(const char *state_root, const char *name) {
         if (out) { memcpy(out, plain.pbData, plain.cbData); out[plain.cbData] = 0; }
     }
     SecureZeroMemory(plain.pbData, plain.cbData); LocalFree(plain.pbData);
+    if (out && secret_register_ssh_password(out)) { ssh_vault_secret_free(out); out = NULL; }
     return out;
 #else
     int fd = open(path, O_RDONLY | O_NOFOLLOW);
@@ -858,6 +863,7 @@ char *ssh_vault_get(const char *state_root, const char *name) {
     close(fd);
     if (got != st.st_size) { free(out); return NULL; }
     out[got] = 0;
+    if (secret_register_ssh_password(out)) { ssh_vault_secret_free(out); return NULL; }
     return out;
 #endif
 }

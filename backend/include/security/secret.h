@@ -1,10 +1,8 @@
 /* secret.h — Secret Security Plane (SECRET_SECURITY_DDD_V1.0), core slice.
  *
- * Deterministic detection + redaction at the LLM boundary (§7, §8, §13) with
- * audit and compatibility modes (§5). Phase 0 semantics: never blocks in the
- * default "passthrough" mode — detection records audit events and redacts
- * egress; "strict" additionally rejects LLM input carrying high-confidence
- * secrets. Detection is cheap and never invokes the LLM (§1.5). */
+ * Automatic runtime filtering protects known SSH passwords only. Generic
+ * pattern/entropy detection remains an explicit diagnostic utility, without
+ * modifying source text, paths or other credentials in normal processing. */
 #pragma once
 #include <stddef.h>
 
@@ -40,6 +38,13 @@ void secret_matches_free(secret_match *m);
  * copy of the text (caller frees); NULL on allocation failure. */
 char *secret_redact_text(const char *text, size_t len, const char *replacement);
 
+/* Runtime automatic redaction is SSH-password-only. The generic detector
+ * above is retained for explicit diagnostics, not model/log/memory filtering. */
+int secret_register_ssh_password(const char *password);
+size_t secret_ssh_password_max_length(void);
+int secret_scan_ssh_passwords(const char *text, size_t len, secret_match **out);
+char *secret_redact_ssh_passwords(const char *text, size_t len, const char *replacement);
+
 /* --- compatibility mode (§5) --------------------------------------------- */
 
 /* "passthrough" (default): audit + redact egress, never block.
@@ -69,10 +74,8 @@ int secret_guard_llm_input(const char *const *contents, size_t n);
  * is freed and replaced when anything matched). */
 void secret_guard_llm_output(char **content);
 
-/* Same egress guard, except an exact credential value that originated in a
- * user message of the current request is preserved.  This lets an explicitly
- * supplied task credential reach a tool plan while still redacting secrets
- * invented by the model or recovered from another source. */
+/* Compatibility signature. Known SSH passwords are always filtered, even
+ * when present in trusted input; all other text passes through unchanged. */
 void secret_guard_llm_output_trusted(char **content, const char *const *trusted, size_t trusted_n);
 
 /* Streaming egress filter. Wrap the consumer callback:

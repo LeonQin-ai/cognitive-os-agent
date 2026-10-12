@@ -86,7 +86,7 @@ static llm_message *llm_redacted_messages(const llm_request *req) {
     if (!out) return NULL;
     for (size_t i = 0; i < req->num_messages; i++) {
         out[i] = req->messages[i];
-        out[i].content = secret_redact_text(req->messages[i].content ? req->messages[i].content : "",
+        out[i].content = secret_redact_ssh_passwords(req->messages[i].content ? req->messages[i].content : "",
                                             strlen(req->messages[i].content ? req->messages[i].content : ""), NULL);
         if (!out[i].content) {
             llm_redacted_messages_free(out, i);
@@ -149,7 +149,7 @@ int llm_stream(llm *llm, const llm_request *req, llm_stream_cb cb, void *ud) {
     if (guard)
         rc = llm->vt->stream(llm, &safe_req, secret_stream_guard_cb, guard);
     else
-        rc = llm->vt->stream(llm, &safe_req, cb, ud); /* request is still redacted */
+        rc = -1; /* never stream known SSH passwords without the output guard */
     if (guard)
         secret_stream_guard_free(guard); /* flushes the held tail */
     llm_redacted_messages_free(safe, req->num_messages);

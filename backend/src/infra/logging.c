@@ -78,7 +78,7 @@ void log_write(loglevel lvl, const char *fmt, ...) {
             message = "[log message omitted: too large or allocation failed]";
     }
     va_end(copy);
-    char *clean = secret_redact_text(message, strlen(message), NULL);
+    char *clean = secret_redact_ssh_passwords(message, strlen(message), NULL);
     free(expanded);
     if (!log_init_once()) {
         free(clean);

@@ -14,6 +14,9 @@ if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8')
 
 counts = {}
+NON_SSH_TEXT = ('password=CodeOnly_98+! token=ghp_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN\n'
+    'Bearer abcdef1234567890abcdef123456\n'
+    'D:/random-Q7m2V9k4X1r8T6p3Z5n0/backend/src/record.c')
 class Provider(BaseHTTPRequestHandler):
     def log_message(self, *args): pass
     def do_POST(self):
@@ -41,6 +44,13 @@ class Provider(BaseHTTPRequestHandler):
                 answer='批量源码完整保留。'
         elif '长答案历史回归测试' in current:
             answer='源码资料：'+'文'*5000+'REPORT_END_MARKER'
+        elif '非SSH文本保留回归测试' in current:
+            count=counts.get('unredacted',0); counts['unredacted']=count+1
+            if count==0:
+                answer=json.dumps([{'tool':'file_read','args':{'path':'unredacted.c'}}])
+            else:
+                assert NON_SSH_TEXT in text and '[REDACTED:secret]' not in text
+                answer=NON_SSH_TEXT
         elif '超大分页参数回归测试' in current:
             count=counts.get('capped',0); counts['capped']=count+1
             schema_text=body['messages'][0]['content']
@@ -82,6 +92,7 @@ with tempfile.TemporaryDirectory(prefix='coa-source-read-') as directory:
     (state / 'readme.txt').write_text('source evidence', encoding='utf-8')
     (state/'backend/src/memory').mkdir(parents=True)
     (state/'backend/src/memory/kv.c').write_text('NESTED_SOURCE_EVIDENCE',encoding='utf-8')
+    (state/'unredacted.c').write_bytes(NON_SSH_TEXT.encode('utf-8'))
     for i in range(3):
         (state / f'batch-{i}.c').write_text('x' * 1900 +
             ('MIDDLE_SOURCE_PROOF' if i == 1 else 'x' * 19) + 'x' * 1981, encoding='utf-8')
@@ -120,6 +131,7 @@ with tempfile.TemporaryDirectory(prefix='coa-source-read-') as directory:
                 ('长答案历史回归测试：输出详细面试资料', 'DONE', 'REPORT_END_MARKER'),
                 ('嵌套根目录发现回归测试：阅读代码整理面试题', 'DONE', '实际发现'),
                 ('超大分页参数回归测试：完整阅读源码', 'DONE', '连续分页完成'),
+                ('非SSH文本保留回归测试：读取源码并原样输出', 'DONE', 'CodeOnly_98+!'),
             ]
             for index, (message, expected, marker) in enumerate(cases):
                 started = request('/v1/chat', {'message': message, 'session': f'read-test-{index}'})
@@ -140,6 +152,11 @@ with tempfile.TemporaryDirectory(prefix='coa-source-read-') as directory:
                     long_output=task['output']
                 if index == 6:
                     assert task['tool_calls']==2 and all(step['ok']==1 for step in task['steps']), task
+                if index == 7:
+                    assert task['output']==NON_SSH_TEXT, task
+                    assert NON_SSH_TEXT in task['steps'][0]['out'], task
+                    saved=request('/v1/chat/history?session=read-test-7')
+                    assert saved['turns'][-1]['a']==NON_SSH_TEXT
                 print('PASS:', expected, message, flush=True)
             history=request('/v1/chat/history?session=read-test-4')
             assert history['turns'][-1]['a']==long_output, 'Chat history truncated the answer'

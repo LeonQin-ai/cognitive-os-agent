@@ -349,7 +349,7 @@ int mem_records_put(mem_records *rs, const mem_record *rin) {
         return -1;
     /* Secret Security Plane (§12): the canonical memory store never holds
      * plaintext secrets — redact MEDIUM/HIGH matches before storage. */
-    clean = secret_redact_text(rin->content, strlen(rin->content), NULL);
+    clean = secret_redact_ssh_passwords(rin->content, strlen(rin->content), NULL);
     if (clean) {
         tmp = *rin;
         tmp.content = clean;

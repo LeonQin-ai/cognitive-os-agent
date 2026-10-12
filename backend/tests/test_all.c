@@ -110,6 +110,7 @@ static void logging_worker(void *arg) {
 
 static void test_logging(void) {
     section("logging redaction and concurrent initialization");
+    CHECK(secret_register_ssh_password("V7m9!qZ2rP") == 0);
     FILE *capture = tmpfile();
     CHECK(capture != NULL);
     if (!capture) return;
@@ -158,8 +159,8 @@ static void test_logging(void) {
     output[n] = '\0';
     fclose(capture);
     CHECK(strstr(output, "V7m9!qZ2rP") == NULL);
-    CHECK(strstr(output, "sk-ABCDEFGHIJKLMNOPQRSTUV123456") == NULL);
-    CHECK(strstr(output, "[REDACTED:secret]") != NULL);
+    CHECK(strstr(output, "sk-ABCDEFGHIJKLMNOPQRSTUV123456") != NULL);
+    CHECK(strstr(output, "[REDACTED:ssh_password]") != NULL);
     CHECK(strstr(output, "long-log-tail") != NULL);
     CHECK(strstr(output, "filtered-level-marker") == NULL);
     CHECK(strstr(output, "invalid-level-marker") == NULL);
@@ -5198,6 +5199,55 @@ static void stream_sink_append(const char *delta, void *ud) {
     (void)dlen;
 }
 
+static void stream_sink_strbuf(const char *delta, void *ud) { strbuf_append((strbuf *)ud, delta); }
+
+static void test_ssh_only_redaction(void) {
+    section("runtime redacts only known SSH passwords (#115)");
+    const char *plain="password=CodeOnly_98+! token=ghp_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN "
+        "Bearer abcdef1234567890abcdef123456 D:/random-Q7m2V9k4X1r8T6p3Z5n0/src/test.c";
+    char *out=secret_redact_ssh_passwords(plain,strlen(plain),NULL);
+    CHECK_STR(out,plain); free(out);
+    out=xstrdup(plain); secret_guard_llm_output(&out); CHECK_STR(out,plain); free(out);
+    const char *pwd="SSHonly_77!\\\"Z";
+    CHECK(ssh_vault_put("state-test/ssh-only","runtime",pwd)==0);
+    out=secret_redact_ssh_passwords(pwd,strlen(pwd),NULL);
+    CHECK(out && !strstr(out,pwd) && strstr(out,"[REDACTED:ssh_password]")); free(out);
+    cJSON *j=cJSON_CreateString(pwd); char *encoded=cJSON_PrintUnformatted(j); cJSON_Delete(j);
+    out=secret_redact_ssh_passwords(encoded,strlen(encoded),NULL);
+    CHECK(out && !strstr(out,"SSHonly_77") && strstr(out,"[REDACTED:ssh_password]")); free(out); free(encoded);
+    const char *trusted[]={pwd}; out=xstrdup(pwd);
+    secret_guard_llm_output_trusted(&out,trusted,1);
+    CHECK(out && strstr(out,"[REDACTED:ssh_password]")); free(out);
+    CHECK(secret_register_ssh_password("1")==0);
+    const char *short_text="version 1 password=1";
+    out=secret_redact_ssh_passwords(short_text,strlen(short_text),NULL);
+    CHECK(out && strstr(out,"version 1") && strstr(out,"password=[REDACTED:ssh_password]")); free(out);
+    llm *local=llm_create("mock",NULL,NULL,"mock");
+    llm_message msg={.role="user",.content=plain}; llm_request req={0}; llm_response resp={0};
+    req.messages=&msg; req.num_messages=1;
+    CHECK(local && llm_chat(local,&req,&resp)==0);
+    CHECK(resp.content && strstr(resp.content,plain)); free(resp.content); free(resp.error); llm_destroy(local);
+    char long_pwd[1025];
+    for(int i=0;i<1024;i++) long_pwd[i]=(char)('a'+i%26);
+    long_pwd[1024]=0; CHECK(secret_register_ssh_password(long_pwd)==0);
+    strbuf input, expected, actual; strbuf_init(&input); strbuf_init(&expected); strbuf_init(&actual);
+    for(int i=0;i<1300;i++) { strbuf_append(&input,"."); strbuf_append(&expected,"."); }
+    strbuf_append(&input,long_pwd); strbuf_append(&input,plain);
+    strbuf_append(&expected,"[REDACTED:ssh_password]"); strbuf_append(&expected,plain);
+    void *guard=secret_stream_guard_new(stream_sink_strbuf,&actual);
+    for(size_t i=0;i<input.len;i+=7) {
+        size_t n=input.len-i<7?input.len-i:7; char chunk[8]; memcpy(chunk,input.buf+i,n); chunk[n]=0;
+        secret_stream_guard_cb(chunk,guard);
+    }
+    secret_stream_guard_free(guard); CHECK_STR(actual.buf,expected.buf);
+    strbuf_free(&input); strbuf_free(&expected); strbuf_free(&actual);
+    mem_records *records=mem_records_new("state-test/ssh-only-memory"); mem_record record={0};
+    snprintf(record.id,sizeof(record.id),"ssh_scope_text"); record.content=xstrdup(plain);
+    CHECK(mem_records_put(records,&record)==0);
+    const mem_record *saved=mem_records_find(records,record.id); CHECK(saved && !strcmp(saved->content,plain));
+    mem_records_remove(records,record.id); mem_records_free(records); free(record.content);
+}
+
 static void test_security(void) {
     section("secret security");
     secret_match *ms = NULL;
@@ -5345,12 +5395,12 @@ static void test_security(void) {
     CHECK(secret_guard_llm_input(blocked_input, 1) == 0);
     CHECK(secret_guard_llm_input(clean_input, 1) == 0);
 
-    /* passthrough mode: egress redacted in place */
+    /* Runtime egress preserves non-SSH token text (#115). */
     {
         char *out = xstrdup("token ghp_" "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN done");
         secret_guard_llm_output(&out);
-        CHECK(out != NULL && strstr(out, "ghp_abcdefghijklmnop") == NULL);
-        CHECK(out != NULL && strstr(out, "[REDACTED:secret]") != NULL);
+        CHECK(out != NULL && strstr(out, "ghp_abcdefghijklmnop") != NULL);
+        CHECK(out != NULL && strstr(out, "[REDACTED:") == NULL);
         free(out);
     }
     /* A credential explicitly present in the current user task must survive
@@ -5364,14 +5414,14 @@ static void test_security(void) {
         free(out);
         out = xstrdup("password ghp_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN");
         secret_guard_llm_output_trusted(&out, NULL, 0);
-        CHECK(out != NULL && strstr(out, "[REDACTED:secret]") != NULL);
+        CHECK(out != NULL && strstr(out, "ghp_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN") != NULL);
         free(out);
     }
 
     /* strict mode: HIGH-confidence input blocked, clean passes */
     CHECK(secret_set_mode("strict") == 0);
     CHECK_STR(secret_mode(), "strict");
-    CHECK(secret_guard_llm_input(blocked_input, 1) == -1);
+    CHECK(secret_guard_llm_input(blocked_input, 1) == 0);
     CHECK(secret_guard_llm_input(clean_input, 1) == 0);
     CHECK(secret_set_mode("passthrough") == 0);
     CHECK(secret_set_mode("bogus") == -1);
@@ -5380,6 +5430,7 @@ static void test_security(void) {
      * Mock echoes its received prompt, so this verifies the LLM boundary
      * rather than only the standalone secret utility. */
     {
+        CHECK(secret_register_ssh_password("Tr0ub4dor&3") == 0);
         llm *local = llm_create("mock", NULL, NULL, "mock");
         llm_message msg[] = {{.role = "user", .content = "SSH password=Tr0ub4dor&3"}};
         llm_request req;
@@ -5392,7 +5443,7 @@ static void test_security(void) {
         if (local) {
             CHECK(llm_chat(local, &req, &response) == 0);
             CHECK(response.content != NULL && strstr(response.content, "Tr0ub4dor&3") == NULL);
-            CHECK(response.content != NULL && strstr(response.content, "[REDACTED:secret]") != NULL);
+            CHECK(response.content != NULL && strstr(response.content, "[REDACTED:ssh_password]") != NULL);
             free(response.content);
             free(response.error);
             llm_destroy(local);
@@ -5417,8 +5468,8 @@ static void test_security(void) {
             off += chunk;
         }
         secret_stream_guard_free(g); /* flushes the held tail */
-        CHECK(strstr(acc, "abcdef1234567890") == NULL);
-        CHECK(strstr(acc, "[REDACTED:secret]") != NULL);
+        CHECK(strstr(acc, "abcdef1234567890") != NULL);
+        CHECK(strstr(acc, "[REDACTED:") == NULL);
         CHECK(strstr(acc, "end") != NULL);
     }
 
@@ -7506,6 +7557,10 @@ int main(int argc, char **argv) {
         test_ssh_prompt_regex();
         printf("%d passed, %d failed\n",g_pass,g_fail); return g_fail?1:0;
     }
+    if (argc==2 && !strcmp(argv[1],"--ssh-only")) {
+        test_logging(); test_ssh_only_redaction(); test_security();
+        printf("%d passed, %d failed\n",g_pass,g_fail); return g_fail?1:0;
+    }
     if (argc == 2 && strcmp(argv[1], "--agent-loop") == 0) {
         test_agent_loop();
         printf("\n%d passed, %d failed\n", g_pass, g_fail);
@@ -7591,6 +7646,7 @@ int main(int argc, char **argv) {
     test_record_v3();
     test_promotion_v3();
     test_mmu_v3();
+    test_ssh_only_redaction();
     test_security();
     test_context_budget();
     test_attention();

@@ -18,7 +18,7 @@
 #include <stdio.h>
 #include <stdatomic.h>
 
-#define GUARD_TAIL 256 /* covers long credentials split across stream deltas */
+#define GUARD_TAIL 6145 /* 1024-byte password, up to 6 JSON bytes per byte */
 
 /* --- module state --------------------------------------------------------- */
 
@@ -138,7 +138,7 @@ int secret_guard_llm_input(const char *const *contents, size_t n) {
         const char *c = contents && contents[i] ? contents[i] : NULL;
         if (!c || !*c)
             continue;
-        cnt = secret_scan_text(c, strlen(c), &ms);
+        cnt = secret_scan_ssh_passwords(c, strlen(c), &ms);
         if (cnt > 0) {
             secret_severity_t s = strongest(ms, cnt);
             audit_scan("llm_input", ms, cnt);
@@ -159,37 +159,20 @@ int secret_guard_llm_input(const char *const *contents, size_t n) {
     return 0;
 }
 
-static int match_is_trusted(const char *text, const secret_match *m,
-                            const char *const *trusted, size_t trusted_n) {
-    size_t n;
-    if (!text || !m || !trusted || m->end <= m->start)
-        return 0;
-    n = m->end - m->start;
-    for (size_t i = 0; i < trusted_n; i++) {
-        const char *p = trusted[i];
-        if (!p || !*p)
-            continue;
-        for (; *p; p++)
-            if (strncmp(p, text + m->start, n) == 0)
-                return 1;
-    }
-    return 0;
-}
-
 static char *redact_untrusted_matches(const char *text, const secret_match *ms, int cnt,
                                       const char *const *trusted, size_t trusted_n) {
     strbuf out;
     size_t pos = 0;
     int changed = 0;
+    (void)trusted; (void)trusted_n;
 
     strbuf_init(&out);
     for (int i = 0; i < cnt; i++) {
         if (ms[i].end <= ms[i].start || ms[i].start < pos)
             continue;
         strbuf_append_n(&out, text + pos, ms[i].start - pos);
-        if (ms[i].severity >= SECRET_SEV_MEDIUM &&
-            !match_is_trusted(text, &ms[i], trusted, trusted_n)) {
-            strbuf_append(&out, "[REDACTED:secret]");
+        if (ms[i].severity >= SECRET_SEV_MEDIUM) {
+            strbuf_append(&out, "[REDACTED:ssh_password]");
             changed = 1;
         } else {
             strbuf_append_n(&out, text + ms[i].start, ms[i].end - ms[i].start);
@@ -211,7 +194,8 @@ void secret_guard_llm_output_trusted(char **content, const char *const *trusted,
 
     if (!content || !*content || !**content)
         return;
-    cnt = secret_scan_text(*content, strlen(*content), &ms);
+    cnt = secret_scan_ssh_passwords(*content, strlen(*content), &ms);
+    if (cnt < 0) { free(*content); *content=xstrdup("[SSH password filtering failed]"); return; }
     if (cnt > 0) {
         secret_severity_t s = strongest(ms, cnt);
         audit_scan("llm_output", ms, cnt);
@@ -258,54 +242,27 @@ void *secret_stream_guard_new(secret_stream_cb inner, void *ud) {
 static void guard_emit_window(stream_guard *g, const char *window, size_t wlen,
                               size_t delta_len) {
     secret_match *ms = NULL;
-    int cnt = secret_scan_text(window, wlen, &ms);
-    /* fixed hold-back: the last GUARD_TAIL-1 bytes stay unemitted so patterns
-     * with up to that much lookahead (bearer, kv assignments, fixed-prefix
-     * keys) are decided before any of their bytes leave the guard */
-    size_t keep = wlen < GUARD_TAIL - 1 ? wlen : GUARD_TAIL - 1;
-    char *out = NULL;
+    int cnt = secret_scan_ssh_passwords(window, wlen, &ms);
+    size_t carry=secret_ssh_password_max_length();
+    if (carry && carry<32) carry=32; /* short-password label context */
+    if (carry) carry--;
+    size_t cut = wlen > carry ? wlen-carry : 0;
     (void)delta_len;
-
-    if (cnt > 0) {
-        secret_severity_t s = strongest(ms, cnt);
-        audit_scan("llm_stream", ms, cnt);
-        counter_add(1, s >= SECRET_SEV_LOW, s >= SECRET_SEV_MEDIUM,
-                    s >= SECRET_SEV_HIGH, 0, 0);
-        out = secret_redact_text(window, wlen, NULL);
-        if (out) {
-            size_t out_len = strlen(out);
-            /* after a redaction the boundary region is consumed; the hold
-             * restarts from the raw tail of this delta */
-            if (out_len > keep && g->inner)
-                g->inner(out, g->ud);
-            counter_add(0, 0, 0, 0, 1, 0);
-            if (g_metrics)
-                metrics_inc(g_metrics, "secret_redactions_total");
-            free(out);
-            memcpy(g->hold, window + wlen - keep, keep);
-            g->hold_len = keep;
-            g->hold[keep] = '\0';
-            secret_matches_free(ms);
-            return;
-        }
-    }
+    if (cnt < 0) { if (g->inner) g->inner("[SSH password filtering failed]",g->ud); g->hold_len=0; return; }
+    /* A complete match crossing the carry boundary can be emitted masked now,
+     * so no partial password is emitted and no already-masked tail is replayed. */
+    for (int i=0; i<cnt; i++) if (ms[i].start<cut && ms[i].end>cut) cut=ms[i].end;
+    if (cnt>0) { audit_scan("llm_stream",ms,cnt); counter_add(1,1,1,1,1,0); }
     secret_matches_free(ms);
-
-    /* no match (or redaction failed): emit window minus the new hold */
-    if (wlen > keep && g->inner) {
-        char *chunk = (char *)malloc(wlen - keep + 1);
-        if (chunk) {
-            memcpy(chunk, window, wlen - keep);
-            chunk[wlen - keep] = '\0';
-            g->inner(chunk, g->ud);
-            free(chunk);
-        } else {
-            g->inner(window, g->ud); /* fail open on OOM */
-        }
+    if (cut && g->inner) {
+        char *prefix=malloc(cut+1);
+        if (prefix) { memcpy(prefix,window,cut); prefix[cut]=0; }
+        char *out=prefix ? secret_redact_ssh_passwords(prefix,cut,NULL):NULL;
+        g->inner(out ? out:"[SSH password filtering failed]",g->ud);
+        free(out); free(prefix);
     }
-    memcpy(g->hold, window + wlen - keep, keep);
-    g->hold_len = keep;
-    g->hold[keep] = '\0';
+    g->hold_len=wlen-cut;
+    memcpy(g->hold,window+cut,g->hold_len); g->hold[g->hold_len]=0;
 }
 
 void secret_stream_guard_cb(const char *delta, void *vg) {
@@ -325,7 +282,7 @@ void secret_stream_guard_cb(const char *delta, void *vg) {
     wlen = g->hold_len + dlen;
     window = (char *)malloc(wlen + 1);
     if (!window) {
-        g->inner(delta, g->ud); /* fail open: deliver unfiltered */
+        g->inner("[SSH password filtering failed]", g->ud); g->hold_len=0;
         return;
     }
     memcpy(window, g->hold, g->hold_len);
@@ -342,15 +299,17 @@ void secret_stream_guard_free(void *vg) {
     /* flush the held tail: scan and emit it */
     if (g->hold_len && g->inner) {
         secret_match *ms = NULL;
-        int cnt = secret_scan_text(g->hold, g->hold_len, &ms);
+        int cnt = secret_scan_ssh_passwords(g->hold, g->hold_len, &ms);
         if (cnt > 0) {
-            char *out = secret_redact_text(g->hold, g->hold_len, NULL);
+            char *out = secret_redact_ssh_passwords(g->hold, g->hold_len, NULL);
             audit_scan("llm_stream", ms, cnt);
             counter_add(1, strongest(ms, cnt) >= SECRET_SEV_LOW,
                         strongest(ms, cnt) >= SECRET_SEV_MEDIUM,
                         strongest(ms, cnt) >= SECRET_SEV_HIGH, 0, 0);
-            g->inner(out ? out : g->hold, g->ud);
+            g->inner(out ? out : "[SSH password filtering failed]", g->ud);
             free(out);
+        } else if (cnt < 0) {
+            g->inner("[SSH password filtering failed]", g->ud);
         } else {
             g->inner(g->hold, g->ud);
         }

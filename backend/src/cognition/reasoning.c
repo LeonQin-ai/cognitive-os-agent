@@ -3362,12 +3362,12 @@ char *reasoning_steps_json(reasoning *r) {
             break;
         cJSON_AddStringToObject(o, "tool", st->tool);
         cJSON_AddNumberToObject(o, "id", st->id);
-        char *args = secret_redact_text(st->args ? st->args : "", st->args ? strlen(st->args) : 0, NULL);
-        char *output = secret_redact_text(st->out ? st->out : "", st->out ? strlen(st->out) : 0, NULL);
+        char *args = secret_redact_ssh_passwords(st->args ? st->args : "", st->args ? strlen(st->args) : 0, NULL);
+        char *output = secret_redact_ssh_passwords(st->out ? st->out : "", st->out ? strlen(st->out) : 0, NULL);
         cJSON_AddStringToObject(o, "args", args ? args : "");
         cJSON_AddStringToObject(o, "out", output ? output : "");
         if (st->target[0]) {
-            char *target = secret_redact_text(st->target, strlen(st->target), NULL);
+            char *target = secret_redact_ssh_passwords(st->target, strlen(st->target), NULL);
             cJSON_AddStringToObject(o, "target", target ? target : "");
             free(target);
         }
