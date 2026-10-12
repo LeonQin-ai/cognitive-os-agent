@@ -3401,6 +3401,11 @@ static void test_agent_loop(void) {
         CHECK(flow_run(&ctx,review,-1,&report,NULL)==0);
         CHECK(report && strstr(report,"报告") && !strstr(report,"任务未完成"));
         free(report);
+        free(ans); ans=NULL;
+        CHECK(reasoning_run(ctx.reasoning,"继续读取意向回归测试：深入读取readme.txt代码",&ans)==0);
+        CHECK(ans && strstr(ans,"后续源码已实际读取"));
+        reasoning_progress(ctx.reasoning,&elapsed,&round,&calls,&tool,&in,&out);
+        CHECK(calls==1 && round==3);
         free(ans);
         runtime_shutdown(&ctx);
         fs_remove("state-test/loop-w/readme.txt");

@@ -250,6 +250,13 @@ static char *mock_respond(const char *msg) {
                        "{\"tool\":\"file_read\",\"args\":{\"path\":\"batch-1.c\"}},"
                        "{\"tool\":\"file_read\",\"args\":{\"path\":\"batch-2.c\"}}]");
     }
+    if(has_substr(msg,"继续读取意向回归测试")) {
+        int previous=0; const char *header=strstr(full,"## 之前轮次的动作结果 (第 ");
+        if(header) sscanf(header,"## 之前轮次的动作结果 (第 %d/",&previous);
+        if(previous==0) return xstrdup("现在需要深入读取后续文件来定位问题。");
+        if(previous==1) return xstrdup("[{\"tool\":\"file_read\",\"args\":{\"path\":\"readme.txt\"}}]");
+        return xstrdup("后续源码已实际读取。");
+    }
     if (has_substr(msg,"多agent分析报告回归测试")) {
         if(in_loop) return xstrdup("报告：已阅读源码，修复建议为补充边界验证。");
         return xstrdup("[{\"tool\":\"file_read\",\"args\":{\"path\":\"readme.txt\"}}]");

@@ -2209,7 +2209,15 @@ static int prompt_requires_mutation(const char *prompt) {
     return 0;
 }
 
+static int prompt_requests_read(const char *prompt) {
+    if (!prompt) return 0;
+    const char *task=strstr(prompt,"## 用户任务\n"); if(task) prompt=task+strlen("## 用户任务\n");
+    return (strstr(prompt,"读") || strstr(prompt,"read ")) &&
+        (strstr(prompt,"代码") || strstr(prompt,"源码") || strstr(prompt,"文件") || strstr(prompt,"目录") ||
+         strstr(prompt,".c") || strstr(prompt,".h") || strstr(prompt,".txt") || strstr(prompt,".py") || strstr(prompt,".log"));
+}
 static int prompt_requires_full_read(const char *prompt) {
+    if (prompt) { const char *task=strstr(prompt,"## 用户任务\n"); if(task) prompt=task+strlen("## 用户任务\n"); }
     return prompt && (strstr(prompt, "代码") || strstr(prompt, "源码") || strstr(prompt, "source") || strstr(prompt, "code")) &&
         (strstr(prompt, "读") || strstr(prompt, "read") || strstr(prompt, "review")) &&
         (strstr(prompt, "全部") || strstr(prompt, "完整") || strstr(prompt, "完备") || strstr(prompt, "所有") ||
@@ -2982,9 +2990,9 @@ restart_planning:
              * not recover. Exhaustion must report an incomplete task. */
             const char *txt = strip_nudge_echo(result);
             int needs_action = prompt_requires_mutation(prompt) && !run_has_mutating_action(r);
-            int needs_read = prompt_requires_full_read(prompt) &&
-                (r->pending_reads_n || r->read_tracking_overflow || answer_reports_unread(txt) ||
-                 (!r->run_file_reads && !run_has_mutating_action(r)));
+            int needs_read = (prompt_requires_full_read(prompt) &&
+                (r->pending_reads_n || r->read_tracking_overflow || answer_reports_unread(txt))) ||
+                (prompt_requests_read(prompt) && !r->run_file_reads && !run_has_mutating_action(r));
             int narrating = !prompt_is_direct_information_request(prompt) &&
                             looks_like_intent(txt);
             if (needs_action || narrating || needs_read) {
