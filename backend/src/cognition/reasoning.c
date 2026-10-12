@@ -230,6 +230,10 @@ struct reasoning {
     uint64_t search_seen[512]; /* successful read-only discoveries in this run */
     int search_seen_n;
     int round_search_skips;
+    struct { char *path; unsigned long long next; } pending_reads[128];
+    int pending_reads_n;
+    int read_tracking_overflow;
+    int run_file_reads;
     int thinking_mode; /* task-local preference; set by the chat lane */
 
     /* live run progress for status display (polled via reasoning_progress):
@@ -992,9 +996,68 @@ static int log_append(char **buf, size_t *blen, size_t *bcap, const char *text) 
 
 /* Model-facing log: everything the next planning round must see (action
  * results, narrations, system nudges). */
+/* Bound individual tool observations, not an entire batch of file reads. */
+static int log_append_entries(reasoning *r, char **buf, size_t *len, size_t *cap, const char *text) {
+    int folded = 0;
+    const char *start = text;
+    if (!text) return 0;
+    for (const char *p = text; *p; ++p) {
+        if (p == text || p[-1] != '\n' || *p != '[') continue;
+        const char *end = strchr(p, ']');
+        if (!end || end-p > 48) continue;
+        char name[49];
+        memcpy(name, p+1, (size_t)(end-p-1)); name[end-p-1] = 0;
+        if (!tool_find(r->tools, name)) continue;
+        size_t n = (size_t)(p-start);
+        char *entry = malloc(n+1);
+        if (!entry) break;
+        memcpy(entry, start, n); entry[n] = 0;
+        folded |= log_append(buf, len, cap, entry);
+        free(entry); start = p;
+    }
+    return folded | log_append(buf, len, cap, start);
+}
+
+static void pending_reads_clear(reasoning *r) {
+    for (int i=0; i<r->pending_reads_n; ++i) free(r->pending_reads[i].path);
+    r->pending_reads_n = r->read_tracking_overflow = r->run_file_reads = 0;
+}
+
+static void record_read_page(reasoning *r, const char *args_json, const char *output) {
+    cJSON *args = cJSON_Parse(args_json);
+    const char *path = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(args, "path"));
+    if (!path) { cJSON_Delete(args); return; }
+    char full[2048]; path_resolve(full, sizeof(full), r->workspace, path);
+    if (fs_is_dir(full)) { cJSON_Delete(args); return; }
+    r->run_file_reads++;
+    int i=0;
+    while (i<r->pending_reads_n && strcmp(r->pending_reads[i].path, full)) ++i;
+    const char *header = output ? strstr(output, "[bytes ") : NULL;
+    unsigned long long first=0, last=0, next=0;
+    int paged = header && sscanf(header, "[bytes %llu-%llu", &first, &last) == 2;
+    const char *marker = paged ? strstr(header, "next_offset_bytes=") : NULL;
+    if (marker) sscanf(marker, "next_offset_bytes=%llu", &next);
+    int more = paged && strstr(header, "more available") != NULL;
+    if (!paged && i == r->pending_reads_n) { cJSON_Delete(args); return; }
+    if (i == r->pending_reads_n) {
+        if (i == 128 || !(r->pending_reads[i].path = xstrdup(full))) {
+            r->read_tracking_overflow = 1; cJSON_Delete(args); return;
+        }
+        r->pending_reads[i].next = 0; r->pending_reads_n++;
+    }
+    if (!paged || first <= r->pending_reads[i].next) {
+        if (!more) {
+            free(r->pending_reads[i].path);
+            memmove(r->pending_reads+i, r->pending_reads+i+1,
+                    (size_t)(--r->pending_reads_n-i)*sizeof(r->pending_reads[0]));
+        } else if (next > r->pending_reads[i].next) r->pending_reads[i].next = next;
+    }
+    cJSON_Delete(args);
+}
+
 static void round_log_append(reasoning *r, const char *text) {
     mutex_lock(&r->progress_mtx);
-    if (log_append(&r->round_log, &r->round_log_len, &r->round_log_cap, text))
+    if (log_append_entries(r, &r->round_log, &r->round_log_len, &r->round_log_cap, text))
         r->search_seen_n = 0; /* folded observations can be read again */
     mutex_unlock(&r->progress_mtx);
 }
@@ -1004,7 +1067,7 @@ static void round_log_append(reasoning *r, const char *text) {
  * and must NOT leak into the final answer (GitHub issue #4: a simple "你好"
  * ended up as 4× repeated narration + nudge spam). */
 static void obs_log_append(reasoning *r, const char *text) {
-    log_append(&r->obs_log, &r->obs_log_len, &r->obs_log_cap, text);
+    log_append_entries(r, &r->obs_log, &r->obs_log_len, &r->obs_log_cap, text);
 }
 
 static void round_log_reset(reasoning *r) {
@@ -1296,6 +1359,15 @@ static char *build_context(reasoning *r, const char *prompt) {
 
     /* anti-pollution caution: history/notes/retrieved context are reference
      * only — the current request must always be planned and executed fresh */
+    if (r->pending_reads_n) {
+        strbuf_append(&b, "## 尚未连续读取到文件末尾\n");
+        for (int i=0; i<r->pending_reads_n && i<16; ++i)
+            strbuf_appendf(&b, "- %s: next_offset_bytes=%llu\n", r->pending_reads[i].path,
+                           r->pending_reads[i].next);
+        if (r->pending_reads_n > 16)
+            strbuf_appendf(&b, "另有 %d 个分页文件待续读，先完成以上文件。\n", r->pending_reads_n-16);
+        strbuf_append(&b, "完整阅读任务必须用 file_read 的 offset_bytes 继续读取，直到 end of file；目录清单不等于源码内容。\n");
+    }
     strbuf_append(&b, "## 重要约束\n"
                           "- 上面的会话摘要、Session notes、Conversation history、Retrieved context 都只是背景参考，"
                           "不代表当前请求已经完成。\n"
@@ -1598,7 +1670,7 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
                 r->round_search_skips++;
                 r->ok_actions++; /* cached observation satisfies verification */
                 strbuf_appendf(&b, "[%s] identical read/search already completed; use its earlier observation, "
-                                 "choose a different source, or answer now\n", r->actions[i].tool);
+                                 "continue with unread files or the next offset_bytes; this is not task completion\n", r->actions[i].tool);
                 run_step_add(r, r->actions[i].tool, r->actions[i].args_json,
                              "previous search result reused", 1, 0);
                 continue;
@@ -1665,6 +1737,8 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
                 hook_dispatch(r->hooks, "exec.on_failure", r->actions[i].tool);
         } else {
             r->last_failed_action_sig = 0;
+            if (strcmp(r->actions[i].tool, "file_read") == 0)
+                record_read_page(r, r->actions[i].args_json, step_out);
             r->same_action_failures = 0;
             r->ok_actions++;
             if (!is_search) round_mutated = 1;
@@ -1896,6 +1970,7 @@ reasoning *reasoning_new(const reasoning_config *cfg) {
 }
 
 void reasoning_free(reasoning *r) {
+    if (r) pending_reads_clear(r);
     if (!r)
         return;
     clear_actions(r);
@@ -2121,6 +2196,21 @@ static int prompt_requires_mutation(const char *prompt) {
         return 0;
     for (size_t i = 0; i < sizeof(verbs) / sizeof(verbs[0]); i++)
         if (strstr(prompt, verbs[i])) return 1;
+    return 0;
+}
+
+static int prompt_requires_full_read(const char *prompt) {
+    return prompt && (strstr(prompt, "代码") || strstr(prompt, "源码") || strstr(prompt, "source") || strstr(prompt, "code")) &&
+        (strstr(prompt, "读") || strstr(prompt, "read") || strstr(prompt, "review")) &&
+        (strstr(prompt, "全部") || strstr(prompt, "完整") || strstr(prompt, "完备") || strstr(prompt, "所有") ||
+         strstr(prompt, "补读") || strstr(prompt, "继续") || strstr(prompt, "entire") || strstr(prompt, "all ") || strstr(prompt, "full"));
+}
+
+static int answer_reports_unread(const char *text) {
+    const char *marks[] = {"未读取", "未读到", "尚未读", "需要补读", "只读了", "只读取了",
+                          "还需要读取", "not yet read", "have not read", "files remain unread"};
+    for (size_t i=0; text && i<sizeof(marks)/sizeof(marks[0]); ++i)
+        if (strstr(text, marks[i])) return 1;
     return 0;
 }
 
@@ -2754,6 +2844,7 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     r->run_mutated = 0;
     r->search_seen_n = 0;
     r->round_search_skips = 0;
+    pending_reads_clear(r);
 
      /* LLM's plain-text answer (had_plan == 0) */
          /* per-round pipeline output */
@@ -2841,7 +2932,7 @@ restart_planning:
             round_log_append(r, result && *result ? result : "(run failed)");
             obs_log_append(r, result && *result ? result : "(run failed)");
             progress_emit(r, r->had_plan ? "recovering" : "reconnecting");
-            if (r->round_idx >= r->max_rounds)
+        if (r->round_idx >= r->max_rounds)
                 break;
             /* Circuit breaker: a PERSISTENT failure (LLM endpoint down /
              * rate-limited / network gone) makes every round fail instantly,
@@ -2880,9 +2971,12 @@ restart_planning:
              * not recover. Exhaustion must report an incomplete task. */
             const char *txt = strip_nudge_echo(result);
             int needs_action = prompt_requires_mutation(prompt) && !run_has_mutating_action(r);
+            int needs_read = prompt_requires_full_read(prompt) &&
+                (r->pending_reads_n || r->read_tracking_overflow || answer_reports_unread(txt) ||
+                 (!r->run_file_reads && !run_has_mutating_action(r)));
             int narrating = !prompt_is_direct_information_request(prompt) &&
                             looks_like_intent(txt);
-            if (needs_action || narrating) {
+            if (needs_action || narrating || needs_read) {
                 /* Repeating the same intention is not evidence of completion.
                  * Stop rather than spending the remaining budget on identical
                  * calls, and surface the task as failed/incomplete. */
@@ -2900,6 +2994,12 @@ restart_planning:
                 free(last_narration);
                 last_narration = xstrdup(txt ? txt : "");
                 round_log_append(r, txt && *txt ? txt : "");
+                if (needs_read) {
+                    round_log_append(r, "[system] 当前完整源码阅读尚未完成：有文件未读到 EOF，或答案明确列出未读源码。"
+                                        "不要把目录枚举或部分源码总结当作完成，也不要让用户重新指定已要求阅读的范围。"
+                                        "请继续未读文件及 next_offset_bytes 指定的分页，完成后再整理资料。");
+                    continue;
+                }
                 round_log_append(r, "[system] 上一轮只输出了意向说明，没有执行任何工具动作。"
                                     "如果任务还需要操作（读写文件、执行命令、生成文件等），"
                                     "请输出 JSON 动作数组并实际执行；"
@@ -2945,8 +3045,9 @@ restart_planning:
                 strcmp(r->actions[i].tool, "list_dir") != 0) search_only = 0;
         search_only_rounds = search_only ? search_only_rounds + 1 : 0;
         if (r->n_actions > 0 && r->round_search_skips == r->n_actions) {
-            round_log_append(r, "[system] 本轮读取与已有动作重复，但这不代表任务完成。"
-                                "请选择未读文件或下一页；只有原任务范围已完成才可以给出最终答案。");
+            round_log_append(r, "[system] 本轮读取或搜索与已有动作重复，但这不代表任务完成。"
+                                "请用目录清单选择未读源码，或按 next_offset_bytes 继续文件分页；"
+                                "只有原任务范围已完成才可以给出最终答案。");
             if (++duplicate_rounds < 2 && r->round_idx < r->max_rounds) {
                 free(r->prev_plan); r->prev_plan = NULL;
                 continue;
@@ -3029,7 +3130,9 @@ restart_planning:
      * the no-plan guard above. It is still incomplete if a write was asked. */
     if (prompt_requires_mutation(prompt) && !run_has_mutating_action(r))
         unfinished = 1;
-    if (stalled || synthesized || fail_aborted || r->tool_fail_aborted) unfinished = 1;
+    if (stalled || synthesized || fail_aborted || r->tool_fail_aborted ||
+        (prompt_requires_full_read(prompt) && (r->pending_reads_n || r->read_tracking_overflow || answer_reports_unread(final_text))))
+        unfinished = 1;
     if (unfinished)
         st = ST_FAILED;
     strbuf_init(&out);
@@ -3039,7 +3142,10 @@ restart_planning:
      * obs_log is a fallback for runs that ended without a final answer. */
     if (unfinished) {
         strbuf_append(&out, "任务未完成：尚未完成请求的阅读、操作或验证，当前结果仅为部分进展。");
-        if (final_text && *final_text) { strbuf_append(&out, "\n\n"); strbuf_append(&out, final_text); }
+        if (final_text && *final_text) {
+            strbuf_append(&out, "\n\n");
+            strbuf_append(&out, final_text);
+        }
     } else if (final_text && *final_text) {
         strbuf_append(&out, final_text);
     } else if (r->obs_log_len > 0) {

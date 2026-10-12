@@ -882,6 +882,29 @@ static void test_snapshot_tx(void) {
         "{\"path\":\"large-read.txt\",\"offset_bytes\":7000}", &ctx);
     CHECK(next_page && next_page->ok && strstr(next_page->output, "BBBB"));
     tool_result_free(next_page);
+    /* Pagination must not replace a Chinese character split at the boundary. */
+    char utf8_source[9001];
+    for (int i=0; i<9000; i+=3) memcpy(utf8_source+i, "中", 3);
+    utf8_source[9000]=0;
+    CHECK(fs_write_file("state-test/w/utf8-read.txt", utf8_source, 9000) == 0);
+    strbuf joined; strbuf_init(&joined);
+    unsigned long long offset=0;
+    for (int page=0; page<4; ++page) {
+        char args[160]; snprintf(args, sizeof(args), "{\"path\":\"utf8-read.txt\",\"offset_bytes\":%llu}", offset);
+        tool_result *part=tool_execute(reg, "file_read", args, &ctx);
+        CHECK(part && part->ok && str_utf8_valid_n(part->output, -1));
+        if (!part || !part->ok) { tool_result_free(part); break; }
+        const char *body=strchr(part->output, '\n');
+        CHECK(body != NULL);
+        if (body) strbuf_append(&joined, body+1);
+        const char *next=strstr(part->output, "next_offset_bytes=");
+        CHECK(next && sscanf(next, "next_offset_bytes=%llu", &offset) == 1);
+        int more=strstr(part->output, "more available") != NULL;
+        tool_result_free(part);
+        if (!more) break;
+    }
+    CHECK(joined.len == 9000 && memcmp(joined.buf, utf8_source, 9000) == 0);
+    strbuf_free(&joined); fs_remove("state-test/w/utf8-read.txt");
     tx *tx = tx_begin(tm, snap, reg, &ctx);
 
     /* write a file inside the tx (workspace-relative path resolves to
@@ -3289,6 +3312,49 @@ static void test_agent_loop(void) {
         runtime_shutdown(&ctx);
     }
 
+    /* A duplicate directory round must recover, then read all file pages.
+     * A premature text answer listing unread source must trigger continuation. */
+    {
+        char content[8001]; memset(content, 'x', 8000); content[8000] = 0;
+        memcpy(content+7970, "END_SOURCE", 10);
+        CHECK(fs_write_file("state-test/loop-w/source.c", content, 8000) == 0);
+        config cfg = {0}; cfg.state_root = "state-test/read-recovery";
+        cfg.workspace = "state-test/loop-w"; cfg.provider = "mock";
+        runtime_ctx ctx;
+        if (init(&ctx, &cfg) != 0) { CHECK(0); return; }
+        char *answer = NULL;
+        CHECK(reasoning_run(ctx.reasoning, "源码阅读恢复回归测试：完整阅读代码并输出完备资料", &answer) == 0);
+        CHECK(answer && strstr(answer, "源码阅读完成"));
+        long long elapsed=0, tin=0, tout=0; int round=0, calls=0; const char *tool=NULL;
+        reasoning_progress(ctx.reasoning, &elapsed, &round, &calls, &tool, &tin, &tout);
+        CHECK(round == 6); CHECK(calls == 3);
+        char *log = reasoning_round_log_tail(ctx.reasoning, 65536);
+        CHECK(log && strstr(log, "END_SOURCE"));
+        CHECK(log && !strstr(log, "output elided"));
+        free(log); free(answer); runtime_shutdown(&ctx);
+        fs_remove("state-test/loop-w/source.c");
+    }
+    /* Three read results in one round must preserve the middle observation. */
+    {
+        char content[3901]; memset(content, 'x', 3900); content[3900] = 0;
+        for (int i=0; i<3; ++i) {
+            char path[96]; snprintf(path, sizeof(path), "state-test/loop-w/batch-%d.c", i);
+            if (i==1) memcpy(content+1900, "MIDDLE_SOURCE_PROOF", 19);
+            CHECK(fs_write_file(path, content, 3900) == 0);
+            if (i==1) memset(content+1900, 'x', 19);
+        }
+        config cfg = {0}; cfg.state_root = "state-test/read-batch";
+        cfg.workspace = "state-test/loop-w"; cfg.provider = "mock";
+        runtime_ctx ctx;
+        if (init(&ctx, &cfg) != 0) { CHECK(0); return; }
+        char *answer=NULL;
+        CHECK(reasoning_run(ctx.reasoning, "批量源码观察回归测试：完整阅读代码", &answer) == 0);
+        CHECK(answer && strstr(answer, "批量源码完整保留"));
+        free(answer); runtime_shutdown(&ctx);
+        for (int i=0; i<3; ++i) {
+            char path[96]; snprintf(path, sizeof(path), "state-test/loop-w/batch-%d.c", i); fs_remove(path);
+        }
+    }
     /* Re-reading the same file must stop promptly and produce a synthesis
      * rather than burning the configured round budget on duplicate reads. */
     {
@@ -3462,7 +3528,7 @@ static void test_agent_loop(void) {
         for (int i = 0; i < 5700; i += 3)
             memcpy(content + i, "中", 3);
         content[5700] = '\0';
-        for (int i = 0; i < 12; i++) {
+        for (int i = 0; i < 20; i++) {
             char path[96];
             snprintf(path, sizeof(path), "state-test/loop-w/fold-%d.txt", i);
             CHECK(fs_write_file(path, content, 5700) == 0);
@@ -3482,14 +3548,14 @@ static void test_agent_loop(void) {
         int round = 0, calls = 0;
         const char *tool = NULL;
         reasoning_progress(ctx.reasoning, &elapsed, &round, &calls, &tool, &in, &out);
-        CHECK(round == 14);
-        CHECK(calls == 13);
+        CHECK(round == 22);
+        CHECK(calls == 21);
         char *log_tail = reasoning_round_log_tail(ctx.reasoning, 65536);
         CHECK(log_tail && str_utf8_valid_n(log_tail, -1));
         free(log_tail);
         free(ans);
         runtime_shutdown(&ctx);
-        for (int i = 0; i < 12; i++) {
+        for (int i = 0; i < 20; i++) {
             char path[96];
             snprintf(path, sizeof(path), "state-test/loop-w/fold-%d.txt", i);
             fs_remove(path);

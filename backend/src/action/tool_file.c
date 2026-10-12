@@ -68,7 +68,9 @@ static tool_result *file_read_exec(const tool *self, const tool_ctx *ctx, const 
         fs_list_free(&dl);
     }
 
-    content = fs_read_file_slice(rp, offset, 7000, &read_bytes, &has_more);
+    /* Leave space for metadata and tool wrappers in the 6144-byte observation
+     * budget. A page must reach the model intact, rather than lose its middle. */
+    content = fs_read_file_slice(rp, offset, 4000, &read_bytes, &has_more);
     cJSON_Delete(args);
     if (!content) {
         char msg[1024];
@@ -82,15 +84,25 @@ static tool_result *file_read_exec(const tool *self, const tool_ctx *ctx, const 
         return tool_result_new(0, "file_read: binary file; use a format-specific extractor");
     }
     char *sanitized = NULL;
+    if (has_more && read_bytes && !str_utf8_valid_n(content, (int)read_bytes)) {
+        size_t lead = read_bytes-1;
+        while (lead && ((unsigned char)content[lead] & 0xc0) == 0x80) --lead;
+        unsigned char c = (unsigned char)content[lead];
+        size_t width = c >= 0xf0 && c <= 0xf4 ? 4 : c >= 0xe0 && c <= 0xef ? 3 : c >= 0xc2 && c <= 0xdf ? 2 : 1;
+        if (lead+width > read_bytes && str_utf8_valid_n(content, (int)lead)) {
+            read_bytes = lead; content[lead] = 0;
+        }
+    }
     if (!str_utf8_valid_n(content, (int)read_bytes))
         sanitized = str_utf8_sanitize(content);
     strbuf output;
     strbuf_init(&output);
     if (offset || has_more)
-        strbuf_appendf(&output, "[bytes %llu-%llu%s; use offset_bytes to read the next part]\n",
+        strbuf_appendf(&output, "[bytes %llu-%llu%s; next_offset_bytes=%llu]\n",
                        (unsigned long long)offset,
                        (unsigned long long)(offset + (read_bytes ? read_bytes - 1 : 0)),
-                       has_more ? ", more available" : ", end of file");
+                       has_more ? ", more available" : ", end of file",
+                       (unsigned long long)(offset + read_bytes));
     if (sanitized) strbuf_append(&output, sanitized);
     else strbuf_append_n(&output, content, read_bytes);
     char *shown = strbuf_detach(&output);

@@ -233,6 +233,23 @@ static char *mock_respond(const char *msg) {
     }
     if (has_substr(msg, "脱敏解释回归测试"))
         return xstrdup("我需要说明脱敏原因：系统曾将普通 URL 路径误判为凭据。现在路径参数会保留。");
+    if (has_substr(msg, "源码阅读恢复回归测试") && !has_substr(full, "已执行动作的观察记录")) {
+        int previous = 0;
+        const char *header = strstr(full, "## 之前轮次的动作结果 (第 ");
+        if (header) sscanf(header, "## 之前轮次的动作结果 (第 %d/", &previous);
+        if (previous <= 1) return xstrdup("[{\"tool\":\"list_dir\",\"args\":{\"path\":\".\"}}]");
+        if (previous == 2) return xstrdup("[{\"tool\":\"file_read\",\"args\":{\"path\":\"source.c\"}}]");
+        if (previous == 3) return xstrdup("暂时只读了第一段，尚未读取后续源码。");
+        if (previous == 4) return xstrdup("[{\"tool\":\"file_read\",\"args\":{\"path\":\"source.c\",\"offset_bytes\":4000}}]");
+        return xstrdup("源码阅读完成：两段源码均已读取，末段证据 END_SOURCE。");
+    }
+    if (has_substr(msg, "批量源码观察回归测试") && !has_substr(full, "已执行动作的观察记录")) {
+        if (in_loop) return xstrdup(has_substr(full, "MIDDLE_SOURCE_PROOF") && !has_substr(full, "output elided") ?
+            "批量源码完整保留" : "批量源码证据丢失");
+        return xstrdup("[{\"tool\":\"file_read\",\"args\":{\"path\":\"batch-0.c\"}},"
+                       "{\"tool\":\"file_read\",\"args\":{\"path\":\"batch-1.c\"}},"
+                       "{\"tool\":\"file_read\",\"args\":{\"path\":\"batch-2.c\"}}]");
+    }
     if (has_substr(msg, "重复读取回归测试") &&
         !has_substr(full, "已执行动作的观察记录"))
         return xstrdup("[{\"tool\":\"file_read\",\"args\":{\"path\":\"readme.txt\"}}]");
@@ -259,12 +276,12 @@ static char *mock_respond(const char *msg) {
         const char *round_header = strstr(full, "## 之前轮次的动作结果 (第 ");
         if (round_header)
             sscanf(round_header, "## 之前轮次的动作结果 (第 %d/", &previous_round);
-        if (previous_round >= 13)
+        if (previous_round >= 21)
             return xstrdup("重读完成：已恢复早期证据。");
         char plan[128];
         snprintf(plan, sizeof(plan),
                  "[{\"tool\":\"file_read\",\"args\":{\"path\":\"fold-%d.txt\"}}]",
-                 previous_round < 12 ? previous_round : 0);
+                 previous_round < 20 ? previous_round : 0);
         return xstrdup(plan);
     }
     if (has_substr(msg, "长任务写入回归测试") &&
