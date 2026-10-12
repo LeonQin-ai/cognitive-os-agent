@@ -24,5 +24,16 @@ const assert = require('node:assert/strict');
     assert.equal(await file.getAttribute('open'),'');
     assert.match(await file.locator('pre').innerText(),/WRITE_DETAILS_MARKER/);
     console.log('PASS #98: written-file cards expose write details on click');
+    await page.evaluate(()=>{
+      CHAT_TABS_CACHE=[{id:'status-test',title:'执行中的任务'}];
+      CHAT_TASKS['status-test']=999;
+      CHAT_CACHE['status-test']=[{role:'bot',progress:{stage:'planning'}}]; sideRecent(CHAT_TABS_CACHE);
+    });
+    assert.match(await page.locator('#side-recent').innerText(),/执行中/);
+    await page.evaluate(()=>{
+      delete CHAT_TASKS['status-test']; CHAT_CACHE['status-test'][0].progress.stage='failed'; sideRecent(CHAT_TABS_CACHE);
+    });
+    assert.match(await page.locator('#side-recent').innerText(),/失败/);
+    console.log('PASS #102: recent sessions show active and failed status');
   } finally {await browser.close();}
 })().catch(error=>{console.error(error);process.exitCode=1;});

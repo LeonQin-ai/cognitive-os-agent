@@ -3119,6 +3119,16 @@ function sideRecent(list){
     b.className = id === CHAT_SESSION ? 'on' : '';
     const label = (info && info.title) ? info.title : (id === 'default' ? '默认会话' : id);
     b.textContent = label.length > 16 ? label.slice(0, 16) + '…' : label;
+    const messages = CHAT_CACHE[id] || [];
+    const latest = [...messages].reverse().find(m => m.role === 'bot' && m.progress);
+    const active = chatTaskOf(id) !== null || info?.running === true;
+    const stage = latest?.progress?.stage;
+    const taskStatus = document.createElement('small'); taskStatus.className = 'recent-task-status';
+    taskStatus.setAttribute('role','status');
+    taskStatus.textContent = active ? '执行中' : stage === 'completed' ? '已完成' :
+      stage === 'failed' ? '失败' : stage === 'timed_out' ? '超时' : stage === 'cancelled' ? '已取消' : '空闲';
+    taskStatus.style.color = active ? 'var(--accent)' : stage === 'failed' ? 'var(--danger)' : 'var(--muted)';
+    taskStatus.style.marginLeft = '8px'; b.append(taskStatus);
     b.title = chatSessionTip(info, id);
     b.onclick = () => chatSwitchSession(id);
     row.appendChild(b);
@@ -4867,7 +4877,7 @@ function chatApplyProgress(session,id,p){
   entry.progress = {...entry.progress, ...p};
   if(entry.steeringRevision > (p.applied_updates || 0)) entry.progress.stage = 'steering';
   if(entry.cancelling) entry.progress.stage = 'cancelling';
-  renderChatEntry(entry); chatPersist();
+  renderChatEntry(entry); chatPersist(); sideRecent(CHAT_TABS_CACHE);
 }
 function chatFinish(session,id,entry,text,stage){
   entry.pending = false; entry.text = text;
@@ -4879,7 +4889,7 @@ function chatFinish(session,id,entry,text,stage){
     CHAT_TASK_ID = null; CHAT_RESUME_OK = stage !== 'completed'; chatBusyUI(false);
     const status = $('chat-status'); if(status) status.textContent = '';
   }
-  chatPersist(); void loadChatSessions();
+  chatPersist(); sideRecent(CHAT_TABS_CACHE); void loadChatSessions();
 }
 async function chatPollTask(session,id,entry){
   if(CHAT_POLLERS.has(id)) return;
@@ -4972,6 +4982,7 @@ async function chatSubmit(resume = false){
   CHAT_ATTACH_DRAFTS.set(session,(CHAT_ATTACH_DRAFTS.get(session)||[]).filter(a=>!attachments.includes(a)));
   const id = r.obj.id; entry.taskId = id; entry.progress = {stage:'queued'};
   CHAT_TASKS[session] = id; CHAT_ENTRIES.set(id,{session,entry});
+  sideRecent(CHAT_TABS_CACHE);
   if(CHAT_SESSION === session){
     CHAT_TASK_ID = id; CHAT_NEW_SESSION = false; CHAT_RESUME_OK = false;
     CHAT_ATTACH = CHAT_ATTACH_DRAFTS.get(session) || []; chatAttachRender(); chatBusyUI(true);
