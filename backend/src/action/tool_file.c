@@ -25,6 +25,7 @@ static tool_result *file_read_exec(const tool *self, const tool_ctx *ctx, const 
     int has_more = 0;
     uint64_t offset = 0;
     size_t page_bytes = 4000;
+    int clamped_page = 0;
 
     (void)self;
     args = cJSON_Parse(args_json);
@@ -33,19 +34,24 @@ static tool_result *file_read_exec(const tool *self, const tool_ctx *ctx, const 
     path_j = cJSON_GetObjectItemCaseSensitive(args, "path");
     cJSON *size_j=cJSON_GetObjectItemCaseSensitive(args,"max_bytes");
     if (size_j) {
-        if (!cJSON_IsNumber(size_j) || size_j->valuedouble<4 || size_j->valuedouble>4000 ||
-            size_j->valuedouble != (int)size_j->valuedouble) {
-            cJSON_Delete(args); return tool_result_new(0,"file_read: max_bytes must be an integer from 4 to 4000");
+        if (!cJSON_IsNumber(size_j) || size_j->valuedouble<4 || size_j->valuedouble>9007199254740991.0 ||
+            size_j->valuedouble != (double)(uint64_t)size_j->valuedouble) {
+            cJSON_Delete(args); return tool_result_new(0,"file_read: max_bytes must be a positive integer >= 4; use 4..4000 per page");
         }
-        page_bytes=(size_t)size_j->valueint;
+        clamped_page = size_j->valuedouble > 4000;
+        page_bytes = clamped_page ? 4000 : (size_t)size_j->valuedouble;
     }
     if (!path_j || !cJSON_IsString(path_j)) {
         cJSON_Delete(args);
         return tool_result_new(0, "file_read: missing string arg 'path'");
     }
     cJSON *offset_j = cJSON_GetObjectItemCaseSensitive(args, "offset_bytes");
-    if (offset_j && cJSON_IsNumber(offset_j) && offset_j->valuedouble >= 0 &&
-        offset_j->valuedouble <= 9007199254740991.0)
+    if (offset_j && (!cJSON_IsNumber(offset_j) || offset_j->valuedouble < 0 ||
+        offset_j->valuedouble > 9007199254740991.0 ||
+        offset_j->valuedouble != (double)(uint64_t)offset_j->valuedouble)) {
+        cJSON_Delete(args); return tool_result_new(0,"file_read: offset_bytes must be a non-negative integer; copy next_offset_bytes from the previous page");
+    }
+    if (offset_j)
         offset = (uint64_t)offset_j->valuedouble;
 
     rp = resolve_path(ctx, path_j->valuestring);
@@ -116,12 +122,14 @@ static tool_result *file_read_exec(const tool *self, const tool_ctx *ctx, const 
         sanitized = str_utf8_sanitize(content);
     strbuf output;
     strbuf_init(&output);
-    if (offset || has_more)
+    if (offset || has_more || clamped_page)
         strbuf_appendf(&output, "[bytes %llu-%llu%s; next_offset_bytes=%llu]\n",
                        (unsigned long long)offset,
                        (unsigned long long)(offset + (read_bytes ? read_bytes - 1 : 0)),
                        has_more ? ", more available" : ", end of file",
                        (unsigned long long)(offset + read_bytes));
+    if (clamped_page)
+        strbuf_append(&output, "[max_bytes capped to 4000; continue at next_offset_bytes, not the requested page size]\n");
     if (sanitized) strbuf_append(&output, sanitized);
     else strbuf_append_n(&output, content, read_bytes);
     char *shown = strbuf_detach(&output);
@@ -416,8 +424,10 @@ const tool *tool_list_dir(void) {
 const tool *tool_file_read(void) {
     static const tool t = {
         "file_read",
-        "Read a text file in bounded chunks; offset_bytes pages through large files. Directories return listings.",
-        "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"offset_bytes\":{\"type\":\"integer\"},\"max_bytes\":{\"type\":\"integer\"}},\"required\":[\"path\"]}",
+        "Read text in pages of 4..4000 bytes (default 4000). Oversized integer max_bytes is capped to 4000. "
+        "Continue using the returned next_offset_bytes, never offset + requested max_bytes. "
+        "Pass discovered absolute paths unchanged. Directories return listings.",
+        "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"offset_bytes\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":9007199254740991},\"max_bytes\":{\"type\":\"integer\",\"minimum\":4,\"maximum\":4000,\"default\":4000}},\"required\":[\"path\"]}",
         0,
         file_read_exec,
         NULL,

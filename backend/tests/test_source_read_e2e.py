@@ -41,6 +41,18 @@ class Provider(BaseHTTPRequestHandler):
                 answer='批量源码完整保留。'
         elif '长答案历史回归测试' in current:
             answer='源码资料：'+'文'*5000+'REPORT_END_MARKER'
+        elif '超大分页参数回归测试' in current:
+            count=counts.get('capped',0); counts['capped']=count+1
+            schema_text=body['messages'][0]['content']
+            assert '"maximum":4000' in schema_text and '"required":["path"]}' in schema_text
+            if count==0:
+                answer=json.dumps([{'tool':'file_read','args':{'path':'source.c','max_bytes':8000}}])
+            elif count==1:
+                assert 'next_offset_bytes=4000' in text and 'max_bytes capped to 4000' in text
+                answer=json.dumps([{'tool':'file_read','args':{'path':'source.c','offset_bytes':4000,'max_bytes':8000}}])
+            else:
+                assert 'END_SOURCE' in text and 'end of file' in text
+                answer='连续分页完成，已读到 END_SOURCE。'
         elif '嵌套根目录发现回归测试' in current:
             count=counts.get('discovery',0); counts['discovery']=count+1
             discovered=(state/'backend/src/memory/kv.c').as_posix()
@@ -107,6 +119,7 @@ with tempfile.TemporaryDirectory(prefix='coa-source-read-') as directory:
                 ('目录读取回归测试：完整阅读源码', 'FAILED', '任务未完成'),
                 ('长答案历史回归测试：输出详细面试资料', 'DONE', 'REPORT_END_MARKER'),
                 ('嵌套根目录发现回归测试：阅读代码整理面试题', 'DONE', '实际发现'),
+                ('超大分页参数回归测试：完整阅读源码', 'DONE', '连续分页完成'),
             ]
             for index, (message, expected, marker) in enumerate(cases):
                 started = request('/v1/chat', {'message': message, 'session': f'read-test-{index}'})
@@ -125,6 +138,8 @@ with tempfile.TemporaryDirectory(prefix='coa-source-read-') as directory:
                         assert json.loads(step['args'])['path'].startswith('batch-')
                 if index == 4:
                     long_output=task['output']
+                if index == 6:
+                    assert task['tool_calls']==2 and all(step['ok']==1 for step in task['steps']), task
                 print('PASS:', expected, message, flush=True)
             history=request('/v1/chat/history?session=read-test-4')
             assert history['turns'][-1]['a']==long_output, 'Chat history truncated the answer'

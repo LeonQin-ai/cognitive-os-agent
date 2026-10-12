@@ -117,10 +117,7 @@ static char *build_catalog_prompt(const tool_registry *tools, struct skill_regis
             strbuf_appendf(&b, "- %s: %s\n", t->name, t->description ? t->description : "");
             if (t->json_schema && *t->json_schema) {
                 strbuf_append(&b, "  args schema: ");
-                if (strlen(t->json_schema) > 200)
-                    strbuf_append_n(&b, t->json_schema, 200);
-                else
-                    strbuf_append(&b, t->json_schema);
+                strbuf_append(&b, t->json_schema);
                 strbuf_append(&b, "\n");
             }
         }
@@ -129,6 +126,9 @@ static char *build_catalog_prompt(const tool_registry *tools, struct skill_regis
         strbuf_append(&b, "Example file discovery: "
                           "[{\"tool\":\"glob\",\"args\":{\"pattern\":\"**/*flow*\"}}]. "
                           "Every glob action needs a non-empty pattern; fix schema errors before retrying.\n");
+    strbuf_append(&b, "File reading: retain absolute paths from glob/list_dir; do not drop a nested search root. "
+                      "Use max_bytes at most 4000 and copy next_offset_bytes for each following page. "
+                      "On a missing path discover its real location instead of retrying it unchanged.\n");
 
     if (have_skill_tool && skills && skill_count(skills) > 0) {
         strbuf_append(&b, "Registered skills (capabilities you can RUN via the skill tool):\n");

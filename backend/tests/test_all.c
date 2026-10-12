@@ -884,6 +884,16 @@ static void test_snapshot_tx(void) {
     tool_result_free(small_page);
     tool_result *bad_page=tool_execute(reg,"file_read","{\"path\":\"large-read.txt\",\"max_bytes\":1}",&ctx);
     CHECK(bad_page && !bad_page->ok); tool_result_free(bad_page);
+    tool_result *capped_page=tool_execute(reg,"file_read","{\"path\":\"large-read.txt\",\"max_bytes\":8000}",&ctx);
+    CHECK(capped_page && capped_page->ok && strstr(capped_page->output,"next_offset_bytes=4000") &&
+          strstr(capped_page->output,"max_bytes capped to 4000")); tool_result_free(capped_page);
+    const char *invalid_pages[]={"{\"path\":\"large-read.txt\",\"max_bytes\":4000.5}",
+        "{\"path\":\"large-read.txt\",\"offset_bytes\":-1}",
+        "{\"path\":\"large-read.txt\",\"offset_bytes\":1.5}"};
+    for(size_t i=0;i<sizeof(invalid_pages)/sizeof(invalid_pages[0]);i++) {
+        bad_page=tool_execute(reg,"file_read",invalid_pages[i],&ctx);
+        CHECK(bad_page && !bad_page->ok); tool_result_free(bad_page);
+    }
     tool_result *next_page = tool_execute(reg, "file_read",
         "{\"path\":\"large-read.txt\",\"offset_bytes\":7000}", &ctx);
     CHECK(next_page && next_page->ok && strstr(next_page->output, "BBBB"));
