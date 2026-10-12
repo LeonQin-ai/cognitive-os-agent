@@ -35,6 +35,8 @@ class Provider(BaseHTTPRequestHandler):
             else:
                 assert 'MIDDLE_SOURCE_PROOF' in text and 'output elided' not in text
                 answer='批量源码完整保留。'
+        elif '长答案历史回归测试' in current:
+            answer='源码资料：'+'文'*5000+'REPORT_END_MARKER'
         else:
             tool='list_dir' if '目录读取回归测试' in current else 'file_read'
             answer=json.dumps([{'tool':tool, 'args':{'path':'.' if tool=='list_dir' else 'readme.txt'}}])
@@ -83,6 +85,7 @@ with tempfile.TemporaryDirectory(prefix='coa-source-read-') as directory:
                 ('批量源码观察回归测试：完整阅读代码', 'DONE', '批量源码完整保留'),
                 ('重复读取回归测试：完整阅读源码', 'FAILED', '任务未完成'),
                 ('目录读取回归测试：完整阅读源码', 'FAILED', '任务未完成'),
+                ('长答案历史回归测试：输出详细面试资料', 'DONE', 'REPORT_END_MARKER'),
             ]
             for index, (message, expected, marker) in enumerate(cases):
                 started = request('/v1/chat', {'message': message, 'session': f'read-test-{index}'})
@@ -100,7 +103,20 @@ with tempfile.TemporaryDirectory(prefix='coa-source-read-') as directory:
                     for step in task.get('steps',[]):
                         assert json.loads(step['args'])['path'].startswith('batch-')
                 print('PASS:', expected, message, flush=True)
-            print('PASS: 4 real API completion scenarios, no paid model calls.')
+            history=request('/v1/chat/history?session=read-test-4')
+            assert history['turns'][-1]['a']==task['output'], 'Chat history truncated the answer'
+            process.terminate(); process.wait(timeout=10)
+            process=subprocess.Popen([str(backend / 'build' / 'cognitive-os-agent.exe'),
+                '--state',str(state),'--workspace',str(state),'serve',str(port)],
+                cwd=backend,stdout=log,stderr=log,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
+            deadline=time.monotonic()+20
+            while True:
+                try: restored=request('/v1/chat/history?session=read-test-4'); break
+                except OSError:
+                    assert time.monotonic()<deadline; time.sleep(.1)
+            assert restored['turns'][-1]['a']==task['output'], 'Restart truncated the saved answer'
+            print('PASS #107: long Unicode answer survives history reload and server restart')
+            print(f'PASS: {len(cases)} real API scenarios, no paid model calls.')
         finally:
             process.terminate()
             process.wait(timeout=10)

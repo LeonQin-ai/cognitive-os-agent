@@ -2294,7 +2294,9 @@ static void record_turn(reasoning *r, const char *q, const char *a) {
     }
 
     r->cur->hist_q[r->cur->hist_n] = str_head(q, HIST_TURN_CAP);
-    r->cur->hist_a[r->cur->hist_n] = str_head(a, HIST_TURN_CAP);
+    /* Display/persistence must retain the answer. Model prompt history has
+     * its own hot-tier budget; shrinking that must not corrupt chat records. */
+    r->cur->hist_a[r->cur->hist_n] = xstrdup(a);
     if (!r->cur->hist_q[r->cur->hist_n])
         r->cur->hist_q[r->cur->hist_n] = xstrdup(q);
     if (!r->cur->hist_a[r->cur->hist_n])
