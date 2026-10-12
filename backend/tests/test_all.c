@@ -7280,6 +7280,32 @@ static void test_local_model(void) {
 }
 
 int main(int argc, char **argv) {
+#ifdef _WIN32
+    if (argc > 1 && (!strcmp(argv[0],"ssh") || !strcmp(argv[0],"ssh.exe") || strstr(argv[0],"issue-ssh"))) {
+        printf("%s",argv[argc-1]); return 0;
+    }
+    if (argc==2 && !strcmp(argv[1],"--ssh-args")) {
+        wchar_t exe[2048]; GetModuleFileNameW(NULL,exe,2048);
+        fs_mkdirs("build/issue-ssh"); CHECK(CopyFileW(exe,L"build/issue-ssh/ssh.exe",FALSE));
+        char folder[2048]; GetFullPathNameA("build/issue-ssh",sizeof(folder),folder,NULL);
+        char *old=xstrdup(getenv("PATH")); strbuf env; strbuf_init(&env);
+        strbuf_appendf(&env,"%s;%s",folder,old?old:""); SetEnvironmentVariableA("PATH",env.buf);
+        tool_registry *reg=tool_registry_new(); tool_register(reg,tool_ssh());
+        const char *commands[]={"ps auxw | sort -rnk4 | head -n 11", "echo \"hello world\" && printf '%s' 'a&b'",
+            "grep -E '^CPU\\(s\\)|^Model name' /proc/cpuinfo", "printf '%s' '%PATH% ! () ^ \\"};
+        for(size_t i=0;i<sizeof(commands)/sizeof(commands[0]);++i){
+            cJSON *args=cJSON_CreateObject(); cJSON_AddStringToObject(args,"host","127.0.0.1");
+            cJSON_AddStringToObject(args,"command",commands[i]); char *json=cJSON_PrintUnformatted(args);
+            tool_result *result=tool_execute(reg,"ssh",json,NULL);
+            if (!result || !result->ok || strcmp(result->output,commands[i]))
+                fprintf(stderr,"SSH argument fixture: %s\n",result ? result->output : "no result");
+            CHECK(result && result->ok && !strcmp(result->output,commands[i]));
+            tool_result_free(result); free(json); cJSON_Delete(args);
+        }
+        tool_registry_free(reg); SetEnvironmentVariableA("PATH",old); free(old); strbuf_free(&env);
+        fs_remove("build/issue-ssh/ssh.exe"); printf("%d passed, %d failed\n",g_pass,g_fail); return g_fail?1:0;
+    }
+#endif
     int askpass_rc = ssh_askpass_run_if_requested();
     if (askpass_rc >= 0) return askpass_rc;
     setvbuf(stdout, NULL, _IONBF, 0); /* unbuffered: survive crashes mid-run */

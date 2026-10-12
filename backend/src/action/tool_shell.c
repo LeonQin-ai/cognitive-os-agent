@@ -267,16 +267,19 @@ static char *ssh_quote_arg(const char *s) {
     strbuf_init(&out);
 #if defined(_WIN32)
     strbuf_append(&out, "\"");
-    for (; s && *s; s++) {
+    for (; s && *s;) {
         if (*s == '\r' || *s == '\n') {
             strbuf_free(&out);
             return NULL;
         }
-        if (*s == '\\' || *s == '\"')
+        size_t slashes=0;
+        while (s[slashes]=='\\') ++slashes;
+        for (size_t i=0; i<slashes*((s[slashes]=='\"' || !s[slashes])?2:1); ++i)
             strbuf_append(&out, "\\");
-        if (strchr("^&|<>()%!", *s))
-            strbuf_append(&out, "^");
-        char one[2] = {*s, '\0'};
+        s+=slashes;
+        if (!*s) break;
+        if (*s=='\"') strbuf_append(&out,"\\");
+        char one[2] = {*s++, '\0'};
         strbuf_append(&out, one);
     }
     strbuf_append(&out, "\"");
@@ -381,7 +384,7 @@ static int ssh_absolute_dir(const char *dir, char *out, size_t cap) {
 #endif
 }
 
-static int ssh_append_options(strbuf *out, const ssh_profile *profile, int has_profile,
+static int ssh_append_native_options(strbuf *out, const ssh_profile *profile, int has_profile,
                               const char *host, const char *user, const char *quoted_command,
                               int port, int batch_mode) {
     char *q;
@@ -405,6 +408,39 @@ static int ssh_append_options(strbuf *out, const ssh_profile *profile, int has_p
     else strbuf_appendf(out, " -- %s", host);
     strbuf_appendf(out, " %s", quoted_command);
     return 0;
+}
+
+#if defined(_WIN32)
+static void ps_literal(strbuf *out, const char *value) {
+    strbuf_append(out,"'");
+    for (; value && *value; ++value) {
+        char one[2]={*value,0}; strbuf_append(out,one);
+        if (*value=='\'') strbuf_append(out,"'");
+    }
+    strbuf_append(out,"'");
+}
+#endif
+static int ssh_append_options(strbuf *out, const ssh_profile *profile, int has_profile,
+                              const char *host, const char *user, const char *quoted_command,
+                              int port, int batch_mode) {
+#if defined(_WIN32)
+    strbuf native; strbuf_init(&native);
+    int rc=ssh_append_native_options(&native,profile,has_profile,host,user,quoted_command,port,batch_mode);
+    if (rc) { strbuf_free(&native); return rc; }
+    /* ProcessStartInfo.Arguments bypasses CMD and PowerShell's native argument
+     * rewriting. Remote pipes, percent signs and backslashes remain literal. */
+    strbuf_append(out,"$ProgressPreference='SilentlyContinue';[Console]::OutputEncoding=[Text.Encoding]::UTF8;"
+                     "$i=New-Object Diagnostics.ProcessStartInfo;$i.FileName='ssh';$i.Arguments=");
+    ps_literal(out,native.buf+4);
+    strbuf_append(out,";$i.UseShellExecute=$false;$i.CreateNoWindow=$true;$i.RedirectStandardOutput=$true;"
+        "$i.RedirectStandardError=$true;$i.StandardOutputEncoding=[Text.Encoding]::UTF8;"
+        "$i.StandardErrorEncoding=[Text.Encoding]::UTF8;$p=[Diagnostics.Process]::Start($i);"
+        "$o=$p.StandardOutput.ReadToEndAsync();$e=$p.StandardError.ReadToEndAsync();$p.WaitForExit();"
+        "[Console]::Out.Write($o.Result);[Console]::Error.Write($e.Result);exit $p.ExitCode");
+    strbuf_free(&native); return 0;
+#else
+    return ssh_append_native_options(out,profile,has_profile,host,user,quoted_command,port,batch_mode);
+#endif
 }
 
 /* OpenSSH's SSH_ASKPASS mechanism supplies a local password without passing
@@ -470,8 +506,9 @@ static int ssh_append_askpass(strbuf *out, const tool_ctx *ctx, const ssh_profil
 #if defined(_WIN32)
     /* set \"name=value\" protects spaces in state_root; do not put the
      * shell-quoted form inside the value because OpenSSH expects a raw path. */
-    strbuf_appendf(out, "set \"SSH_ASKPASS=%s\" & set \"COA_SSH_ASKPASS_SECRET=%s\" & "
-                        "set \"SSH_ASKPASS_REQUIRE=force\" & set \"DISPLAY=1\" & ", helper, secret);
+    strbuf_append(out,"$env:SSH_ASKPASS="); ps_literal(out,helper);
+    strbuf_append(out,";$env:COA_SSH_ASKPASS_SECRET="); ps_literal(out,secret);
+    strbuf_append(out,";$env:SSH_ASKPASS_REQUIRE='force';$env:DISPLAY='1';");
 #else
     if (chmod(helper, 0700) != 0 || chmod(secret, 0600) != 0) {
         free(qhelper); fs_remove(helper); fs_remove(secret); return -1;
@@ -658,6 +695,9 @@ static tool_result *ssh_exec(const tool *self, const tool_ctx *ctx, const char *
     }
     cJSON *wrapped = cJSON_CreateObject();
     cJSON_AddStringToObject(wrapped, "command", cmd.buf);
+#if defined(_WIN32)
+    cJSON_AddStringToObject(wrapped,"shell","powershell");
+#endif
     cJSON_AddNumberToObject(wrapped, "timeout_ms", timeout_ms);
     shell_args = cJSON_PrintUnformatted(wrapped);
     cJSON_Delete(wrapped);
