@@ -261,6 +261,13 @@ static char *mock_respond(const char *msg) {
         if(in_loop) return xstrdup("报告：已阅读源码，修复建议为补充边界验证。");
         return xstrdup("[{\"tool\":\"file_read\",\"args\":{\"path\":\"readme.txt\"}}]");
     }
+    if (has_substr(msg,"字面标签回归测试")) {
+        if(in_loop) return xstrdup("标签文件已写入。");
+        return xstrdup("<think>plan</think>[{\"tool\":\"file_write\",\"args\":{\"path\":\"keep-think.txt\","
+                       "\"content\":\"<think>literal</think>\"}}]");
+    }
+    if (has_substr(msg,"思考未闭合回归测试") && !has_substr(full,"已执行动作的观察记录"))
+        return xstrdup("<think>[{\"tool\":\"file_write\",\"args\":{\"path\":\"DO_NOT_WRITE.txt\",\"content\":\"bad\"}}]");
     if (has_substr(msg,"思考标签回归测试")) {
         if(in_loop) return xstrdup("文件读取完成。");
         return xstrdup("<think>[{\"tool\":\"file_write\",\"args\":{\"path\":\"DO_NOT_WRITE.txt\",\"content\":\"bad\"}}]</think>"

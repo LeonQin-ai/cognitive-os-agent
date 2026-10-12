@@ -3406,6 +3406,14 @@ static void test_agent_loop(void) {
         CHECK(ans && strstr(ans,"后续源码已实际读取"));
         reasoning_progress(ctx.reasoning,&elapsed,&round,&calls,&tool,&in,&out);
         CHECK(calls==1 && round==3);
+        free(ans); ans=NULL;
+        CHECK(reasoning_run(ctx.reasoning,"字面标签回归测试：写入标签文件",&ans)==0);
+        char *literal=fs_read_file("state-test/loop-w/keep-think.txt");
+        CHECK(literal && !strcmp(literal,"<think>literal</think>"));
+        free(literal); fs_remove("state-test/loop-w/keep-think.txt");
+        free(ans); ans=NULL;
+        CHECK(reasoning_run(ctx.reasoning,"思考未闭合回归测试：读取文件",&ans)!=0);
+        CHECK(!fs_exists("state-test/loop-w/DO_NOT_WRITE.txt"));
         free(ans);
         runtime_shutdown(&ctx);
         fs_remove("state-test/loop-w/readme.txt");

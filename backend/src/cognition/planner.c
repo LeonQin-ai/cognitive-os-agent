@@ -530,7 +530,15 @@ static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_act
     while (*visible==' ' || *visible=='\n' || *visible=='\r') ++visible;
     if (*visible!='[' && *visible!='{') {
         const char *close=NULL, *scan=visible;
-        while ((scan=strstr(scan,"</think>"))!=NULL) { close=scan+8; scan+=8; }
+        while ((scan=strstr(scan,"</think>"))!=NULL) {
+            close=scan+8; scan=close;
+            while (*scan==' ' || *scan=='\n' || *scan=='\r') ++scan;
+            if (*scan=='[' || *scan=='{') break;
+        }
+        if (!close && strncmp(visible,"<think>",7)==0) {
+            if (err_out) *err_out=xstrdup("model response contains an unfinished thinking block");
+            free(plan); return -1;
+        }
         if (close) {
             char *clean=xstrdup(close);
             if (clean) { free(plan); plan=clean; }
