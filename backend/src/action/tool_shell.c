@@ -392,6 +392,7 @@ static int ssh_append_native_options(strbuf *out, const ssh_profile *profile, in
      * an existing known_hosts entry made every new managed environment fail. */
     strbuf_appendf(out, "ssh -o BatchMode=%s -o ConnectTimeout=5 -o NumberOfPasswordPrompts=1 -o StrictHostKeyChecking=accept-new -p %d",
                    batch_mode ? "yes" : "no", port);
+    if (!batch_mode) strbuf_append(out," -o PreferredAuthentications=keyboard-interactive,password -o PubkeyAuthentication=no");
     if (has_profile && profile->identity_file) {
         q = ssh_quote_arg(profile->identity_file); if (!q) return -1;
         strbuf_appendf(out, " -i %s", q); free(q);

@@ -7334,6 +7334,31 @@ int main(int argc, char **argv) {
         tool_registry_free(reg); SetEnvironmentVariableA("PATH",old); free(old); strbuf_free(&env);
         fs_remove("build/issue-ssh/ssh.exe"); printf("%d passed, %d failed\n",g_pass,g_fail); return g_fail?1:0;
     }
+    if (argc==2 && !strcmp(argv[1],"--ssh-password")) {
+        const char *port=getenv("COA_SSH_TEST_PORT"), *password=getenv("COA_SSH_TEST_PASSWORD");
+        CHECK(port && password); if(!port || !password) return 1;
+        tool_registry *reg=tool_registry_new(); tool_register(reg,tool_ssh());
+        tool_ctx ctx={0}; ctx.reg=reg; ctx.state_root="state-test/issue70"; ctx.session_id="issue70";
+        fs_mkdirs("state-test/issue70/ssh");
+        cJSON *envroot=cJSON_CreateObject(), *envs=cJSON_CreateObject(), *profile=cJSON_CreateObject();
+        cJSON_AddStringToObject(profile,"host","127.0.0.1"); cJSON_AddStringToObject(profile,"user","testuser");
+        cJSON_AddNumberToObject(profile,"port",atoi(port));
+        char known[2048]; GetFullPathNameA("state-test/issue70/known_hosts",sizeof(known),known,NULL);
+        cJSON_AddStringToObject(profile,"known_hosts",known); cJSON_AddItemToObject(envs,"fixture",profile);
+        cJSON_AddItemToObject(envroot,"environments",envs); char *envjson=cJSON_PrintUnformatted(envroot);
+        fs_write_file("state-test/issue70/ssh/environments.json",envjson,strlen(envjson)); free(envjson); cJSON_Delete(envroot);
+        char intro[400]; snprintf(intro,sizeof(intro),"登录环境fixture SSH testuser@127.0.0.1 -p %s 密码%s 查看CPU",port,password);
+        char *safe=ssh_session_prepare_prompt(ctx.state_root,ctx.session_id,intro);
+        CHECK(safe && !strstr(safe,password)); free(safe);
+        char args[300]; snprintf(args,sizeof(args),"{\"environment\":\"fixture\",\"command\":\"nproc | wc -l\",\"timeout_ms\":10000}");
+        tool_result *result=tool_execute(reg,"ssh",args,&ctx);
+        if(!result || !result->ok) fprintf(stderr,"Local SSH fixture failed: %s\n",result?result->output:"");
+        CHECK(result && result->ok && strstr(result->output,"CPU_COUNT=8"));
+        CHECK(result && !strstr(result->output,password));
+        CHECK(ssh_session_has_verified_profile(ctx.state_root,ctx.session_id));
+        tool_result_free(result); tool_registry_free(reg);
+        printf("%d passed, %d failed\n",g_pass,g_fail); return g_fail?1:0;
+    }
 #endif
     int askpass_rc = ssh_askpass_run_if_requested();
     if (askpass_rc >= 0) return askpass_rc;

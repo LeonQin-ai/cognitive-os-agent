@@ -101,3 +101,14 @@ jobs:
         run: ./build/cognitive-os-agent-scenario.exe
       - name: Benchmark sanity (mock)
         run: ./build/cognitive-os-agent-bench.exe --mock
+      - name: SSH argument and private password regressions
+        run: |
+          ./build/cognitive-os-agent-test.exe --ssh-args
+          python -m pip install paramiko
+          python tests/test_ssh_password_e2e.py
+      - name: Source read completion API regressions
+        run: python tests/test_source_read_e2e.py
+      - name: Recent status and file detail browser regressions
+        run: |
+          npm ci --prefix webarena --ignore-scripts --no-audit --no-fund
+          NODE_PATH="$PWD/webarena/node_modules" node tests/test_issue_ui.cjs
