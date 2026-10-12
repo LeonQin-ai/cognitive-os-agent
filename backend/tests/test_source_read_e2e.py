@@ -3,11 +3,15 @@ import json
 from pathlib import Path
 import socket
 import subprocess
+import sys
 import tempfile
 import threading
 import time
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8')
 
 counts = {}
 class Provider(BaseHTTPRequestHandler):
