@@ -3,6 +3,7 @@
  * (§8.1). Rules are deterministic first; no LLM in the detection path. */
 #include "security/secret.h"
 #include "infra/util.h"
+#include "os/os_fs.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -343,6 +344,17 @@ static void scan_patterns(const char *text, size_t len, matchvec *mv) {
 
 /* --- entropy detector (fallback) -------------------------------------------- */
 
+static int existing_absolute_path(const char *text, size_t start, size_t end) {
+    if (start >= end || text[start] != '/') return 0;
+    if (start >= 2 && text[start-1] == ':' && isalpha((unsigned char)text[start-2])) start -= 2;
+    if (end-start > 4096) return 0;
+    char *path = malloc(end-start+1);
+    if (!path) return 0;
+    memcpy(path, text+start, end-start); path[end-start] = 0;
+    int exists = fs_exists(path);
+    free(path); return exists;
+}
+
 static void scan_entropy(const char *text, size_t len, matchvec *mv) {
     size_t run_start = 0, i = 0;
     size_t url_end = 0;
@@ -369,7 +381,9 @@ static void scan_entropy(const char *text, size_t len, matchvec *mv) {
              * password/token/API-key rules still scan the entire URL. */
             if (rl >= 28 && !in_attachment_name && !reference_field && run_start >= url_end) {
                 double h = shannon(text + run_start, rl);
-                if (h >= 4.5)
+                /* Only entropy is exempted, only for verified filesystem paths.
+                 * Deterministic credential/token matches still take precedence. */
+                if (h >= 4.5 && !existing_absolute_path(text, run_start, i))
                     mv_push_nonoverlapping(mv, run_start, i,
                                            SECRET_SEV_MEDIUM, "entropy");
             }

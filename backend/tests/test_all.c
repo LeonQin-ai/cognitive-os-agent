@@ -3012,6 +3012,26 @@ static void test_discovery_read_paths(void) {
     free(expected); tool_registry_free(reg);
 }
 
+static void test_existing_path_redaction(void) {
+    section("existing source paths survive entropy filtering (#114)");
+    const char *relative = "state-test/path-Q7m2V9k4X1r8T6p3Z5n0/backend/src/memory/record.c";
+    fs_mkdirs("state-test/path-Q7m2V9k4X1r8T6p3Z5n0/backend/src/memory");
+    fs_write_file(relative, "path evidence", 13);
+    char *absolute = fs_absolute_path(relative);
+    char *shown = absolute ? secret_redact_text(absolute, strlen(absolute), NULL) : NULL;
+    CHECK(shown && absolute && !strcmp(shown, absolute)); free(shown);
+    const char *token = "ghp_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN";
+    char *actual = fs_absolute_path("state-test/path-Q7m2V9k4X1r8T6p3Z5n0/backend/src/memory");
+    char file[4096]; path_join(file, sizeof(file), actual, token); free(actual);
+    fs_write_file(file, "evidence", 8);
+    shown = secret_redact_text(file, strlen(file), NULL);
+    CHECK(shown && strstr(shown, "[REDACTED:") && !strstr(shown, token)); free(shown);
+    const char *entropy = "Q7m2V9k4X1r8T6p3Z5n0B8c1F4g6H2j9L5s7";
+    shown = secret_redact_text(entropy, strlen(entropy), NULL);
+    CHECK(shown && strstr(shown, "[REDACTED:")); free(shown);
+    fs_remove(file); fs_remove(relative); free(absolute);
+}
+
 static void test_edit_search(void) {
     section("file_edit + glob + grep");
     /* hermetic start: a killed earlier run may have left files behind */
@@ -7469,6 +7489,7 @@ int main(int argc, char **argv) {
     if (argc==2 && !strcmp(argv[1],"--file-tools")) {
         test_snapshot_tx();
         test_discovery_read_paths();
+        test_existing_path_redaction();
         printf("%d passed, %d failed\n",g_pass,g_fail); return g_fail?1:0;
     }
     if (argc==2 && !strcmp(argv[1],"--ssh-prompt")) {
@@ -7499,6 +7520,7 @@ int main(int argc, char **argv) {
     test_memory();
     test_snapshot_tx();
     test_discovery_read_paths();
+    test_existing_path_redaction();
     test_ssh_prompt_regex();
     test_ssh_password_integration();
     test_llm_mock();
