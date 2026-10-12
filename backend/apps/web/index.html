@@ -4775,7 +4775,7 @@ function renderChatEntry(entry){
     const files = new Map();
     for(const s of steps){
       if(s.ok === 1 && (s.tool === 'file_write' || s.tool === 'file_edit') && s.target)
-        files.set(s.target, s.tool === 'file_write' ? '已写入' : '已编辑');
+        files.set(s.target, {action:s.tool === 'file_write' ? '已写入' : '已编辑', step:s});
     }
     if(files.size){
       const fileCard = document.createElement('section'); fileCard.className = 'run-files';
@@ -4783,11 +4783,15 @@ function renderChatEntry(entry){
       const icon = document.createElement('span'); icon.className = 'run-files-icon'; icon.textContent = '✎'; icon.setAttribute('aria-hidden','true');
       const title = document.createElement('span'); title.textContent = '已修改 ' + files.size + ' 个文件';
       head.append(icon,title); fileCard.append(head);
-      for(const [path,action] of files){
-        const row = document.createElement('div'); row.className = 'run-file';
+      for(const [path,{action,step}] of files){
+        const detail = document.createElement('details'); detail.className = 'run-file-detail';
+        const row = document.createElement('summary'); row.className = 'run-file';
         const name = document.createElement('code'); name.textContent = path;
         const status = document.createElement('span'); status.textContent = action;
-        row.append(name,status); fileCard.append(row);
+        row.append(name,status); detail.append(row);
+        const info = document.createElement('pre');
+        info.textContent = [step.args ? '参数：' + step.args : '', step.out ? '结果：' + step.out : ''].filter(Boolean).join('\n');
+        detail.append(info); fileCard.append(detail);
       }
       detailBody.append(fileCard);
     }
