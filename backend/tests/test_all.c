@@ -3302,7 +3302,8 @@ static void test_agent_loop(void) {
         runtime_ctx ctx;
         if (init(&ctx, &cfg) != 0) { CHECK(0); return; }
         char *ans = NULL;
-        CHECK(reasoning_run(ctx.reasoning, "重复读取回归测试：分析项目", &ans) == 0);
+        CHECK(reasoning_run(ctx.reasoning, "重复读取回归测试：分析项目", &ans) != 0);
+        CHECK(ans && strstr(ans, "任务未完成") != NULL);
         CHECK(ans && strstr(ans, "综合回答") != NULL);
         long long elapsed = 0, in = 0, out = 0;
         int round = 0, calls = 0;
@@ -3328,7 +3329,8 @@ static void test_agent_loop(void) {
         if (init(&ctx, &cfg) != 0) { CHECK(0); return; }
         CHECK(tool_find(ctx.tools, "list_dir") != NULL);
         char *ans = NULL;
-        CHECK(reasoning_run(ctx.reasoning, "目录读取回归测试：分析项目并给出清单", &ans) == 0);
+        CHECK(reasoning_run(ctx.reasoning, "目录读取回归测试：分析项目并给出清单", &ans) != 0);
+        CHECK(ans && strstr(ans, "任务未完成") != NULL);
         CHECK(ans && strstr(ans, "综合回答") != NULL);
         long long elapsed = 0, in = 0, out = 0;
         int round = 0, calls = 0;
@@ -7211,10 +7213,15 @@ static void test_local_model(void) {
     fs_remove(root);
 }
 
-int main(void) {
+int main(int argc, char **argv) {
     int askpass_rc = ssh_askpass_run_if_requested();
     if (askpass_rc >= 0) return askpass_rc;
     setvbuf(stdout, NULL, _IONBF, 0); /* unbuffered: survive crashes mid-run */
+    if (argc == 2 && strcmp(argv[1], "--agent-loop") == 0) {
+        test_agent_loop();
+        printf("\n%d passed, %d failed\n", g_pass, g_fail);
+        return g_fail ? 1 : 0;
+    }
     printf("cognitive-os-agent unit tests\n");
     test_logging();
     test_util();

@@ -2763,6 +2763,7 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     int unfinished = 0; /* text described future work, or requested write never ran */
     int search_only_rounds = 0;
     int synthesized = 0; /* fallback answer may describe an incomplete run */
+    int duplicate_rounds = 0;
 restart_planning:
     for (r->round_idx = 1; r->round_idx <= r->max_rounds; r->round_idx++) {
         if (run_aborted(r)) { st = ST_FAILED; break; }
@@ -2944,11 +2945,16 @@ restart_planning:
                 strcmp(r->actions[i].tool, "list_dir") != 0) search_only = 0;
         search_only_rounds = search_only ? search_only_rounds + 1 : 0;
         if (r->n_actions > 0 && r->round_search_skips == r->n_actions) {
-            round_log_append(r, "[system] 本轮读取或搜索均与已完成的动作重复，停止空转；"
-                                "请根据已有结果回答，明确说明尚未找到的内容。");
+            round_log_append(r, "[system] 本轮读取与已有动作重复，但这不代表任务完成。"
+                                "请选择未读文件或下一页；只有原任务范围已完成才可以给出最终答案。");
+            if (++duplicate_rounds < 2 && r->round_idx < r->max_rounds) {
+                free(r->prev_plan); r->prev_plan = NULL;
+                continue;
+            }
             stalled = 1;
             break;
         }
+        duplicate_rounds = 0;
         if ((search_only_rounds == 6 || (search_only_rounds > 6 && search_only_rounds % 12 == 0)) &&
             !prompt_requires_mutation(prompt))
             round_log_append(r, "[system] 已连续多轮读取或搜索资料。请评估已有证据是否足够回答；"
@@ -3023,6 +3029,7 @@ restart_planning:
      * the no-plan guard above. It is still incomplete if a write was asked. */
     if (prompt_requires_mutation(prompt) && !run_has_mutating_action(r))
         unfinished = 1;
+    if (stalled || synthesized || fail_aborted || r->tool_fail_aborted) unfinished = 1;
     if (unfinished)
         st = ST_FAILED;
     strbuf_init(&out);
@@ -3031,7 +3038,8 @@ restart_planning:
      * process_log / the UI's process panel), never part of the answer. The
      * obs_log is a fallback for runs that ended without a final answer. */
     if (unfinished) {
-        strbuf_append(&out, "任务未完成：模型只描述了后续动作，或尚未执行所需的写入/生成动作。请继续任务。");
+        strbuf_append(&out, "任务未完成：尚未完成请求的阅读、操作或验证，当前结果仅为部分进展。");
+        if (final_text && *final_text) { strbuf_append(&out, "\n\n"); strbuf_append(&out, final_text); }
     } else if (final_text && *final_text) {
         strbuf_append(&out, final_text);
     } else if (r->obs_log_len > 0) {
