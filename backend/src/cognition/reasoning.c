@@ -126,8 +126,8 @@ struct sess_store {
 struct run_step {
     unsigned id;
     char tool[48];
-    char args[160];
-    char out[240];
+    char *args;
+    char *out;
     char target[240]; /* file path only; never persist file contents in the task timeline */
     int ok; /* 1 ok, 0 failed, -1 skipped (policy/hook) */
     int ms;
@@ -1481,6 +1481,7 @@ static void utf8_head_copy(char *dst, size_t cap, const char *src) {
 
 /* Record one executed action in the step registry (Claude-Code style
  * "● Tool(args) ⎿ out-head" display; args/out are truncated heads). */
+static void step_strings_free(struct run_step *step) { free(step->args); free(step->out); }
 static void run_step_add(reasoning *r, const char *tool, const char *args, const char *out, int ok, int ms) {
     struct run_step *st;
 
@@ -1488,6 +1489,7 @@ static void run_step_add(reasoning *r, const char *tool, const char *args, const
         return;
     mutex_lock(&r->progress_mtx);
     if (r->n_steps >= 256) {
+        step_strings_free(&r->steps[0]);
         memmove(r->steps, r->steps + 1, 255 * sizeof(*r->steps));
         r->n_steps = 255;
     }
@@ -1502,8 +1504,8 @@ static void run_step_add(reasoning *r, const char *tool, const char *args, const
     memset(st, 0, sizeof(*st));
     st->id = ++r->step_sequence;
     utf8_head_copy(st->tool, sizeof(st->tool), tool ? tool : "?");
-    utf8_head_copy(st->args, sizeof(st->args), args ? args : "");
-    utf8_head_copy(st->out, sizeof(st->out), out ? out : "");
+    st->args = str_head(args ? args : "",65536);
+    st->out = str_head(out ? out : "",65536);
     if (tool && strncmp(tool, "file_", 5) == 0 && args) {
         cJSON *parsed = cJSON_Parse(args);
         cJSON *path = parsed ? cJSON_GetObjectItemCaseSensitive(parsed, "path") : NULL;
@@ -1693,6 +1695,7 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
         int64_t tool_span = trace_begin_task(r->trace, r->run_task ? r->run_task->id : r->trace_task_id,
                                              span_name);
         char step_out[240] = ""; /* output head for the step registry */
+        char *full_step_out = NULL;
         if (tx) {
             /* per-action output = the chunk tx_run appends to the aggregate */
             size_t out_before = tx_output(tx) ? strlen(tx_output(tx)) : 0;
@@ -1700,6 +1703,7 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
             const char *agg = tx_output(tx);
             if (agg && strlen(agg) > out_before)
                 snprintf(step_out, sizeof(step_out), "%s", agg + out_before);
+            if (agg && strlen(agg) > out_before) full_step_out = str_head(agg+out_before,65536);
         } else if (exec) {
             executor_result *er = NULL;
             int erc = executor_execute(exec, r->actions[i].tool, r->actions[i].args_json, &er);
@@ -1708,6 +1712,7 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
                 /* executor output is already UTF-8 sanitized */
                 strbuf_appendf(&b, "[%s] %s\n", r->actions[i].tool, er->output ? er->output : "");
                 snprintf(step_out, sizeof(step_out), "%s", er->output ? er->output : "");
+                full_step_out = str_head(er->output ? er->output : "",65536);
                 executor_result_free(er);
             }
         } else {
@@ -1715,8 +1720,9 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
         }
         trace_end(r->trace, tool_span, rc == 0 ? 1 : -1);
         r->prog_tool_ms += time_now_ms() - t_tool0;
-        run_step_add(r, r->actions[i].tool, r->actions[i].args_json, step_out, rc == 0 ? 1 : 0,
+        run_step_add(r, r->actions[i].tool, r->actions[i].args_json, full_step_out ? full_step_out : step_out, rc == 0 ? 1 : 0,
                      (int)(time_now_ms() - t_tool0));
+        free(full_step_out);
         if (rc != 0) {
             r->all_actions_ok = 0;
             strbuf_appendf(&b, "[%s] FAILED\n", r->actions[i].tool);
@@ -1986,6 +1992,7 @@ void reasoning_free(reasoning *r) {
         free(r->own_store_.meta);
         mutex_destroy(&r->own_store_.sess_mtx);
     }
+    for (int i=0;i<r->n_steps;++i) step_strings_free(&r->steps[i]);
     free(r->steps);
     free(r->progress_json);
     mutex_destroy(&r->progress_mtx);
@@ -2738,6 +2745,7 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
 
     /* fresh step registry for this run (keep the buffer) */
     mutex_lock(&r->progress_mtx);
+    for (int i=0;i<r->n_steps;++i) step_strings_free(&r->steps[i]);
     r->n_steps = 0;
     r->step_sequence = 0;
     mutex_unlock(&r->progress_mtx);
@@ -3341,8 +3349,8 @@ char *reasoning_steps_json(reasoning *r) {
             break;
         cJSON_AddStringToObject(o, "tool", st->tool);
         cJSON_AddNumberToObject(o, "id", st->id);
-        char *args = secret_redact_text(st->args, strlen(st->args), NULL);
-        char *output = secret_redact_text(st->out, strlen(st->out), NULL);
+        char *args = secret_redact_text(st->args ? st->args : "", st->args ? strlen(st->args) : 0, NULL);
+        char *output = secret_redact_text(st->out ? st->out : "", st->out ? strlen(st->out) : 0, NULL);
         cJSON_AddStringToObject(o, "args", args ? args : "");
         cJSON_AddStringToObject(o, "out", output ? output : "");
         if (st->target[0]) {

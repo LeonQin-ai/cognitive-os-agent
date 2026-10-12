@@ -95,6 +95,10 @@ with tempfile.TemporaryDirectory(prefix='coa-source-read-') as directory:
                     time.sleep(.05)
                 assert task['status'] == expected, task
                 assert marker in task.get('output', ''), task
+                if index == 1:
+                    assert any('MIDDLE_SOURCE_PROOF' in step.get('out','') for step in task.get('steps',[])), task
+                    for step in task.get('steps',[]):
+                        assert json.loads(step['args'])['path'].startswith('batch-')
                 print('PASS:', expected, message, flush=True)
             print('PASS: 4 real API completion scenarios, no paid model calls.')
         finally:
