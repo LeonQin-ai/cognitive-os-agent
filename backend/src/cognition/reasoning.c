@@ -2189,9 +2189,12 @@ static int prompt_requires_mutation(const char *prompt) {
     if (agent_task) prompt = agent_task + strlen("## 用户任务\n");
     if (strstr(prompt, "如何") || strstr(prompt, "怎么") || strstr(prompt, "how to "))
         return 0;
+    if ((strstr(prompt,"修复建议") || strstr(prompt,"修复原因") || strstr(prompt,"修复方案")) &&
+        !strstr(prompt,"并修复") && !strstr(prompt,"实际修复") && !strstr(prompt,"保存") &&
+        !strstr(prompt,"写入") && !strstr(prompt,".md") && !strstr(prompt,".txt")) return 0;
     /* A checklist requested in chat is a text answer, even when phrased as
      * "生成一份…". Keep explicit file/PPT requests under the write guard. */
-    if ((strstr(prompt, "清单") || strstr(prompt, "面试题")) &&
+    if ((strstr(prompt, "清单") || strstr(prompt, "面试题") || strstr(prompt,"报告") || strstr(prompt,"资料")) &&
         !strstr(prompt, "文件") && !strstr(prompt, "PPT") &&
         !strstr(prompt, "ppt") && !strstr(prompt, ".md") &&
         !strstr(prompt, ".txt") && !strstr(prompt, ".pdf") &&

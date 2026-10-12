@@ -3394,6 +3394,13 @@ static void test_agent_loop(void) {
         CHECK(reasoning_run(ctx.reasoning,"思考标签回归测试：读取readme.txt",&ans)==0);
         CHECK(ans && strstr(ans,"文件读取完成") && !strstr(ans,"</think>"));
         CHECK(!fs_exists("state-test/loop-w/DO_NOT_WRITE.txt"));
+        CHECK(agent_pool_add(ctx.agents,"issue-review","审查代码，提出修复建议，不要修改代码")>=0);
+        const char *review="{\"nodes\":[{\"id\":\"review\",\"agent\":\"issue-review\","
+            "\"task\":\"多agent分析报告回归测试：阅读源码后生成修复建议报告\"}],\"edges\":[]}";
+        char *report=NULL;
+        CHECK(flow_run(&ctx,review,-1,&report,NULL)==0);
+        CHECK(report && strstr(report,"报告") && !strstr(report,"任务未完成"));
+        free(report);
         free(ans);
         runtime_shutdown(&ctx);
         fs_remove("state-test/loop-w/readme.txt");

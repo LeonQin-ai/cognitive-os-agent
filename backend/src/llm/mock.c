@@ -250,6 +250,10 @@ static char *mock_respond(const char *msg) {
                        "{\"tool\":\"file_read\",\"args\":{\"path\":\"batch-1.c\"}},"
                        "{\"tool\":\"file_read\",\"args\":{\"path\":\"batch-2.c\"}}]");
     }
+    if (has_substr(msg,"多agent分析报告回归测试")) {
+        if(in_loop) return xstrdup("报告：已阅读源码，修复建议为补充边界验证。");
+        return xstrdup("[{\"tool\":\"file_read\",\"args\":{\"path\":\"readme.txt\"}}]");
+    }
     if (has_substr(msg,"思考标签回归测试")) {
         if(in_loop) return xstrdup("文件读取完成。");
         return xstrdup("<think>[{\"tool\":\"file_write\",\"args\":{\"path\":\"DO_NOT_WRITE.txt\",\"content\":\"bad\"}}]</think>"
