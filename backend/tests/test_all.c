@@ -7751,6 +7751,28 @@ static void test_complete_tool_result(void) {
     tool_registry_free(reg); free(large_observation); large_observation=NULL;
 }
 
+static void test_mmu_rejected_cache(void) {
+    section("MMU rejected promotion has no uncharged large cache");
+    mem_records *rs=mem_records_new("state-mmu-budget-test");
+    ctx_mmu *mmu=ctx_mmu_new(); mem_record r={0};
+    snprintf(r.id,sizeof r.id,"mem_budget_large"); r.type=MEMR_SEMANTIC;
+    r.importance=1; r.confidence=1; r.utility=1;
+    r.content=malloc(1024*1024+1); memset(r.content,'x',1024*1024); r.content[1024*1024]=0;
+    CHECK(mem_records_put(rs,&r)==0); free(r.content);
+    ctx_mmu_config cfg; ctx_mmu_config_default(&cfg); cfg.token_budget=1024;
+    char *result=ctx_mmu_recall(mmu,rs,NULL,"budget",&cfg); free(result);
+    char *stats=ctx_mmu_stats_json(mmu); cJSON *j=cJSON_Parse(stats); free(stats);
+    CHECK(cJSON_GetNumberValue(cJSON_GetObjectItemCaseSensitive(j,"materialized_bytes"))<4096);
+    CHECK(cJSON_GetNumberValue(cJSON_GetObjectItemCaseSensitive(j,"rejected_promotions"))>=1);
+    cJSON_Delete(j); cfg.token_budget=1;
+    result=ctx_mmu_recall(mmu,rs,NULL,"budget",&cfg); free(result);
+    stats=ctx_mmu_stats_json(mmu); j=cJSON_Parse(stats); free(stats);
+    CHECK(cJSON_GetNumberValue(cJSON_GetObjectItemCaseSensitive(j,"materialized_bytes"))==0);
+    CHECK(cJSON_GetNumberValue(cJSON_GetObjectItemCaseSensitive(j,"token_used"))==0);
+    cJSON_Delete(j); ctx_mmu_free(mmu); mem_records_remove(rs,r.id); mem_records_free(rs);
+    fs_remove("state-mmu-budget-test/records"); fs_remove("state-mmu-budget-test");
+}
+
 int main(int argc, char **argv) {
 #ifdef _WIN32
     if (argc > 1 && (!strcmp(argv[0],"ssh") || !strcmp(argv[0],"ssh.exe") || strstr(argv[0],"issue-ssh"))) {
@@ -7820,12 +7842,15 @@ int main(int argc, char **argv) {
         test_logging(); test_ssh_only_redaction(); test_security();
         printf("%d passed, %d failed\n",g_pass,g_fail); return g_fail?1:0;
     }
+    if (argc==2 && !strcmp(argv[1],"--mmu-budget")) {
+        test_mmu_rejected_cache(); printf("\n%d passed, %d failed\n",g_pass,g_fail); return g_fail ? 1:0;
+    }
     if (argc==2 && !strcmp(argv[1],"--tool-results")) {
         test_complete_tool_result();
         printf("\n%d passed, %d failed\n",g_pass,g_fail); return g_fail ? 1:0;
     }
     if (argc==2 && !strcmp(argv[1],"--audit")) {
-        test_config(); test_issue121_regressions(); test_scheduler(); test_scheduler_limits(); test_coro();
+        test_config(); test_issue121_regressions(); test_mmu_rejected_cache(); test_scheduler(); test_scheduler_limits(); test_coro();
         printf("\n%d passed, %d failed\n",g_pass,g_fail); return g_fail ? 1:0;
     }
     if (argc==2 && !strcmp(argv[1],"--usage")) {
@@ -7878,7 +7903,7 @@ int main(int argc, char **argv) {
     test_executor_family();
     test_index();
     test_metrics();
-    test_config(); test_issue121_regressions();
+    test_config(); test_issue121_regressions(); test_mmu_rejected_cache();
     test_blackboard();
     test_blackboard_persist();
     test_flow_store();

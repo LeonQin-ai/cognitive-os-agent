@@ -49,6 +49,7 @@ struct ctx_mmu {
     size_t token_budget;
     size_t token_used;
     uint64_t generation;
+    uint64_t rejected_promotions;
     ctx_mmu_config cfg;
 };
 
@@ -161,10 +162,11 @@ int ctx_mmu_pin(ctx_mmu *mmu, const char *record_id, int pinned) {
 
 char *ctx_mmu_stats_json(ctx_mmu *mmu) {
     strbuf sb;
-    size_t i, hot = 0, warm = 0, cold = 0;
+    size_t i, hot = 0, warm = 0, cold = 0, materialized = 0;
     if (!mmu)
         return NULL;
     for (i = 0; i < mmu->count; i++) {
+        for (int l=0;l<3;l++) if (mmu->pages[i].repr[l]) materialized+=strlen(mmu->pages[i].repr[l])+1;
         if (mmu->pages[i].residency == CTX_HOT)
             hot++;
         else if (mmu->pages[i].residency == CTX_WARM)
@@ -178,6 +180,9 @@ char *ctx_mmu_stats_json(ctx_mmu *mmu) {
                    (int)mmu->count, (int)hot, (int)warm, (int)cold,
                    (int)mmu->token_budget, (int)mmu->token_used,
                    (unsigned long long)mmu->generation);
+    if (sb.len && sb.buf[sb.len-1]=='}') sb.buf[--sb.len]=0;
+    strbuf_appendf(&sb,",\"materialized_bytes\":%llu,\"rejected_promotions\":%llu}",
+                   (unsigned long long)materialized,(unsigned long long)mmu->rejected_promotions);
     return strbuf_detach(&sb);
 }
 
@@ -264,6 +269,7 @@ static char *materialize(ctx_mmu *mmu, ctx_page *pg, const mem_record *r,
         case CTX_L2: pg->repr[level] = derive_l2(pg, r); break;
         }
         pg->tok[level] = token_estimate(pg->repr[level]);
+
     }
     (void)mmu;
     *tok_out = pg->tok[level];
@@ -577,8 +583,11 @@ char *ctx_mmu_recall(ctx_mmu *mmu, mem_records *rs, void *vs,
         if (!r)
             continue;
         materialize(mmu, pg, r, CTX_L1, &tok);
-        if (mmu->token_used + tok > mmu->token_budget)
-            continue;  /* try smaller candidates */
+        if (tok > mmu->token_budget || mmu->token_used > mmu->token_budget-tok) {
+            free(pg->repr[CTX_L1]); pg->repr[CTX_L1]=NULL; pg->tok[CTX_L1]=0;
+            mmu->rejected_promotions++;
+            continue; /* rejected COLD pages must not retain uncharged text */
+        }
         mmu->token_used += tok;
         pg->residency = CTX_WARM;
         mmu->generation++;
@@ -597,6 +606,13 @@ char *ctx_mmu_recall(ctx_mmu *mmu, mem_records *rs, void *vs,
         r = mem_records_find(rs, pg->record_id);
         if (!r)
             continue;
+        size_t required=(strlen(r->content ? r->content:"")+3)/4;
+        size_t without_l1=mmu->token_used-pg->tok[CTX_L1];
+        if (required>mmu->token_budget || without_l1>mmu->token_budget-required) {
+            free(pg->repr[CTX_L2]); pg->repr[CTX_L2]=NULL; pg->tok[CTX_L2]=0;
+            mmu->rejected_promotions++;
+            continue; /* test before allocating a potentially huge L2 copy */
+        }
         materialize(mmu, pg, r, CTX_L2, &tok);
         if (mmu->token_used - pg->tok[CTX_L1] + tok > mmu->token_budget)
             continue;
