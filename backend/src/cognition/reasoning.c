@@ -2227,7 +2227,7 @@ static int prompt_is_direct_information_request(const char *prompt) {
 static int prompt_requires_mutation(const char *prompt) {
     static const char *const verbs[] = {
         "生成", "制作", "创建", "复制", "写入", "修改", "修复", "保存", "导出",
-        "安装", "部署", "删除", "create ", "generate ", "copy ", "write ",
+        "安装", "部署", "删除", "register ", "create ", "generate ", "copy ", "write ",
         "edit ", "fix ", "save ", "export ", "install ", "deploy ", "delete "
     };
     if (!prompt) return 0;
@@ -2251,6 +2251,9 @@ static int prompt_requires_mutation(const char *prompt) {
         !strstr(prompt, "删除") && !strstr(prompt, "部署") &&
         !strstr(prompt, "安装"))
         return 0;
+    /* 注册表 is a noun (registry), not an instruction to register a skill. */
+    for (const char *p=strstr(prompt,"注册"); p; p=strstr(p+strlen("注册"),"注册"))
+        if (strncmp(p+strlen("注册"),"表",strlen("表"))) return 1;
     for (size_t i = 0; i < sizeof(verbs) / sizeof(verbs[0]); i++)
         if (strstr(prompt, verbs[i])) return 1;
     return 0;
@@ -3184,6 +3187,27 @@ restart_planning:
      * obs_log is a fallback for runs that ended without a final answer. */
     if (unfinished) {
         strbuf_append(&out, "任务未完成：尚未完成请求的阅读、操作或验证，当前结果仅为部分进展。");
+        int explained=0;
+        const char *instruction=completion_instruction(r,prompt);
+        if (prompt_requires_mutation(instruction) && !run_has_mutating_action(r)) {
+            strbuf_append(&out,"\n原因：尚无成功执行所请求操作的工具记录；读取文件或加载技能指令不能代替实际操作。");
+            if ((strstr(instruction,"注册") || strstr(instruction,"register ")) &&
+                (strstr(instruction,"skill") || strstr(instruction,"技能")))
+                strbuf_append(&out," 请使用 skill_manage 注册技能并核对结果。");
+            explained=1;
+        }
+        if (prompt_requires_full_read(instruction) && r->pending_reads_n) {
+            strbuf_append(&out,"\n原因：以下文件尚未连续读取到 EOF；继续使用 file_read 和所列 offset_bytes：");
+            for(int i=0;i<r->pending_reads_n && i<8;i++)
+                strbuf_appendf(&out,"\n- %s：offset_bytes=%llu",r->pending_reads[i].path,r->pending_reads[i].next);
+            explained=1;
+        }
+        if (r->tool_fail_aborted) { strbuf_append(&out,"\n原因：相同工具连续失败3次；请查看最后一次失败的工具结果，修正参数或环境后恢复任务。"); explained=1; }
+        if (stalled) { strbuf_append(&out,"\n原因：重复工具动作没有新增进展；需调整路径、分页参数或执行方案。"); explained=1; }
+        if (fail_aborted) { strbuf_append(&out,"\n原因：模型规划或执行验证连续失败；请核对执行记录中的最后一条错误。"); explained=1; }
+        if (r->round_idx>=r->max_rounds) { strbuf_appendf(&out,"\n原因：达到配置的最大规划轮数 %d；当前步骤未全部完成。",r->max_rounds); explained=1; }
+        if (!explained) strbuf_append(&out,"\n原因：模型仍在描述待执行工作，尚未提交可验证的最终结果；请根据保留的执行记录继续任务。");
+
         if (final_text && *final_text) {
             strbuf_append(&out, "\n\n");
             strbuf_append(&out, final_text);
