@@ -1,0 +1,23 @@
+{
+  "date": "2026-10-14",
+  "fault_boundary": "entire Runtime subprocess, not one in-process worker",
+  "injection": "TerminateProcess",
+  "killed_pid": 45544,
+  "restarted_pid": 45720,
+  "precondition_task_status": "RUNNING",
+  "snapshot_id": "s1791933780466",
+  "snapshot_available": true,
+  "interrupted_detected": true,
+  "restart_to_detect_ms": 511.0307999420911,
+  "snapshot_restore_ms": 18.285100115463138,
+  "manual_replay_to_done_ms": 54.946199990808964,
+  "crash_to_done_ms": 591.7591999750584,
+  "old_task_id": 0,
+  "replayed_task_id": 1,
+  "following_task_id": 2,
+  "restore_content_verified": true,
+  "replay_content_verified": true,
+  "following_task_done": true,
+  "replay_mode": "explicit resume after verified snapshot restore; idempotent file replacement; no automatic external operation replay",
+  "duplicate_fixture_writes": 0
+}

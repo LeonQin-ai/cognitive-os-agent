@@ -32,6 +32,7 @@ typedef struct ctx_page {
     long long updated_ms;
     long long last_access_ms;
     unsigned access_count;
+    int previously_evicted;
     int pinned;
 
     uint64_t content_hash;    /* regeneration guard (§7.4) */
@@ -50,6 +51,10 @@ struct ctx_mmu {
     size_t token_used;
     uint64_t generation;
     uint64_t rejected_promotions;
+    uint64_t evictions, evicted_bytes, eviction_us;
+    uint64_t summary_count, summary_source_bytes, summary_bytes, summary_us;
+    uint64_t rehydrations, rehydrated_bytes, rehydration_us;
+    uint64_t eviction_samples[64], summary_samples[64], recovery_samples[64];
     ctx_mmu_config cfg;
 };
 
@@ -160,6 +165,14 @@ int ctx_mmu_pin(ctx_mmu *mmu, const char *record_id, int pinned) {
     return -1;
 }
 
+static int compare_sample(const void *a,const void *b) {
+    uint64_t x=*(const uint64_t *)a,y=*(const uint64_t *)b; return (x>y)-(x<y);
+}
+static uint64_t sample_percentile(const uint64_t *samples,uint64_t count,unsigned percent) {
+    size_t n=count<64 ? (size_t)count:64; uint64_t sorted[64];
+    if(!n) return 0; memcpy(sorted,samples,n*sizeof(*sorted)); qsort(sorted,n,sizeof(*sorted),compare_sample);
+    size_t rank=(n*percent+99)/100; return sorted[rank ? rank-1:0];
+}
 char *ctx_mmu_stats_json(ctx_mmu *mmu) {
     strbuf sb;
     size_t i, hot = 0, warm = 0, cold = 0, materialized = 0;
@@ -183,6 +196,26 @@ char *ctx_mmu_stats_json(ctx_mmu *mmu) {
     if (sb.len && sb.buf[sb.len-1]=='}') sb.buf[--sb.len]=0;
     strbuf_appendf(&sb,",\"materialized_bytes\":%llu,\"rejected_promotions\":%llu}",
                    (unsigned long long)materialized,(unsigned long long)mmu->rejected_promotions);
+    if(sb.len && sb.buf[sb.len-1]=='}') sb.buf[--sb.len]=0;
+    strbuf_appendf(&sb,",\"evictions\":%llu,\"evicted_bytes\":%llu,\"eviction_us\":%llu,"
+        "\"summary_count\":%llu,\"summary_source_bytes\":%llu,\"summary_bytes\":%llu,\"summary_us\":%llu,"
+        "\"rehydrations\":%llu,\"rehydrated_bytes\":%llu,\"rehydration_us\":%llu}",
+        (unsigned long long)mmu->evictions,(unsigned long long)mmu->evicted_bytes,(unsigned long long)mmu->eviction_us,
+        (unsigned long long)mmu->summary_count,(unsigned long long)mmu->summary_source_bytes,(unsigned long long)mmu->summary_bytes,
+        (unsigned long long)mmu->summary_us,(unsigned long long)mmu->rehydrations,(unsigned long long)mmu->rehydrated_bytes,
+        (unsigned long long)mmu->rehydration_us);
+    if(sb.len && sb.buf[sb.len-1]=='}') sb.buf[--sb.len]=0;
+    const char *names[]={"eviction","summary","rehydration"};
+    const uint64_t *sets[]={mmu->eviction_samples,mmu->summary_samples,mmu->recovery_samples};
+    uint64_t counts[]={mmu->evictions,mmu->summary_count,mmu->rehydrations};
+    for(int k=0;k<3;k++) {
+        strbuf_appendf(&sb,",\"%s_sample_count\":%llu",names[k],(unsigned long long)(counts[k]<64 ? counts[k]:64));
+        for(unsigned q=50;q<=99;q=q==50 ? 95:99) {
+            strbuf_appendf(&sb,",\"%s_p%u_us\":%llu",names[k],q,(unsigned long long)sample_percentile(sets[k],counts[k],q));
+            if(q==99) break;
+        }
+    }
+    strbuf_append(&sb,"}");
     return strbuf_detach(&sb);
 }
 
@@ -263,13 +296,25 @@ static char *materialize(ctx_mmu *mmu, ctx_page *pg, const mem_record *r,
         pg->content_hash = h;
     }
     if (!pg->repr[level]) {
+        int64_t started=time_now_us();
         switch (level) {
         case CTX_L0: pg->repr[level] = derive_l0(pg, r); break;
         case CTX_L1: pg->repr[level] = derive_l1(pg, r); break;
         case CTX_L2: pg->repr[level] = derive_l2(pg, r); break;
         }
         pg->tok[level] = token_estimate(pg->repr[level]);
-
+        if (pg->repr[level] && level==CTX_L1) {
+            mmu->summary_count++; mmu->summary_source_bytes+=strlen(r->content);
+            mmu->summary_bytes+=strlen(pg->repr[level]);
+            uint64_t duration=(uint64_t)(time_now_us()-started); mmu->summary_us+=duration;
+            mmu->summary_samples[(mmu->summary_count-1)%64]=duration;
+            if (pg->previously_evicted) {
+                mmu->rehydrations++; mmu->rehydrated_bytes+=strlen(pg->repr[level]);
+                uint64_t recovery_duration=(uint64_t)(time_now_us()-started);
+                mmu->rehydration_us+=recovery_duration; mmu->recovery_samples[(mmu->rehydrations-1)%64]=recovery_duration;
+                pg->previously_evicted=0;
+            }
+        }
     }
     (void)mmu;
     *tok_out = pg->tok[level];
@@ -351,13 +396,17 @@ static void evict_to_budget(ctx_mmu *mmu) {
         if (!worst)
             return;  /* everything pinned: over budget is unavoidable */
 
+        int64_t started=time_now_us();
         mmu->token_used -= page_tokens(worst);
+        for(j=0;j<3;j++) if(worst->repr[j]) mmu->evicted_bytes+=strlen(worst->repr[j])+1;
         for (j = 0; j < 3; j++) {
             free(worst->repr[j]);
             worst->repr[j] = NULL;
             worst->tok[j] = 0;
         }
-        worst->residency = CTX_COLD;
+        worst->residency = CTX_COLD; worst->previously_evicted=1;
+        uint64_t duration=(uint64_t)(time_now_us()-started); mmu->evictions++; mmu->eviction_us+=duration;
+        mmu->eviction_samples[(mmu->evictions-1)%64]=duration;
         mmu->generation++;
     }
 }
@@ -582,7 +631,7 @@ char *ctx_mmu_recall(ctx_mmu *mmu, mem_records *rs, void *vs,
         r = mem_records_find(rs, pg->record_id);
         if (!r)
             continue;
-        materialize(mmu, pg, r, CTX_L1, &tok);
+        if (!materialize(mmu, pg, r, CTX_L1, &tok)) { mmu->rejected_promotions++; continue; }
         if (tok > mmu->token_budget || mmu->token_used > mmu->token_budget-tok) {
             free(pg->repr[CTX_L1]); pg->repr[CTX_L1]=NULL; pg->tok[CTX_L1]=0;
             mmu->rejected_promotions++;
@@ -613,7 +662,7 @@ char *ctx_mmu_recall(ctx_mmu *mmu, mem_records *rs, void *vs,
             mmu->rejected_promotions++;
             continue; /* test before allocating a potentially huge L2 copy */
         }
-        materialize(mmu, pg, r, CTX_L2, &tok);
+        if (!materialize(mmu, pg, r, CTX_L2, &tok)) { mmu->rejected_promotions++; continue; }
         if (mmu->token_used - pg->tok[CTX_L1] + tok > mmu->token_budget)
             continue;
         mmu->token_used += tok;

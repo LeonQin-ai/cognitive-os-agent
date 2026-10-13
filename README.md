@@ -67,7 +67,7 @@ The goal is not another prompt framework — it is the **runtime substrate under
 
 ## Benchmarks
 
-All numbers are real full-agent-loop runs. Clean scorecard: [`backend/docs/BENCHMARK_RESULTS.md`](backend/docs/BENCHMARK_RESULTS.md) · methodology & failure attribution: [`backend/docs/benchmark-report-2026-08-31.md`](backend/docs/benchmark-report-2026-08-31.md).
+The agent-quality results below use full-agent-loop tasks. Clean scorecard: [`backend/docs/BENCHMARK_RESULTS.md`](backend/docs/BENCHMARK_RESULTS.md) · methodology & failure attribution: [`backend/docs/benchmark-report-2026-08-31.md`](backend/docs/benchmark-report-2026-08-31.md).
 
 | Benchmark | Score | Model |
 |---|---|---|
@@ -79,6 +79,83 @@ All numbers are real full-agent-loop runs. Clean scorecard: [`backend/docs/BENCH
 | Policy compliance (violating requests) | **bare LLM 0/4 → runtime policy engine 4/4** | deepseek-chat |
 
 Notable: the same runtime reaches **78.79% on GAIA** and **72.7% on SWE-bench mini** with a mid-tier GLM-5.3-flash — and policy compliance goes **0/4 → 4/4** when rules move from the prompt into the runtime policy engine. The LLM is the accelerator; the runtime provides the guarantees.
+
+### Runtime measurements — 2026-10-14
+
+Measured on Windows 11 (build 26200), Intel Family 6 Model 142, about 8 GiB RAM,
+Zig cc 0.14.1 `-O1`. These are actual Scheduler/AgentPool/MMU/file-recovery runs
+with deterministic local workloads; they exclude production model inference.
+Registered roles are not concurrent processes. The scale workload uses 8 workers,
+64 context probes per task and 8 MiB aggregate context; 2 auxiliary Runtime workers
+remain idle. Scale values are medians of 3 runs; peak RSS is the maximum of those runs.
+
+| Registered roles | Completed tasks | Elapsed ms | Tasks/s | Queue P50 / P95 / P99 ms | Peak RSS MiB |
+| --- | --- | --- | --- | --- | --- |
+| 100 | 10,000 | 579.370 | 17,260 | 0.114 / 0.254 / 0.364 | 16.95 |
+| 1,000 | 10,000 | 578.199 | 17,295 | 0.114 / 0.258 / 0.392 | 17.09 |
+| 100 | 100,000 | 5748.495 | 17,396 | 0.113 / 0.262 / 0.422 | 22.48 |
+| 1,000 | 100,000 | 5771.132 | 17,328 | 0.113 / 0.257 / 0.376 | 22.57 |
+
+All submitted tasks were admitted and completed, with zero failures/rejections;
+ending active/queued counts were zero. Completed history was bounded to 64 records.
+RSS samples include the retained benchmark verification arrays, not just task history.
+
+![Runtime scale measurements](backend/docs/runtime-scale-2026-10-14.svg)
+
+![Sampled memory and queue](backend/docs/runtime-memory-2026-10-14.svg)
+
+A separate **backlog gate** held workers until 100,000 tasks had been submitted:
+**99,992 queued**, 39.942 s until drained,
+59.07 MiB peak RSS. Its queue delay includes the intentional
+hold and is reported separately from ordinary throughput runs.
+
+**Context pressure — one run per layout.** Three canonical records were made HOT,
+evicted, reduced to WARM overviews, rehydrated to HOT, then reloaded from disk with
+all original lengths and content hashes verified. L1 overviews are lossy; the
+canonical store keeps complete content. RSS includes source records and serialization,
+so MMU context budget is not a process-RAM limit. Source texts are generated ASCII
+fixtures, not production conversation transcripts. No GiB prompt was sent to a model.
+
+| Context layout MiB | Peak RSS MiB | Eviction recall ms | WARM cache bytes | HOT rehydrate ms | Canonical reload ms | Content checks |
+| --- | --- | --- | --- | --- | --- | --- |
+| 512 / 128 / 10 | 2860.61 | 306.725 | 3,900 | 7330.594 | 1144.853 | Passed |
+| 768 / 128 / 128 | 3197.01 | 887.189 | 3,900 | 15020.763 | 2014.049 | Passed |
+
+Per-operation counts and P50/P95/P99 are retained in JSON (bounded last-64 sample
+windows; the large cases contain only 3 evictions each). These small samples do
+not establish a tail-latency SLO.
+
+**Crash recovery — one real process-termination run:** RUNNING task + available
+snapshot → forced Runtime exit → INTERRUPTED detection → verified snapshot restore
+→ explicit replay → DONE → successful subsequent task. Restart detection:
+**511.031 ms**; snapshot restore: **18.285 ms**;
+explicit replay to DONE: **54.946 ms**; crash to DONE:
+**591.759 ms**. The killed boundary is the entire Runtime process
+(`TerminateProcess` here, `SIGKILL` in POSIX tests), not an isolated in-process worker.
+Replay covers idempotent file replacement; arbitrary external operations are not
+replayed automatically and exactly-once/power-loss recovery are not claimed.
+
+[Full benchmark report](backend/docs/runtime-benchmark-expanded.md) ·
+[Whitepaper and 3 architecture diagrams](backend/docs/runtime-whitepaper.md) ·
+[5-minute verification walkthrough](backend/docs/runtime-demo-2026-10-14.webm).
+
+[![Runtime demo](backend/docs/runtime-demo-cover.png)](backend/docs/runtime-demo-2026-10-14.webm)
+
+Reproduce after building `runtime-bench` / `bench-runtime`:
+
+```bash
+cd backend
+python tests/run_runtime_measurements.py --full --output docs
+python tests/test_runtime_benchmark.py          # scale + MMU + backlog correctness smoke
+python tests/test_crash_recovery_e2e.py --report # owned process kill, restore, explicit replay
+```
+
+Raw measurements: [scale](backend/docs/runtime-scale-2026-10-14.json),
+[backlog](backend/docs/runtime-backlog-2026-10-14.json),
+[Context](backend/docs/runtime-context-pressure-2026-10-14.json),
+[crash recovery](backend/docs/runtime-crash-recovery-2026-10-14.json).
+The previous [128 MiB baseline](backend/docs/runtime-benchmark.md) used a different
+per-task memory probe scheme and is retained as history, not a direct scaling comparator.
 
 ## Web Console
 

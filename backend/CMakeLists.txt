@@ -79,3 +79,8 @@ add_test(NAME benchmark COMMAND cognitive-os-agent-bench --mock)
 # macOS CI build-macos directory) must therefore run from the source root.
 set_tests_properties(unit scenario benchmark PROPERTIES
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+
+add_executable(bench-runtime tests/bench_runtime.c)
+target_link_libraries(bench-runtime PRIVATE cagent)
+add_test(NAME runtime-benchmark-smoke COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_runtime_benchmark.py)
+set_tests_properties(runtime-benchmark-smoke PROPERTIES ENVIRONMENT "COA_BENCH_BINARY=$<TARGET_FILE:bench-runtime>" TIMEOUT 120)

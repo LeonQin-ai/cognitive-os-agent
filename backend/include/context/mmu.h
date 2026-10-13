@@ -58,7 +58,9 @@ ctx_mmu *ctx_mmu_new(void);
 void ctx_mmu_free(ctx_mmu *mmu);
 
 void ctx_mmu_set_config(ctx_mmu *mmu, const ctx_mmu_config *cfg);
-/* Current residency: token_used / token_budget / page count as JSON. */
+/* Residency plus materialized bytes, refused promotions, eviction/overview/
+ * rehydration counters and nearest-rank P50/P95/P99 over the last <=64 events.
+ * L1 overviews are lossy; source records are separately owned by MemRecords. */
 char *ctx_mmu_stats_json(ctx_mmu *mmu);
 
 /* Pin a record's page (task state; never evicted). 0 ok, -1 not found. */
