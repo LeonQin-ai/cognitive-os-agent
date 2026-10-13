@@ -36,6 +36,7 @@ int skill_register(skill_registry *r, const skill *s);
  * same name is overwritten (used by the market "install" flow so reinstall and
  * update always succeed). 0 ok, -1 empty name/invalid kind. */
 int skill_register_ex(skill_registry *r, const skill *s, int replace);
+/* Returned versions remain immutable and valid until registry destruction. */
 const skill *skill_find(skill_registry *r, const char *name);
 int skill_count(skill_registry *r);
 const skill *skill_get(skill_registry *r, size_t i);
@@ -66,6 +67,7 @@ int skill_registry_persist(skill_registry *r, const char *state_root);
 int skill_registry_load(skill_registry *r, const char *state_root);
 /* Import <state_root>/skills/<name>/SKILL.md and loose *.md files as prompt
  * skills. Returns the number imported, or -1 if the directory cannot be read. */
+int skill_registry_refresh(skill_registry *r);
 int skill_registry_load_local(skill_registry *r, const char *state_root);
 
 #ifdef __cplusplus

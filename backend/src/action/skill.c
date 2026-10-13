@@ -11,9 +11,16 @@
 #include <stdio.h>
 #include "cJSON.h"
 
+typedef struct skill_version {
+    skill value;
+    struct skill_version *next;
+} skill_version;
+
 struct skill_registry {
     mutex_t mtx;
-    skill *items; /* each holds owned dup'd strings */
+    skill **items; /* immutable versions remain valid until registry teardown */
+    skill_version *versions;
+    char *local_root;
     size_t count, cap;
 };
 
@@ -37,8 +44,13 @@ void skill_registry_free(skill_registry *r) {
     if (!r)
         return;
     mutex_lock(&r->mtx);
-    for (size_t i = 0; i < r->count; i++)
-        skill_free(&r->items[i]);
+    while (r->versions) {
+        skill_version *v = r->versions;
+        r->versions = v->next;
+        skill_free(&v->value);
+        free(v);
+    }
+    free(r->local_root);
     free(r->items);
     mutex_unlock(&r->mtx);
     mutex_destroy(&r->mtx);
@@ -47,7 +59,7 @@ void skill_registry_free(skill_registry *r) {
 
 static int find_skill(skill_registry *r, const char *name) {
     for (size_t i = 0; i < r->count; i++)
-        if (strcmp(r->items[i].name, name) == 0)
+        if (strcmp(r->items[i]->name, name) == 0)
             return (int)i;
     return -1;
 }
@@ -58,7 +70,6 @@ int skill_register(skill_registry *r, const skill *s) {
 
 int skill_register_ex(skill_registry *r, const skill *s, int replace) {
     int i;
-    skill *e;
     skill copy = {0};
 
     if (!r || !s || !s->name || !*s->name)
@@ -84,17 +95,17 @@ int skill_register_ex(skill_registry *r, const skill *s, int replace) {
     }
 
     if (i >= 0) {
-        /* upsert: overwrite in place */
-        skill *e = &r->items[i];
-        skill_free(e);
-        *e = copy;
-        mutex_unlock(&r->mtx);
-        return 0;
+        const skill *old = r->items[i];
+        if (!strcmp(old->description, copy.description) && !strcmp(old->kind, copy.kind) &&
+            !strcmp(old->body, copy.body) && !strcmp(old->caps, copy.caps)) {
+            mutex_unlock(&r->mtx);
+            skill_free(&copy);
+            return 0;
+        }
     }
-
-    if (r->count == r->cap) {
+    if (i < 0 && r->count == r->cap) {
         size_t ncap = r->cap ? r->cap * 2 : 8;
-        skill *ni = (skill *)realloc(r->items, ncap * sizeof(*ni));
+        skill **ni = (skill **)realloc(r->items, ncap * sizeof(*ni));
         if (!ni) {
             mutex_unlock(&r->mtx);
             skill_free(&copy);
@@ -103,9 +114,17 @@ int skill_register_ex(skill_registry *r, const skill *s, int replace) {
         r->items = ni;
         r->cap = ncap;
     }
-
-    e = &r->items[r->count++];
-    *e = copy;
+    skill_version *v = (skill_version *)malloc(sizeof(*v));
+    if (!v) {
+        mutex_unlock(&r->mtx);
+        skill_free(&copy);
+        return -1;
+    }
+    v->value = copy;
+    v->next = r->versions;
+    r->versions = v;
+    if (i < 0) i = (int)r->count++;
+    r->items[i] = &v->value;
     mutex_unlock(&r->mtx);
     return 0;
 }
@@ -119,7 +138,7 @@ const skill *skill_find(skill_registry *r, const char *name) {
     mutex_lock(&r->mtx);
     i = find_skill(r, name);
     if (i >= 0)
-        s = &r->items[i];
+        s = r->items[i];
     mutex_unlock(&r->mtx);
     return s;
 }
@@ -139,7 +158,7 @@ const skill *skill_get(skill_registry *r, size_t i) {
     if (!r)
         return NULL;
     mutex_lock(&r->mtx);
-    const skill *s = (i < r->count) ? &r->items[i] : NULL;
+    const skill *s = (i < r->count) ? r->items[i] : NULL;
     mutex_unlock(&r->mtx);
     return s;
 }
@@ -374,7 +393,7 @@ char *skill_list_json(skill_registry *r) {
         return cJSON_PrintUnformatted(arr);
     mutex_lock(&r->mtx);
     for (size_t i = 0; i < r->count; i++) {
-        skill *e = &r->items[i];
+        skill *e = r->items[i];
         cJSON *o = cJSON_CreateObject();
         cJSON_AddStringToObject(o, "name", e->name);
         cJSON_AddStringToObject(o, "description", e->description);
@@ -437,9 +456,9 @@ int skill_unregister(skill_registry *r, const char *name) {
         return -1;
     }
 
-    skill_free(&r->items[idx]);
+    /* Borrowed versions may still be executing on other threads. */
     if ((size_t)idx + 1 < r->count)
-        memmove(&r->items[idx], &r->items[idx + 1], (r->count - (size_t)idx - 1) * sizeof(skill));
+        memmove(&r->items[idx], &r->items[idx + 1], (r->count - (size_t)idx - 1) * sizeof(*r->items));
     r->count--;
     mutex_unlock(&r->mtx);
     return 0;
@@ -457,7 +476,7 @@ int skill_registry_persist(skill_registry *r, const char *state_root) {
     arr = cJSON_CreateArray();
     mutex_lock(&r->mtx);
     for (size_t i = 0; i < r->count; i++) {
-        skill *e = &r->items[i];
+        skill *e = r->items[i];
         cJSON *o = cJSON_CreateObject();
         cJSON_AddStringToObject(o, "name", e->name);
         cJSON_AddStringToObject(o, "description", e->description);
@@ -566,6 +585,13 @@ int skill_registry_load_local(skill_registry *r, const char *state_root) {
     dir_list entries = {0};
     int count = 0;
     if (!r || !state_root) return -1;
+    mutex_lock(&r->mtx);
+    if (!r->local_root || strcmp(r->local_root, state_root)) {
+        char *root = xstrdup(state_root);
+        if (!root) { mutex_unlock(&r->mtx); return -1; }
+        free(r->local_root); r->local_root = root;
+    }
+    mutex_unlock(&r->mtx);
     path_join(dir, sizeof(dir), state_root, "skills");
     if (fs_mkdirs(dir) != 0 || fs_list_dir(dir, &entries) != 0) return -1;
     for (size_t i = 0; i < entries.count; i++) {
@@ -588,4 +614,16 @@ int skill_registry_load_local(skill_registry *r, const char *state_root) {
     }
     fs_list_free(&entries);
     return count;
+}
+
+/* Lazy discovery at every catalogue read: no restart or explicit reload needed. */
+int skill_registry_refresh(skill_registry *r) {
+    if (!r) return -1;
+    mutex_lock(&r->mtx);
+    char *root = r->local_root ? xstrdup(r->local_root) : NULL;
+    mutex_unlock(&r->mtx);
+    if (!root) return 0;
+    int n = skill_registry_load_local(r, root);
+    free(root);
+    return n;
 }

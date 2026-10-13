@@ -130,6 +130,7 @@ static char *build_catalog_prompt(const tool_registry *tools, struct skill_regis
                       "Use max_bytes at most 4000 and copy next_offset_bytes for each following page. "
                       "On a missing path discover its real location instead of retrying it unchanged.\n");
 
+    if (skills) skill_registry_refresh(skills);
     if (have_skill_tool && skills && skill_count(skills) > 0) {
         strbuf_append(&b, "Registered skills (capabilities you can RUN via the skill tool):\n");
         for (int i = 0; i < skill_count(skills); i++) {

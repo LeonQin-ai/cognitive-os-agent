@@ -2822,6 +2822,7 @@ static int h_skills(const http_request *req, http_response *resp, void *ud) {
 
     if (!authz_ok(ctx, req, resp))
         return 0;
+    if (ctx->skills) skill_registry_refresh(ctx->skills);
     s = ctx->skills ? skill_list_json(ctx->skills) : xstrdup("[]");
     http_resp_json(resp, s ? s : "[]");
     free(s);

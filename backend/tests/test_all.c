@@ -7562,6 +7562,37 @@ static void test_local_model(void) {
     fs_remove(root);
 }
 
+static void test_skill_live_discovery(void) {
+    printf("\n[test_skill_live_discovery]\n");
+    const char *root = "state-skill-live-test";
+    skill_registry *r = skill_registry_new();
+    CHECK(skill_registry_load_local(r, root) >= 0);
+    fs_mkdirs("state-skill-live-test/skills/copied");
+    const char *file = "state-skill-live-test/skills/copied/SKILL.md";
+    const char *first = "---\nname: copied\ndescription: live\n---\nfirst version";
+    CHECK(fs_write_file(file, first, strlen(first)) == 0);
+    CHECK(skill_registry_refresh(r) == 1);
+    const skill *borrowed = skill_find(r, "copied");
+    CHECK(borrowed && strstr(borrowed->body, "first version"));
+    CHECK(fs_write_file(file, "second version", 14) == 0);
+    CHECK(skill_registry_refresh(r) == 1);
+    CHECK(strstr(skill_find(r, "copied")->body, "second version") != NULL);
+    CHECK(borrowed && strstr(borrowed->body, "first version"));
+    for (int i = 0; i < 100; i++) {
+        char name[40]; snprintf(name, sizeof name, "grow-%d", i);
+        skill extra = {name, "", "prompt", "instruction", ""};
+        CHECK(skill_register(r, &extra) == 0);
+    }
+    CHECK(borrowed && strstr(borrowed->body, "first version"));
+    CHECK(skill_unregister(r, "copied") == 0);
+    CHECK(borrowed && strstr(borrowed->body, "first version"));
+    fs_remove(file);
+    fs_remove("state-skill-live-test/skills/copied");
+    fs_remove("state-skill-live-test/skills");
+    fs_remove(root);
+    skill_registry_free(r);
+}
+
 int main(int argc, char **argv) {
 #ifdef _WIN32
     if (argc > 1 && (!strcmp(argv[0],"ssh") || !strcmp(argv[0],"ssh.exe") || strstr(argv[0],"issue-ssh"))) {
@@ -7630,6 +7661,11 @@ int main(int argc, char **argv) {
     if (argc==2 && !strcmp(argv[1],"--ssh-only")) {
         test_logging(); test_ssh_only_redaction(); test_security();
         printf("%d passed, %d failed\n",g_pass,g_fail); return g_fail?1:0;
+    }
+    if (argc==2 && !strcmp(argv[1],"--skills")) {
+        test_skills(); test_skill_args(); test_skill_live_discovery();
+        printf("\n%d passed, %d failed\n", g_pass, g_fail);
+        return g_fail ? 1 : 0;
     }
     if (argc==2 && !strcmp(argv[1],"--flow")) {
         test_flow(); test_flow_decompose();
@@ -7700,6 +7736,7 @@ int main(int argc, char **argv) {
     test_usage();
     test_registry();
     test_skills();
+    test_skill_live_discovery();
     test_local_dropins();
     test_skill_args();
     test_caps_gate();
