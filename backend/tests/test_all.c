@@ -4253,6 +4253,18 @@ static void test_flow(void) {
 
     /* execution: 2-node chain with {{a}} substitution; results on the board */
     {
+        const char *bad[]={
+            "{\"nodes\":[{\"id\":\"a\",\"agent\":\"x\",\"task\":\"{{missing}}\"}]}",
+            "{\"nodes\":[{\"id\":\"a\",\"agent\":\"x\",\"task\":\"{{a}}\"}]}",
+            "{\"nodes\":[{\"id\":\"a\",\"agent\":\"x\",\"task\":\"{{b}}\"},{\"id\":\"b\",\"agent\":\"x\",\"task\":\"{{a}}\"}]}",
+            "{\"nodes\":[{\"id\":\"a\",\"agent\":\"x\",\"task\":\"t\"}],\"edges\":{}}",
+            "{\"nodes\":[{\"id\":\"a\",\"agent\":\"x\",\"task\":\"{{unfinished\"}]}"
+        };
+        for(size_t i=0;i<sizeof(bad)/sizeof(bad[0]);i++) {
+            char *err=NULL; CHECK(flow_validate(bad[i],&err)==-1); CHECK(err && *err); free(err);
+        }
+    }
+    {
         config cfg;
         memset(&cfg, 0, sizeof(cfg));
         cfg.state_root = "state-test/flow";
@@ -4281,6 +4293,16 @@ static void test_flow(void) {
         /* progress registry: unbound runs (-1) leave no entry */
         CHECK(flow_progress_json(-1) == NULL);
         free(ans); free(trace);
+
+        /* Omitting the explicit edge must retain the reference dependency. */
+        const char *implicit="{\"nodes\":[{\"id\":\"a\",\"agent\":\"alpha\",\"task\":\"创建 flow-a.txt 写入内容为 flow-ok\"},"
+            "{\"id\":\"b\",\"agent\":\"beta\",\"task\":\"总结以下内容: {{a}}\"}]}";
+        ans=trace=NULL; CHECK(flow_run(&ctx,implicit,780,&ans,&trace)==0);
+        CHECK(trace && strstr(trace,"上游 a 结果开始") && !strstr(trace,"{{a}}"));
+        cJSON *parsed=trace ? cJSON_Parse(trace):NULL;
+        cJSON *child=cJSON_GetArrayItem(parsed,1);
+        CHECK(cJSON_GetNumberValue(cJSON_GetObjectItemCaseSensitive(child,"layer"))==1);
+        cJSON_Delete(parsed); free(ans); free(trace);
 
         /* progress registry: a bound run records per-node status */
         {

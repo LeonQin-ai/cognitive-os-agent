@@ -86,6 +86,14 @@ static int flow_node_index(flow_dag *d, const char *id) {
     return -1;
 }
 
+static int flow_add_edge(flow_dag *d, int from, int to, char **err) {
+    if(from==to) { flow_err(err,"node '%s' depends on itself",d->nodes[to].id); return -1; }
+    for(int i=0;i<d->nodes[from].nadj;i++) if(d->nodes[from].adj[i]==to) return 0;
+    if(d->nodes[from].nadj>=FLOW_MAX_NODES) { flow_err(err,"too many dependency edges"); return -1; }
+    d->nodes[from].adj[d->nodes[from].nadj++]=to; d->nodes[to].indeg++;
+    return 0;
+}
+
 /* Parse the JSON document into `d`. Returns 0 ok; on failure -1 with *err. */
 static int flow_parse(const char *dag_json, flow_dag *d, char **err) {
     cJSON *root;
@@ -127,6 +135,10 @@ static int flow_parse(const char *dag_json, flow_dag *d, char **err) {
         }
 
         flow_node *nd = &d->nodes[d->n];
+        if(strlen(jid->valuestring)>=sizeof(nd->id) || strlen(jag->valuestring)>=sizeof(nd->agent) ||
+           strlen(jtk->valuestring)>=sizeof(nd->task)) {
+            cJSON_Delete(root); flow_err(err,"node id, agent or task exceeds its supported length"); return -1;
+        }
         snprintf(nd->id, sizeof(nd->id), "%s", jid->valuestring);
         snprintf(nd->agent, sizeof(nd->agent), "%s", jag->valuestring);
         snprintf(nd->task, sizeof(nd->task), "%s", jtk->valuestring);
@@ -144,6 +156,7 @@ static int flow_parse(const char *dag_json, flow_dag *d, char **err) {
 
     /* edges: [{"from","to"}] or [["from","to"]] */
     jedges = cJSON_GetObjectItemCaseSensitive(root, "edges");
+    if(jedges && !cJSON_IsArray(jedges)) { cJSON_Delete(root); flow_err(err,"edges must be an array"); return -1; }
     if (jedges && cJSON_IsArray(jedges)) {
         cJSON *je;
         cJSON_ArrayForEach(je, jedges) {
@@ -181,13 +194,23 @@ static int flow_parse(const char *dag_json, flow_dag *d, char **err) {
                 return -1;
             }
 
-            if (d->nodes[fi].nadj >= FLOW_MAX_NODES)
-                continue;
-            d->nodes[fi].adj[d->nodes[fi].nadj++] = ti;
-            d->nodes[ti].indeg++;
+            if(flow_add_edge(d,fi,ti,err)) { cJSON_Delete(root); return -1; }
         }
     }
 
+    /* A result reference is also a dependency, even if an edge was omitted. */
+    for(int i=0;i<d->n;i++) {
+        const char *p=d->nodes[i].task;
+        while((p=strstr(p,"{{"))!=NULL) {
+            const char *end=strstr(p+2,"}}"); size_t n=end ? (size_t)(end-p-2):0;
+            if(!end || !n || n>=64) { cJSON_Delete(root); flow_err(err,"invalid result reference in node '%s'",d->nodes[i].id); return -1; }
+            char ref[64]; memcpy(ref,p+2,n); ref[n]=0;
+            int from=flow_node_index(d,ref);
+            if(from<0) { cJSON_Delete(root); flow_err(err,"unknown result reference '%s' in node '%s'",ref,d->nodes[i].id); return -1; }
+            if(flow_add_edge(d,from,i,err)) { cJSON_Delete(root); return -1; }
+            p=end+2;
+        }
+    }
     cJSON_Delete(root);
     return 0;
 }

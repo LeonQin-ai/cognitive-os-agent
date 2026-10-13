@@ -2,7 +2,8 @@
  *
  * A flow is a JSON DAG: {"nodes":[{"id","agent","task"}...],
  * "edges":[{"from","to"}...]}. Task strings may reference upstream results
- * with "{{<nodeid>}}" placeholders (capped per reference).
+ * with "{{<nodeid>}}" placeholders (capped per reference). References imply
+ * dependency edges, and unknown/self/cyclic references are rejected.
  *
  * flow_validate parses and checks the DAG (unique ids, known edges, no
  * cycles via Kahn's algorithm). flow_run executes it: nodes are layered

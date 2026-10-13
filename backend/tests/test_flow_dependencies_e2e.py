@@ -91,7 +91,7 @@ with tempfile.TemporaryDirectory(prefix='coa-flow-deps-') as folder:
             request('/v1/agents',{'name':'alpha','role':'源码阅读与文件执行'})
             dag={'nodes':[{'id':'a','agent':'alpha','task':'读取 evidence.c，完成 FLOW_WAIT_STEP1'},
                 {'id':'b','agent':'alpha','task':'创建 api-step2.txt，FLOW_CHILD，上游结果 {{a}}'}],
-                'edges':[['a','b']]}
+                'edges':[]}
             started=request('/v1/flows',dag)
             assert entered.wait(10)
             live=request('/v1/tasks/'+str(started['id']))
