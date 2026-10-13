@@ -2130,8 +2130,8 @@ async function loadDashboard(){
       cells[3].textContent = wmem;
       cells[4].textContent = plugins;
       cells[5].textContent = ims;
-      cells[6].textContent = (tot.prompt + tot.completion).toLocaleString();
-      cells[6].title = '输入 ' + (tot.prompt || 0).toLocaleString() + ' / 输出 ' + (tot.completion || 0).toLocaleString();
+      cells[6].textContent = usg.obj && usg.obj.usage_available ? (tot.prompt + tot.completion + (tot.reasoning || 0)).toLocaleString() : '未提供';
+      cells[6].title = usg.obj && usg.obj.usage_available ? '输入 ' + (tot.prompt || 0).toLocaleString() + ' / 输出 ' + ((tot.completion || 0) + (tot.reasoning || 0)).toLocaleString() : '模型后端尚未提供 Token 用量';
     }
   }
   /* 按模型的 token 用量明细（/v1/usage：reasoning 每轮把增量记入账本） */

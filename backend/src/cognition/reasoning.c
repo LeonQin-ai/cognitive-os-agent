@@ -253,10 +253,37 @@ struct reasoning {
      * against the run-start snapshot of llm usage counters so per-round
      * usage is attributed correctly even across llm swaps. */
     usage *usage_acc;
-    long long usage_base_in, usage_base_out, usage_base_reason;
+    long long usage_base_in, usage_base_out, usage_base_reason, usage_base_reports;
+    long long run_usage_in, run_usage_out, run_usage_reports;
 };
 
 /* Only the worker constructs snapshots. Readers copy immutable JSON. */
+static void usage_book_round(reasoning *r) {
+        /* per-round token accounting into the global per-model ledger
+         * (deltas vs the previous snapshot; a mid-run llm swap would produce
+         * a bogus negative delta, hence the guard) */
+        if (r->usage_acc && r->llm) {
+            long long ti = 0, to = 0, tr = 0;
+            long long reports = 0;
+            llm_usage_thread_totals(&ti, &to, &tr, &reports);
+            if (reports > r->usage_base_reports) {
+                long long rd = tr - r->usage_base_reason;
+                if (rd < 0)
+                    rd = 0;
+                /* visible completion = total completion minus invisible
+                 * thinking tokens (issue #7) */
+                long long vd = (to - r->usage_base_out) - rd;
+                usage_add_ex(r->usage_acc, r->llm->model ? r->llm->model : "?",
+                             (long)(ti - r->usage_base_in), (long)(vd > 0 ? vd : 0),
+                             (long)rd);
+            }
+            r->usage_base_in = ti;
+            r->usage_base_out = to;
+            r->usage_base_reason = tr;
+            r->usage_base_reports = reports;
+        }
+}
+
 static void progress_emit(reasoning *r, const char *stage) {
     char activity[256];
     const char *model = (r && r->llm && r->llm->model && *r->llm->model) ? r->llm->model : "未配置模型";
@@ -312,7 +339,10 @@ static void progress_emit(reasoning *r, const char *stage) {
     cJSON_AddNumberToObject(o, "model_call", r->prog_llm_calls + (strcmp(stage, "planning") == 0 ? 1 : 0));
     cJSON_AddNumberToObject(o, "model_failures", r->prog_model_failures);
     long long tin = 0, tout = 0;
-    if (r->llm) llm_usage_totals(r->llm, &tin, &tout);
+    long long reports = 0;
+    llm_usage_thread_totals(&tin, &tout, NULL, &reports);
+    tin -= r->run_usage_in; tout -= r->run_usage_out;
+    cJSON_AddBoolToObject(o, "usage_available", reports > r->run_usage_reports);
     cJSON_AddNumberToObject(o, "tokens_in", (double)tin);
     cJSON_AddNumberToObject(o, "tokens_out", (double)tout);
     char *steps = reasoning_steps_json(r);
@@ -2813,16 +2843,10 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
         }
     }
 
-    /* run-start snapshot of the active llm's usage counters: per-round
-     * deltas are attributed to this run's model in the ledger */
-    if (r->llm) {
-        llm_usage_totals(r->llm, &r->usage_base_in, &r->usage_base_out);
-        r->usage_base_reason = llm_usage_reason_total(r->llm);
-    } else {
-        r->usage_base_in = 0;
-        r->usage_base_out = 0;
-        r->usage_base_reason = 0;
-    }
+    llm_usage_thread_totals(&r->usage_base_in, &r->usage_base_out, &r->usage_base_reason, &r->run_usage_reports);
+    r->usage_base_reports = r->run_usage_reports;
+    r->run_usage_in = r->usage_base_in;
+    r->run_usage_out = r->usage_base_out;
 
     free(r->last_prompt);
     r->last_prompt = xstrdup(prompt);
@@ -2919,6 +2943,7 @@ restart_planning:
         free(result);
         result = NULL;
         st = state_machine_run(r->sm, prompt, &result);
+        usage_book_round(r);
         if (run_aborted(r)) { st = ST_FAILED; break; }
         if (r->tool_fail_aborted) {
             round_log_append(r, result && *result ? result : "(tool failed repeatedly)");
@@ -2932,28 +2957,6 @@ restart_planning:
                 round_log_append(r, result); obs_log_append(r, result);
             }
             continue;
-        }
-        /* per-round token accounting into the global per-model ledger
-         * (deltas vs the previous snapshot; a mid-run llm swap would produce
-         * a bogus negative delta, hence the guard) */
-        if (r->usage_acc && r->llm) {
-            long long ti = 0, to = 0, tr = 0;
-            llm_usage_totals(r->llm, &ti, &to);
-            tr = llm_usage_reason_total(r->llm);
-            if (ti > r->usage_base_in || to > r->usage_base_out) {
-                long long rd = tr - r->usage_base_reason;
-                if (rd < 0)
-                    rd = 0;
-                /* visible completion = total completion minus invisible
-                 * thinking tokens (issue #7) */
-                long long vd = (to - r->usage_base_out) - rd;
-                usage_add_ex(r->usage_acc, r->llm->model ? r->llm->model : "?",
-                             (long)(ti - r->usage_base_in), (long)(vd > 0 ? vd : 0),
-                             (long)rd);
-            }
-            r->usage_base_in = ti;
-            r->usage_base_out = to;
-            r->usage_base_reason = tr;
         }
         if (st != ST_DONE) {
             /* Stage failure (planner LLM error, VERIFY gate, …): the failed
@@ -3290,6 +3293,7 @@ restart_planning:
         ret = -1;
     }
 
+    usage_book_round(r); /* include a final synthesis request, even on failure */
     if (picked) {
         r->llm = saved;
         llm_destroy(picked);

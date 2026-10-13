@@ -4,6 +4,7 @@
  * Each provider implements chat and streaming (SSE). */
 #pragma once
 #include <stddef.h>
+#include <stdatomic.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -54,11 +55,11 @@ struct llm {
     void *impl;
     volatile int cancel; /* set by llm_cancel(); checked between stream deltas */
     /* cumulative token usage from provider "usage" objects (polled without a
-     * lock; drift under concurrent runs is acceptable for a status display) */
-    volatile long long usage_in, usage_out;
+     * lock; atomic updates preserve concurrent request totals) */
+    _Atomic long long usage_in, usage_out;
     /* invisible thinking tokens reported by thinking models (subset of
      * usage_out; issue #7 — shown separately on the dashboard) */
-    volatile long long usage_reason;
+    _Atomic long long usage_reason;
 };
 
 /* Provider capability summary (bridge-level; agents pick models by capability
@@ -105,6 +106,11 @@ void llm_usage_totals(const llm *llm, long long *tokens_in, long long *tokens_ou
 /* Cumulative invisible thinking tokens reported by the provider (0 when the
  * model is not a thinking model). Subset of usage_out. */
 long long llm_usage_reason_total(const llm *llm);
+
+/* Provider reports usage once per response (or increments of cumulative SSE usage).
+ * Thread totals isolate accounting from other agents sharing this provider. */
+void llm_record_usage(llm *l, long long in, long long out, long long reason);
+void llm_usage_thread_totals(long long *in, long long *out, long long *reason, long long *reports);
 
 /* Convenience one-shot chat. Returns malloc'd string (NULL on error). */
 char *llm_chat_simple(llm *llm, const char *system_prompt, const char *user_prompt);

@@ -222,3 +222,19 @@ char *llm_chat_simple_ex(llm *llm, const char *system_prompt, const char *user_p
     resp.content = NULL;
     return out;
 }
+
+static _Thread_local long long thread_in, thread_out, thread_reason, thread_reports;
+void llm_record_usage(llm *l, long long in, long long out, long long reason) {
+    if (!l || in < 0 || out < 0 || reason < 0) return;
+    /* Reasoning usage may arrive after completion usage in a later SSE chunk. */
+    atomic_fetch_add(&l->usage_in, in);
+    atomic_fetch_add(&l->usage_out, out);
+    atomic_fetch_add(&l->usage_reason, reason);
+    thread_in += in; thread_out += out; thread_reason += reason; thread_reports++;
+}
+void llm_usage_thread_totals(long long *in, long long *out, long long *reason, long long *reports) {
+    if (in) *in = thread_in;
+    if (out) *out = thread_out;
+    if (reason) *reason = thread_reason;
+    if (reports) *reports = thread_reports;
+}

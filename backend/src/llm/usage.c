@@ -122,6 +122,7 @@ char *usage_json(usage *u) {
             cJSON_AddNumberToObject(o, "calls", (double)e->calls);
             cJSON_AddItemToObject(models, e->model, o);
         }
+        cJSON_AddBoolToObject(root, "usage_available", u->count > 0);
         cJSON *tot = cJSON_CreateObject();
         cJSON_AddNumberToObject(tot, "prompt", (double)u->prompt_total);
         cJSON_AddNumberToObject(tot, "completion", (double)u->completion_total);

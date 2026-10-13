@@ -78,8 +78,11 @@ static char *build_request_body(const llm_request *req, const char *model, int s
     cJSON_AddNumberToObject(root, "temperature", req->temperature);
     if (req->max_tokens > 0)
         cJSON_AddNumberToObject(root, "max_tokens", req->max_tokens);
-    if (stream)
+    if (stream) {
         cJSON_AddBoolToObject(root, "stream", 1);
+        cJSON *options = cJSON_AddObjectToObject(root, "stream_options");
+        cJSON_AddBoolToObject(options, "include_usage", 1);
+    }
     s = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
     return s;
@@ -92,30 +95,33 @@ static void set_error(llm_response *resp, const char *msg) {
 /* Accumulate usage from an OpenAI-style usage object
  * {prompt_tokens, completion_tokens}. Present in non-stream responses and
  * in stream chunks from providers that report usage (often the final one). */
-static void accumulate_usage(llm *llm, cJSON *root) {
-    cJSON *u, *pi, *co;
-
-    if (!llm || !root)
-        return;
-    u = cJSON_GetObjectItemCaseSensitive(root, "usage");
-    if (!u || !cJSON_IsObject(u))
-        return;
-    pi = cJSON_GetObjectItemCaseSensitive(u, "prompt_tokens");
-    co = cJSON_GetObjectItemCaseSensitive(u, "completion_tokens");
-    if (pi && cJSON_IsNumber(pi))
-        llm->usage_in += (long long)pi->valuedouble;
-    if (co && cJSON_IsNumber(co))
-        llm->usage_out += (long long)co->valuedouble;
-    /* thinking models report invisible reasoning tokens inside
-     * completion_tokens (e.g. {"completion_tokens_details":{"reasoning_tokens":
-     * 8192}}) — track them separately so the dashboard can show visible
-     * output apart from thinking (issue #7). */
-    {
-        cJSON *cd = cJSON_GetObjectItemCaseSensitive(u, "completion_tokens_details");
-        cJSON *rt = cd ? cJSON_GetObjectItemCaseSensitive(cd, "reasoning_tokens") : NULL;
-        if (rt && cJSON_IsNumber(rt))
-            llm->usage_reason += (long long)rt->valuedouble;
-    }
+/* Both standard and input/output usage spellings occur in compatible APIs.
+ * Streaming providers report cumulative usage: subtract previous values. */
+static void accumulate_usage(llm *l, cJSON *root, long long *last) {
+    cJSON *u = cJSON_GetObjectItemCaseSensitive(root, "usage");
+    if (!cJSON_IsObject(u)) return;
+    cJSON *pi = cJSON_GetObjectItemCaseSensitive(u, "prompt_tokens");
+    cJSON *co = cJSON_GetObjectItemCaseSensitive(u, "completion_tokens");
+    if (!cJSON_IsNumber(pi)) pi = cJSON_GetObjectItemCaseSensitive(u, "input_tokens");
+    if (!cJSON_IsNumber(co)) co = cJSON_GetObjectItemCaseSensitive(u, "output_tokens");
+    if (!cJSON_IsNumber(pi) && !cJSON_IsNumber(co)) return;
+    cJSON *cd = cJSON_GetObjectItemCaseSensitive(u, "completion_tokens_details");
+    if (!cJSON_IsObject(cd)) cd = cJSON_GetObjectItemCaseSensitive(u, "output_tokens_details");
+    cJSON *rt = cJSON_GetObjectItemCaseSensitive(cd, "reasoning_tokens");
+    long long values[3] = {
+        cJSON_IsNumber(pi) && pi->valuedouble >= 0 && pi->valuedouble < 9223372036854775807.0 ? (long long)pi->valuedouble : 0,
+        cJSON_IsNumber(co) && co->valuedouble >= 0 && co->valuedouble < 9223372036854775807.0 ? (long long)co->valuedouble : 0,
+        cJSON_IsNumber(rt) && rt->valuedouble >= 0 && rt->valuedouble < 9223372036854775807.0 ? (long long)rt->valuedouble : 0
+    };
+    if (values[2] > values[1]) values[2] = values[1];
+    if (last) {
+        long long delta[3];
+        for (int i=0; i<3; i++) {
+            delta[i] = values[i] > last[i] ? values[i] - last[i] : 0;
+            if (values[i] > last[i]) last[i] = values[i];
+        }
+        llm_record_usage(l, delta[0], delta[1], delta[2]);
+    } else llm_record_usage(l, values[0], values[1], values[2]);
 }
 
 static char *normalize_base(const char *base, const char **path_out) {
@@ -194,7 +200,7 @@ static int openai_chat(llm *llm, const llm_request *req, llm_response *resp) {
         set_error(resp, "openai: invalid JSON response");
         return -1;
     }
-    accumulate_usage(llm, root);
+    accumulate_usage(llm, root, NULL);
 
     choices = cJSON_GetObjectItemCaseSensitive(root, "choices");
     msg = choices && choices->child ? cJSON_GetObjectItemCaseSensitive(choices->child, "message") : NULL;
@@ -258,6 +264,7 @@ static int openai_stream(llm *llm, const llm_request *req, llm_stream_cb cb, voi
         return -1;
     }
 
+    long long stream_usage[3] = {0};
     while (sse_next(s, line, sizeof(line)) == 1) {
         if (llm->cancel) {
             rc = -1;
@@ -266,7 +273,7 @@ static int openai_stream(llm *llm, const llm_request *req, llm_stream_cb cb, voi
         cJSON *root = cJSON_Parse(line);
         if (!root)
             continue;
-        accumulate_usage(llm, root);
+        accumulate_usage(llm, root, stream_usage);
         cJSON *choices = cJSON_GetObjectItemCaseSensitive(root, "choices");
         cJSON *ch = choices && choices->child ? choices->child : NULL;
         cJSON *delta = ch ? cJSON_GetObjectItemCaseSensitive(ch, "delta") : NULL;

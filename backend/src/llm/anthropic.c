@@ -90,17 +90,23 @@ static void set_error(llm_response *resp, const char *msg) {
 }
 
 /* Accumulate an Anthropic usage object {input_tokens, output_tokens}. */
-static void accumulate_usage_obj(llm *llm, cJSON *u) {
+static void accumulate_usage_obj(llm *llm, cJSON *u, long long *last) {
     cJSON *in, *out;
 
     if (!llm || !u || !cJSON_IsObject(u))
         return;
     in = cJSON_GetObjectItemCaseSensitive(u, "input_tokens");
     out = cJSON_GetObjectItemCaseSensitive(u, "output_tokens");
-    if (in && cJSON_IsNumber(in))
-        llm->usage_in += (long long)in->valuedouble;
-    if (out && cJSON_IsNumber(out))
-        llm->usage_out += (long long)out->valuedouble;
+    if (cJSON_IsNumber(in) || cJSON_IsNumber(out)) {
+        long long delta[2] = {0};
+        cJSON *fields[2] = {in, out};
+        for (int i=0; i<2; i++) if (cJSON_IsNumber(fields[i]) && fields[i]->valuedouble >= 0 && fields[i]->valuedouble < 9223372036854775807.0) {
+            long long value = (long long)fields[i]->valuedouble;
+            delta[i] = last ? (value > last[i] ? value-last[i] : 0) : value;
+            if (last && value > last[i]) last[i] = value;
+        }
+        llm_record_usage(llm, delta[0], delta[1], 0);
+    }
 }
 
 static strmap *anthropic_headers(llm *llm) {
@@ -160,7 +166,7 @@ static int anthropic_chat(llm *llm, const llm_request *req, llm_response *resp) 
     }
 
     strbuf_init(&sb);
-    accumulate_usage_obj(llm, cJSON_GetObjectItemCaseSensitive(root, "usage"));
+    accumulate_usage_obj(llm, cJSON_GetObjectItemCaseSensitive(root, "usage"), NULL);
     content = cJSON_GetObjectItemCaseSensitive(root, "content");
     if (content && cJSON_IsArray(content)) {
         cJSON *it;
@@ -210,6 +216,7 @@ static int anthropic_stream(llm *llm, const llm_request *req, llm_stream_cb cb, 
         return -1;
     }
 
+    long long stream_usage[2] = {0};
     while (sse_next(s, line, sizeof(line)) == 1) {
         if (llm->cancel) {
             sse_close(s);
@@ -224,9 +231,9 @@ static int anthropic_stream(llm *llm, const llm_request *req, llm_stream_cb cb, 
         if (type && cJSON_IsString(type)) {
             if (strcmp(type->valuestring, "message_start") == 0)
                 accumulate_usage_obj(llm, cJSON_GetObjectItemCaseSensitive(
-                                               cJSON_GetObjectItemCaseSensitive(root, "message"), "usage"));
+                                               cJSON_GetObjectItemCaseSensitive(root, "message"), "usage"), stream_usage);
             else if (strcmp(type->valuestring, "message_delta") == 0)
-                accumulate_usage_obj(llm, cJSON_GetObjectItemCaseSensitive(root, "usage"));
+                accumulate_usage_obj(llm, cJSON_GetObjectItemCaseSensitive(root, "usage"), stream_usage);
         }
         /* content_block_delta -> delta.text */
         cJSON *delta = cJSON_GetObjectItemCaseSensitive(root, "delta");

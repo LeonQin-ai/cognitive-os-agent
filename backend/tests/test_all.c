@@ -6408,7 +6408,7 @@ static void th_serve_ctx(void *arg)  { serve((runtime_ctx *)arg); }
 
 static int fake_openai_json(const http_request *req, http_response *resp, void *ud) {
     (void)req; (void)ud;
-    http_resp_json(resp, "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"hello from openai-fake\"}}]}");
+    http_resp_json(resp, "{\"usage\":{\"input_tokens\":11,\"output_tokens\":7,\"output_tokens_details\":{\"reasoning_tokens\":2}},\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"hello from openai-fake\"}}]}");
     return 0;
 }
 static int fake_anthropic_json(const http_request *req, http_response *resp, void *ud) {
@@ -6417,10 +6417,14 @@ static int fake_anthropic_json(const http_request *req, http_response *resp, voi
     return 0;
 }
 static int fake_openai_sse(const http_request *req, http_response *resp, void *ud) {
-    (void)req; (void)ud;
+    (void)ud;
+    CHECK(req->body && strstr(req->body, "\"include_usage\":true"));
     http_resp_json(resp,
         "data: {\"choices\":[{\"delta\":{\"content\":\"hel\"}}]}\n\n"
         "data: {\"choices\":[{\"delta\":{\"content\":\"lo\"}}]}\n\n"
+        "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":7}}\n\n"
+        "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":7,\"completion_tokens_details\":{\"reasoning_tokens\":2}}}\n\n"
+        "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":7,\"completion_tokens_details\":{\"reasoning_tokens\":2}}}\n\n"
         "data: [DONE]\n\n");
     return 0;
 }
@@ -6463,6 +6467,8 @@ static void test_llm_adapters_http(void) {
         llm_response out; memset(&out, 0, sizeof out);
         CHECK(llm_chat(oai, &q, &out) == 0);
         CHECK_STR(out.content, "hello from openai-fake");
+        long long ti=0,to=0; llm_usage_totals(oai,&ti,&to);
+        CHECK(ti==11 && to==7 && llm_usage_reason_total(oai)==2);
         free(out.content); free(out.error);
         llm_destroy(oai);
     }
@@ -6473,6 +6479,8 @@ static void test_llm_adapters_http(void) {
         strbuf sb; strbuf_init(&sb);
         CHECK(llm_stream(oai, &q, stream_accum, &sb) == 0);
         CHECK_STR(sb.buf, "hello");
+        long long ti=0,to=0; llm_usage_totals(oai,&ti,&to);
+        CHECK(ti==11 && to==7 && llm_usage_reason_total(oai)==2);
         strbuf_free(&sb);
         llm_destroy(oai);
     }
@@ -7640,6 +7648,26 @@ static void test_prompt_skill_handoff(void) {
     tool_result_free(res); skill_registry_free(r);
 }
 
+typedef struct usage_thread_test { llm *l; long long in, out; } usage_thread_test;
+static void usage_thread_worker(void *arg) {
+    usage_thread_test *t = arg;
+    long long before_in, before_out;
+    llm_usage_thread_totals(&before_in, &before_out, NULL, NULL);
+    for (int i=0; i<10000; i++) llm_record_usage(t->l, 3, 2, 1);
+    llm_usage_thread_totals(&t->in, &t->out, NULL, NULL);
+    t->in -= before_in; t->out -= before_out;
+}
+static void test_usage_concurrent_agents(void) {
+    section("atomic usage and per-agent thread isolation");
+    llm *l = llm_create("mock", NULL, NULL, NULL);
+    usage_thread_test args[4] = {0}; thread_t *threads[4];
+    for (int i=0; i<4; i++) { args[i].l=l; threads[i]=thread_create(usage_thread_worker,&args[i]); CHECK(threads[i]!=NULL); }
+    for (int i=0; i<4; i++) { if (threads[i]) thread_join(threads[i]); CHECK(args[i].in==30000 && args[i].out==20000); }
+    long long in=0,out=0; llm_usage_totals(l,&in,&out);
+    CHECK(in==120000 && out==80000 && llm_usage_reason_total(l)==40000);
+    llm_destroy(l);
+}
+
 int main(int argc, char **argv) {
 #ifdef _WIN32
     if (argc > 1 && (!strcmp(argv[0],"ssh") || !strcmp(argv[0],"ssh.exe") || strstr(argv[0],"issue-ssh"))) {
@@ -7708,6 +7736,10 @@ int main(int argc, char **argv) {
     if (argc==2 && !strcmp(argv[1],"--ssh-only")) {
         test_logging(); test_ssh_only_redaction(); test_security();
         printf("%d passed, %d failed\n",g_pass,g_fail); return g_fail?1:0;
+    }
+    if (argc==2 && !strcmp(argv[1],"--usage")) {
+        test_usage(); test_usage_concurrent_agents(); test_llm_adapters_http();
+        printf("\n%d passed, %d failed\n", g_pass, g_fail); return g_fail ? 1 : 0;
     }
     if (argc==2 && !strcmp(argv[1],"--skills")) {
         test_skills(); test_skill_args(); test_skill_live_discovery(); test_skill_registration_tool(); test_prompt_skill_handoff();
@@ -7780,7 +7812,7 @@ int main(int argc, char **argv) {
     test_plugin_intelligence();
     test_trace();
     test_router();
-    test_usage();
+    test_usage(); test_usage_concurrent_agents();
     test_registry();
     test_skills();
     test_skill_live_discovery(); test_skill_registration_tool(); test_prompt_skill_handoff();

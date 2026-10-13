@@ -32,12 +32,11 @@ static char *llm_simple_booked(runtime_ctx *ctx, const char *sys, const char *us
 
     if (!ctx || !ctx->llm)
         return NULL;
-    llm_usage_totals(ctx->llm, &bin, &bout);
-    bren = llm_usage_reason_total(ctx->llm);
+    long long before_reports=0, after_reports=0;
+    llm_usage_thread_totals(&bin, &bout, &bren, &before_reports);
     out = llm_chat_simple(ctx->llm, sys, user);
-    llm_usage_totals(ctx->llm, &tin, &tout);
-    tren = llm_usage_reason_total(ctx->llm);
-    if (ctx->usage && (tin > bin || tout > bout)) {
+    llm_usage_thread_totals(&tin, &tout, &tren, &after_reports);
+    if (ctx->usage && after_reports > before_reports) {
         long long rd = tren - bren;
         if (rd < 0)
             rd = 0;
