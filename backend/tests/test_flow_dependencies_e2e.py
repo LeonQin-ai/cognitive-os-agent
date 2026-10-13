@@ -30,6 +30,10 @@ class Provider(BaseHTTPRequestHandler):
                     {'agent':'alpha','task':'读取 evidence.c，完成 FLOW_WAIT_STEP1'},
                     {'agent':'alpha','task':'创建 api-step2.txt FLOW_CHILD 上游 {{step1}}'},
                     {'agent':'alpha','task':'创建 api-step3.txt FLOW_JOIN {{step2}}','after':[2]}])
+            elif 'FLOW_SUMMARY' in current:
+                assert '文件已生成' in current
+                counts['summary']=counts.get('summary',0)+1
+                answer='只总结上游文件交付结果，文字总结已完成。'
             elif 'FLOW_JOIN' in current:
                 assert counts.get('child',0)>=2
                 n=counts.get('join',0); counts['join']=n+1
@@ -150,6 +154,14 @@ with tempfile.TemporaryDirectory(prefix='coa-flow-deps-') as folder:
             old=request('/v1/tasks/'+str(started['id']))
             assert {n['id'] for n in old['flow_nodes']}=={'a','b'},old
             print('PASS: auto-decomposed mixed dependencies execute strictly in order; terminal states persist')
+            # Upstream verbs are context, not an extra write requirement for a summary.
+            counts['child']=0
+            dag={'nodes':[{'id':'writer','agent':'alpha','task':'创建 api-step2.txt FLOW_CHILD 上游 UPSTREAM_READY'},
+                {'id':'summary','agent':'alpha','task':'总结上游结果 FLOW_SUMMARY {{writer}}'}]}
+            summary=finished(request('/v1/flows',dag)['id'])
+            assert summary['status']=='DONE' and '文字总结已完成' in summary['output'],summary
+            assert counts.get('summary',0)==1 and not errors,errors
+            print('PASS: summary completes without writing when upstream context says a file was generated')
         finally:
             release.set(); process.terminate(); process.wait(timeout=10)
             provider.shutdown(); provider.server_close()

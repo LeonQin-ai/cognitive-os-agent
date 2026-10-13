@@ -490,6 +490,7 @@ static void flow_worker(void *arg) {
     if (r) {
         char *prompt = agent_pool_task_prompt(j->ctx->agents, j->nd->agent, j->task);
         reasoning_set_trace_task_id(r, j->task_id);
+        reasoning_set_completion_prompt(r,j->nd->task);
         flow_prog_node_attach(j->task_id, j->nd->id, r);
         j->rc = prompt ? reasoning_run(r, prompt, &j->out) : -1;
         if (j->rc == 0 && !agent_pool_deliverable_valid(j->ctx->agents, j->nd->agent,

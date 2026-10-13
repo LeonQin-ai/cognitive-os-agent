@@ -4323,6 +4323,13 @@ static void test_flow(void) {
         cJSON_Delete(parsed); free(ans); free(trace);
 
         /* progress registry: a bound run records per-node status */
+        const char *context_dag="{\"nodes\":["
+            "{\"id\":\"writer\",\"agent\":\"alpha\",\"task\":\"创建文件 上游写入交付回归测试\"},"
+            "{\"id\":\"summary\",\"agent\":\"beta\",\"task\":\"上下文交付判定回归测试：总结 {{writer}}\"}]}";
+        ans=trace=NULL; CHECK(flow_run(&ctx,context_dag,781,&ans,&trace)==0);
+        CHECK(ans && strstr(ans,"文字总结已完成") && !strstr(ans,"任务未完成"));
+        CHECK(trace && strstr(trace,"文件已生成，已读取完整源码") && !strstr(trace,"\"status\":\"error\""));
+        free(ans); free(trace);
         {
             char *prog = NULL;
             CHECK(flow_run(&ctx, dag, 777, &ans, &trace) == 0);

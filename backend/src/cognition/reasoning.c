@@ -145,6 +145,7 @@ struct reasoning {
     reasoning_observer observer;
     void *observer_ud;
     task *run_task;
+    const char *completion_prompt; /* borrowed node instruction, excluding upstream context */
     int64_t trace_task_id; /* Flow nodes have no run_task pointer */
     unsigned applied_updates;
     llm *llm;
@@ -332,6 +333,10 @@ void reasoning_set_observer(reasoning *r, reasoning_observer cb, void *ud) {
 }
 void reasoning_set_thinking_mode(reasoning *r, int enabled) { if (r) r->thinking_mode = enabled != 0; }
 void reasoning_set_task(reasoning *r, task *t) { if (r) r->run_task = t; }
+void reasoning_set_completion_prompt(reasoning *r, const char *prompt) { if(r) r->completion_prompt=prompt; }
+static const char *completion_instruction(reasoning *r, const char *prompt) {
+    return r->completion_prompt ? r->completion_prompt:prompt;
+}
 void reasoning_set_trace_task_id(reasoning *r, int64_t task_id) { if (r) r->trace_task_id = task_id; }
 static int run_aborted(reasoning *r) {
     if (!r->run_task || !task_should_abort(r->run_task)) return 0;
@@ -2991,11 +2996,11 @@ restart_planning:
              * aloud, while the model stuck narrating 4 rounds in a row will
              * not recover. Exhaustion must report an incomplete task. */
             const char *txt = strip_nudge_echo(result);
-            int needs_action = prompt_requires_mutation(prompt) && !run_has_mutating_action(r);
-            int needs_read = (prompt_requires_full_read(prompt) &&
+            int needs_action = prompt_requires_mutation(completion_instruction(r,prompt)) && !run_has_mutating_action(r);
+            int needs_read = (prompt_requires_full_read(completion_instruction(r,prompt)) &&
                 (r->pending_reads_n || r->read_tracking_overflow || answer_reports_unread(txt))) ||
-                (prompt_requests_read(prompt) && !r->run_file_reads && !run_has_mutating_action(r));
-            int narrating = !prompt_is_direct_information_request(prompt) &&
+                (prompt_requests_read(completion_instruction(r,prompt)) && !r->run_file_reads && !run_has_mutating_action(r));
+            int narrating = !prompt_is_direct_information_request(completion_instruction(r,prompt)) &&
                             looks_like_intent(txt);
             if (needs_action || narrating || needs_read) {
                 /* Repeating the same intention is not evidence of completion.
@@ -3078,7 +3083,7 @@ restart_planning:
         }
         duplicate_rounds = 0;
         if ((search_only_rounds == 6 || (search_only_rounds > 6 && search_only_rounds % 12 == 0)) &&
-            !prompt_requires_mutation(prompt))
+            !prompt_requires_mutation(completion_instruction(r,prompt)))
             round_log_append(r, "[system] 已连续多轮读取或搜索资料。请评估已有证据是否足够回答；"
                                 "足够就直接给出最终答案，仍缺关键事实则继续读取不同的目标。");
         /* stall detection: the LLM proposed the exact same plan twice — no
@@ -3149,10 +3154,10 @@ restart_planning:
     }
     /* A read-only final round may exhaust the budget without ever reaching
      * the no-plan guard above. It is still incomplete if a write was asked. */
-    if (prompt_requires_mutation(prompt) && !run_has_mutating_action(r))
+    if (prompt_requires_mutation(completion_instruction(r,prompt)) && !run_has_mutating_action(r))
         unfinished = 1;
     if (stalled || synthesized || fail_aborted || r->tool_fail_aborted ||
-        (prompt_requires_full_read(prompt) && (r->pending_reads_n || r->read_tracking_overflow || answer_reports_unread(final_text))))
+        (prompt_requires_full_read(completion_instruction(r,prompt)) && (r->pending_reads_n || r->read_tracking_overflow || answer_reports_unread(final_text))))
         unfinished = 1;
     if (unfinished)
         st = ST_FAILED;

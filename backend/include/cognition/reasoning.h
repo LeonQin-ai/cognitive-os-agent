@@ -77,6 +77,9 @@ typedef void (*reasoning_observer)(const char *json, void *ud);
 void reasoning_set_observer(reasoning *r, reasoning_observer cb, void *ud);
 struct task;
 void reasoning_set_task(reasoning *r, struct task *task);
+/* Borrow an unexpanded node instruction for completion checks only. It must
+ * outlive the engine; the model still receives the full contextual prompt. */
+void reasoning_set_completion_prompt(reasoning *r, const char *prompt);
 /* Associate a Flow node's reasoning with its parent scheduler task. */
 void reasoning_set_trace_task_id(reasoning *r, int64_t task_id);
 reasoning *reasoning_new(const reasoning_config *cfg);

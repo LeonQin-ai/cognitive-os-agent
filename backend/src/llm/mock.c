@@ -266,6 +266,11 @@ static char *mock_respond(const char *msg) {
         if(in_loop) return xstrdup("报告：已阅读源码，修复建议为补充边界验证。");
         return xstrdup("[{\"tool\":\"file_read\",\"args\":{\"path\":\"readme.txt\"}}]");
     }
+    if(has_substr(msg,"上游写入交付回归测试")) {
+        if(in_loop) return xstrdup("文件已生成，已读取完整源码，等待后续总结。");
+        return xstrdup("[{\"tool\":\"file_write\",\"args\":{\"path\":\"context-artifact.txt\",\"content\":\"written\"}}]");
+    }
+    if(has_substr(msg,"上下文交付判定回归测试")) return xstrdup("只总结上游结果，文字总结已完成。");
     if (has_substr(msg,"字面标签回归测试")) {
         if(in_loop) return xstrdup("标签文件已写入。");
         return xstrdup("<think>plan</think>[{\"tool\":\"file_write\",\"args\":{\"path\":\"keep-think.txt\","
