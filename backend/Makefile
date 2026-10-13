@@ -29,7 +29,7 @@ include/api/web_ui.h: apps/web/index.html tools/gen_web_ui.py
 $(SRCS): | include/api/web_ui.h
 .DEFAULT_GOAL := all
 
-all: build/cognitive-os-agent build/cognitive-os-agent-test build/cognitive-os-agent-scenario build/mock-llm-server build/test-adapters build/cognitive-os-agent-e2e build/cognitive-os-agent-bench
+all: build/cognitive-os-agent build/cognitive-os-agent-test build/cognitive-os-agent-scenario build/mock-llm-server build/test-adapters build/cognitive-os-agent-e2e build/cognitive-os-agent-bench build/bench-runtime
 
 build/cognitive-os-agent: $(SRCS) cli/main.c
 	@mkdir -p build
@@ -87,3 +87,7 @@ include/api/attachment_extractor.h: tools/attachment_extract.py tools/gen_attach
 $(SRCS): | include/api/attachment_extractor.h
 
 build/cognitive-os-agent build/cognitive-os-agent-test build/cognitive-os-agent-scenario build/mock-llm-server build/test-adapters build/cognitive-os-agent-e2e build/cognitive-os-agent-bench build/test-review: include/api/attachment_extractor.h
+
+build/bench-runtime: $(SRCS) tests/bench_runtime.c include/api/attachment_extractor.h
+	@mkdir -p build
+	$(CC) $(CFLAGS) -o $@ $(SRCS) tests/bench_runtime.c $(LDLIBS)

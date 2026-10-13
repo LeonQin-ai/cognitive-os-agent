@@ -48,6 +48,8 @@ python3 tools/gen_attachment_extractor.py
 TARGET="${1:-all}"
 case "$TARGET" in
   all)
+    echo "[build] bench-runtime"
+    $CC $CFLAGS -o build/bench-runtime$EXE $SRCS tests/bench_runtime.c $LIBS
     echo "[build] cognitive-os-agent"
     $CC $CFLAGS -o build/cognitive-os-agent$EXE $SRCS cli/main.c $LIBS
     echo "[build] cognitive-os-agent-test"
@@ -88,6 +90,10 @@ case "$TARGET" in
   e2e)
     echo "[build] cognitive-os-agent-e2e"
     $CC $CFLAGS -o build/cognitive-os-agent-e2e$EXE $SRCS tests/test_e2e.c $LIBS
+    ;;
+  runtime-bench)
+    echo "[build] bench-runtime"
+    $CC $CFLAGS -o build/bench-runtime$EXE $SRCS tests/bench_runtime.c $LIBS
     ;;
   bench)
     echo "[build] cognitive-os-agent-bench"

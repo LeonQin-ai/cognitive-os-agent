@@ -1,4 +1,4 @@
-param([ValidateSet('all','cli','test','scenario','mock','e2e','adapters','bench','review')][string]$Target='all')
+param([ValidateSet('all','cli','test','scenario','mock','e2e','adapters','bench','runtime-bench','review')][string]$Target='all')
 $ErrorActionPreference='Stop'
 Push-Location $PSScriptRoot
 try {
@@ -19,6 +19,7 @@ try {
         adapters=@('test-adapters','tests/test_adapters.c'); e2e=@('cognitive-os-agent-e2e','tests/test_e2e.c')
         review=@('test-review','tests/test_review.c')
         bench=@('cognitive-os-agent-bench','tests/bench_agent.c')
+        'runtime-bench'=@('bench-runtime','tests/bench_runtime.c')
     }
     foreach ($name in $targets.Keys) {
         if ($Target -ne 'all' -and $Target -ne $name) { continue }

@@ -1,0 +1,23 @@
+{
+  "scope": "real runtime; local deterministic runner/LLM; no remote inference",
+  "agents": 100,
+  "tasks_completed": 10000,
+  "workers": 8,
+  "aggregate_context_bytes": 134217728,
+  "peak_rss_bytes": 144199680,
+  "elapsed_ms": 591.579,
+  "tasks_per_second": 16903.91308684047,
+  "scheduler_latency_p50_ms": 0.115,
+  "scheduler_latency_p95_ms": 0.252,
+  "scheduler_latency_max_ms": 0.812,
+  "retained_tasks": 64,
+  "retained_bytes": 23360,
+  "dag_depth": 32,
+  "dag_run_ms": 727.268,
+  "failure_recovery_ms": 0.062,
+  "rollback_ms": 0.65,
+  "rollback_verified": true,
+  "measurement_date": "2026-10-13",
+  "platform": "Windows-11-10.0.26200-SP0",
+  "compiler": "Zig cc 0.14.1, -O1"
+}
