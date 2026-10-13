@@ -2829,7 +2829,7 @@ static void test_tool_truncate(void) {
     tool_result *r = tool_execute(reg, "bigout", "{}", NULL);
     CHECK(r != NULL);
     if (r) {
-        CHECK(r->ok == 1);
+        CHECK(r->ok == 0); /* no workspace: complete output cannot be saved */
         CHECK(r->output && strlen(r->output) < 20000);
         CHECK(r->output && strstr(r->output, "[truncated") != NULL);
         tool_result_free(r);
@@ -7709,6 +7709,48 @@ static void test_issue121_regressions(void) {
     token[510]=0; CHECK(!auth_check(a,token)); auth_free(a);
 }
 
+static char *large_observation;
+static tool_result *large_browser_result(const tool *self,const tool_ctx *ctx,const char *args) {
+    (void)self; (void)ctx; (void)args; return tool_result_new(1,large_observation);
+}
+static void test_complete_tool_result(void) {
+    section("complete browser/tool result remains readable beyond context limits");
+    large_observation=malloc(20001); memset(large_observation,'x',20000); large_observation[20000]=0;
+    memcpy(large_observation+9000,"BROWSER_MIDDLE_PROOF",20);
+    memcpy(large_observation+19000,"password=source-only-value",sizeof("password=source-only-value")-1);
+    CHECK(secret_register_ssh_password("SSH_FullResult_Scope_9A!")==0);
+    memcpy(large_observation+15000,"SSH_FullResult_Scope_9A!",sizeof("SSH_FullResult_Scope_9A!")-1);
+    char *expected=secret_redact_ssh_passwords(large_observation,strlen(large_observation),NULL);
+    tool_registry *reg=tool_registry_new(); tool_register_builtins(reg);
+    tool browser={"browser-full","test fixture",NULL,0,large_browser_result,NULL}; tool_register(reg,&browser);
+    tool_ctx ctx={0}; ctx.reg=reg; ctx.workspace="state-complete-tool-test";
+    tool_result *result=tool_execute(reg,"browser-full","{}",&ctx);
+    CHECK(result && result->ok && strstr(result->output,"[full tool result saved]"));
+    const char *start=result ? strchr(result->output,'{'):NULL;
+    const char *end=start ? strchr(start,'}'):NULL;
+    char *json=start && end ? xstrdup(start):NULL;
+    if(json) json[end-start+1]=0;
+    cJSON *meta=json ? cJSON_Parse(json):NULL;
+    const char *file=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(meta,"path"));
+    char *stored=file ? fs_read_file(file):NULL;
+    CHECK(stored && expected && strcmp(stored,expected)==0);
+    CHECK(stored && !strstr(stored,"SSH_FullResult_Scope_9A!") && strstr(stored,"[REDACTED:ssh_password]"));
+    CHECK(stored && strstr(stored,"BROWSER_MIDDLE_PROOF") && strstr(stored,"password=source-only-value"));
+    cJSON *args=cJSON_CreateObject(); cJSON_AddStringToObject(args,"path",file ? file:"");
+    cJSON_AddNumberToObject(args,"offset_bytes",8000); char *arg_json=cJSON_PrintUnformatted(args); cJSON_Delete(args);
+    tool_result *page=tool_execute(reg,"file_read",arg_json,&ctx);
+    CHECK(page && page->ok && strstr(page->output,"BROWSER_MIDDLE_PROOF"));
+    tool_result_free(page); free(arg_json); free(stored);
+    if(file) fs_remove(file); cJSON_Delete(meta); free(json); tool_result_free(result);
+    fs_remove("state-complete-tool-test/.tool-results"); fs_remove(ctx.workspace);
+    fs_write_file("state-complete-tool-test-blocked","x",1);
+    ctx.workspace="state-complete-tool-test-blocked";
+    result=tool_execute(reg,"browser-full","{}",&ctx);
+    CHECK(result && !result->ok && strstr(result->output,"full result save failed"));
+    tool_result_free(result); fs_remove(ctx.workspace); free(expected);
+    tool_registry_free(reg); free(large_observation); large_observation=NULL;
+}
+
 int main(int argc, char **argv) {
 #ifdef _WIN32
     if (argc > 1 && (!strcmp(argv[0],"ssh") || !strcmp(argv[0],"ssh.exe") || strstr(argv[0],"issue-ssh"))) {
@@ -7777,6 +7819,10 @@ int main(int argc, char **argv) {
     if (argc==2 && !strcmp(argv[1],"--ssh-only")) {
         test_logging(); test_ssh_only_redaction(); test_security();
         printf("%d passed, %d failed\n",g_pass,g_fail); return g_fail?1:0;
+    }
+    if (argc==2 && !strcmp(argv[1],"--tool-results")) {
+        test_complete_tool_result();
+        printf("\n%d passed, %d failed\n",g_pass,g_fail); return g_fail ? 1:0;
     }
     if (argc==2 && !strcmp(argv[1],"--audit")) {
         test_config(); test_issue121_regressions(); test_scheduler(); test_scheduler_limits(); test_coro();
@@ -7868,7 +7914,7 @@ int main(int argc, char **argv) {
     test_memory_graph();
     test_edit_search();
     test_snapshot_bigfile();
-    test_mcp();
+    test_mcp(); test_complete_tool_result();
     test_tool_schema();
     test_tool_truncate();
     test_mcp_standard();

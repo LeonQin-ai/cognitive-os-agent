@@ -2265,8 +2265,9 @@ static int prompt_requests_read(const char *prompt) {
 }
 static int prompt_requires_full_read(const char *prompt) {
     if (prompt) { const char *task=strstr(prompt,"## 用户任务\n"); if(task) prompt=task+strlen("## 用户任务\n"); }
-    return prompt && (strstr(prompt, "代码") || strstr(prompt, "源码") || strstr(prompt, "source") || strstr(prompt, "code")) &&
-        (strstr(prompt, "读") || strstr(prompt, "read") || strstr(prompt, "review")) &&
+    return prompt && (strstr(prompt, "代码") || strstr(prompt, "源码") || strstr(prompt, "source") || strstr(prompt, "code") || strstr(prompt,"浏览器") ||
+        strstr(prompt,"网页") || strstr(prompt,"页面") || strstr(prompt,"文档") || strstr(prompt,"文件")) &&
+        (strstr(prompt, "读") || strstr(prompt, "read") || strstr(prompt, "review") || strstr(prompt,"提取")) &&
         (strstr(prompt, "全部") || strstr(prompt, "完整") || strstr(prompt, "完备") || strstr(prompt, "所有") ||
          strstr(prompt, "补读") || strstr(prompt, "继续") || strstr(prompt, "entire") || strstr(prompt, "all ") || strstr(prompt, "full"));
 }

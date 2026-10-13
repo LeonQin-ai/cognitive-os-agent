@@ -130,6 +130,11 @@ static char *build_catalog_prompt(const tool_registry *tools, struct skill_regis
                       "Use max_bytes at most 4000 and copy next_offset_bytes for each following page. "
                       "On a missing path discover its real location instead of retrying it unchanged.\n");
 
+    strbuf_append(&b, "Browser extraction: a navigation/accessibility snapshot may omit article text. "
+        "When supported by the installed browser MCP, evaluate document.body.innerText (and relevant frames) "
+        "after the requested content loads. Follow actual site pagination/scroll loading when needed. "
+        "If a tool returns [full tool result saved], read its local file in 4000-byte pages to EOF; "
+        "the preview is not the complete result. Do not repeatedly navigate to the same page for missing text.\n");
     if (skills) skill_registry_refresh(skills);
     if (have_skill_tool && skills && skill_count(skills) > 0) {
         strbuf_append(&b, "Registered skills (capabilities you can RUN via the skill tool):\n");

@@ -3,10 +3,14 @@
 #include "runtime/event_bus.h"
 #include "infra/metrics.h"
 #include "infra/util.h"
+#include "os/os_fs.h"
+#include "os/os_time.h"
+#include "security/secret.h"
 
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdatomic.h>
 #include "cJSON.h"
 
 struct tool_registry {
@@ -231,19 +235,53 @@ int tool_validate_args(const tool *tool, const char *args_json, char **err_out) 
 
 /* Cap tool output so a huge file/shell dump cannot blow up the LLM context
  * (mirrors Claude Code's maxResultSizeChars). */
-static char *truncate_output(const char *out, size_t limit) {
+static char *truncate_output(const char *out, size_t limit, const tool_ctx *ctx) {
     size_t n = strlen(out);
     char *msg;
     char tail[96];
 
     if (n <= limit)
         return NULL;
+    /* Keep complete browser/MCP/shell/skill text available instead of losing
+     * the middle or repeatedly reopening the source. Filter only known SSH
+     * passwords before creating this durable local observation. */
+    if (ctx && ctx->workspace && *ctx->workspace) {
+        static _Atomic unsigned long sequence;
+        char dir[2048], file[2048], leaf[96];
+        path_join(dir, sizeof dir, ctx->workspace, ".tool-results");
+        if (fs_mkdirs(dir) == 0) {
+            snprintf(leaf, sizeof leaf, "%lld-%lu.txt", (long long)time_now_us(), atomic_fetch_add(&sequence,1));
+            path_join(file, sizeof file, dir, leaf);
+            char *safe = secret_redact_ssh_passwords(out, n, NULL);
+            if (safe && fs_write_file(file,safe,strlen(safe)) == 0) {
+                cJSON *meta=cJSON_CreateObject();
+                char *absolute=fs_absolute_path(file);
+                cJSON_AddStringToObject(meta,"path",absolute ? absolute : file);
+                free(absolute);
+                cJSON_AddNumberToObject(meta,"bytes",(double)strlen(safe));
+                cJSON_AddNumberToObject(meta,"offset_bytes",0);
+                cJSON_AddNumberToObject(meta,"max_bytes",4000);
+                char *json=cJSON_PrintUnformatted(meta); cJSON_Delete(meta);
+                strbuf b; strbuf_init(&b);
+                strbuf_append(&b,"[full tool result saved] Read the complete content with file_read using these arguments, then follow next_offset_bytes until end of file. Do not reopen the browser to retrieve the same text.\n");
+                strbuf_append(&b,json ? json : "");
+                strbuf_append(&b,"\nPreview (not the whole result):\n");
+                size_t preview=strlen(safe)<800 ? strlen(safe):800;
+                /* Do not cut a UTF-8 code point in the preview. */
+                while(preview && ((unsigned char)safe[preview]&0xc0)==0x80) preview--;
+                strbuf_append_n(&b,safe,preview);
+                free(json); free(safe);
+                return strbuf_detach(&b);
+            }
+            free(safe);
+        }
+    }
     msg = (char *)malloc(limit + 96);
     if (!msg)
         return NULL;
     memcpy(msg, out, limit);
     msg[limit] = '\0';
-    snprintf(tail, sizeof(tail), "\n...[truncated, 全长 %zu 字符]", n);
+    snprintf(tail, sizeof(tail), "\n...[truncated, 全长 %zu 字符; full result save failed]", n);
     strcat(msg, tail);
     return msg;
 }
@@ -287,10 +325,11 @@ tool_result *tool_execute(tool_registry *reg, const char *name, const char *args
 
     /* cap output size before it enters the LLM context */
     if (r->output) {
-        char *capped = truncate_output(r->output, 8000);
+        char *capped = truncate_output(r->output, 6000, ctx);
         if (capped) {
             free(r->output);
             r->output = capped;
+            if (strstr(capped,"full result save failed")) r->ok=0;
         }
     }
 
