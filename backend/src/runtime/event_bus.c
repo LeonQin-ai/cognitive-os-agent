@@ -28,6 +28,7 @@ struct event_bus {
     subscription *subs;
     size_t count, cap;
     mutex_t sub_mtx;    /* guards subs array only (rare mutation) */
+    _Atomic uint64_t dropped;
     _Atomic int draining; /* 1 = a thread is draining/dispatching */
 };
 
@@ -142,12 +143,9 @@ static void drain(event_bus *b) {
         atomic_store_explicit(&b->draining, 0, memory_order_release);
         if (dispatched >= max_dispatch)
             break; /* bound publisher latency under a sustained producer flood */
-        /* A producer may have enqueued between our last pop and clearing the
-         * flag. Re-check once; if something arrived, loop and drain again. */
-        if (ringbuf_pop(b->queue, &it) != 1)
-            break;
-        /* put it back so the loop drains it in order */
-        ringbuf_push(b->queue, it);
+        /* Observe without removing/reinserting an event. Reinsertion could
+         * race with producers filling the released slot and lose ownership. */
+        if (ringbuf_empty(b->queue)) break;
     }
 }
 
@@ -172,7 +170,8 @@ void event_bus_publish(event_bus *b, event_type type, const char *source, cJSON 
     ev->ts_ms = time_now_ms();
     ev->payload = payload;
     if (ringbuf_push(b->queue, ev) != 1) {
-        /* ring full: fall back to a synchronous best-effort dispatch */
+        /* Bounded queue: account for deliberate overflow drops. */
+        atomic_fetch_add(&b->dropped, 1);
         free(ev);
         if (payload)
             cJSON_Delete(payload);
@@ -188,3 +187,6 @@ void event_bus_publish_json(event_bus *b, event_type type, const char *source, c
         p = cJSON_CreateString(json_text);
     event_bus_publish(b, type, source, p);
 }
+
+uint64_t event_bus_dropped(const event_bus *b) { return b ? atomic_load(&b->dropped) : 0; }
+void event_bus_flush(event_bus *b) { if (b) drain(b); }

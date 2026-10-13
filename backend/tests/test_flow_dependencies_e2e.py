@@ -162,6 +162,19 @@ with tempfile.TemporaryDirectory(prefix='coa-flow-deps-') as folder:
             assert summary['status']=='DONE' and '文字总结已完成' in summary['output'],summary
             assert counts.get('summary',0)==1 and not errors,errors
             print('PASS: summary completes without writing when upstream context says a file was generated')
+            counts['upstream']=0; entered.clear(); release.clear()
+            cancelled=request('/v1/flows',{'nodes':[
+                {'id':'waiting','agent':'alpha','task':'读取 evidence.c FLOW_WAIT_STEP1'},
+                {'id':'child','agent':'alpha','task':'创建 DO_NOT_CREATE.txt FLOW_NEVER'}],
+                'edges':[['waiting','child']]})
+            assert entered.wait(10)
+            req=urllib.request.Request(f'http://127.0.0.1:{port}/v1/tasks/'+str(cancelled['id']),method='DELETE')
+            with urllib.request.urlopen(req,timeout=5): pass
+            release.set(); stopped=finished(cancelled['id'])
+            assert stopped['status']=='CANCELLED',stopped
+            assert all(n['status']=='cancelled' for n in stopped['flow_nodes']),stopped
+            assert not (state/'DO_NOT_CREATE.txt').exists()
+            print('PASS: parent cancellation propagates to active and queued Flow nodes')
         finally:
             release.set(); process.terminate(); process.wait(timeout=10)
             provider.shutdown(); provider.server_close()

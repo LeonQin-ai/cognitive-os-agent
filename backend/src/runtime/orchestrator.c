@@ -375,5 +375,5 @@ int orchestrate(runtime_ctx *ctx, const char *task, char **answer, char **trace_
     free(flow_answer);
 
     *answer = final;
-    return 0;
+    return final ? 0 : -1;
 }

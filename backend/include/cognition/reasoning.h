@@ -76,6 +76,8 @@ typedef void (*reasoning_observer)(const char *json, void *ud);
 /* Set only while the lane is idle; callback runs on its worker. */
 void reasoning_set_observer(reasoning *r, reasoning_observer cb, void *ud);
 struct task;
+/* Borrowed parent for cancellation/timeout only, independent of steering. */
+void reasoning_set_abort_parent(reasoning *r, struct task *task);
 void reasoning_set_task(reasoning *r, struct task *task);
 /* Borrow an unexpanded node instruction for completion checks only. It must
  * outlive the engine; the model still receives the full contextual prompt. */

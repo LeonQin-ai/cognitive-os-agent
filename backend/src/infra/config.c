@@ -7,6 +7,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <stdio.h>
+#include <errno.h>
 #include "infra/util.h"
 #include "os/os_fs.h"
 #include "cJSON.h"
@@ -22,6 +23,7 @@ extern char **environ;
 
 struct config {
     cJSON *root;
+    cJSON *env;
 };
 
 config *config_new(void) {
@@ -29,6 +31,7 @@ config *config_new(void) {
     if (!c)
         return NULL;
     c->root = cJSON_CreateObject();
+    c->env = cJSON_CreateObject();
     return c;
 }
 
@@ -95,15 +98,12 @@ void config_apply_env(config *c, const char *prefix) {
         size_t n = 0;
         for (size_t i = plen; i < klen && n < sizeof(key) - 1; i++) {
             char ch = (*e)[i];
-            if (ch == '_')
-                ch = '.';
-            else
-                ch = (char)tolower((unsigned char)ch);
+            ch = (char)tolower((unsigned char)ch);
             key[n++] = ch;
         }
         key[n] = '\0';
-        cJSON_DeleteItemFromObject(c->root, key);
-        cJSON_AddStringToObject(c->root, key, eq + 1);
+        cJSON_DeleteItemFromObject(c->env, key);
+        cJSON_AddStringToObject(c->env, key, eq + 1);
     }
 }
 
@@ -111,15 +111,13 @@ void config_free(config *c) {
     if (!c)
         return;
     cJSON_Delete(c->root);
+    cJSON_Delete(c->env);
     free(c);
 }
 
-/* Navigate a dotted path into the JSON tree. The built-in defaults store flat
- * dotted keys (e.g. "llm.base_url"), while env vars (config_apply_env) write
- * underscore-flattened keys (e.g. "llm.base.url"). Since env vars must override
- * defaults, try the flattened form FIRST, then the exact key, then nested dot
- * navigation. Without this order an empty-string default like "llm.base_url":""
- * would shadow a LLM_BASE_URL env value. */
+/* Environment overrides are stored separately from JSON. Double underscores
+ * encode dots without confusing an underscore inside a key. Legacy single
+ * underscore environment names remain supported as a fallback. */
 static cJSON *config_get_path(const config *c, const char *key) {
     char flat[512];
     size_t j = 0;
@@ -133,15 +131,21 @@ static cJSON *config_get_path(const config *c, const char *key) {
         return NULL;
     if (!key || !*key)
         return NULL;
-    for (size_t i = 0; key[i] && j + 1 < sizeof(flat); i++)
-        flat[j++] = (key[i] == '_') ? '.' : key[i];
-    flat[j] = '\0';
-    n = cJSON_GetObjectItemCaseSensitive(c->root, flat);
-    if (n)
-        return n;
+    for (size_t i=0; key[i] && j+2 < sizeof(flat); i++) {
+        if (key[i]=='.') { flat[j++]='_'; flat[j++]='_'; }
+        else flat[j++]=key[i];
+    }
+    flat[j]='\0';
+    n = cJSON_GetObjectItemCaseSensitive(c->env, flat);
+    if (n) return n;
+    j=0;
+    for (size_t i=0; key[i] && j+1 < sizeof(flat); i++)
+        flat[j++]=key[i]=='.' ? '_' : key[i];
+    flat[j]='\0';
+    n = cJSON_GetObjectItemCaseSensitive(c->env, flat);
+    if (n) return n;
     n = cJSON_GetObjectItemCaseSensitive(c->root, key);
-    if (n)
-        return n;
+    if (n) return n;
     node = c->root;
     snprintf(path, sizeof(path), "%s", key);
     /* manual dot-splitting (strtok_r is not portable to MSVC) */
@@ -172,6 +176,11 @@ int64_t config_get_int(const config *c, const char *key, int64_t def) {
     cJSON *n = config_get_path(c, key);
     if (n && cJSON_IsNumber(n))
         return (int64_t)n->valuedouble;
+    if (cJSON_IsString(n)) {
+        char *end=NULL; errno=0;
+        long long value=strtoll(n->valuestring,&end,10);
+        if (!errno && end!=n->valuestring && !*end) return (int64_t)value;
+    }
     return def;
 }
 
@@ -179,6 +188,10 @@ int config_get_bool(const config *c, const char *key, int def) {
     cJSON *n = config_get_path(c, key);
     if (n && cJSON_IsBool(n))
         return cJSON_IsTrue(n);
+    if (cJSON_IsString(n)) {
+        if (!strcmp(n->valuestring,"true") || !strcmp(n->valuestring,"1")) return 1;
+        if (!strcmp(n->valuestring,"false") || !strcmp(n->valuestring,"0")) return 0;
+    }
     return def;
 }
 

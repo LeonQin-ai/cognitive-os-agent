@@ -104,3 +104,10 @@ int ringbuf_pop(ringbuf *r, void **out) {
         }
     }
 }
+
+int ringbuf_empty(const ringbuf *r) {
+    if (!r) return 1;
+    size_t pos = atomic_load_explicit(&r->dequeue_pos, memory_order_acquire);
+    size_t seq = atomic_load_explicit(&r->seq[pos & r->mask], memory_order_acquire);
+    return (intptr_t)seq - (intptr_t)(pos+1) < 0;
+}

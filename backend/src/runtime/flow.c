@@ -255,7 +255,7 @@ static int flow_layer(flow_dag *d) {
  * per node so the API can render real execution progress. */
 #define FLOW_PROG_MAX 8 /* concurrent tracked runs; full table -> reuse finished slots */
 
-enum { FP_QUEUED = 0, FP_RUNNING = 1, FP_OK = 2, FP_ERROR = 3, FP_BLOCKED = 4 };
+enum { FP_QUEUED = 0, FP_RUNNING = 1, FP_OK = 2, FP_ERROR = 3, FP_BLOCKED = 4, FP_CANCELLED = 5, FP_TIMEOUT = 6 };
 
 typedef struct flow_prog_node {
     char id[64];
@@ -412,6 +412,8 @@ char *flow_progress_json(int64_t task_id) {
                                                      : p->nodes[i].state == FP_RUNNING ? "running"
                                                      : p->nodes[i].state == FP_OK      ? "ok"
                                                      : p->nodes[i].state == FP_BLOCKED ? "blocked"
+                                                     : p->nodes[i].state == FP_CANCELLED ? "cancelled"
+                                                     : p->nodes[i].state == FP_TIMEOUT ? "timeout"
                                                                                        : "error");
                 cJSON_AddNumberToObject(o, "start_ms", (double)p->nodes[i].start_ms);
                 cJSON_AddNumberToObject(o, "end_ms", (double)p->nodes[i].end_ms);
@@ -453,6 +455,7 @@ char *flow_progress_json(int64_t task_id) {
 typedef struct flow_job {
     runtime_ctx *ctx;
     int64_t task_id;
+    task *parent;
     flow_node *nd;
     char task[FLOW_MAX_TASKLEN]; /* after {{ref}} substitution */
     char *out;
@@ -491,6 +494,7 @@ static void flow_worker(void *arg) {
         char *prompt = agent_pool_task_prompt(j->ctx->agents, j->nd->agent, j->task);
         reasoning_set_trace_task_id(r, j->task_id);
         reasoning_set_completion_prompt(r,j->nd->task);
+        reasoning_set_abort_parent(r,j->parent);
         flow_prog_node_attach(j->task_id, j->nd->id, r);
         j->rc = prompt ? reasoning_run(r, prompt, &j->out) : -1;
         if (j->rc == 0 && !agent_pool_deliverable_valid(j->ctx->agents, j->nd->agent,
@@ -522,7 +526,9 @@ static void flow_worker(void *arg) {
     snprintf(key, sizeof(key), "flow/%s/result", j->nd->id);
     blackboard_put(j->ctx->blackboard, key, result);
     flow_event(j->ctx, "done", j->nd->id, j->nd->agent, j->rc == 0 ? "ok" : "error");
-    flow_prog_node_mark(j->task_id, j->nd->id, j->rc == 0 ? FP_OK : FP_ERROR);
+    if (j->parent && task_should_abort(j->parent))
+        j->rc = j->parent->cancel_flag ? -3 : -4;
+    flow_prog_node_mark(j->task_id, j->nd->id, j->rc == 0 ? FP_OK : j->rc == -3 ? FP_CANCELLED : j->rc == -4 ? FP_TIMEOUT : FP_ERROR);
 }
 
 /* Replace "{{<id>}}" in the node's task with upstream results (capped). */
@@ -682,10 +688,17 @@ int flow_run(runtime_ctx *ctx, const char *dag_json, int64_t task_id, char **ans
         return -1;
     }
 
+    task *parent = ctx->scheduler && task_id >= 0 ? scheduler_acquire(ctx->scheduler,task_id) : NULL;
     for (int L = 0; L <= maxlayer; L++) {
         int layern = 0, runidx[FLOW_MAX_NODES];
         for (int i = 0; i < d->n; i++) {
             if (d->nodes[i].layer != L) continue;
+            if (parent && task_should_abort(parent)) {
+                jobs[i].rc=parent->cancel_flag ? -3 : -4; failed=1;
+                results[i]=xstrdup(parent->cancel_flag ? "Flow cancelled" : "Flow timed out");
+                flow_prog_node_mark(task_id,d->nodes[i].id,parent->cancel_flag ? FP_CANCELLED : FP_TIMEOUT);
+                continue;
+            }
             const char *blocked_by = NULL;
             for (int u=0;u<d->n && !blocked_by;u++)
                 for(int k=0;k<d->nodes[u].nadj;k++)
@@ -707,6 +720,7 @@ int flow_run(runtime_ctx *ctx, const char *dag_json, int64_t task_id, char **ans
             else
                 tasks[i] = xstrdup(d->nodes[i].task);
             jobs[i].ctx = ctx;
+            jobs[i].parent = parent;
             jobs[i].task_id = task_id;
             jobs[i].nd = &d->nodes[i];
             snprintf(jobs[i].task, FLOW_MAX_TASKLEN, "%s", tasks[i] ? tasks[i] : d->nodes[i].task);
@@ -746,7 +760,7 @@ int flow_run(runtime_ctx *ctx, const char *dag_json, int64_t task_id, char **ans
             cJSON_AddStringToObject(st, "agent", d->nodes[i].agent);
             cJSON_AddStringToObject(st, "task", tasks[i] ? tasks[i] : d->nodes[i].task);
             cJSON_AddNumberToObject(st, "layer", (double)d->nodes[i].layer);
-            cJSON_AddStringToObject(st, "status", jobs[i].rc == 0 ? "ok" : jobs[i].rc == -2 ? "blocked" : "error");
+            cJSON_AddStringToObject(st, "status", jobs[i].rc == 0 ? "ok" : jobs[i].rc == -2 ? "blocked" : jobs[i].rc == -3 ? "cancelled" : jobs[i].rc == -4 ? "timeout" : "error");
             cJSON_AddStringToObject(st, "result", result);
             cJSON_AddItemToArray(trace, st);
         }
@@ -788,5 +802,9 @@ int flow_run(runtime_ctx *ctx, const char *dag_json, int64_t task_id, char **ans
     free(d);
 
     *answer = fin.len > 0 ? fin.buf : xstrdup("(flow produced no output)");
+    if (parent) {
+        if (task_should_abort(parent) && !parent->cancel_flag) parent->timed_out=1;
+        scheduler_release(ctx->scheduler,parent);
+    }
     return failed ? -1 : 0;
 }

@@ -37,6 +37,9 @@ int event_bus_subscribe(event_bus *b, int type, event_handler fn, void *ud);
 /* Publish an event. Takes ownership of payload (may be NULL). Non-blocking. */
 void event_bus_publish(event_bus *b, event_type type, const char *source, cJSON *payload);
 /* Convenience: publish with a JSON text payload (parsed, then freed after dispatch). */
+/* Observable overload count and bounded explicit drain for pending events. */
+uint64_t event_bus_dropped(const event_bus *b);
+void event_bus_flush(event_bus *b);
 void event_bus_publish_json(event_bus *b, event_type type, const char *source, const char *json_text);
 
 #ifdef __cplusplus

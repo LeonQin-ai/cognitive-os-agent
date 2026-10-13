@@ -1704,15 +1704,33 @@ static void test_config(void) {
     CHECK(config_get_str(c, "llm.base_url", NULL) != NULL);
     CHECK(strcmp(config_get_str(c, "llm.base_url", NULL), "") == 0);
     CHECK(config_get_bool(c, "tx.use_transaction", 0) == 1);
-    /* env LLM_BASE_URL writes the underscore-flattened key; it must win
-     * over the empty-string flat-dotted default */
-    CHECK(config_apply_json(c,
-        "{\"llm.base.url\":\"http://localhost:9000\",\"tx.use.transaction\":false}") == 0);
-    CHECK(strcmp(config_get_str(c, "llm.base_url", NULL),
-                 "http://localhost:9000") == 0);
-    CHECK(config_get_bool(c, "tx.use_transaction", 1) == 0);
-    /* provider/model keys have no underscore->dot collision */
-    CHECK(strcmp(config_get_str(c, "llm.provider", NULL), "mock") == 0);
+    /* JSON keys that differ by underscores must remain distinct. */
+    CHECK(config_apply_json(c,"{\"llm.base.url\":\"separate-key\"}")==0);
+    CHECK_STR(config_get_str(c,"llm.base_url",NULL), "");
+    CHECK_STR(config_get_str(c,"llm.base.url",NULL), "separate-key");
+#if defined(_WIN32)
+    _putenv("COA_TESTFIX_LLM_BASE_URL=http://localhost:9000");
+    _putenv("COA_TESTFIX_TX_USE_TRANSACTION=false");
+    _putenv("COA_TESTFIX_SCHEDULER__MAX_ACTIVE=123");
+    _putenv("COA_TESTFIX_LLM__BASE__URL=explicit-dotted");
+#else
+    setenv("COA_TESTFIX_LLM_BASE_URL","http://localhost:9000",1);
+    setenv("COA_TESTFIX_TX_USE_TRANSACTION","false",1);
+    setenv("COA_TESTFIX_SCHEDULER__MAX_ACTIVE","123",1);
+    setenv("COA_TESTFIX_LLM__BASE__URL","explicit-dotted",1);
+#endif
+    config_apply_env(c,"COA_TESTFIX_");
+    CHECK_STR(config_get_str(c,"llm.base_url",NULL), "http://localhost:9000");
+    CHECK_STR(config_get_str(c,"llm.base.url",NULL), "explicit-dotted");
+    CHECK(config_get_bool(c,"tx.use_transaction",1)==0);
+    CHECK(config_get_int(c,"scheduler.max_active",0)==123);
+#if defined(_WIN32)
+    _putenv("COA_TESTFIX_LLM_BASE_URL="); _putenv("COA_TESTFIX_TX_USE_TRANSACTION=");
+    _putenv("COA_TESTFIX_SCHEDULER__MAX_ACTIVE="); _putenv("COA_TESTFIX_LLM__BASE__URL=");
+#else
+    unsetenv("COA_TESTFIX_LLM_BASE_URL"); unsetenv("COA_TESTFIX_TX_USE_TRANSACTION");
+    unsetenv("COA_TESTFIX_SCHEDULER__MAX_ACTIVE"); unsetenv("COA_TESTFIX_LLM__BASE__URL");
+#endif
     config_free(c);
 }
 
@@ -7668,6 +7686,29 @@ static void test_usage_concurrent_agents(void) {
     llm_destroy(l);
 }
 
+static void event_stress_handler(const event *ev, void *ud) {
+    (void)ev; atomic_fetch_add((_Atomic int *)ud,1);
+}
+static void event_stress_producer(void *arg) {
+    for (int i=0;i<5000;i++) event_bus_publish((event_bus *)arg,EV_TASK,"concurrent",NULL);
+}
+static void test_issue121_regressions(void) {
+    section("issue121 event conservation and token boundaries");
+    event_bus *b=event_bus_new(); _Atomic int received=0;
+    event_bus_subscribe(b,-1,event_stress_handler,&received);
+    thread_t *threads[4];
+    for(int i=0;i<4;i++) { threads[i]=thread_create(event_stress_producer,b); CHECK(threads[i]!=NULL); }
+    for(int i=0;i<4;i++) if(threads[i]) thread_join(threads[i]);
+    event_bus_flush(b);
+    CHECK((uint64_t)atomic_load(&received)+event_bus_dropped(b)==20000);
+    event_bus_free(b);
+    auth *a=auth_new(); char token[513]; memset(token,'k',sizeof(token)); token[511]=0;
+    auth_add_key(a,token); CHECK(auth_count(a)==1 && auth_check(a,token));
+    token[511]='k'; token[512]=0;
+    auth_add_key(a,token); CHECK(auth_count(a)==1 && !auth_check(a,token));
+    token[510]=0; CHECK(!auth_check(a,token)); auth_free(a);
+}
+
 int main(int argc, char **argv) {
 #ifdef _WIN32
     if (argc > 1 && (!strcmp(argv[0],"ssh") || !strcmp(argv[0],"ssh.exe") || strstr(argv[0],"issue-ssh"))) {
@@ -7737,6 +7778,10 @@ int main(int argc, char **argv) {
         test_logging(); test_ssh_only_redaction(); test_security();
         printf("%d passed, %d failed\n",g_pass,g_fail); return g_fail?1:0;
     }
+    if (argc==2 && !strcmp(argv[1],"--audit")) {
+        test_config(); test_issue121_regressions(); test_scheduler(); test_scheduler_limits(); test_coro();
+        printf("\n%d passed, %d failed\n",g_pass,g_fail); return g_fail ? 1:0;
+    }
     if (argc==2 && !strcmp(argv[1],"--usage")) {
         test_usage(); test_usage_concurrent_agents(); test_llm_adapters_http();
         printf("\n%d passed, %d failed\n", g_pass, g_fail); return g_fail ? 1 : 0;
@@ -7787,7 +7832,7 @@ int main(int argc, char **argv) {
     test_executor_family();
     test_index();
     test_metrics();
-    test_config();
+    test_config(); test_issue121_regressions();
     test_blackboard();
     test_blackboard_persist();
     test_flow_store();

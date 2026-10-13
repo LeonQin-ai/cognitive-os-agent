@@ -145,6 +145,7 @@ struct reasoning {
     unsigned long progress_seq;
     reasoning_observer observer;
     void *observer_ud;
+    task *abort_parent; /* cancellation only; never consumes parent messages */
     task *run_task;
     const char *completion_prompt; /* borrowed node instruction, excluding upstream context */
     int64_t trace_task_id; /* Flow nodes have no run_task pointer */
@@ -363,6 +364,7 @@ void reasoning_set_observer(reasoning *r, reasoning_observer cb, void *ud) {
     if (r) { r->observer = cb; r->observer_ud = ud; }
 }
 void reasoning_set_thinking_mode(reasoning *r, int enabled) { if (r) r->thinking_mode = enabled != 0; }
+void reasoning_set_abort_parent(reasoning *r, task *t) { if (r) r->abort_parent=t; }
 void reasoning_set_task(reasoning *r, task *t) { if (r) r->run_task = t; }
 void reasoning_set_completion_prompt(reasoning *r, const char *prompt) { if(r) r->completion_prompt=prompt; }
 static const char *completion_instruction(reasoning *r, const char *prompt) {
@@ -370,6 +372,7 @@ static const char *completion_instruction(reasoning *r, const char *prompt) {
 }
 void reasoning_set_trace_task_id(reasoning *r, int64_t task_id) { if (r) r->trace_task_id = task_id; }
 static int run_aborted(reasoning *r) {
+    if (r->abort_parent && task_should_abort(r->abort_parent)) return 1;
     if (!r->run_task || !task_should_abort(r->run_task)) return 0;
     if (!r->run_task->cancel_flag) r->run_task->timed_out = 1;
     return 1;

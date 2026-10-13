@@ -114,12 +114,18 @@ static int add_all(scheduler *s, task *t) {
     return 0;
 }
 
+/* Scheduler lock stabilizes completion/output; progress has its own lock. */
 static size_t task_bytes(task *t) {
-    return sizeof(*t) + (t->attachments_json ? strlen(t->attachments_json) : 0) + (t->input ? strlen(t->input) : 0) +
-        (t->output ? strlen(t->output) : 0) + (t->tag ? strlen(t->tag) : 0) +
-        (t->progress_json ? strlen(t->progress_json) : 0) +
-        (t->trace_json ? strlen(t->trace_json) : 0);
+    size_t bytes = sizeof(*t) + (t->attachments_json ? strlen(t->attachments_json) : 0) +
+        (t->input ? strlen(t->input) : 0) + (t->tag ? strlen(t->tag) : 0);
+    if (t->completed && t->output) bytes += strlen(t->output);
+    mutex_lock(&t->progress_mtx);
+    if (t->progress_json) bytes += strlen(t->progress_json);
+    if (t->trace_json) bytes += strlen(t->trace_json);
+    mutex_unlock(&t->progress_mtx);
+    return bytes;
 }
+
 /* Completion callbacks must finish before a task becomes reclaimable. */
 static void prune_history(scheduler *s) {
     size_t count = 0, bytes = 0;

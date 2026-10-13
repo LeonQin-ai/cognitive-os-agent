@@ -12,6 +12,8 @@
 #include <bcrypt.h>
 #endif
 
+#define AUTH_TOKEN_BYTES 512
+
 struct auth {
     char **keys;
     size_t count;
@@ -32,7 +34,7 @@ void auth_free(auth *a) {
 }
 
 void auth_add_key(auth *a, const char *key) {
-    if (!a || !key || !*key)
+    if (!a || !key || !*key || strlen(key) >= AUTH_TOKEN_BYTES)
         return;
     if (a->count == a->cap) {
         size_t cap = a->cap ? a->cap * 2 : 4;
@@ -43,38 +45,30 @@ void auth_add_key(auth *a, const char *key) {
         a->cap = cap;
     }
 
-    a->keys[a->count++] = xstrdup(key);
+    char *padded = (char *)calloc(AUTH_TOKEN_BYTES, 1);
+    if (!padded) return;
+    memcpy(padded, key, strlen(key));
+    a->keys[a->count++] = padded;
 }
 
 int auth_count(auth *a) {
     return a ? (int)a->count : 0;
 }
 
-/* Constant-time string equality: scans the full length of both inputs and
- * accumulates differences so the runtime does not depend on matching length. */
-static int ct_equal(const char *a, const char *b) {
-    int diff;
-    size_t n;
-
-    size_t la = strlen(a), lb = strlen(b);
-    diff = (int)(la ^ lb);
-    n = la > lb ? la : lb;
-    for (size_t i = 0; i < n; i++) {
-        unsigned char ca = i < la ? (unsigned char)a[i] : 0;
-        unsigned char cb = i < lb ? (unsigned char)b[i] : 0;
-        diff |= (int)(ca ^ cb);
-    }
-
-    return diff == 0;
-}
-
+/* Fixed-width padded comparison: the secret length never controls a loop. */
 int auth_check(auth *a, const char *token) {
-    if (!a || !token)
-        return 0;
-    for (size_t i = 0; i < a->count; i++)
-        if (ct_equal(a->keys[i], token))
-            return 1;
-    return 0;
+    if (!a || !token) return 0;
+    unsigned char candidate[AUTH_TOKEN_BYTES] = {0};
+    size_t n=0;
+    while (n < sizeof(candidate) && token[n]) { candidate[n]=(unsigned char)token[n]; n++; }
+    if (n == sizeof(candidate)) return 0;
+    int matched=0;
+    for (size_t k=0; k<a->count; k++) {
+        volatile unsigned diff=0;
+        for (size_t i=0; i<sizeof(candidate); i++) diff |= candidate[i] ^ (unsigned char)a->keys[k][i];
+        matched |= diff==0;
+    }
+    return matched;
 }
 
 /* Portable ASCII case-insensitive equality for a short prefix. */

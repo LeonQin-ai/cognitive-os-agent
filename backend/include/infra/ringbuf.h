@@ -22,6 +22,8 @@ void ringbuf_free(ringbuf *r);
 int ringbuf_push(ringbuf *r, void *item);
 
 /* Lock-free dequeue. Returns 1 ok (*item set), 0 buffer empty, -1 bad args. */
+/* Non-consuming readiness observation; may change concurrently. */
+int ringbuf_empty(const ringbuf *r);
 int ringbuf_pop(ringbuf *r, void **item);
 
 #ifdef __cplusplus
