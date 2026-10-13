@@ -105,6 +105,7 @@ void tool_register_builtins(tool_registry *reg) {
     tool_register(reg, tool_git());
     tool_register(reg, tool_mcp());
     tool_register(reg, tool_skill());
+    tool_register(reg, tool_skill_manage());
     tool_register(reg, tool_glob());
     tool_register(reg, tool_grep());
 }

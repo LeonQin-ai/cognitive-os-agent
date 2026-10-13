@@ -614,7 +614,7 @@ static void test_snapshot_tx(void) {
 
     tool_registry *reg = tool_registry_new();
     tool_register_builtins(reg);
-    CHECK(tool_registry_count(reg) == 11); /* file_read/list_dir/write/edit, shell, ssh, git, mcp, skill, glob, grep */
+    CHECK(tool_registry_count(reg) == 12); /* file_read/list_dir/write/edit, shell, ssh, git, mcp, skill, glob, grep */
     CHECK(tool_find(reg, "file_read") != NULL);
     CHECK(tool_find(reg, "list_dir") != NULL);
     CHECK(fs_mkdirs("state-test/w") == 0);
@@ -7593,6 +7593,38 @@ static void test_skill_live_discovery(void) {
     skill_registry_free(r);
 }
 
+static void test_skill_registration_tool(void) {
+    section("skill registration tool");
+    const char *root = "state-skill-register-test";
+    skill_registry *r = skill_registry_new();
+    fs_mkdirs("state-skill-register-test/skills/agent-browser");
+    fs_mkdirs("state-skill-register-test/skills/codehub-mr-review");
+    const char *a = "state-skill-register-test/skills/agent-browser/SKILL.md";
+    const char *b = "state-skill-register-test/skills/codehub-mr-review/SKILL.md";
+    CHECK(fs_write_file(a, "Browser instructions", 20) == 0);
+    CHECK(fs_write_file(b, "Review instructions", 19) == 0);
+    tool_ctx ctx = {0}; ctx.skills = r; ctx.state_root = root;
+    const tool *t = tool_skill_manage();
+    tool_result *res = t->execute(t, &ctx, "{\"names\":[\"agent-browser\",\"codehub-mr-review\"]}");
+    CHECK(res && res->ok && strstr(res->output, "agent-browser") && strstr(res->output, "codehub-mr-review"));
+    tool_result_free(res);
+    skill_registry *reload = skill_registry_new();
+    CHECK(skill_registry_load(reload, root) == 0);
+    CHECK(skill_find(reload, "agent-browser") != NULL);
+    CHECK(skill_find(reload, "codehub-mr-review") != NULL);
+    res = t->execute(t, &ctx, "{\"names\":[\"missing\"]}");
+    CHECK(res && !res->ok); tool_result_free(res);
+    res = t->execute(t, &ctx, "{\"names\":[42]}");
+    CHECK(res && !res->ok); tool_result_free(res);
+    res = t->execute(t, &ctx, "{\"names\":[]}");
+    CHECK(res && !res->ok); tool_result_free(res);
+    skill_registry_free(reload); skill_registry_free(r);
+    fs_remove(a); fs_remove(b); fs_remove("state-skill-register-test/skills.json");
+    fs_remove("state-skill-register-test/skills/agent-browser");
+    fs_remove("state-skill-register-test/skills/codehub-mr-review");
+    fs_remove("state-skill-register-test/skills"); fs_remove(root);
+}
+
 int main(int argc, char **argv) {
 #ifdef _WIN32
     if (argc > 1 && (!strcmp(argv[0],"ssh") || !strcmp(argv[0],"ssh.exe") || strstr(argv[0],"issue-ssh"))) {
@@ -7663,7 +7695,7 @@ int main(int argc, char **argv) {
         printf("%d passed, %d failed\n",g_pass,g_fail); return g_fail?1:0;
     }
     if (argc==2 && !strcmp(argv[1],"--skills")) {
-        test_skills(); test_skill_args(); test_skill_live_discovery();
+        test_skills(); test_skill_args(); test_skill_live_discovery(); test_skill_registration_tool();
         printf("\n%d passed, %d failed\n", g_pass, g_fail);
         return g_fail ? 1 : 0;
     }
@@ -7736,7 +7768,7 @@ int main(int argc, char **argv) {
     test_usage();
     test_registry();
     test_skills();
-    test_skill_live_discovery();
+    test_skill_live_discovery(); test_skill_registration_tool();
     test_local_dropins();
     test_skill_args();
     test_caps_gate();

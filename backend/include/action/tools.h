@@ -124,6 +124,7 @@ int ssh_askpass_run_if_requested(void);
 const tool *tool_git(void);
 const tool *tool_mcp(void);
 const tool *tool_skill(void);
+const tool *tool_skill_manage(void);
 const tool *tool_glob(void);
 const tool *tool_grep(void);
 

@@ -216,3 +216,51 @@ char *tool_generated_load_mapping(const char *state_root) {
     snprintf(path, sizeof(path), "%s/generated_tools.json", state_root);
     return fs_read_file(path);
 }
+
+/* Registration is a runtime operation, not a hand edit of the entire manifest. */
+static tool_result *skill_manage_exec(const tool *self, const tool_ctx *ctx, const char *json) {
+    (void)self;
+    if (!ctx || !ctx->skills || !ctx->state_root)
+        return tool_result_new(0, "skill_manage: registry/state directory unavailable");
+    cJSON *args = cJSON_Parse(json);
+    cJSON *names = cJSON_GetObjectItemCaseSensitive(args, "names");
+    if (!cJSON_IsArray(names) || cJSON_GetArraySize(names) == 0) {
+        cJSON_Delete(args);
+        return tool_result_new(0, "skill_manage: names must be a nonempty array");
+    }
+    if (skill_registry_load_local(ctx->skills, ctx->state_root) < 0) {
+        cJSON_Delete(args);
+        return tool_result_new(0, "skill_manage: cannot scan local skills directory");
+    }
+    cJSON *name;
+    cJSON_ArrayForEach(name, names) {
+        if (!cJSON_IsString(name) || !skill_find(ctx->skills, name->valuestring)) {
+            cJSON_Delete(args);
+            return tool_result_new(0, "skill_manage: requested skill missing; copy its SKILL.md to <state_root>/skills/<name>/SKILL.md first");
+        }
+    }
+    if (skill_registry_persist(ctx->skills, ctx->state_root) != 0) {
+        cJSON_Delete(args);
+        return tool_result_new(0, "skill_manage: failed to persist registry");
+    }
+    char *registered = cJSON_PrintUnformatted(names);
+    strbuf b; strbuf_init(&b);
+    strbuf_append(&b, "Registered and persisted skills available to agents: ");
+    strbuf_append(&b, registered ? registered : "[]");
+    free(registered); cJSON_Delete(args);
+    tool_result *result = tool_result_new(1, b.buf);
+    strbuf_free(&b);
+    return result;
+}
+
+const tool *tool_skill_manage(void) {
+    static const tool t = {
+        "skill_manage",
+        "Register local SKILL.md skills into the running agent registry and persist them. "
+        "Use this for skill registration instead of repeatedly reading/editing skills.json. "
+        "Local directory: <state_root>/skills/<folder>/SKILL.md. Supply declared skill names.",
+        "{\"type\":\"object\",\"properties\":{\"names\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}}},\"required\":[\"names\"]}",
+        1, skill_manage_exec, NULL
+    };
+    return &t;
+}
