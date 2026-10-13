@@ -45,8 +45,8 @@ const skill *skill_get(skill_registry *r, size_t i);
  * directory. Returns a malloc'd result (never NULL on lookup success; NULL if
  * the skill is unknown or its command is forbidden). Caller frees with
  * skill_result_free. args_json is reserved for future parameter binding.
- * kind="prompt" skills need an LLM and are NOT executed here — the caller
- * gets ok=0 with a hint to run them via skill_render_prompt + LLM. */
+ * kind="prompt" returns ok=1 with bound instructions for the calling agent.
+ * This loads instructions; it does not execute their requested actions. */
 skill_result *skill_execute(skill_registry *r, const char *name, const char *args_json,
                                     const char *workspace, int timeout_ms);
 void skill_result_free(skill_result *res);

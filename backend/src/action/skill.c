@@ -289,13 +289,18 @@ skill_result *skill_execute(skill_registry *r, const char *name, const char *arg
 
     bound = bind_args(s->body, args_json);
     if (strcmp(s->kind, "prompt") == 0) {
-        /* prompt skills need an LLM backend — not runnable as a process */
-        free(bound);
+        /* Hand instructions to the already-running planner. No nested LLM or
+         * process is needed; actual actions still run through ordinary tools. */
         skill_result *res = (skill_result *)calloc(1, sizeof(*res));
         if (res) {
-            res->ok = 0;
-            res->output = xstrdup("prompt skill: run via /v1/skills/run (needs an LLM backend)");
+            strbuf text; strbuf_init(&text);
+            strbuf_append(&text, "[prompt skill instructions]\nFollow these instructions using available tools. "
+                "Loading a skill alone does not perform the requested task.\n");
+            strbuf_append(&text, bound ? bound : "");
+            res->output = strbuf_detach(&text);
+            res->ok = res->output != NULL;
         }
+        free(bound);
         return res;
     }
 

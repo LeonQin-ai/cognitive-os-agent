@@ -15,6 +15,7 @@
 #include "runtime/scheduler.h"
 #include "llm/llm.h"
 #include "action/tools.h"
+#include "action/skill.h"
 #include "plugin_intelligence/generator.h"
 #include "memory/memory.h"
 #include "memory/service.h"
@@ -1752,7 +1753,15 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
                 record_read_page(r, r->actions[i].args_json, step_out);
             r->same_action_failures = 0;
             r->ok_actions++;
-            if (!is_search) round_mutated = 1;
+            int instruction_only = 0;
+            if (!strcmp(r->actions[i].tool, "skill") && r->skills) {
+                cJSON *a = cJSON_Parse(r->actions[i].args_json);
+                cJSON *name = cJSON_GetObjectItemCaseSensitive(a, "name");
+                const skill *sk = cJSON_IsString(name) ? skill_find(r->skills, name->valuestring) : NULL;
+                instruction_only = sk && !strcmp(sk->kind, "prompt");
+                cJSON_Delete(a);
+            }
+            if (!is_search && !instruction_only) round_mutated = 1;
             if (is_search) {
                 const int seen_cap = (int)(sizeof(r->search_seen) / sizeof(r->search_seen[0]));
                 if (r->search_seen_n == seen_cap) {

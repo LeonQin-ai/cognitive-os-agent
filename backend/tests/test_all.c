@@ -7625,6 +7625,21 @@ static void test_skill_registration_tool(void) {
     fs_remove("state-skill-register-test/skills"); fs_remove(root);
 }
 
+static void test_prompt_skill_handoff(void) {
+    section("prompt skill handoff without a nested LLM");
+    skill_registry *r = skill_registry_new();
+    skill s = {"prompt-handoff", "", "prompt", "Read {{path}} then write the requested report.", ""};
+    CHECK(skill_register(r, &s) == 0);
+    tool_ctx ctx = {0}; ctx.skills = r;
+    const tool *t = tool_skill();
+    tool_result *res = t->execute(t, &ctx, "{\"name\":\"prompt-handoff\",\"args\":{\"path\":\"sample.c\"}}");
+    CHECK(res && res->ok);
+    CHECK(res && strstr(res->output, "[prompt skill instructions]"));
+    CHECK(res && strstr(res->output, "Read sample.c"));
+    CHECK(res && !strstr(res->output, "needs an LLM backend"));
+    tool_result_free(res); skill_registry_free(r);
+}
+
 int main(int argc, char **argv) {
 #ifdef _WIN32
     if (argc > 1 && (!strcmp(argv[0],"ssh") || !strcmp(argv[0],"ssh.exe") || strstr(argv[0],"issue-ssh"))) {
@@ -7695,7 +7710,7 @@ int main(int argc, char **argv) {
         printf("%d passed, %d failed\n",g_pass,g_fail); return g_fail?1:0;
     }
     if (argc==2 && !strcmp(argv[1],"--skills")) {
-        test_skills(); test_skill_args(); test_skill_live_discovery(); test_skill_registration_tool();
+        test_skills(); test_skill_args(); test_skill_live_discovery(); test_skill_registration_tool(); test_prompt_skill_handoff();
         printf("\n%d passed, %d failed\n", g_pass, g_fail);
         return g_fail ? 1 : 0;
     }
@@ -7768,7 +7783,7 @@ int main(int argc, char **argv) {
     test_usage();
     test_registry();
     test_skills();
-    test_skill_live_discovery(); test_skill_registration_tool();
+    test_skill_live_discovery(); test_skill_registration_tool(); test_prompt_skill_handoff();
     test_local_dropins();
     test_skill_args();
     test_caps_gate();
