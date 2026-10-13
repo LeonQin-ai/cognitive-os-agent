@@ -106,8 +106,13 @@
   #side-recent{padding:0 8px 8px}
   .side-recent-row{display:flex;align-items:center;gap:2px;border-radius:8px}
   .side-recent-row > button:first-child{flex:1;min-width:0;width:auto!important}
-  .recent-task-status{flex:none;white-space:nowrap}
+  .recent-task-status{order:-1;flex:0 0 auto;white-space:nowrap;font-size:11px;padding:2px 4px;border-radius:4px;background:var(--nav-on)}
   .recent-session-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .flow-status-line{text-align:left;white-space:pre-wrap;overflow-wrap:anywhere;min-width:0;max-width:100%;font-size:12px;margin:6px 0}
+  .flow-status-line:empty{display:none}
+  .flow-task-heading{display:flex;gap:8px;align-items:center;flex-wrap:wrap;min-width:0}
+  .flow-task-status{flex:none;white-space:nowrap}
+  .flow-task-title{flex:1 1 150px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12.5px}
   #side-recent button{
     display:flex; align-items:center; gap:8px; width:100%;
     background:none; border:0; border-radius:8px; color:var(--muted);
@@ -986,28 +991,31 @@ panels.agents = `
   <div class="card" id="flow-orchestrate">
     <h2>Flow 自动编排（LLM 生成 DAG）</h2>
     <div class="hint">输入一个总任务，LLM 自动分解成 Flow DAG（每个子任务分给一个 agent，并行执行）。生成后填入下方编辑器，可修改再执行；「自动执行」则一步完成 分解→执行→LLM 综合答案。需先在上方注册 agent。</div>
+    <div id="flow-gen-status" class="muted flow-status-line" role="status" aria-live="polite"></div>
     <div class="row">
       <input id="flow-task" type="text" placeholder="描述总任务，如：调研 dist 目录并写一份问题清单" style="flex:1;min-width:220px">
       <button onclick="flowGen()">生成 DAG</button>
       <button onclick="flowAuto()">自动执行</button>
-      <span id="flow-gen-status" class="muted" style="font-size:12px"></span>
+      
     </div>
   </div>
   <div class="card">
     <h2>Flow DAG</h2>
     <div class="hint">手写或修改 DAG：nodes 每项 {id, agent, task}（agent 需先注册），edges 每项 {from, to}。task 里可用 {{节点id}} 引用上游节点的结果。校验通过后按拓扑分层并行执行，结果写入黑板 flow/&lt;id&gt;/result。</div>
     <textarea id="flow-json" style="width:100%;min-height:150px;font-family:monospace;font-size:12px" placeholder='{"nodes":[{"id":"a","agent":"alpha","task":"创建 f.txt 写入内容为 hi"},{"id":"b","agent":"beta","task":"总结: {{a}}"}],"edges":[{"from":"a","to":"b"}]}'></textarea>
+    <div id="flow-status" class="muted flow-status-line" role="status" aria-live="polite"></div>
     <div class="row" style="margin-top:8px">
       <button onclick="flowRun()">执行 Flow</button>
       <button class="sec" onclick="flowMerge()">综合答案</button>
       <button class="sec" onclick="loadFlow()">加载黑板记录</button>
-      <span id="flow-status" class="muted" style="font-size:12px"></span>
+      
     </div>
     <div id="flow-out" style="font-size:12.5px;white-space:pre-wrap;margin-top:8px"></div>
+    <div id="flow-follow-status" class="muted flow-status-line" role="status" aria-live="polite"></div>
     <div class="row" style="margin-top:8px">
       <input id="flow-follow" type="text" placeholder="执行完后继续追问，如：把第 2 步的结果整理成表格" style="flex:1;min-width:220px" onkeydown="if(event.key==='Enter')flowFollow()">
       <button onclick="flowFollow()">继续对话</button>
-      <span id="flow-follow-status" class="muted" style="font-size:12px"></span>
+      
     </div>
     <div class="hint" style="margin-top:4px">「综合答案」把 Flow 各节点结果交给 LLM 汇总成最终结论；「继续对话」带着 Flow 结果进入对话（走 /v1/chat，保留上下文）。</div>
   </div>
@@ -1156,28 +1164,31 @@ panels.flow = `
   <div class="card">
     <h2>自动编排（LLM 生成 DAG）</h2>
     <div class="hint">输入一个总任务，LLM 自动分解成 Flow DAG（每个子任务一个节点，并行执行）。生成后填入下方编辑器，可修改再执行；「自动执行」则一步完成 分解→执行→LLM 综合答案。需先在 Agents 页注册 agent。</div>
+    <div id="flow-gen-status" class="muted flow-status-line" role="status" aria-live="polite"></div>
     <div class="row">
       <input id="flow-task" type="text" placeholder="描述总任务，如：调研 dist 目录并写一份问题清单" style="flex:1;min-width:220px">
       <button onclick="flowGen()">生成 DAG</button>
       <button onclick="flowAuto()">自动执行</button>
-      <span id="flow-gen-status" class="muted" style="font-size:12px"></span>
+      
     </div>
   </div>
   <div class="card">
     <h2>Flow DAG</h2>
     <div class="hint">手写或修改 DAG：nodes 每项 {id, agent, task}（agent 需先注册），edges 每项 {from, to}。task 里可用 {{节点id}} 引用上游节点的结果。校验通过后按拓扑分层并行执行，结果写入黑板 flow/&lt;id&gt;/result。</div>
     <textarea id="flow-json" style="width:100%;min-height:150px;font-family:monospace;font-size:12px" placeholder='{"nodes":[{"id":"a","agent":"alpha","task":"创建 f.txt 写入内容为 hi"},{"id":"b","agent":"beta","task":"总结: {{a}}"}],"edges":[{"from":"a","to":"b"}]}'></textarea>
+    <div id="flow-status" class="muted flow-status-line" role="status" aria-live="polite"></div>
     <div class="row" style="margin-top:8px">
       <button onclick="flowRun()">执行 Flow</button>
       <button class="sec" onclick="flowMerge()">综合答案</button>
       <button class="sec" onclick="loadFlow()">加载黑板记录</button>
-      <span id="flow-status" class="muted" style="font-size:12px"></span>
+      
     </div>
     <div id="flow-out" style="font-size:12.5px;white-space:pre-wrap;margin-top:8px"></div>
+    <div id="flow-follow-status" class="muted flow-status-line" role="status" aria-live="polite"></div>
     <div class="row" style="margin-top:8px">
       <input id="flow-follow" type="text" placeholder="执行完后继续追问，如：把第 2 步的结果整理成表格" style="flex:1;min-width:220px" onkeydown="if(event.key==='Enter')flowFollow()">
       <button onclick="flowFollow()">继续对话</button>
-      <span id="flow-follow-status" class="muted" style="font-size:12px"></span>
+      
     </div>
     <div class="hint" style="margin-top:4px">「综合答案」把 Flow 各节点结果交给 LLM 汇总成最终结论；「继续对话」带着 Flow 结果进入对话（走 /v1/chat，保留上下文）。</div>
   </div>
@@ -3129,9 +3140,11 @@ function sideRecent(list){
     const stage = latest?.progress?.stage;
     const taskStatus = document.createElement('small'); taskStatus.className = 'recent-task-status';
     taskStatus.setAttribute('role','status');
+    taskStatus.dataset.state = active ? 'running' : (stage || 'idle');
     taskStatus.textContent = active ? '执行中' : stage === 'completed' ? '已完成' :
       stage === 'failed' ? '失败' : stage === 'timed_out' ? '超时' : stage === 'cancelled' ? '已取消' : '空闲';
     taskStatus.style.color = active ? 'var(--accent)' : stage === 'failed' ? 'var(--danger)' : 'var(--muted)';
+    taskStatus.style.marginLeft = '0';
     b.append(taskStatus, title);
     b.title = chatSessionTip(info, id);
     b.onclick = () => chatSwitchSession(id);
@@ -3536,13 +3549,13 @@ function chatBusyUI(busy){
 /* Flow 容器任务进度：各节点执行状态（flow_nodes 来自 /v1/tasks/<id>） */
 function flowNodesText(t){
   if(!t || !Array.isArray(t.flow_nodes) || !t.flow_nodes.length) return '';
-  const ICON = {queued:'⏸', running:'⏳', ok:'✓', error:'✗'};
+  const ICON = {queued:'⏸', running:'⏳', ok:'✓', error:'✗', blocked:'⊘'};
   const now = Date.now();
   return t.flow_nodes.map(n => {
     let state = n.status === 'running'
       ? (n.cur_tool ? '正在执行 ' + n.cur_tool : (n.round ? '正在规划第 ' + n.round + ' 轮' : '正在启动'))
-      : ({queued:'等待中', ok:'已完成', error:'失败'}[n.status] || n.status || '未知');
-    let s = (n.id || '?') + ' ' + (ICON[n.status] || '·') + ' ' + state;
+      : ({queued:'等待中', ok:'已完成', error:'失败', blocked:'已阻断（前置步骤未完成）'}[n.status] || n.status || '未知');
+    let s = (ICON[n.status] || '·') + ' ' + state + ' · ' + (n.id || '?');
     let ms = 0;
     if(n.status === 'running' && n.start_ms) ms = now - n.start_ms;
     else if((n.status === 'ok' || n.status === 'error') && n.start_ms && n.end_ms) ms = n.end_ms - n.start_ms;
@@ -3944,7 +3957,8 @@ async function loadFlow(){
 /* ===== 协作任务列表（state/flows.json 持久化）===== */
 function flowStatusBadge(s){
   const c = {'RUNNING':'#b58900','DONE':'#2da44e','FAILED':'#cf222e','CANCELLED':'#6e7781','TIMEOUT':'#cf222e','INTERRUPTED':'#b58900'}[s] || '#6e7781';
-  return '<span style="color:#fff;background:' + c + ';border-radius:8px;padding:1px 8px;font-size:11px">' + esc(s || '?') + '</span>';
+  const label={RUNNING:'执行中',DONE:'已完成',FAILED:'失败',CANCELLED:'已取消',TIMEOUT:'超时',INTERRUPTED:'已中断'}[s] || s || '?';
+  return '<span class="flow-task-status" role="status" style="color:#fff;background:' + c + ';border-radius:8px;padding:1px 8px;font-size:11px">' + esc(label) + '</span>';
 }
 
 async function loadFlowTasks(){
@@ -3961,9 +3975,9 @@ async function loadFlowTasks(){
     const cancel = live ? '<button class="sec sm" onclick="flowTaskCancel(' + id + ')">取消</button>' : '';
     const edit = editable ? '<button class="sec sm" onclick="flowTaskEdit(' + id + ')">修改</button>' : '';
     return '<div id="flow-task-' + id + '" style="border:1px solid var(--bd,#ddd);border-radius:8px;padding:8px 10px;margin:6px 0">' +
-      '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">' +
-      '<b>#' + id + '</b>' + flowStatusBadge(s) +
-      '<span style="flex:1;min-width:150px;font-size:12.5px">' + esc(x.name || (x.input || '').slice(0, 60) || '(无名称)') + '</span>' +
+      '<div class="flow-task-heading">' + flowStatusBadge(s) +
+      '<b>#' + id + '</b>' +
+      '<span class="flow-task-title" title="' + esc(x.name || x.input || '') + '">' + esc(x.name || (x.input || '').slice(0, 60) || '(无名称)') + '</span>' +
       resume + cancel + edit +
       '</div>' +
       (x.input ? '<div class="muted" style="font-size:11.5px;margin-top:4px;white-space:pre-wrap">' + esc(x.input).slice(0, 200) + '</div>' : '') +

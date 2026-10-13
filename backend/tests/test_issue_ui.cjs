@@ -43,11 +43,32 @@ const assert = require('node:assert/strict');
     assert(statusBox.x>=buttonBox.x && statusBox.x+statusBox.width<=buttonBox.x+buttonBox.width);
     assert(statusBox.x+statusBox.width<=titleBox.x, 'Status must precede the clipped title');
     assert.equal(await status.evaluate(el=>getComputedStyle(el).flexShrink),'0');
+    assert.equal(await status.evaluate(el=>getComputedStyle(el).order),'-1');
+    assert.equal(await status.getAttribute('data-state'),'running');
     console.log('PASS #111: left status remains fully visible with a long title in a narrow sidebar');
     await page.evaluate(()=>{
       delete CHAT_TASKS['status-test']; CHAT_CACHE['status-test'][0].progress.stage='failed'; sideRecent(CHAT_TABS_CACHE);
     });
     assert.match(await page.locator('#side-recent').innerText(),/失败/);
     console.log('PASS #102: recent sessions show active and failed status');
+    await page.route('http://ui.test/v1/flows/list',route=>route.fulfill({status:200,contentType:'application/json',
+      body:JSON.stringify({records:[{id:42,status:'RUNNING',name:'很长的多Agent源码阅读任务标题'.repeat(30),created_ms:1,updated_ms:1}]})}));
+    await page.evaluate(async()=>{
+      switchPanel('agents'); await loadFlowTasks(); $('flow-tasks').style.width='200px';
+      flowStatus('status','正在执行多 Agent 任务\n前置步骤失败，后续步骤已阻断');
+    });
+    const badge=page.locator('#flow-task-42 .flow-task-status');
+    const badgeBox=await badge.boundingBox();
+    const headingBox=await page.locator('#flow-task-42 .flow-task-heading').boundingBox();
+    assert(badgeBox && headingBox && badgeBox.x===headingBox.x);
+    assert.equal(await badge.innerText(),'执行中');
+    assert(badgeBox.x+badgeBox.width<=headingBox.x+headingBox.width);
+    assert.equal(await badge.evaluate(el=>getComputedStyle(el).flexShrink),'0');
+    const flowStatus=page.locator('#flow-status');
+    assert.equal(await flowStatus.evaluate(el=>getComputedStyle(el).textAlign),'left');
+    assert.equal(await flowStatus.evaluate(el=>el.nextElementSibling.classList.contains('row')),true);
+    const nodes=await page.evaluate(()=>flowNodesText({flow_nodes:[{id:'很长的后续节点名称',status:'blocked'}]}));
+    assert.match(nodes,/^⊘ 已阻断（前置步骤未完成）/);
+    console.log('PASS #118: Flow status stays left of long titles, above controls, with explicit blocked state');
   } finally {await browser.close();}
 })().catch(error=>{console.error(error);process.exitCode=1;});
