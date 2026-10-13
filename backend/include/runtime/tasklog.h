@@ -1,6 +1,6 @@
 /* tasklog.h — durable task journal (任务保存/恢复).
  *
- * Appends one JSONL record per terminal task transition to
+ * Appends JSONL RUNNING and terminal task transitions to
  * <state_root>/journal/tasks.jsonl: {id,status,session,input,output,trace,spans,ts}. The journal
  * is the checkpoint store: unlike the in-memory scheduler table it survives
  * restarts, so finished/cancelled tasks can be listed and re-submitted
@@ -17,6 +17,8 @@ typedef struct tasklog tasklog;
 
 tasklog *tasklog_new(const char *state_root);
 void tasklog_free(tasklog *tl);
+/* Startup: mark latest nonterminal records INTERRUPTED; compute a safe next ID. */
+int tasklog_recover(tasklog *tl, int64_t *next_id);
 
 /* Append a terminal record (output, trace and spans are capped). `trace_json`
  * is the sanitized progress timeline; `spans_json` contains execution timings.

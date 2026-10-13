@@ -1701,11 +1701,13 @@ function updateSnapshotSelection(){
 async function loadJournal(){
   const el = $('journal-list'); if(!el) return;
   const r = await call('GET', '/v1/tasks/journal?limit=50');
-  const arr = (r.obj && Array.isArray(r.obj)) ? r.obj : [];
-  if(!arr.length){ el.textContent = '暂无任务历史'; return; }
+  const transitions = (r.obj && Array.isArray(r.obj)) ? r.obj : [];
+  const latest = new Map(); transitions.forEach(t=>latest.set(t.id,t));
+  const arr = Array.from(latest.values()).filter(t=>t.status!=='RUNNING' && t.status!=='QUEUED');
+  if(!arr.length){ el.textContent = '暂无已结束或中断的任务'; return; }
   el.classList.remove('hint');
   el.innerHTML = '';
-  const COL = {DONE:'var(--ok,#4ade80)',FAILED:'var(--danger,#f87171)',CANCELLED:'var(--muted)',TIMEOUT:'var(--warn,#fbbf24)'};
+  const COL = {DONE:'var(--ok,#4ade80)',FAILED:'var(--danger,#f87171)',CANCELLED:'var(--muted)',TIMEOUT:'var(--warn,#fbbf24)',INTERRUPTED:'var(--warn,#fbbf24)'};
   arr.slice().reverse().forEach(t => {
     const row = document.createElement('div');
     row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:7px 10px;border:1px solid var(--border);border-radius:8px;margin-bottom:6px;font-size:12.5px';

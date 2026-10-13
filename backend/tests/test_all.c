@@ -7773,6 +7773,34 @@ static void test_mmu_rejected_cache(void) {
     fs_remove("state-mmu-budget-test/records"); fs_remove("state-mmu-budget-test");
 }
 
+static void test_crash_journal(void) {
+    section("interrupted journal recovery and monotonic IDs");
+    const char *root="state-crash-journal-test";
+    fs_remove("state-crash-journal-test/journal/tasks.jsonl");
+    tasklog *log=tasklog_new(root);
+    tasklog_record(log,0,"RUNNING",NULL,"first task",NULL,NULL,NULL);
+    tasklog_record(log,1,"RUNNING",NULL,"completed task",NULL,NULL,NULL);
+    tasklog_record(log,1,"DONE",NULL,"completed task","done",NULL,NULL);
+    tasklog_record(log,7,"QUEUED",NULL,"queued task",NULL,NULL,NULL);
+    fs_append_file("state-crash-journal-test/journal/tasks.jsonl","{\"id\":",6);
+    int64_t next=0; CHECK(tasklog_recover(log,&next)==2); CHECK(next==8);
+    char *status=NULL;
+    CHECK(tasklog_find(log,0,&status,NULL,NULL,NULL)==1 && status && !strcmp(status,"INTERRUPTED")); free(status); status=NULL;
+    CHECK(tasklog_find(log,1,&status,NULL,NULL,NULL)==1 && status && !strcmp(status,"DONE")); free(status);
+    CHECK(tasklog_recover(log,&next)==0 && next==8);
+    scheduler *sched=scheduler_new(1,NULL,NULL);
+    scheduler_ensure_next_id(sched,next); CHECK(scheduler_submit(sched,0,"first recovered",NULL,0)==8);
+    CHECK(scheduler_wait_idle(sched,2000)==0); scheduler_ensure_next_id(sched,0);
+    CHECK(scheduler_submit(sched,0,"next recovered",NULL,0)==9); CHECK(scheduler_wait_idle(sched,2000)==0);
+    scheduler_free(sched);
+    FILE *oversized=fopen("state-crash-journal-test/journal/tasks.jsonl","wb");
+    CHECK(oversized!=NULL);
+    if(oversized) { fseek(oversized,32*1024*1024,SEEK_SET); fputc('x',oversized); fclose(oversized); }
+    CHECK(tasklog_recover(log,&next)==-1); /* explicit failure, never reset IDs to zero */
+    tasklog_free(log);
+    fs_remove("state-crash-journal-test/journal/tasks.jsonl"); fs_remove("state-crash-journal-test/journal"); fs_remove(root);
+}
+
 int main(int argc, char **argv) {
 #ifdef _WIN32
     if (argc > 1 && (!strcmp(argv[0],"ssh") || !strcmp(argv[0],"ssh.exe") || strstr(argv[0],"issue-ssh"))) {
@@ -7842,6 +7870,9 @@ int main(int argc, char **argv) {
         test_logging(); test_ssh_only_redaction(); test_security();
         printf("%d passed, %d failed\n",g_pass,g_fail); return g_fail?1:0;
     }
+    if (argc==2 && !strcmp(argv[1],"--crash-journal")) {
+        test_crash_journal(); printf("\n%d passed, %d failed\n",g_pass,g_fail); return g_fail ? 1:0;
+    }
     if (argc==2 && !strcmp(argv[1],"--mmu-budget")) {
         test_mmu_rejected_cache(); printf("\n%d passed, %d failed\n",g_pass,g_fail); return g_fail ? 1:0;
     }
@@ -7850,7 +7881,7 @@ int main(int argc, char **argv) {
         printf("\n%d passed, %d failed\n",g_pass,g_fail); return g_fail ? 1:0;
     }
     if (argc==2 && !strcmp(argv[1],"--audit")) {
-        test_config(); test_issue121_regressions(); test_mmu_rejected_cache(); test_scheduler(); test_scheduler_limits(); test_coro();
+        test_config(); test_issue121_regressions(); test_mmu_rejected_cache(); test_crash_journal(); test_scheduler(); test_scheduler_limits(); test_coro();
         printf("\n%d passed, %d failed\n",g_pass,g_fail); return g_fail ? 1:0;
     }
     if (argc==2 && !strcmp(argv[1],"--usage")) {
@@ -7903,7 +7934,7 @@ int main(int argc, char **argv) {
     test_executor_family();
     test_index();
     test_metrics();
-    test_config(); test_issue121_regressions(); test_mmu_rejected_cache();
+    test_config(); test_issue121_regressions(); test_mmu_rejected_cache(); test_crash_journal();
     test_blackboard();
     test_blackboard_persist();
     test_flow_store();

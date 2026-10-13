@@ -427,6 +427,7 @@ static void sched_trampoline(task *t, scheduler *s, void *ud) {
         return;
     }
 
+    tasklog_record(ctx->tasklog,t->id,"RUNNING",t->tag,t->input,NULL,NULL,NULL);
     scheduler_yield(); /* cooperative fairness: let another task start first */
     if (t->userdata) {
         /* userdata marker (set by /v1/orchestrate = 1, /v1/flows = 2): run the
@@ -963,6 +964,14 @@ int init(runtime_ctx *ctx, const config *cfg) {
         return -1;
     }
 
+    /* Establish durable IDs/checkpoints before cron or API can submit work. */
+    ctx->tasklog=tasklog_new(ctx->state_root);
+    int64_t next_task_id=0;
+    int interrupted=tasklog_recover(ctx->tasklog,&next_task_id);
+    if(interrupted<0) { log_error("task journal recovery failed"); runtime_shutdown(ctx); return -1; }
+    scheduler_ensure_next_id(ctx->scheduler,next_task_id);
+    if(interrupted) log_info("task journal: detected %d interrupted tasks",interrupted);
+
     /* mirror task lifecycle into the Context layer's task state slot */
     scheduler_set_completion_cb(ctx->scheduler, task_done, ctx);
 
@@ -975,8 +984,6 @@ int init(runtime_ctx *ctx, const config *cfg) {
     if (ctx->cron)
         cron_start(ctx->cron);
 
-    /* durable task journal (checkpoint/恢复) */
-    ctx->tasklog = tasklog_new(ctx->state_root);
 
     /* multi-agent collaboration task registry: restore flow runs; anything
      * that was still RUNNING when the process died becomes INTERRUPTED and

@@ -31,6 +31,8 @@ jobs:
           sleep 1
           ./build-macos/test-adapters
           ./build-macos/cognitive-os-agent-e2e
+      - name: Actual process crash recovery
+        run: COA_BUILD_DIR=build-macos python3 tests/test_crash_recovery_e2e.py
       - name: Package native desktop
         run: bash package-macos.sh
       - uses: actions/upload-artifact@v4
@@ -54,6 +56,8 @@ jobs:
           sleep 1
       - name: Unit tests
         run: ./build/cognitive-os-agent-test
+      - name: Actual process crash recovery
+        run: python3 tests/test_crash_recovery_e2e.py
       - name: Scenario tests
         run: ./build/cognitive-os-agent-scenario
       - name: Adapter tests (chat + SSE)
@@ -116,6 +120,8 @@ jobs:
         run: python tests/test_completion_recovery_e2e.py
       - name: Complete browser MCP results API regression
         run: python tests/test_browser_results_e2e.py
+      - name: Actual process crash recovery
+        run: python tests/test_crash_recovery_e2e.py
       - name: Runtime benchmark smoke
         run: python tests/test_runtime_benchmark.py
       - name: Skill discovery and execution API regressions

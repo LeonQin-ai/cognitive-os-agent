@@ -87,8 +87,14 @@ void tasklog_record(tasklog *tl, int64_t id, const char *status, const char *ses
         return;
 
     mutex_lock(&tl->mtx);
-    f = fopen(tl->path, "ab");
+    f = fopen(tl->path, "a+b");
     if (f) {
+        fseek(f,0,SEEK_END);
+        long size=ftell(f);
+        if(size>0) {
+            fseek(f,-1,SEEK_END); int tail=fgetc(f); fseek(f,0,SEEK_END);
+            if(tail!='\n') fputc('\n',f); /* isolate an interrupted partial JSON line */
+        }
         fputs(line, f);
         fputc('\n', f);
         fclose(f);
@@ -217,4 +223,46 @@ int tasklog_find(tasklog *tl, int64_t id, char **status, char **session, char **
     }
     cJSON_Delete(arr);
     return found;
+}
+
+typedef struct recovery_record { int64_t id; size_t order; cJSON *json; } recovery_record;
+static int compare_recovery(const void *a,const void *b) {
+    const recovery_record *x=a,*y=b;
+    if(x->id!=y->id) return (x->id>y->id)-(x->id<y->id);
+    return (x->order>y->order)-(x->order<y->order);
+}
+int tasklog_recover(tasklog *tl,int64_t *next_id) {
+    if(next_id) *next_id=0;
+    if(!tl) return -1;
+    if(fs_file_size(tl->path)>(long long)TASKLOG_FILE_MAX) return -1; /* do not silently reuse IDs */
+    mutex_lock(&tl->mtx); cJSON *arr=journal_parse(tl->path,0,INT64_MIN); mutex_unlock(&tl->mtx);
+    if(!arr) return 0;
+    size_t count=(size_t)cJSON_GetArraySize(arr),n=0,order=0;
+    recovery_record *records=calloc(count ? count:1,sizeof(*records));
+    if(!records) { cJSON_Delete(arr); return -1; }
+    cJSON *it;
+    cJSON_ArrayForEach(it,arr) {
+        cJSON *id=cJSON_GetObjectItemCaseSensitive(it,"id");
+        if(cJSON_IsNumber(id) && id->valuedouble>=0 && id->valuedouble<9007199254740991.0 &&
+           (double)(int64_t)id->valuedouble==id->valuedouble) {
+            records[n++]=(recovery_record){(int64_t)id->valuedouble,order,it};
+            if(next_id && *next_id<records[n-1].id+1) *next_id=records[n-1].id+1;
+        }
+        order++;
+    }
+    qsort(records,n,sizeof(*records),compare_recovery);
+    int interrupted=0;
+    for(size_t i=0;i<n;i++) {
+        if(i+1<n && records[i].id==records[i+1].id) continue; /* newest transition only */
+        cJSON *o=records[i].json;
+        const char *status=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(o,"status"));
+        if(status && (!strcmp(status,"RUNNING") || !strcmp(status,"QUEUED"))) {
+            tasklog_record(tl,records[i].id,"INTERRUPTED",
+                cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(o,"session")),
+                cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(o,"input")),
+                "Runtime restarted before task completion; inspect checkpoint and explicitly resume.",NULL,NULL);
+            interrupted++;
+        }
+    }
+    free(records); cJSON_Delete(arr); return interrupted;
 }

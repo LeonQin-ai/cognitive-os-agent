@@ -499,3 +499,8 @@ int scheduler_shutdown(scheduler *s, int timeout_ms) {
 
     return 0;
 }
+
+void scheduler_ensure_next_id(scheduler *s,int64_t next_id) {
+    if(!s || next_id<0) return;
+    mutex_lock(&s->mtx); if(s->next_id<next_id) s->next_id=next_id; mutex_unlock(&s->mtx);
+}

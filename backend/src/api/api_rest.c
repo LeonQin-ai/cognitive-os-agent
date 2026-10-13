@@ -26,6 +26,7 @@
 #include "os/os_thread.h"
 
 #include <stdlib.h>
+#include <errno.h>
 #include <string.h>
 #include <stdio.h>
 #include <stdint.h>
@@ -388,8 +389,9 @@ static int h_task_resume(const http_request *req, http_response *resp, void *ud)
         http_resp_json(resp, "{\"error\":\"expected /v1/tasks/<id>/resume\"}");
         return 0;
     }
-    id = atoll(suffix);
-    if (id <= 0) {
+    char *id_end=NULL; errno=0;
+    id=strtoll(suffix,&id_end,10);
+    if (errno || id_end==suffix || id_end!=slash || id < 0) {
         resp->status = 400;
         http_resp_json(resp, "{\"error\":\"invalid task id\"}");
         return 0;

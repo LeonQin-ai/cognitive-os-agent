@@ -102,6 +102,8 @@ task *scheduler_acquire(scheduler *s, int64_t id);
 void scheduler_release(scheduler *s, task *t);
 void scheduler_set_history_limits(scheduler *s, size_t count, size_t bytes);
 int scheduler_total(scheduler *s);
+/* Restore journal high-water mark before accepting work. Never lowers the ID. */
+void scheduler_ensure_next_id(scheduler *s, int64_t next_id);
 void task_set_progress(task *t, const char *json);
 char *task_progress_copy(task *t);
 /* Append one safe, user-observable progress event to the in-memory timeline.

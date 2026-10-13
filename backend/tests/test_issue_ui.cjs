@@ -70,5 +70,14 @@ const assert = require('node:assert/strict');
     const nodes=await page.evaluate(()=>flowNodesText({flow_nodes:[{id:'很长的后续节点名称',status:'blocked'}]}));
     assert.match(nodes,/^⊘ 已阻断（前置步骤未完成）/);
     console.log('PASS #118: Flow status stays left of long titles, above controls, with explicit blocked state');
+    await page.route('http://ui.test/v1/tasks/journal?limit=50',route=>route.fulfill({status:200,contentType:'application/json',body:JSON.stringify([
+      {id:0,status:'RUNNING',input:'old running'}, {id:0,status:'INTERRUPTED',input:'interrupted'},
+      {id:1,status:'RUNNING',input:'old running'}, {id:1,status:'DONE',input:'completed'},
+      {id:2,status:'RUNNING',input:'still active'}])}));
+    await page.evaluate(async()=>{ $('journal-list') || document.body.insertAdjacentHTML('beforeend','<div id="journal-list"></div>'); await loadJournal(); });
+    const history=await page.locator('#journal-list').innerText();
+    assert.match(history,/INTERRUPTED/); assert.match(history,/DONE/); assert.doesNotMatch(history,/RUNNING|still active/);
+    assert.equal(await page.locator('#journal-list > div').count(),2);
+    console.log('PASS #130: history uses latest terminal/interrupted transition, not stale RUNNING entries');
   } finally {await browser.close();}
 })().catch(error=>{console.error(error);process.exitCode=1;});
