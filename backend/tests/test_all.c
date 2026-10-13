@@ -4190,6 +4190,24 @@ static void test_flow_decompose(void) {
     char *data = fs_read_file("state-test/loop-w/a.txt");
     CHECK(data == NULL); /* decompose must not run the nodes */
     free(data);
+    dag=NULL; CHECK(flow_decompose(&ctx,"局部依赖回归测试",&dag)==0);
+    cJSON *plan=dag ? cJSON_Parse(dag):NULL;
+    cJSON *edges=cJSON_GetObjectItemCaseSensitive(plan,"edges");
+    CHECK(cJSON_GetArraySize(edges)==2);
+    CHECK(dag && strstr(dag,"\"from\":\"step1\",\"to\":\"step2\"") &&
+          strstr(dag,"\"from\":\"step2\",\"to\":\"step3\""));
+    cJSON_Delete(plan); free(dag);
+    dag=NULL; CHECK(flow_decompose(&ctx,"显式并行回归测试",&dag)==0);
+    plan=dag ? cJSON_Parse(dag):NULL; CHECK(cJSON_GetArraySize(cJSON_GetObjectItemCaseSensitive(plan,"edges"))==0);
+    cJSON_Delete(plan); free(dag);
+    const char *invalid[]={"非法依赖编号回归测试","依赖类型回归测试","未知agent依赖回归测试"};
+    for(size_t i=0;i<sizeof(invalid)/sizeof(invalid[0]);i++) {
+        dag=NULL; CHECK(flow_decompose(&ctx,invalid[i],&dag)==-1); CHECK(dag==NULL); free(dag);
+    }
+    char *answer=NULL;
+    CHECK(orchestrate(&ctx,"非法依赖编号回归测试",&answer,NULL)==-1);
+    CHECK(answer && strstr(answer,"计划无效")); free(answer);
+    CHECK(!fs_exists("state-test/loop-w/SHOULD_NOT_RUN.txt"));
     runtime_shutdown(&ctx);
 }
 

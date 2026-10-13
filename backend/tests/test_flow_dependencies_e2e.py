@@ -25,7 +25,16 @@ class Provider(BaseHTTPRequestHandler):
         current=text.split('## Current request\n',1)[-1]
         current=current.split('## 用户任务\n',1)[-1].split('\n## ',1)[0]
         try:
-            if 'FLOW_WAIT_STEP1' in current:
+            if 'FLOW_DECOMP_MIXED' in current:
+                answer=json.dumps([
+                    {'agent':'alpha','task':'读取 evidence.c，完成 FLOW_WAIT_STEP1'},
+                    {'agent':'alpha','task':'创建 api-step2.txt FLOW_CHILD 上游 {{step1}}'},
+                    {'agent':'alpha','task':'创建 api-step3.txt FLOW_JOIN {{step2}}','after':[2]}])
+            elif 'FLOW_JOIN' in current:
+                assert counts.get('child',0)>=2
+                n=counts.get('join',0); counts['join']=n+1
+                answer=json.dumps([{'tool':'file_write','args':{'path':'api-step3.txt','content':'after-second'}}]) if n==0 else '第三步文件已生成。'
+            elif 'FLOW_WAIT_STEP1' in current:
                 n=counts.get('upstream',0); counts['upstream']=n+1
                 if n==0:
                     entered.set(); assert release.wait(15), 'fixture was not released'
@@ -119,6 +128,28 @@ with tempfile.TemporaryDirectory(prefix='coa-flow-deps-') as folder:
             assert (state/'independent-api.txt').exists()
             assert '节点未执行' in task['output'] and not errors
             print('PASS: failed upstream blocks descendants, independent branch completes, task is FAILED')
+            # Mixed explicit/missing after values must still form a real chain.
+            counts['upstream']=0; counts['child']=0; entered.clear(); release.clear()
+            (state/'api-step2.txt').unlink()
+            compiled=request('/v1/flows/decompose',{'task':'FLOW_DECOMP_MIXED'})
+            compiled=compiled.get('dag',compiled.get('flow',compiled))
+            if isinstance(compiled,str): compiled=json.loads(compiled)
+            assert {'from':'step1','to':'step2'} in compiled['edges'],compiled
+            auto_started=request('/v1/flows',compiled)
+            assert entered.wait(10)
+            live=request('/v1/tasks/'+str(auto_started['id']))
+            nodes={n['id']:n for n in live['flow_nodes']}
+            assert nodes['step1']['status']=='running' and nodes['step2']['status']=='queued' and nodes['step3']['status']=='queued',live
+            assert not (state/'api-step2.txt').exists() and counts.get('child',0)==0
+            release.set(); done=finished(auto_started['id'])
+            assert done['status']=='DONE' and not errors,done
+            nodes={n['id']:n for n in done['flow_nodes']}
+            assert nodes['step2']['start_ms']>=nodes['step1']['end_ms']
+            assert nodes['step3']['start_ms']>=nodes['step2']['end_ms']
+            # A reused live registry slot must not erase the old terminal state.
+            old=request('/v1/tasks/'+str(started['id']))
+            assert {n['id'] for n in old['flow_nodes']}=={'a','b'},old
+            print('PASS: auto-decomposed mixed dependencies execute strictly in order; terminal states persist')
         finally:
             release.set(); process.terminate(); process.wait(timeout=10)
             provider.shutdown(); provider.server_close()

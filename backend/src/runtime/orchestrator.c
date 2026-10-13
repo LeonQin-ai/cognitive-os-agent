@@ -21,6 +21,7 @@
 #include "cJSON.h"
 
 #define ORCH_MAX_STEPS 4
+#define ORCH_MAX_TASKLEN 8192
 
 /* llm_chat_simple + book the token delta into the per-model usage ledger.
  * Decompose/merge call the LLM directly, bypassing the reasoning loop's
@@ -98,7 +99,7 @@ static char *roster_text(runtime_ctx *ctx) {
  * registered are kept. `after[][ORCH_MAX_STEPS]` receives 0-based prerequisite
  * step indices per step (1-based "after" in the plan text, converted here).
  * Returns the number of valid steps (0 = parse fail). */
-static int parse_plan(runtime_ctx *ctx, const char *raw, char agents[][64], char tasks[][512],
+static int parse_plan(runtime_ctx *ctx, const char *raw, char agents[][64], char tasks[][ORCH_MAX_TASKLEN],
                       int after[][ORCH_MAX_STEPS]) {
     size_t alen;
     char *arr_txt;
@@ -125,6 +126,7 @@ static int parse_plan(runtime_ctx *ctx, const char *raw, char agents[][64], char
         return 0;
     }
 
+    if(cJSON_GetArraySize(arr)>ORCH_MAX_STEPS) { cJSON_Delete(arr); return -1; }
     cJSON_ArrayForEach(it, arr) {
     cJSON *a;
     cJSON *t;
@@ -132,30 +134,27 @@ static int parse_plan(runtime_ctx *ctx, const char *raw, char agents[][64], char
 
         if (n >= ORCH_MAX_STEPS)
             break;
-        if (!cJSON_IsObject(it))
-            continue;
+        if (!cJSON_IsObject(it)) { cJSON_Delete(arr); return -1; }
         a = cJSON_GetObjectItemCaseSensitive(it, "agent");
         t = cJSON_GetObjectItemCaseSensitive(it, "task");
-        if (!a || !cJSON_IsString(a) || !a->valuestring || !*a->valuestring)
-            continue;
-        if (!t || !cJSON_IsString(t) || !t->valuestring || !*t->valuestring)
-            continue;
-        if (agent_pool_find(ctx->agents, a->valuestring) < 0)
-            continue; /* unknown */
+        if (!a || !cJSON_IsString(a) || !a->valuestring || !*a->valuestring) { cJSON_Delete(arr); return -1; }
+        if (!t || !cJSON_IsString(t) || !t->valuestring || !*t->valuestring) { cJSON_Delete(arr); return -1; }
+        if (agent_pool_find(ctx->agents, a->valuestring) < 0 || strlen(a->valuestring)>=64 || strlen(t->valuestring)>=ORCH_MAX_TASKLEN) { cJSON_Delete(arr); return -1; }
         snprintf(agents[n], 64, "%s", a->valuestring);
-        snprintf(tasks[n], 512, "%s", t->valuestring);
+        snprintf(tasks[n], ORCH_MAX_TASKLEN, "%s", t->valuestring);
         /* "after": [1-based step indices] → 0-based, forward-only, deduped;
          * -1 terminated (calloc'd 0xFF == -1) */
         memset(after[n], 0xFF, sizeof(after[n]));
         jaf = cJSON_GetObjectItemCaseSensitive(it, "after");
+        if (!jaf && n>0) after[n][0]=n-1;
+        if (jaf && !cJSON_IsArray(jaf)) { cJSON_Delete(arr); return -1; }
         if (jaf && cJSON_IsArray(jaf)) {
             cJSON *jd;
             cJSON_ArrayForEach(jd, jaf) {
     int idx;
     int dup = 0;
 
-                if (!cJSON_IsNumber(jd))
-                    continue;
+                if (!cJSON_IsNumber(jd) || jd->valuedouble<1 || jd->valuedouble>n || jd->valuedouble!=(int)jd->valuedouble) { cJSON_Delete(arr); return -1; }
                 idx = (int)jd->valuedouble - 1; /* 1-based → 0-based */
                 if (idx < 0 || idx >= n)
                     continue; /* only earlier steps */
@@ -183,71 +182,30 @@ static int parse_plan(runtime_ctx *ctx, const char *raw, char agents[][64], char
     return n;
 }
 
-/* Compile a parsed plan into a Flow DAG JSON document. Edges come from the
- * per-step prerequisite lists; if no step declared any dependency and n > 1,
- * the steps are chained sequentially (i-1 → i) so analyze → fix → verify
- * always flows. Returns malloc'd JSON. */
-static char *build_dag_json(char agents[][64], char tasks[][512], int after[][ORCH_MAX_STEPS], int n) {
-    int any_dep = 0;
-    cJSON *root;
-    cJSON *nodes;
-    cJSON *edges;
-    char *s;
-
-    for (int i = 0; i < n && !any_dep; i++)
-        for (int k = 0; k < ORCH_MAX_STEPS; k++)
-            if (after[i][k] >= 0) {
-                any_dep = 1;
-                break;
-            }
-
-    root = cJSON_CreateObject();
-    nodes = cJSON_CreateArray();
-    edges = cJSON_CreateArray();
-    if (!root || !nodes || !edges) {
-        cJSON_Delete(root);
-        cJSON_Delete(nodes);
-        cJSON_Delete(edges);
-        return NULL;
-    }
-
-    for (int i = 0; i < n; i++) {
-        cJSON *nd = cJSON_CreateObject();
-        char id[16];
-        snprintf(id, sizeof(id), "step%d", i + 1);
-        cJSON_AddStringToObject(nd, "id", id);
-        cJSON_AddStringToObject(nd, "agent", agents[i]);
-        cJSON_AddStringToObject(nd, "task", tasks[i]);
-        cJSON_AddItemToArray(nodes, nd);
-        if (any_dep) {
-            for (int k = 0; k < ORCH_MAX_STEPS && after[i][k] >= 0; k++) {
-                cJSON *e = cJSON_CreateObject();
-                char from[16];
-                snprintf(from, sizeof(from), "step%d", after[i][k] + 1);
-                cJSON_AddStringToObject(e, "from", from);
-                cJSON_AddStringToObject(e, "to", id);
-                cJSON_AddItemToArray(edges, e);
-            }
-        } else if (i > 0) {
-            cJSON *e = cJSON_CreateObject();
-            char from[16];
-            snprintf(from, sizeof(from), "step%d", i); /* step(i) = previous */
-            cJSON_AddStringToObject(e, "from", from);
-            cJSON_AddStringToObject(e, "to", id);
-            cJSON_AddItemToArray(edges, e);
+/* Compile each step's validated prerequisites. Missing after defaults to
+ * the previous step; explicit after:[] preserves independent parallelism. */
+static char *build_dag_json(char agents[][64], char tasks[][ORCH_MAX_TASKLEN], int after[][ORCH_MAX_STEPS], int n) {
+    cJSON *root=cJSON_CreateObject(), *nodes=cJSON_CreateArray(), *edges=cJSON_CreateArray();
+    if(!root || !nodes || !edges) { cJSON_Delete(root); cJSON_Delete(nodes); cJSON_Delete(edges); return NULL; }
+    cJSON_AddItemToObject(root,"nodes",nodes); cJSON_AddItemToObject(root,"edges",edges);
+    for(int i=0;i<n;i++) {
+        char id[16]; snprintf(id,sizeof(id),"step%d",i+1);
+        cJSON *node=cJSON_CreateObject();
+        if(!node) { cJSON_Delete(root); return NULL; }
+        cJSON_AddStringToObject(node,"id",id); cJSON_AddStringToObject(node,"agent",agents[i]);
+        cJSON_AddStringToObject(node,"task",tasks[i]); cJSON_AddItemToArray(nodes,node);
+        for(int k=0;k<ORCH_MAX_STEPS && after[i][k]>=0;k++) {
+            char from[16]; snprintf(from,sizeof(from),"step%d",after[i][k]+1);
+            cJSON *edge=cJSON_CreateObject(); if(!edge) { cJSON_Delete(root); return NULL; }
+            cJSON_AddStringToObject(edge,"from",from); cJSON_AddStringToObject(edge,"to",id); cJSON_AddItemToArray(edges,edge);
         }
     }
-
-    cJSON_AddItemToObject(root, "nodes", nodes);
-    cJSON_AddItemToObject(root, "edges", edges);
-    s = cJSON_PrintUnformatted(root);
-    cJSON_Delete(root);
-    return s;
+    char *out=cJSON_PrintUnformatted(root); cJSON_Delete(root); return out;
 }
 
 /* LLM decomposition: roster + task in, parsed plan out. Returns the number of
  * valid steps (0 = no roster / no parseable plan). */
-static int decompose_task(runtime_ctx *ctx, const char *task, char (*agents)[64], char (*tasks)[512],
+static int decompose_task(runtime_ctx *ctx, const char *task, char (*agents)[64], char (*tasks)[ORCH_MAX_TASKLEN],
                           int (*after)[ORCH_MAX_STEPS]) {
     char *roster = ctx->llm && ctx->agents && agent_pool_count(ctx->agents) > 0 ? roster_text(ctx) : NULL;
     int nsteps = 0;
@@ -256,7 +214,7 @@ static int decompose_task(runtime_ctx *ctx, const char *task, char (*agents)[64]
                      "只输出 JSON 数组，格式：[{\"agent\":\"agent 名\",\"task\":\"子任务描述\","
                      "\"after\":[1,2]}]。"
                      "\"after\" 是本步骤依赖的前置步骤编号（从 1 开始，按数组顺序编号），"
-                     "没有依赖的步骤可省略。分析类步骤在前，修复/执行类步骤必须声明依赖分析步骤，"
+                     "省略 after 表示依赖前一步；确实独立可并行的步骤必须显式 after:[]。分析类步骤在前，修复/执行类步骤必须声明依赖分析步骤，"
                      "验证类步骤必须声明依赖修复步骤。"
                      "子任务描述中可用 {{stepN}} 占位符引用第 N 步的输出结果"
                      "（如 {{step1}} 运行时会替换为步骤 1 的结果）。不要输出任何其他文字。";
@@ -288,7 +246,7 @@ int flow_decompose(runtime_ctx *ctx, const char *task, char **dag_json) {
         return -1;
     *dag_json = NULL;
     char (*agents)[64] = calloc(ORCH_MAX_STEPS, sizeof(*agents));
-    char (*tasks)[512] = calloc(ORCH_MAX_STEPS, sizeof(*tasks));
+    char (*tasks)[ORCH_MAX_TASKLEN] = calloc(ORCH_MAX_STEPS, sizeof(*tasks));
     int (*after)[ORCH_MAX_STEPS] = calloc(ORCH_MAX_STEPS, sizeof(*after));
     if (!agents || !tasks || !after) {
         free(agents);
@@ -298,7 +256,7 @@ int flow_decompose(runtime_ctx *ctx, const char *task, char **dag_json) {
     }
 
     nsteps = decompose_task(ctx, task, agents, tasks, after);
-    if (nsteps == 0) {
+    if (nsteps <= 0) {
         free(agents);
         free(tasks);
         free(after);
@@ -331,7 +289,7 @@ int orchestrate(runtime_ctx *ctx, const char *task, char **answer, char **trace_
 
     /* ---- DECOMPOSE (skipped with no roster) ---- */
     char (*agents)[64] = calloc(ORCH_MAX_STEPS, sizeof(*agents));
-    char (*tasks)[512] = calloc(ORCH_MAX_STEPS, sizeof(*tasks));
+    char (*tasks)[ORCH_MAX_TASKLEN] = calloc(ORCH_MAX_STEPS, sizeof(*tasks));
     int (*after)[ORCH_MAX_STEPS] = calloc(ORCH_MAX_STEPS, sizeof(*after));
     if (!agents || !tasks || !after) {
         free(agents);
@@ -342,6 +300,11 @@ int orchestrate(runtime_ctx *ctx, const char *task, char **answer, char **trace_
 
     nsteps = decompose_task(ctx, task, agents, tasks, after);
 
+    if (nsteps < 0) {
+        free(agents); free(tasks); free(after);
+        *answer=xstrdup("多 Agent 计划无效：请检查 agent、任务长度和 after 前置编号；步骤未执行。");
+        return -1;
+    }
     if (nsteps == 0) {
         /* fallback: no agents / no parseable plan → plain single-agent run */
         free(agents);

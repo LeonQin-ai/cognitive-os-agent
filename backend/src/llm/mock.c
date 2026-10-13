@@ -177,6 +177,11 @@ static char *mock_respond(const char *msg) {
     /* multi-agent orchestration: the decompose prompt lists the roster under
      * "可用 agent"; the merge prompt aggregates under "各 agent 结果" */
     if (has_substr(msg, "可用 agent") || has_substr(msg, "可用agent")) {
+        if(has_substr(msg,"局部依赖回归测试")) return xstrdup("[{\"agent\":\"alpha\",\"task\":\"回答 first\"},{\"agent\":\"alpha\",\"task\":\"回答 second\"},{\"agent\":\"alpha\",\"task\":\"回答 third\",\"after\":[2]}]");
+        if(has_substr(msg,"显式并行回归测试")) return xstrdup("[{\"agent\":\"alpha\",\"task\":\"回答 one\",\"after\":[]},{\"agent\":\"alpha\",\"task\":\"回答 two\",\"after\":[]}]");
+        if(has_substr(msg,"非法依赖编号回归测试")) return xstrdup("[{\"agent\":\"alpha\",\"task\":\"创建 SHOULD_NOT_RUN.txt\",\"after\":[2]}]");
+        if(has_substr(msg,"依赖类型回归测试")) return xstrdup("[{\"agent\":\"alpha\",\"task\":\"回答 one\",\"after\":\"1\"}]");
+        if(has_substr(msg,"未知agent依赖回归测试")) return xstrdup("[{\"agent\":\"ghost\",\"task\":\"t\"},{\"agent\":\"alpha\",\"task\":\"t\",\"after\":[1]}]");
         return xstrdup("[{\"agent\":\"alpha\","
                           "\"task\":\"创建 orch.txt 写入内容为 orch-ok\"}]");
     }
