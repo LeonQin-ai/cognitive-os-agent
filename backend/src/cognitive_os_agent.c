@@ -433,8 +433,19 @@ static void sched_trampoline(task *t, scheduler *s, void *ud) {
          * multi-agent pipeline / flow DAG instead of the single-agent loop */
         if (t->userdata == (void *)3)
             run_rc = im_run_round(ctx, t, &answer);
-        else if (t->userdata == (void *)2)
+        else if (t->userdata == (void *)2) {
             run_rc = flow_run(ctx, t->input, t->id, &answer, NULL);
+            char *nodes=flow_progress_json(t->id);
+            cJSON *saved=cJSON_CreateObject(), *arr=nodes ? cJSON_Parse(nodes):NULL;
+            free(nodes);
+            if(saved && arr) {
+                cJSON_AddItemToObject(saved,"flow_nodes",arr); arr=NULL;
+                char *snapshot=cJSON_PrintUnformatted(saved);
+                if(snapshot) task_set_progress(t,snapshot);
+                free(snapshot);
+            }
+            cJSON_Delete(arr); cJSON_Delete(saved);
+        }
         else
             run_rc = orchestrate(ctx, t->input, &answer, NULL);
     } else {

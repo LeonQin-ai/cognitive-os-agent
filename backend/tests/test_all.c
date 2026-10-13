@@ -4306,6 +4306,29 @@ static void test_flow(void) {
 
         /* Execute beyond the former 16-node limit, including the final sink. */
         {
+            fs_remove("state-test/loop-w/flow-blocked.txt");
+            fs_remove("state-test/loop-w/flow-grandchild.txt");
+            fs_remove("state-test/loop-w/flow-independent.txt");
+            fs_remove("state-test/loop-w/flow-join.txt");
+            const char *failed_dag="{\"nodes\":["
+                "{\"id\":\"bad\",\"agent\":\"alpha\",\"task\":\"完整读取 flow-missing.c 源码\"},"
+                "{\"id\":\"child\",\"agent\":\"alpha\",\"task\":\"创建 flow-blocked.txt 写入内容为 BAD\"},"
+                "{\"id\":\"grandchild\",\"agent\":\"alpha\",\"task\":\"创建 flow-grandchild.txt 写入内容为 BAD\"},"
+                "{\"id\":\"independent\",\"agent\":\"alpha\",\"task\":\"创建 flow-independent.txt 写入内容为 independent-ok\"},"
+                "{\"id\":\"join\",\"agent\":\"alpha\",\"task\":\"创建 flow-join.txt 写入内容为 BAD\"}],"
+                "\"edges\":[[\"bad\",\"child\"],[\"child\",\"grandchild\"],[\"child\",\"join\"],[\"independent\",\"join\"]]}";
+            ans=trace=NULL;
+            CHECK(flow_run(&ctx,failed_dag,779,&ans,&trace)==-1);
+            CHECK(ans && strstr(ans,"节点执行失败") && strstr(ans,"节点未执行"));
+            CHECK(trace && strstr(trace,"\"status\":\"blocked\"") && strstr(trace,"\"status\":\"error\""));
+            CHECK(!fs_exists("state-test/loop-w/flow-blocked.txt") && !fs_exists("state-test/loop-w/flow-grandchild.txt"));
+            CHECK(!fs_exists("state-test/loop-w/flow-join.txt"));
+            CHECK(fs_exists("state-test/loop-w/flow-independent.txt"));
+            char *progress=flow_progress_json(779);
+            CHECK(progress && strstr(progress,"\"status\":\"blocked\"") && !strstr(progress,"\"status\":\"queued\""));
+            free(progress); free(ans); free(trace);
+        }
+        {
             char large_dag[4096];
             size_t used = (size_t)snprintf(large_dag, sizeof(large_dag), "{\"nodes\":[");
             for (int i = 0; i < 17; i++)
@@ -7559,6 +7582,10 @@ int main(int argc, char **argv) {
     }
     if (argc==2 && !strcmp(argv[1],"--ssh-only")) {
         test_logging(); test_ssh_only_redaction(); test_security();
+        printf("%d passed, %d failed\n",g_pass,g_fail); return g_fail?1:0;
+    }
+    if (argc==2 && !strcmp(argv[1],"--flow")) {
+        test_flow(); test_flow_decompose();
         printf("%d passed, %d failed\n",g_pass,g_fail); return g_fail?1:0;
     }
     if (argc == 2 && strcmp(argv[1], "--agent-loop") == 0) {

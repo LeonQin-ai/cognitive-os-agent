@@ -232,7 +232,7 @@ static int flow_layer(flow_dag *d) {
  * per node so the API can render real execution progress. */
 #define FLOW_PROG_MAX 8 /* concurrent tracked runs; full table -> reuse finished slots */
 
-enum { FP_QUEUED = 0, FP_RUNNING = 1, FP_OK = 2, FP_ERROR = 3 };
+enum { FP_QUEUED = 0, FP_RUNNING = 1, FP_OK = 2, FP_ERROR = 3, FP_BLOCKED = 4 };
 
 typedef struct flow_prog_node {
     char id[64];
@@ -388,6 +388,7 @@ char *flow_progress_json(int64_t task_id) {
                 cJSON_AddStringToObject(o, "status", p->nodes[i].state == FP_QUEUED  ? "queued"
                                                      : p->nodes[i].state == FP_RUNNING ? "running"
                                                      : p->nodes[i].state == FP_OK      ? "ok"
+                                                     : p->nodes[i].state == FP_BLOCKED ? "blocked"
                                                                                        : "error");
                 cJSON_AddNumberToObject(o, "start_ms", (double)p->nodes[i].start_ms);
                 cJSON_AddNumberToObject(o, "end_ms", (double)p->nodes[i].end_ms);
@@ -599,6 +600,7 @@ int flow_validate(const char *dag_json, char **err) {
 int flow_run(runtime_ctx *ctx, const char *dag_json, int64_t task_id, char **answer, char **trace_json) {
     char *err = NULL;
     int maxlayer = 0;
+    int failed = 0;
     char **results;
     char **tasks;
     /* trace + answer (sink nodes = no outgoing edges) */
@@ -658,9 +660,20 @@ int flow_run(runtime_ctx *ctx, const char *dag_json, int64_t task_id, char **ans
 
     for (int L = 0; L <= maxlayer; L++) {
         int layern = 0, runidx[FLOW_MAX_NODES];
-        for (int i = 0; i < d->n; i++)
-            if (d->nodes[i].layer == L)
-                runidx[layern++] = i;
+        for (int i = 0; i < d->n; i++) {
+            if (d->nodes[i].layer != L) continue;
+            const char *blocked_by = NULL;
+            for (int u=0;u<d->n && !blocked_by;u++)
+                for(int k=0;k<d->nodes[u].nadj;k++)
+                    if(d->nodes[u].adj[k]==i && jobs[u].rc!=0) { blocked_by=d->nodes[u].id; break; }
+            if (blocked_by) {
+                jobs[i].rc=-2; failed=1;
+                char message[256]; snprintf(message,sizeof(message),"前置节点 %s 未成功完成，本节点未执行。",blocked_by);
+                results[i]=xstrdup(message);
+                flow_prog_node_mark(task_id,d->nodes[i].id,FP_BLOCKED);
+                flow_event(ctx,"blocked",d->nodes[i].id,d->nodes[i].agent,message);
+            } else runidx[layern++]=i;
+        }
         /* substitute upstream results into task templates, set up jobs */
         for (int k = 0; k < layern; k++) {
             int i = runidx[k];
@@ -693,6 +706,7 @@ int flow_run(runtime_ctx *ctx, const char *dag_json, int64_t task_id, char **ans
                 if (threads[k])
                     thread_join(threads[k]);
                 results[i] = jobs[i].out; /* may be NULL on failure */
+                if (jobs[i].rc!=0) failed=1;
             }
         }
     }
@@ -708,14 +722,15 @@ int flow_run(runtime_ctx *ctx, const char *dag_json, int64_t task_id, char **ans
             cJSON_AddStringToObject(st, "agent", d->nodes[i].agent);
             cJSON_AddStringToObject(st, "task", tasks[i] ? tasks[i] : d->nodes[i].task);
             cJSON_AddNumberToObject(st, "layer", (double)d->nodes[i].layer);
-            cJSON_AddStringToObject(st, "status", jobs[i].rc == 0 ? "ok" : "error");
+            cJSON_AddStringToObject(st, "status", jobs[i].rc == 0 ? "ok" : jobs[i].rc == -2 ? "blocked" : "error");
             cJSON_AddStringToObject(st, "result", result);
             cJSON_AddItemToArray(trace, st);
         }
         if (jobs[i].rc != 0) {
             /* failed node: surface the failure explicitly so the merge LLM
              * reports it instead of inventing content around an empty slot */
-            strbuf_appendf(&fin, "%s: [节点执行失败] %s\n", d->nodes[i].id,
+            strbuf_appendf(&fin, "%s: [%s] %s\n", d->nodes[i].id,
+                               jobs[i].rc == -2 ? "依赖未完成，节点未执行" : "节点执行失败",
                                result && *result ? result : "(agent run failed)");
             continue;
         }
@@ -749,5 +764,5 @@ int flow_run(runtime_ctx *ctx, const char *dag_json, int64_t task_id, char **ans
     free(d);
 
     *answer = fin.len > 0 ? fin.buf : xstrdup("(flow produced no output)");
-    return 0;
+    return failed ? -1 : 0;
 }

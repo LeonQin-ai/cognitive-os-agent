@@ -110,6 +110,8 @@ jobs:
           python tests/test_ssh_password_e2e.py
       - name: Source read completion API regressions
         run: python tests/test_source_read_e2e.py
+      - name: Multi-agent dependency API regressions
+        run: python tests/test_flow_dependencies_e2e.py
       - name: Recent status and file detail browser regressions
         run: |
           npm ci --prefix webarena --ignore-scripts --no-audit --no-fund

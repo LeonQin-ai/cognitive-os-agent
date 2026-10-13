@@ -360,8 +360,11 @@ int orchestrate(runtime_ctx *ctx, const char *task, char **answer, char **trace_
 
     rc = flow_run(ctx, dag, -1, &flow_answer, &trace);
     free(dag);
-    if (rc != 0)
+    if (rc != 0) {
+        *answer=flow_answer ? flow_answer : xstrdup("多 Agent 执行未完成。");
+        if(trace_json) *trace_json=trace; else free(trace);
         return -1;
+    }
 
     if (trace) {
         cJSON *arr = cJSON_Parse(trace);
