@@ -67,7 +67,7 @@ Cognitive OS 把这些职责**从提示词里搬进运行时**：
 
 ## 基准评测
 
-下表为完整 agent 循环评测，后面的 Runtime 指标采用本地确定性负载，两者分别统计。纯净分数表：[`backend/docs/BENCHMARK_RESULTS.md`](backend/docs/BENCHMARK_RESULTS.md) · 方法论与失败归因详录：[`backend/docs/benchmark-report-2026-08-31.md`](backend/docs/benchmark-report-2026-08-31.md)。
+下表为完整 agent 循环评测，后面的 Runtime 指标采用本地确定性负载，两者分别统计。纯净分数表：[`backend/docs/BENCHMARK_RESULTS.md`](backend/docs/BENCHMARK_RESULTS.md) · 方法论与失败归因详录：[`backend/docs/benchmark-report.md`](backend/docs/benchmark-report.md)。
 
 | 评测 | 分数 | 模型 |
 |---|---|---|
@@ -525,7 +525,7 @@ macOS 可运行 `bash package-macos.sh`，在 `dist/Cognitive OS.app` 生成原�
 
 **CI** 在每次 push 和 pull request 时运行 Windows、Linux、Linux AddressSanitizer、macOS Apple Silicon 和 macOS Intel 门禁。见 [`.github/workflows/ci.yml`](.github/workflows/ci.yml)。
 
-基准评测纯净分数表：[`backend/docs/BENCHMARK_RESULTS.md`](backend/docs/BENCHMARK_RESULTS.md) · 方法论与真实 LLM 结果：[`backend/docs/benchmark-report-2026-08-31.md`](backend/docs/benchmark-report-2026-08-31.md)。
+基准评测纯净分数表：[`backend/docs/BENCHMARK_RESULTS.md`](backend/docs/BENCHMARK_RESULTS.md) · 方法论与真实 LLM 结果：[`backend/docs/benchmark-report.md`](backend/docs/benchmark-report.md)。
 
 ## 文档
 
@@ -537,7 +537,7 @@ macOS 可运行 `bash package-macos.sh`，在 `dist/Cognitive OS.app` 生成原�
 | [`backend/docs/COGNITIVE_OS_DETAILED_DESIGN_V3.1.md`](backend/docs/COGNITIVE_OS_DETAILED_DESIGN_V3.1.md) | 详细设计、实现状态与剩余差距 |
 | [`backend/docs/COGNITIVE_OS_SECRET_SECURITY_DDD_V1.0.md`](backend/docs/COGNITIVE_OS_SECRET_SECURITY_DDD_V1.0.md) | 密钥安全设计与验收标准 |
 | [`backend/docs/BENCHMARK_RESULTS.md`](backend/docs/BENCHMARK_RESULTS.md) | 纯净基准分数表（GAIA / SWE-bench / BFCL / 策略遵循） |
-| [`backend/docs/benchmark-report-2026-08-31.md`](backend/docs/benchmark-report-2026-08-31.md) | Agent 基准评测方法与真实 LLM 结果（分数表背后的详细记录） |
+| [`backend/docs/benchmark-report.md`](backend/docs/benchmark-report.md) | Agent 基准评测方法与真实 LLM 结果（分数表背后的详细记录） |
 | [`backend/README.md`](backend/README.md) | 开发者文档：构建、并发模型、API、配置、市场、本地模型 |
 
 ## 路线图

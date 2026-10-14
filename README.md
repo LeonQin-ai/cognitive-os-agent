@@ -67,7 +67,7 @@ The goal is not another prompt framework — it is the **runtime substrate under
 
 ## Benchmarks
 
-The agent-quality results below use full-agent-loop tasks. Clean scorecard: [`backend/docs/BENCHMARK_RESULTS.md`](backend/docs/BENCHMARK_RESULTS.md) · methodology & failure attribution: [`backend/docs/benchmark-report-2026-08-31.md`](backend/docs/benchmark-report-2026-08-31.md).
+The agent-quality results below use full-agent-loop tasks. Clean scorecard: [`backend/docs/BENCHMARK_RESULTS.md`](backend/docs/BENCHMARK_RESULTS.md) · methodology & failure attribution: [`backend/docs/benchmark-report.md`](backend/docs/benchmark-report.md).
 
 | Benchmark | Score | Model |
 |---|---|---|
@@ -569,7 +569,7 @@ On macOS, `bash package-macos.sh` creates a native Cocoa/WebKit app in
 
 **CI** runs on every push and pull request across Windows, Linux, Linux AddressSanitizer, macOS Apple Silicon, and macOS Intel. See [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
 
-Benchmark scorecard: [`backend/docs/BENCHMARK_RESULTS.md`](backend/docs/BENCHMARK_RESULTS.md) · methodology and real-LLM results: [`backend/docs/benchmark-report-2026-08-31.md`](backend/docs/benchmark-report-2026-08-31.md).
+Benchmark scorecard: [`backend/docs/BENCHMARK_RESULTS.md`](backend/docs/BENCHMARK_RESULTS.md) · methodology and real-LLM results: [`backend/docs/benchmark-report.md`](backend/docs/benchmark-report.md).
 
 ## Documentation
 
@@ -581,7 +581,7 @@ The design documents describe target architecture; the detailed design's impleme
 | [`backend/docs/COGNITIVE_OS_ARCHITECTURE_BASELINE_V3.0.md`](backend/docs/COGNITIVE_OS_ARCHITECTURE_BASELINE_V3.0.md) | Proposed architecture baseline and component boundaries |
 | [`backend/docs/COGNITIVE_OS_DETAILED_DESIGN_V3.1.md`](backend/docs/COGNITIVE_OS_DETAILED_DESIGN_V3.1.md) | Detailed design, implementation status, and remaining gaps |
 | [`backend/docs/COGNITIVE_OS_SECRET_SECURITY_DDD_V1.0.md`](backend/docs/COGNITIVE_OS_SECRET_SECURITY_DDD_V1.0.md) | Secret-security design and acceptance criteria |
-| [`backend/docs/benchmark-report-2026-08-31.md`](backend/docs/benchmark-report-2026-08-31.md) | Agent benchmark methodology and real-LLM results (detailed record behind the scorecard) |
+| [`backend/docs/benchmark-report.md`](backend/docs/benchmark-report.md) | Agent benchmark methodology and real-LLM results (detailed record behind the scorecard) |
 | [`backend/README.md`](backend/README.md) | Developer docs: build, concurrency model, API, configuration, marketplace, local models |
 
 ## Roadmap

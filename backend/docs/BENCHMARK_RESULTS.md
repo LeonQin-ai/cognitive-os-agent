@@ -1,6 +1,6 @@
 # Benchmark Results
 
-Clean scorecard of cognitive-os-agent on public agent benchmarks. All numbers are **real runs** (full agent loop, no shortcuts); methodology, failure attribution and every framework fix along the way are documented in the detailed report: [`benchmark-report-2026-08-31.md`](benchmark-report-2026-08-31.md).
+Clean scorecard of cognitive-os-agent on public agent benchmarks. All numbers are **real runs** (full agent loop, no shortcuts); methodology, failure attribution and every framework fix along the way are documented in the detailed report: [`benchmark-report.md`](benchmark-report.md).
 
 ## Headline results
 
