@@ -15,7 +15,8 @@
 #else
 #include <sys/resource.h>
 #if defined(__APPLE__)
-#include <mach/mach.h>
+#include <libproc.h>
+#include <unistd.h>
 #else
 #include <unistd.h>
 #endif
@@ -59,8 +60,8 @@ static size_t memory_rss(int peak) {
 #else
     if(!peak) {
 #if defined(__APPLE__)
-        mach_task_basic_info_data_t info; mach_msg_type_number_t count=MACH_TASK_BASIC_INFO_COUNT;
-        return task_info(mach_task_self(),MACH_TASK_BASIC_INFO,(task_info_t)&info,&count)==KERN_SUCCESS ? info.resident_size:0;
+        struct proc_taskinfo info;
+        return proc_pidinfo(getpid(), PROC_PIDTASKINFO, 0, &info, sizeof info)==sizeof info ? (size_t)info.pti_resident_size:0;
 #else
         FILE *f=fopen("/proc/self/statm","r"); unsigned long total=0,resident=0;
         if(!f) return 0; int ok=fscanf(f,"%lu %lu",&total,&resident)==2; fclose(f);
