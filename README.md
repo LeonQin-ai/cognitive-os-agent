@@ -467,8 +467,8 @@ bash package-macos.sh       # native .app + architecture-specific ZIP
 ./build/cognitive-os-agent
 
 # Start the web console
-./build/cognitive-os-agent serve 8080
-# → http://localhost:8080/
+./build/cognitive-os-agent serve 18300
+# → http://localhost:18300/
 ```
 
 The embedded web console ships a ChatGPT-style dark UI: multi-session chat with
@@ -482,14 +482,17 @@ durable task journal with one-click **checkpoint resume** (`POST /v1/tasks/<id>/
 
 Drive it over HTTP:
 
+The Windows desktop app uses port `18300`. Run the standalone CLI server above
+only when the desktop app is closed, since both use the same port.
+
 ```bash
-curl -X POST localhost:8080/v1/chat -d '{"prompt":"Create note.txt with content hello"}'
-curl localhost:8080/v1/tasks/0    # inspect a task
-curl localhost:8080/v1/tasks/journal   # durable task history (checkpoint)
-curl localhost:8080/v1/cron       # scheduled jobs (interval / daily)
-curl localhost:8080/v1/tools      # registered tools
-curl localhost:8080/v1/memory     # Memory OS state
-curl localhost:8080/metrics       # gauges: context.bytes_*, memory.*, tx.*
+curl -X POST http://localhost:18300/v1/chat -H 'Content-Type: application/json' -d '{"message":"Create note.txt with content hello"}'
+curl http://localhost:18300/v1/tasks/0    # inspect a task; use the id returned above
+curl http://localhost:18300/v1/tasks/journal   # durable task history (checkpoint)
+curl http://localhost:18300/v1/cron       # scheduled jobs (interval / daily)
+curl http://localhost:18300/v1/tools      # registered tools
+curl http://localhost:18300/v1/memory     # Memory OS state
+curl http://localhost:18300/metrics       # gauges: context.bytes_*, memory.*, tx.*
 ```
 
 Point it at a real LLM (or run fully offline with the mock provider):

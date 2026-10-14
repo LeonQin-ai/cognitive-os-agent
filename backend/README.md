@@ -113,7 +113,7 @@ or MCP page. The pages display the effective state folder paths. A custom
 ./build/cognitive-os-agent --config state/cognitive-os-agent.json run "分析项目中的 bug"
 ./build/cognitive-os-agent --config state/cognitive-os-agent.json "分析项目中的 bug"
 ./build/cognitive-os-agent --config state/cognitive-os-agent.json config
-./build/cognitive-os-agent --config state/cognitive-os-agent.json serve 8080
+./build/cognitive-os-agent --config state/cognitive-os-agent.json serve 18300
 ```
 
 `config` prints an effective summary and only reports whether an API key is
@@ -121,20 +121,20 @@ configured. `COA_*` environment values override file values. The terminal
 shows each agent stage while a task runs. On Windows, the CLI decodes Unicode
 command-line arguments before running a task, so Chinese text and paths work.
 
-`./build/cognitive-os-agent serve 8080` then `curl`:
+`./build/cognitive-os-agent serve 18300` then `curl` (close the Windows desktop app first if it is running, since it also uses port `18300`):
 
 ```
-curl -X POST localhost:8080/v1/tasks -d '{"prompt":"创建 a.txt 写入 hi"}'
-curl localhost:8080/v1/tasks/0
-curl -X POST localhost:8080/v1/tasks/0/messages -d '{"message":"Add tests, then continue"}'
-curl localhost:8080/v1/tools
-curl localhost:8080/v1/memory
-curl localhost:8080/v1/blackboard        # shared blackboard snapshot
-curl localhost:8080/v1/agents            # registered agents + facts
-curl localhost:8080/metrics
+curl -X POST http://localhost:18300/v1/tasks -H 'Content-Type: application/json' -d '{"prompt":"创建 a.txt 写入 hi"}'
+curl http://localhost:18300/v1/tasks/0    # replace 0 with the returned id
+curl -X POST http://localhost:18300/v1/tasks/0/messages -H 'Content-Type: application/json' -d '{"message":"Add tests, then continue"}'
+curl http://localhost:18300/v1/tools
+curl http://localhost:18300/v1/memory
+curl http://localhost:18300/v1/blackboard        # shared blackboard snapshot
+curl http://localhost:18300/v1/agents            # registered agents + facts
+curl http://localhost:18300/metrics
 ```
 
-Open `http://localhost:8080/` for the embedded web console.
+Open `http://localhost:18300/` for the embedded web console.
 
 ### Execution trace
 

@@ -426,8 +426,8 @@ bash package-macos.sh       # 生成原生 .app 与当前架构 ZIP
 ./build/cognitive-os-agent
 
 # 启动 Web 控制台
-./build/cognitive-os-agent serve 8080
-# → http://localhost:8080/
+./build/cognitive-os-agent serve 18300
+# → http://localhost:18300/
 ```
 
 内嵌 Web 控制台为 ChatGPT 风格暗色 UI：多会话聊天，**聊天记录按会话持久化、重启不丢**
@@ -439,14 +439,16 @@ bash package-macos.sh       # 生成原生 .app 与当前架构 ZIP
 
 通过 HTTP 驱动：
 
+Windows 桌面版固定使用 `18300` 端口。若按上面的命令单独启动 CLI 服务，请先关闭桌面版，以免端口被占用。
+
 ```bash
-curl -X POST localhost:8080/v1/chat -d '{"prompt":"创建 note.txt，内容为 hello"}'
-curl localhost:8080/v1/tasks/0    # 查看任务
-curl localhost:8080/v1/tasks/journal   # 持久化任务历史（checkpoint）
-curl localhost:8080/v1/cron       # 定时任务（间隔 / 每日）
-curl localhost:8080/v1/tools      # 已注册工具
-curl localhost:8080/v1/memory     # Memory OS 状态
-curl localhost:8080/metrics       # 指标：context.bytes_*、memory.*、tx.*
+curl -X POST http://localhost:18300/v1/chat -H 'Content-Type: application/json' -d '{"message":"创建 note.txt，内容为 hello"}'
+curl http://localhost:18300/v1/tasks/0    # 查看任务；将 0 换成上一步返回的 id
+curl http://localhost:18300/v1/tasks/journal   # 持久化任务历史（checkpoint）
+curl http://localhost:18300/v1/cron       # 定时任务（间隔 / 每日）
+curl http://localhost:18300/v1/tools      # 已注册工具
+curl http://localhost:18300/v1/memory     # Memory OS 状态
+curl http://localhost:18300/metrics       # 指标：context.bytes_*、memory.*、tx.*
 ```
 
 接入真实 LLM（或用 mock 提供方完全离线运行）：
