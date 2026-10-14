@@ -503,12 +503,18 @@ Point it at a real LLM (or run fully offline with the mock provider):
 Quality gate: CI builds and tests on Windows (zig cc), Linux (gcc and AddressSanitizer), macOS Apple Silicon, and macOS Intel.
 
 ```
-unit:      2583 passed, 0 failed   (local Windows verification, 2026-09-29)
+unit:      3129 passed, 0 failed   (local Windows verification, 2026-10-14)
 scenario:  91 checks, 0 failed     (HTTP server, plugins, MCP stdio, flows)
 e2e:       E2E PASS                (real HTTP, both protocols)
 adapters:  ADAPTER PASS            (chat + SSE stream, openai + anthropic)
 bench:     BFCL-style 22 cases     (simple / multiple / parallel / irrelevance / policy)
 ASAN:      0 memory errors
+```
+
+Latest issue verification (2026-10-14): [CI run 38510473915](https://github.com/LeonQin-ai/cognitive-os-agent/actions/runs/38510473915) passed all five platform jobs. The image-wait regression checks a real upload, the image payload and 8192-token budget, slow-provider failure without automatic retry/synthesis, a subsequent successful image request, and an unchanged 32768-token text-planning budget. It runs on Windows, Linux and both macOS architectures. Runtime smoke covers scale, MMU integrity and queue backlog; crash recovery uses actual process termination. The five browser regression checks cover left-side session status and latest interrupted-task history.
+
+```bash
+python backend/tests/test_vision_wait_e2e.py
 ```
 
 ### Running the tests yourself
