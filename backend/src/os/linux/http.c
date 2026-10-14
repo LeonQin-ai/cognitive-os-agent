@@ -24,6 +24,7 @@ struct http_stream {
     /* plain-socket variant */
     sock *sock;
     int64_t deadline_ms;
+    int read_failed;
     char buf[HTTP_BUF];
     size_t pos;
     size_t len;
@@ -284,11 +285,13 @@ static int http_fill(http_stream *h) {
     h->len = 0;
     if (h->deadline_ms) {
         int64_t remaining=h->deadline_ms-time_now_ms();
-        if(remaining<=0 || sock_wait_readable(h->sock,(int)remaining)<=0) return -1;
+        if(remaining<=0 || sock_wait_readable(h->sock,(int)remaining)<=0) { h->read_failed=1; return -1; }
     }
     n = sock_recv(h->sock, h->buf, HTTP_BUF);
-    if (n <= 0)
+    if (n <= 0) {
+        if(n<0 || h->content_remaining>0 || (h->chunked && h->cstate!=CHUNK_DONE)) h->read_failed=1;
         return -1;
+    }
     h->len = (size_t)n;
     return (int)h->len;
 }
@@ -677,6 +680,9 @@ static http_response *http_full(const char *base_url, const char *method, const 
             break;
     }
 
+    if(h->read_failed) {
+        strbuf_free(&sb); free(r); http_stream_close(h); return NULL;
+    }
     r->body = strbuf_detach(&sb);
     r->body_len = strlen(r->body);
     http_stream_close(h);

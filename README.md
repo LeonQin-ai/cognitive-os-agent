@@ -513,6 +513,8 @@ ASAN:      0 memory errors
 
 Latest issue verification (2026-10-14): [CI run 38510473915](https://github.com/LeonQin-ai/cognitive-os-agent/actions/runs/38510473915) passed all five platform jobs. The image-wait regression checks a real upload, the image payload and 8192-token budget, slow-provider failure without automatic retry/synthesis, a subsequent successful image request, and an unchanged 32768-token text-planning budget. It runs on Windows, Linux and both macOS architectures. Runtime smoke covers scale, MMU integrity and queue backlog; crash recovery uses actual process termination. The five browser regression checks cover left-side session status and latest interrupted-task history.
 
+The image-wait regression also covers a permanently silent provider and a response body delivered one byte at a time. A fixed receive deadline prevents trickling data from extending the wait indefinitely; timed-out or incomplete bodies are discarded. With a 1000 ms test configuration, both cases reach FAILED within 5 seconds on Windows (allowing its per-stage timeout behavior), issue only one model call each, and leave subsequent image/text requests usable.
+
 ```bash
 python backend/tests/test_vision_wait_e2e.py
 ```

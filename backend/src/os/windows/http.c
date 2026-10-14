@@ -7,6 +7,7 @@
  * src/os/http_dispatch.c binds it at first use. */
 #include "os/platform.h"
 #include "infra/util.h"
+#include "os/os_time.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -128,6 +129,7 @@ static http_response *do_request(const char *method, const char *base_url, const
        WinHTTP's defaults (~30s+) mean a slow or dead peer blocks the caller —
        fatal inside the single-threaded HTTP server where every request queues. */
     DWORD to = (DWORD)(timeout_ms > 0 ? timeout_ms : 30000);
+    int64_t deadline=time_now_ms()+to;
     WinHttpSetTimeouts(hSess, to, to, to, to);
 
     HINTERNET hConn = WinHttpConnect(hSess, whost, (INTERNET_PORT)port, 0);
@@ -218,17 +220,25 @@ static http_response *do_request(const char *method, const char *base_url, const
     for (;;) {
         char tmp[16384];
         DWORD downloaded = 0;
-        if (!WinHttpReadData(hReq, tmp, sizeof(tmp), &downloaded))
+        int64_t remaining=deadline-time_now_ms();
+        if(remaining<=0) { ok=FALSE; break; }
+        DWORD receive=(DWORD)remaining;
+        if(!WinHttpSetOption(hReq,WINHTTP_OPTION_RECEIVE_TIMEOUT,&receive,sizeof receive) ||
+           !WinHttpReadData(hReq, tmp, sizeof(tmp), &downloaded)) {
+            ok=FALSE;
             break;
+        }
         if (downloaded == 0)
             break;
         strbuf_append_n(&body_buf, tmp, (size_t)downloaded);
     }
 
-    r = (http_response *)calloc(1, sizeof(*r));
-    r->status = (int)dwStatus;
-    r->body = strbuf_detach(&body_buf);
-    r->body_len = r->body ? strlen(r->body) : 0;
+    r = ok ? (http_response *)calloc(1, sizeof(*r)):NULL;
+    if(r) {
+        r->status = (int)dwStatus;
+        r->body = strbuf_detach(&body_buf);
+        r->body_len = r->body ? strlen(r->body) : 0;
+    } else strbuf_free(&body_buf);
 
     WinHttpCloseHandle(hReq);
     WinHttpCloseHandle(hConn);

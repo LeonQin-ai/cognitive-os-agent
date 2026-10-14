@@ -6,6 +6,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 backend=Path(__file__).resolve().parents[1]
 captures=[]
+release_silent=threading.Event()
+mode='silent'
 class Provider(BaseHTTPRequestHandler):
     def log_message(self,*args): pass
     def do_POST(self):
@@ -16,11 +18,17 @@ class Provider(BaseHTTPRequestHandler):
         if images:
             assert images[0]['image_url']['url'].startswith('data:image/png;base64,')
             assert body['max_tokens']==8192
-            if len(captures)==1: time.sleep(8)
+            if mode=='silent':
+                release_silent.wait(30)
+                return
         else: assert body['max_tokens']==32768
         data=json.dumps({'choices':[{'message':{'content':'VISION_WAIT_OK'}}]}).encode()
         self.send_response(200); self.send_header('Content-Length',str(len(data))); self.end_headers()
-        try: self.wfile.write(data)
+        try:
+            if images and mode=='trickle':
+                for byte in data:
+                    self.wfile.write(bytes([byte])); self.wfile.flush(); time.sleep(.03)
+            else: self.wfile.write(data)
         except (BrokenPipeError,ConnectionResetError): pass
 
 with tempfile.TemporaryDirectory(prefix='coa-vision-wait-') as folder:
@@ -59,12 +67,19 @@ with tempfile.TemporaryDirectory(prefix='coa-vision-wait-') as folder:
             failed,elapsed=chat([uploaded['id']])
             assert failed['status']=='FAILED' and 'capture-vision' in failed['output'] and '1000 ms' in failed['output'],failed
             assert elapsed<5,elapsed
+            assert len(captures)==1,len(captures)
+            mode='trickle'
+            failed,elapsed=chat([uploaded['id']])
+            assert failed['status']=='FAILED' and '1000 ms' in failed['output'],failed
+            assert elapsed<5 and len(captures)==2,(elapsed,len(captures))
+            mode='ready'
             done,_=chat([uploaded['id']]); assert done['status']=='DONE',done
             plain,_=chat([]); assert plain['status']=='DONE',plain
-            assert len(captures)==3,len(captures)
-            print('PASS: slow image request fails within bound without retry loop; image retry and text succeed; payload and budgets verified')
+            assert len(captures)==4,len(captures)
+            print('PASS: permanently silent and trickling providers fail without retry/synthesis; image retry and text succeed; payload and budgets verified')
         finally:
             process.terminate()
             try: process.wait(timeout=5)
             except subprocess.TimeoutExpired: process.kill(); process.wait()
             provider.shutdown()
+            release_silent.set()
