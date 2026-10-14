@@ -40,6 +40,8 @@ int planner_plan_ex(llm *llm, const struct tool_registry *tools, struct skill_re
                         struct policy_engine *policy, const char *prompt, planned_action **actions,
                         int *n_actions, char **raw_out, char **err_out);
 
+/* Also returns -2 for visual-provider request failure: callers must surface
+ * the diagnostic without automatically resending the image or synthesizing. */
 int planner_plan_attachments_ex(llm *llm, const struct tool_registry *tools, struct skill_registry *skills,
     struct policy_engine *policy, const char *prompt, planned_action **actions,
     int *n_actions, char **raw_out, char **err_out, const char *attachments);

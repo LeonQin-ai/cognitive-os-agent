@@ -1,5 +1,6 @@
 #include "os/platform.h"
 #include "os/os_socket.h"
+#include "os/os_time.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -22,6 +23,7 @@ struct http_stream {
     size_t c_pos;
     /* plain-socket variant */
     sock *sock;
+    int64_t deadline_ms;
     char buf[HTTP_BUF];
     size_t pos;
     size_t len;
@@ -280,6 +282,10 @@ static int http_fill(http_stream *h) {
         return (int)(h->len - h->pos);
     h->pos = 0;
     h->len = 0;
+    if (h->deadline_ms) {
+        int64_t remaining=h->deadline_ms-time_now_ms();
+        if(remaining<=0 || sock_wait_readable(h->sock,(int)remaining)<=0) return -1;
+    }
     n = sock_recv(h->sock, h->buf, HTTP_BUF);
     if (n <= 0)
         return -1;
@@ -596,6 +602,7 @@ static http_stream *http_open(const char *base_url, const char *method, const ch
     }
 
     h->sock = sock;
+    h->deadline_ms=timeout_ms>0 ? time_now_ms()+timeout_ms:0;
     h->content_remaining = -1;
     if (parse_response_head(h) != 0) {
         http_stream_close(h);

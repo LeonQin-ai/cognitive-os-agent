@@ -502,6 +502,21 @@ static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_act
     req.messages = msgs;
     req.num_messages = count;
     req.temperature = 0.2;
+    int visual = 0;
+    for (int i=0;i<count;i++) if(msgs[i].image_b64 && *msgs[i].image_b64) visual=1;
+    if (visual) {
+        /* Image/frame requests need a visible bound independent of the long
+         * source-generation budget. Do not infer vision support from names. */
+        long limit=120000;
+        const char *setting=getenv("COA_LLM_VISION_TIMEOUT_MS");
+        if(setting && *setting) {
+            char *end=NULL; long value=strtol(setting,&end,10);
+            if(end && !*end && value>=1000 && value<=600000) limit=value;
+        }
+        int global=llm_timeout_ms();
+        req.timeout_ms=limit<global ? limit:global;
+        log_info("planner: visual request model=%s timeout_ms=%ld max_tokens=8192",llm->model ? llm->model:"unknown",req.timeout_ms);
+    }
     req.max_tokens = 32768; /* tool plans carrying file_write content (whole
                              * scripts) need real headroom; 2048 truncated the
                              * JSON mid-string and the plan was lost. Thinking
@@ -509,16 +524,23 @@ static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_act
                              * budget — glm-5.3-flash burned all 8192 on
                              * invisible reasoning and returned empty content
                              * (finish_reason=length) */
+    if(visual) req.max_tokens=8192;
     rc = llm_chat(llm, &req, &resp);
     for (int i=0;i<28;i++) free(owned[i]);
     cJSON_Delete(files);
     free(sys_prompt);
     if (rc != 0) {
-        if (err_out)
-            *err_out = xstrdup(resp.error ? resp.error : "LLM call failed");
+        if (err_out) {
+            if(visual) {
+                strbuf diagnostic; strbuf_init(&diagnostic);
+                strbuf_appendf(&diagnostic,"图片/视频帧模型请求失败（模型 %s，HTTP 等待超时配置 %ld ms）：%s。请检查接口是否支持图片输入；慢响应可调整 COA_LLM_VISION_TIMEOUT_MS。",
+                    llm->model ? llm->model:"unknown",req.timeout_ms,resp.error ? resp.error:"LLM call failed");
+                *err_out=strbuf_detach(&diagnostic);
+            } else *err_out = xstrdup(resp.error ? resp.error : "LLM call failed");
+        }
         free(resp.content);
         free(resp.error);
-        return -1;
+        return visual ? -2 : -1;
     }
 
     plan = resp.content;

@@ -151,6 +151,18 @@ static http_response *do_request(const char *method, const char *base_url, const
         return NULL;
     }
 
+    /* Response headers have a separate WinHTTP timeout (90s by default).
+     * Apply bounds on the request handle too; session settings alone do not
+     * bound ReceiveResponse on every Windows version. */
+    if (!WinHttpSetTimeouts(hReq, to, to, to, to) ||
+        !WinHttpSetOption(hReq, WINHTTP_OPTION_RECEIVE_RESPONSE_TIMEOUT, &to, sizeof to)) {
+        WinHttpCloseHandle(hReq);
+        WinHttpCloseHandle(hConn);
+        WinHttpCloseHandle(hSess);
+        free(whost); free(wpath); free(wmethod);
+        return NULL;
+    }
+
     strbuf_init(&hdr);
     if (content_type && body && *body)
         strbuf_appendf(&hdr, "Content-Type: %s\r\n", content_type);

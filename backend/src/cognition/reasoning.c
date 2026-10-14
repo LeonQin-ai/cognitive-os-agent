@@ -249,6 +249,7 @@ struct reasoning {
     int prog_llm_calls;
     long long prog_tool_ms;  /* cumulative tool execution latency */
     int prog_model_failures; /* consecutive/total request failures this run */
+    int visual_request_failed; /* avoid silently repeating expensive image requests */
 
     /* per-model token ledger (borrowed; may be NULL). Deltas are computed
      * against the run-start snapshot of llm usage counters so per-round
@@ -1457,6 +1458,7 @@ static int h_reason(state_machine *sm, void *ud, const char *input, char **out) 
     int64_t llm_span = trace_begin_task(r->trace, r->run_task ? r->run_task->id : r->trace_task_id, "llm.plan");
     int rc = planner_plan_attachments_ex(r->llm, r->tools, r->skills, r->policy, aug ? aug : input, &r->actions, &r->n_actions,
                                  &raw, &plan_err, r->run_task ? r->run_task->attachments_json : NULL);
+    r->visual_request_failed = rc == -2;
     trace_end(r->trace, llm_span, rc == 0 && raw ? 1 : -1);
     r->prog_llm_ms += time_now_ms() - t_llm0;
     r->prog_llm_calls++;
@@ -2907,6 +2909,7 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     r->last_failed_action_sig = 0;
     r->same_action_failures = 0;
     r->tool_fail_aborted = 0;
+    r->visual_request_failed = 0;
     r->run_mutated = 0;
     r->search_seen_n = 0;
     r->round_search_skips = 0;
@@ -2976,6 +2979,11 @@ restart_planning:
             if (!r->had_plan) r->prog_model_failures++;
             round_log_append(r, result && *result ? result : "(run failed)");
             obs_log_append(r, result && *result ? result : "(run failed)");
+            if (r->visual_request_failed) {
+                final_text=xstrdup(result && *result ? result:"图片模型请求失败");
+                fail_aborted = 1;
+                break;
+            }
             progress_emit(r, r->had_plan ? "recovering" : "reconnecting");
         if (r->round_idx >= r->max_rounds)
                 break;
@@ -3204,7 +3212,8 @@ restart_planning:
         }
         if (r->tool_fail_aborted) { strbuf_append(&out,"\n原因：相同工具连续失败3次；请查看最后一次失败的工具结果，修正参数或环境后恢复任务。"); explained=1; }
         if (stalled) { strbuf_append(&out,"\n原因：重复工具动作没有新增进展；需调整路径、分页参数或执行方案。"); explained=1; }
-        if (fail_aborted) { strbuf_append(&out,"\n原因：模型规划或执行验证连续失败；请核对执行记录中的最后一条错误。"); explained=1; }
+        if (fail_aborted && !r->visual_request_failed) { strbuf_append(&out,"\n原因：模型规划或执行验证连续失败；请核对执行记录中的最后一条错误。"); explained=1; }
+        if (r->visual_request_failed) explained=1;
         if (r->round_idx>=r->max_rounds) { strbuf_appendf(&out,"\n原因：达到配置的最大规划轮数 %d；当前步骤未全部完成。",r->max_rounds); explained=1; }
         if (!explained) strbuf_append(&out,"\n原因：模型仍在描述待执行工作，尚未提交可验证的最终结果；请根据保留的执行记录继续任务。");
 
@@ -3245,7 +3254,7 @@ restart_planning:
         }
     }
 
-    if (fail_aborted)
+    if (fail_aborted && !r->visual_request_failed)
         strbuf_appendf(&out, "\n(连续 %s 轮阶段失败，任务中止 — 请根据执行记录中的真实错误修正后重试)",
                        REASONING_CONSEC_FAIL_ABORT_STR);
 
