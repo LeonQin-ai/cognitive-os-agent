@@ -122,6 +122,8 @@ jobs:
         run: python tests/test_dsml_e2e.py
       - name: Multi-agent dependency API regressions
         run: python tests/test_flow_dependencies_e2e.py
+      - name: IM group member repair and validation
+        run: python tests/test_im_members_e2e.py
       - name: Incomplete diagnostics and recovery API regression
         run: python tests/test_completion_recovery_e2e.py
       - name: Visual provider timeout and recovery regression
@@ -140,3 +142,4 @@ jobs:
         run: |
           npm ci --prefix webarena --ignore-scripts --no-audit --no-fund
           NODE_PATH="$PWD/webarena/node_modules" node tests/test_issue_ui.cjs
+          NODE_PATH="$PWD/webarena/node_modules" node tests/test_im_members_ui.cjs

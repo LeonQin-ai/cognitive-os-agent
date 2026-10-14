@@ -1426,12 +1426,16 @@ panels.im = `
       <div>
         <div class="row" style="margin:0 0 8px">
           <input id="im-new" type="text" placeholder="会话名称" style="flex:1">
-          <button onclick="imCreate()">＋</button>
+          <button id="im-create" onclick="imCreate()" aria-label="创建会话">＋</button>
         </div>
         <label class="toggle-row" style="display:flex;align-items:center;gap:6px;margin:0 0 6px;font-size:12px;color:var(--muted)">
           <input type="checkbox" id="im-group" style="width:16px;height:16px;accent-color:var(--accent)"> 群聊
         </label>
-        <input id="im-members" type="text" placeholder="Agent 名称，逗号分隔（先在多 Agent 页面创建）" style="margin-bottom:6px" hidden>
+        <div id="im-members" role="group" aria-label="群聊 Agent" style="margin-bottom:6px;max-height:180px;overflow:auto" hidden></div>
+        <div id="im-members-edit" hidden><span id="im-members-title"></span>
+          <button class="sec sm" onclick="imSaveMembers()">保存成员</button>
+          <button class="sec sm" onclick="imCancelMembers()">取消</button></div>
+        <div id="im-member-status" class="hint" role="status" aria-live="polite"></div>
         <div class="hint" id="im-agent-hint" style="margin:0 0 8px" hidden>群内已注册的 Agent 会依次回复用户消息；每条消息最多触发每位 Agent 一次。发送下一条消息即可开始下一轮。</div>
         <select id="im-channel" style="margin-bottom:10px;font-size:12.5px">
           <option value="">关联外部渠道（选填）</option>
@@ -2671,6 +2675,7 @@ async function pluginGenerate(){
 let IM_ACTIVE = null;
 let WS = null;
 let IM_CHANNELS = [];
+let IM_AGENTS = [], IM_SESSIONS = [], IM_EDITING = null;
 const IM_RUN_STATE = new Map();
 
 function imRunUpdate(m){
@@ -2686,22 +2691,88 @@ function imRunUpdate(m){
     m.status === 'failed' ? '本轮执行失败，请查看任务 #' + m.task_id : '本轮已完成';
 }
 
-function imCreate(){
+function imSelectedMembers(){
+  return Array.from(document.querySelectorAll('#im-members input:checked'), el => el.value);
+}
+
+function imRenderMemberOptions(selected=imSelectedMembers()){
+  const box=$('im-members'); if(!box) return;
+  box.replaceChildren();
+  const names=new Set(IM_AGENTS.map(a=>a.name));
+  [...IM_AGENTS,...selected.filter(n=>!names.has(n)).map(name=>({name,missing:true}))].forEach(agent=>{
+    const label=document.createElement('label');
+    label.style.cssText='display:flex;align-items:center;gap:8px;padding:5px;overflow-wrap:anywhere';
+    const input=document.createElement('input'); input.type='checkbox'; input.value=agent.name;
+    input.style.cssText='width:16px;height:16px;flex:none'; input.checked=selected.includes(agent.name);
+    const text=document.createElement('span'); text.textContent=agent.name+(agent.missing?'（未注册，请移除）':agent.role?' · '+agent.role:'');
+    label.append(input,text); box.append(label);
+  });
+  if(!IM_AGENTS.length){
+    const hint=document.createElement('span'); hint.textContent='暂无已注册的 Agent。';
+    const button=document.createElement('button'); button.className='sec sm'; button.textContent='前往注册 Agent';
+    button.onclick=()=>switchPanel('agents'); box.prepend(hint,button);
+  }
+}
+
+async function imLoadAgents(){
+  const r=await call('GET','/v1/agents');
+  if(r.status!==200 || !r.obj || !Array.isArray(r.obj.agents)){
+    $('im-member-status').textContent='Agent 列表加载失败，请刷新后重试'; return false;
+  }
+  IM_AGENTS=r.obj.agents; imRenderMemberOptions(); return true;
+}
+
+function imCancelMembers(){
+  IM_EDITING=null;
+  if($('im-members-edit')) $('im-members-edit').hidden=true;
+  if($('im-create')) $('im-create').disabled=false;
+  if($('im-group')) $('im-group').disabled=false;
+  imRenderMemberOptions([]);
+}
+
+function imEditMembers(id){
+  const session=IM_SESSIONS.find(s=>s.id===id); if(!session) return;
+  IM_EDITING=id; $('im-group').checked=true; $('im-group').disabled=true;
+  $('im-members').hidden=false; $('im-agent-hint').hidden=false;
+  $('im-create').disabled=true; $('im-members-edit').hidden=false;
+  $('im-members-title').textContent='编辑 '+session.name+' 的 Agent（下一轮生效）';
+  $('im-member-status').textContent=''; imRenderMemberOptions(session.members || []);
+}
+
+function imValidateSelected(){
+  const members=imSelectedMembers(), names=new Set(IM_AGENTS.map(a=>a.name));
+  if(!members.length || members.some(n=>!names.has(n))){
+    $('im-member-status').textContent='请至少选择一位已注册的 Agent'; return null;
+  }
+  return members;
+}
+
+async function imSaveMembers(){
+  const id=IM_EDITING, members=imValidateSelected(); if(id===null || !members) return;
+  const r=await call('PUT','/v1/im/sessions/'+id+'/members',{members});
+  if(r.status!==200){ $('im-member-status').textContent=(r.obj && r.obj.error)||'成员保存失败，请重试'; return; }
+  imCancelMembers(); $('im-member-status').textContent='群成员已保存'; await renderIm();
+}
+
+async function imCreate(){
+  if(IM_EDITING!==null) return;
   const name = $('im-new').value.trim() || '新会话';
   const isGroup = $('im-group').checked;
-  const members = $('im-members').value.split(',').map(s => s.trim()).filter(Boolean);
+  const members = isGroup ? imValidateSelected():[];
+  if(isGroup && !members) return;
   const body = {name: name, kind: isGroup ? 'group' : 'direct'};
   if(isGroup && members.length) body.members = members;
   const sel = $('im-channel');
   if(sel && sel.value){ body.channel = sel.value; }
-  call('POST', '/v1/im/sessions', body).then(() => {
-    $('im-new').value = ''; $('im-members').value = '';
-    renderIm();
-  });
+  const r=await call('POST', '/v1/im/sessions', body);
+  if(r.status!==200){ $('im-member-status').textContent=(r.obj && r.obj.error)||'创建失败，请重试'; return; }
+  $('im-new').value = ''; $('im-member-status').textContent=''; imRenderMemberOptions([]);
+  IM_ACTIVE=r.obj.id; await renderIm();
 }
 
 function imDelete(id){
   call('DELETE', '/v1/im/sessions/' + id).then(() => {
+    if(IM_EDITING===id) imCancelMembers();
     if(IM_ACTIVE === id) IM_ACTIVE = null;
     renderIm();
   });
@@ -2832,11 +2903,14 @@ async function renderIm(){
   }
   const g = $('im-group');
   if(g && !g.dataset.bound){
+    imCancelMembers();
     g.dataset.bound = '1';
     g.addEventListener('change', () => { const el = $('im-members'); if(el) el.hidden = !g.checked; const hint = $('im-agent-hint'); if(hint) hint.hidden = !g.checked; });
   }
+  await imLoadAgents();
   const r = await call('GET', '/v1/im/sessions');
   const sessions = (r.obj && Array.isArray(r.obj.sessions)) ? r.obj.sessions : [];
+  IM_SESSIONS=sessions;
   list.innerHTML = '';
   if(!sessions.length){
     list.innerHTML = '<span class="muted" style="font-size:12px">暂无会话，创建第一个吧</span>';
@@ -2872,6 +2946,11 @@ async function renderIm(){
     left.appendChild(badge);
     left.appendChild(name);
     div.appendChild(left);
+    if(isGroup){
+      const edit=document.createElement('button'); edit.className='sec sm'; edit.textContent='成员';
+      edit.setAttribute('aria-label','编辑 '+s.name+' 的成员');
+      edit.onclick=e=>{ e.stopPropagation(); imEditMembers(s.id); }; div.appendChild(edit);
+    }
     div.appendChild(del);
     list.appendChild(div);
   });
@@ -2879,20 +2958,15 @@ async function renderIm(){
   renderImThread();
 }
 
-function imSend(){
+async function imSend(){
   const input = $('im-input');
   let content = input.value.trim();
   if(!content || IM_ACTIVE === null) return;
   const sender = 'me';
-  input.value = '';
-  const payload = {type:'im.send', session_id: IM_ACTIVE, content, sender};
-  if(WS && WS.readyState === WebSocket.OPEN){
-    WS.send(JSON.stringify(payload));
-  } else {
-    call('POST', '/v1/im/sessions/' + IM_ACTIVE + '/messages', {role:'user', content, sender}).then(r => {
-      if(r.obj && r.obj.ok) renderImThread();
-    });
-  }
+  const session=IM_ACTIVE;
+  const r=await call('POST', '/v1/im/sessions/' + session + '/messages', {role:'user', content, sender});
+  if(!r.obj || !r.obj.ok){ $('im-run-status').textContent=(r.obj && r.obj.error)||'消息发送失败，请重试'; return; }
+  if(IM_ACTIVE===session){ if(input.value.trim()===content) input.value=''; renderImThread(); }
 }
 
 async function imSearch(){

@@ -271,13 +271,16 @@ environment to remove its managed credential.
 
 ## IM Bridge and agent groups
 
-Register agents in **多 Agent & Flow**, then create an IM group whose members
-are those agent names. Each user message queues a bounded round: every
+Register agents in **多 Agent & Flow**, then select them from the IM group's
+Agent checkboxes. Use **成员** on an existing group to change its roster;
+`PUT /v1/im/sessions/<id>/members` accepts `{"members":["alpha","beta"]}`.
+Creation and updates require 1–64 unique registered names. Each user message queues a bounded round: every
 registered member reads the room transcript and replies once in member order.
 The next user message starts the next round. Replies persist in the room,
 appear over WebSocket, and are sent to its linked external channel. Agent
-conversation state is isolated by room and agent. A group with no registered
-agent members remains a normal message room.
+conversation state is isolated by room and agent. Legacy empty groups can be
+repaired through **成员**. Sending to an empty group or a group with removed
+Agent names returns HTTP 409 before saving the message; update its members first.
 
 `POST /v1/im/sessions/<id>/messages` with `{"content":"..."}` triggers a
 round, as does a WebSocket `im.send` event. Telegram inbound messages use the

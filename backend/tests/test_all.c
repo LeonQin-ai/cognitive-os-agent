@@ -6922,7 +6922,8 @@ static void test_http_api_contracts(uint16_t port) {
     CHECK(j && cJSON_IsFalse(cJSON_GetObjectItemCaseSensitive(j, "ok")));
     cJSON_Delete(j);
     j = api_request_json(port, "POST", "/v1/im/sessions",
-                         "{\"name\":\"bridge-room\",\"kind\":\"group\",\"channel\":\"audit-channel\"}", 200);
+                         /* Channel ingestion fixture has no agent roster. */
+                         "{\"name\":\"bridge-room\",\"kind\":\"direct\",\"channel\":\"audit-channel\"}", 200);
     jid = j ? cJSON_GetObjectItemCaseSensitive(j, "id") : NULL;
     long long bridge_id = cJSON_IsNumber(jid) ? (long long)jid->valuedouble : -1;
     cJSON_Delete(j);

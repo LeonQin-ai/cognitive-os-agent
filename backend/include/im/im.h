@@ -43,6 +43,9 @@ int64_t im_create_session_ex(im *im, const char *name, const char *kind, const c
                                  size_t n_members);
 /* Delete a session and its messages. Returns 1 ok, 0 not found. */
 int im_delete_session(im *im, int64_t id);
+/* Replace group members for subsequent turns. 1 ok, 0 missing, -1 invalid/OOM,
+ * -2 direct session. Names are copied; validation against the roster is at API. */
+int im_session_set_members(im *im, int64_t id, const char **members, size_t n_members);
 
 /* List sessions (malloc'd array; free with im_sessions_free). */
 im_session *im_list_sessions(im *im, size_t *count);

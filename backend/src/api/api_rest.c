@@ -4416,6 +4416,19 @@ static void im_forward_to_channel(runtime_ctx *ctx, int64_t session_id, const ch
         free(r);
 }
 
+static int im_group_ready(runtime_ctx *ctx, int64_t session_id) {
+    size_t count=0; int ready=1;
+    im_session *sessions=im_list_sessions(ctx->im,&count);
+    for (size_t i=0;i<count;i++) if (sessions[i].id==session_id &&
+        sessions[i].kind && !strcmp(sessions[i].kind,"group")) {
+        ready=sessions[i].n_members>0;
+        for (size_t j=0;j<sessions[i].n_members;j++)
+            if (!ctx->agents || agent_pool_find(ctx->agents,sessions[i].members[j])<0) ready=0;
+        break;
+    }
+    im_sessions_free(sessions,count); return ready;
+}
+
 /* Inbound WebSocket text protocol:
  *   {"type":"im.send","session_id":N,"content":"...","sender":"..."} -> IM message
  *   {"type":"im.ping"}                                  -> server replies pong
@@ -4437,6 +4450,9 @@ static void on_ws_msg(const char *text, void *ud) {
         cJSON *content = cJSON_GetObjectItemCaseSensitive(root, "content");
         cJSON *sender = cJSON_GetObjectItemCaseSensitive(root, "sender");
         if (sid && cJSON_IsNumber(sid) && content && cJSON_IsString(content) && ctx->im) {
+            if (!im_group_ready(ctx,(int64_t)sid->valuedouble)) {
+                cJSON_Delete(root); return;
+            }
             const char *snd = (sender && cJSON_IsString(sender)) ? sender->valuestring : NULL;
             int64_t id = im_send_ex(ctx->im, (int64_t)sid->valuedouble, "user", content->valuestring, snd);
             if (id > 0) {
@@ -4465,6 +4481,25 @@ static int h_im_sessions(const http_request *req, http_response *resp, void *ud)
     return 0;
 }
 
+/* Reject empty, duplicate and stale names instead of creating a silent group. */
+static int im_validate_members(runtime_ctx *ctx, cJSON *array, const char **members, size_t *count,
+                               http_response *resp) {
+    int n=cJSON_IsArray(array) ? cJSON_GetArraySize(array) : 0;
+    if (n<1 || n>64) goto invalid;
+    for (int i=0;i<n;i++) {
+        cJSON *v=cJSON_GetArrayItem(array,i);
+        if (!cJSON_IsString(v) || !*v->valuestring || !ctx->agents ||
+            agent_pool_find(ctx->agents,v->valuestring)<0) goto invalid;
+        for (int j=0;j<i;j++) if (!strcmp(members[j],v->valuestring)) goto invalid;
+        members[i]=v->valuestring;
+    }
+    *count=(size_t)n; return 1;
+invalid:
+    resp->status=400;
+    http_resp_json(resp,"{\"error\":\"请选择 1 至 64 位已注册且不重复的 Agent；可先在多 Agent 页面注册\"}");
+    return 0;
+}
+
 static int h_im_session_create(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
     char *b;
@@ -4490,7 +4525,9 @@ static int h_im_session_create(const http_request *req, http_response *resp, voi
             kind = k->valuestring;
         if (c && cJSON_IsString(c))
             channel = c->valuestring;
-        if (m && cJSON_IsArray(m)) {
+        if (kind && !strcmp(kind,"group")) {
+            if (!im_validate_members(ctx,m,members,&n_members,resp)) { cJSON_Delete(root); return 0; }
+        } else if (m && cJSON_IsArray(m)) {
             int mn = cJSON_GetArraySize(m);
             for (int i = 0; i < mn && n_members < 64; i++) {
                 cJSON *mv = cJSON_GetArrayItem(m, i);
@@ -4731,7 +4768,7 @@ static int h_im_channel_send(const http_request *req, http_response *resp, void 
 /* Handles GET/POST/DELETE on /v1/im/sessions/{id} and /v1/im/sessions/{id}/messages */
 static int h_im_session_route(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
-    int is_messages = 0;
+    int is_messages = 0, is_members=0;
     size_t rest_len;
     char idbuf[64];
     int64_t session_id;
@@ -4751,6 +4788,9 @@ static int h_im_session_route(const http_request *req, http_response *resp, void
 
     const char *rest = req->path + strlen("/v1/im/sessions/");
     rest_len = strlen(rest);
+    if (rest_len>strlen("/members") && !strcmp(rest+rest_len-strlen("/members"),"/members")) {
+        is_members=1; rest_len-=strlen("/members");
+    }
     if (rest_len > strlen("/messages") && strcmp(rest + rest_len - strlen("/messages"), "/messages") == 0) {
         is_messages = 1;
         rest_len -= strlen("/messages");
@@ -4767,6 +4807,24 @@ static int h_im_session_route(const http_request *req, http_response *resp, void
     }
 
     session_id = atoll(idbuf);
+
+    if (!strcmp(req->method,"PUT") && is_members) {
+        char *body=body_str(req); cJSON *root=body ? cJSON_Parse(body):NULL; free(body);
+        const char *members[64]; size_t count=0;
+        if (!im_validate_members(ctx,cJSON_GetObjectItemCaseSensitive(root,"members"),members,&count,resp)) {
+            cJSON_Delete(root); return 0;
+        }
+        char *end=NULL; int64_t exact_id=strtoll(idbuf,&end,10);
+        int result=(end && !*end && exact_id>0) ? im_session_set_members(ctx->im,exact_id,members,count):0;
+        cJSON_Delete(root);
+        if (result==1) http_resp_json(resp,"{\"ok\":true}");
+        else { resp->status=result==0 ? 404:result==-2 ? 400:500;
+            http_resp_json(resp,"{\"error\":\"群聊不存在、不是群聊或成员保存失败\"}"); }
+        return 0;
+    }
+    if (is_members || !strcmp(req->method,"PUT")) {
+        resp->status=404; http_resp_json(resp,"{\"error\":\"expected PUT .../members\"}"); return 0;
+    }
 
     if (strcmp(req->method, "DELETE") == 0) {
         int ok = im_delete_session(ctx->im, session_id);
@@ -4810,6 +4868,12 @@ static int h_im_session_route(const http_request *req, http_response *resp, void
             return 0;
         }
         role = "user";
+        /* Old stores may contain empty groups, or members removed from the
+         * roster. Reject before appending a human message that nobody can run. */
+        if (!im_group_ready(ctx,session_id)) {
+            cJSON_Delete(root); resp->status=409;
+            http_resp_json(resp,"{\"error\":\"群聊没有可用 Agent，请点击成员选择已注册的 Agent 并保存\"}"); return 0;
+        }
         int64_t id = im_send_ex(ctx->im, session_id, role, content, sender);
         if (id < 0) {
             cJSON_Delete(root);
@@ -5240,6 +5304,7 @@ int api_attach(runtime_ctx *ctx) {
     http_server_route(ctx->http, "POST", "/v1/im/channels/", h_im_channel_send, ctx);
     http_server_route(ctx->http, "GET", "/v1/im/sessions/", h_im_session_route, ctx);
     http_server_route(ctx->http, "POST", "/v1/im/sessions/", h_im_session_route, ctx);
+    http_server_route(ctx->http, "PUT", "/v1/im/sessions/", h_im_session_route, ctx);
     http_server_route(ctx->http, "DELETE", "/v1/im/sessions/", h_im_session_route, ctx);
     http_server_ws_route(ctx->http, "/ws", on_ws_msg, ctx);
     http_server_route(ctx->http, "GET", "/metrics", h_metrics, ctx);

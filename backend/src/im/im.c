@@ -307,6 +307,30 @@ int64_t im_create_session_ex(im *im, const char *name, const char *kind, const c
     return s->id;
 }
 
+int im_session_set_members(im *im, int64_t id, const char **members, size_t n_members) {
+    if (!im || !members || !n_members || n_members>64) return -1;
+    char **copy=calloc(n_members,sizeof(*copy));
+    if (!copy) return -1;
+    for (size_t i=0;i<n_members;i++) {
+        if (!members[i] || !*members[i] || !(copy[i]=xstrdup(members[i]))) {
+            for (size_t j=0;j<i;j++) free(copy[j]);
+            free(copy); return -1;
+        }
+    }
+    int result=0;
+    mutex_lock(&im->mtx);
+    for (size_t i=0;i<im->count;i++) if (im->sessions[i].id==id) {
+        im_sess *s=&im->sessions[i];
+        if (!s->kind || strcmp(s->kind,"group")) { result=-2; break; }
+        for (size_t j=0;j<s->n_members;j++) free(s->members[j]);
+        free(s->members); s->members=copy; s->n_members=n_members;
+        copy=NULL; im_persist(im); result=1; break;
+    }
+    mutex_unlock(&im->mtx);
+    if (copy) { for (size_t i=0;i<n_members;i++) free(copy[i]); free(copy); }
+    return result;
+}
+
 int im_delete_session(im *im, int64_t id) {
     int found = 0;
 
