@@ -23,6 +23,8 @@ remain idle. Scale values are medians of 3 runs; peak RSS is the maximum of thos
 | 1,000 | 10,000 | 578.199 | 17,295 | 0.114 / 0.258 / 0.392 | 17.09 |
 | 100 | 100,000 | 5748.495 | 17,396 | 0.113 / 0.262 / 0.422 | 22.48 |
 | 1,000 | 100,000 | 5771.132 | 17,328 | 0.113 / 0.257 / 0.376 | 22.57 |
+| 100 | 1,000,000 | 65971.943 | 15,158 | 0.131 / 0.313 / 2.039 | 78.65 |
+| 1,000 | 1,000,000 | 72279.054 | 13,835 | 0.144 / 0.346 / 14.790 | 77.92 |
 
 All submitted tasks were admitted and completed, with zero failures/rejections;
 ending active/queued counts were zero. Completed history was bounded to 64 records.
@@ -74,11 +76,13 @@ Reproduce after building `runtime-bench` / `bench-runtime`:
 ```bash
 cd backend
 python tests/run_runtime_measurements.py --full --output docs
+python tests/run_runtime_measurements.py --million --compiler "Zig 0.14.1 cc -std=c11 -O1 -g" --output docs
 python tests/test_runtime_benchmark.py          # scale + MMU + backlog correctness smoke
 python tests/test_crash_recovery_e2e.py --report # owned process kill, restore, explicit replay
 ```
 
 Raw measurements: [scale](runtime-scale-2026-10-14.json),
+[million-task extension](runtime-million-2026-10-14.json),
 [backlog](runtime-backlog-2026-10-14.json),
 [Context](runtime-context-pressure-2026-10-14.json),
 [crash recovery](runtime-crash-recovery-2026-10-14.json).
@@ -94,7 +98,9 @@ per-task memory probe scheme and is retained as history, not a direct scaling co
 - MMU事件延迟按单调微秒计时；P50/P95/P99是最近最多64个事件的nearest-rank。三个驱逐事件的P95/P99通常都等于最大值，样本数随数据保留；端到端recall延迟另包含排序/处理/返回JSON。
 - rehydration事件计数测的是被驱逐页重新生成L1；HOT重新物化的完整阶段耗时使用rehydrate_recall_ms。规范磁盘重载单独测canonical_reload_ms，之后核对所有原始内容。
 - 崩溃检测计时从重新启动到API看到INTERRUPTED，不是后台监控独立Worker的检测SLO；crash_to_done包含重启、API轮询、恢复和显式重放。
-- 一百万Task是后续扩展目标，当前规模指标明确为十万Task，没有把十万写成百万。
+- 百万任务新增独立结果：100/1000 Agent各3轮，每轮实际提交并完成1,000,000任务，共6,000,000；失败、拒绝、结束活动/队列均为0，完成历史不超过64条，事务回滚核对通过。没有测百万任务全部同时积压；上面的backlog是独立10万积压案例。
+- 百万任务耗时：100 Agent为58.743/65.972/74.076秒，1000 Agent为73.305/71.629/72.279秒。1000 Agent的中位吞吐较既有10万任务基准约下降20%，排队P99为14.790 ms；采样队列峰值6201。长运行期间的突发排队不能以平均吞吐掩盖，没有声称线性扩展或预设性能SLO。
+- 图表纳入百万任务结果；内存/队列图采用1000 Agent百万任务的耗时中位轮次。RSS增长包含基准验证数组逐页实际写入，不能据此断言Runtime任务历史泄漏。百万案例Native代码基于cdff91a，工作负载及编译参数与原规模组一致；不同轮次系统负载会影响尾延迟。
 
 ## 代码与用例
 

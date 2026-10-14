@@ -129,7 +129,9 @@ jobs:
       - name: Actual process crash recovery
         run: python tests/test_crash_recovery_e2e.py
       - name: Runtime benchmark smoke
-        run: python tests/test_runtime_benchmark.py
+        run: |
+          python tests/test_runtime_benchmark.py
+          python tests/test_runtime_reports.py
       - name: Skill discovery and execution API regressions
         run: python tests/test_skill_runtime_e2e.py
       - name: Recent status and file detail browser regressions

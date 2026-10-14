@@ -67,7 +67,7 @@ Cognitive OS 把这些职责**从提示词里搬进运行时**：
 
 ## 基准评测
 
-全部数字为真实完整 agent 循环运行结果。纯净分数表：[`backend/docs/BENCHMARK_RESULTS.md`](backend/docs/BENCHMARK_RESULTS.md) · 方法论与失败归因详录：[`backend/docs/benchmark-report-2026-08-31.md`](backend/docs/benchmark-report-2026-08-31.md)。
+下表为完整 agent 循环评测，后面的 Runtime 指标采用本地确定性负载，两者分别统计。纯净分数表：[`backend/docs/BENCHMARK_RESULTS.md`](backend/docs/BENCHMARK_RESULTS.md) · 方法论与失败归因详录：[`backend/docs/benchmark-report-2026-08-31.md`](backend/docs/benchmark-report-2026-08-31.md)。
 
 | 评测 | 分数 | 模型 |
 |---|---|---|
@@ -79,6 +79,50 @@ Cognitive OS 把这些职责**从提示词里搬进运行时**：
 | 策略遵循（违规请求） | **裸 LLM 0/4 → 运行时策略引擎 4/4** | deepseek-chat |
 
 值得注意：同一套运行时用中端模型 GLM-5.3-flash 即可达到 **GAIA 78.79%**、**SWE-bench mini 72.7%**；把规则从提示词移进运行时策略引擎后，策略遵循从 **0/4 变 4/4**。LLM 是加速器，运行时提供保证。
+
+## Runtime 实测（2026-10-14）
+
+测试机器：Windows 11 build 26200、Intel Family 6 Model 142、约8 GiB RAM，Zig cc 0.14.1 `-O1`。实际运行 Scheduler、AgentPool、Context MMU及文件恢复；调度任务为本地确定性负载，不包含生产模型推理。Agent数表示注册角色数，不是并发进程数；8个工作Worker，每任务64次Context读取，聚合Context为8 MiB，另有2个空闲Runtime Worker。规模数据取3轮中位数，峰值RSS取该组最大值。
+
+| 注册 Agent | 完成任务 | 总耗时 ms | 任务/秒 | 排队 P50 / P95 / P99 ms | 峰值 RSS MiB |
+| --- | --- | --- | --- | --- | --- |
+| 100 | 10,000 | 579.370 | 17,260 | 0.114 / 0.254 / 0.364 | 16.95 |
+| 1,000 | 10,000 | 578.199 | 17,295 | 0.114 / 0.258 / 0.392 | 17.09 |
+| 100 | 100,000 | 5748.495 | 17,396 | 0.113 / 0.262 / 0.422 | 22.48 |
+| 1,000 | 100,000 | 5771.132 | 17,328 | 0.113 / 0.257 / 0.376 | 22.57 |
+| 100 | 1,000,000 | 65971.943 | 15,158 | 0.131 / 0.313 / 2.039 | 78.65 |
+| 1,000 | 1,000,000 | 72279.054 | 13,835 | 0.144 / 0.346 / 14.790 | 77.92 |
+
+所有任务均接收并完成，失败/拒绝为0，结束时活动任务和队列归零；完成历史最多保留64条。RSS包含基准用例的完整性校验数组，不能将其全部算为任务历史内存。内存/队列每2048次提交采样，队列峰值是采样观察值。
+
+百万任务扩展实际共执行600万任务（100/1000 Agent各3轮）；耗时范围分别为58.743–74.076秒及71.629–73.305秒。1000 Agent下，吞吐相比已有10万任务基准约下降20%，排队P99增至14.790 ms，采样队列突增最高6201个任务；不能据此声称线性扩展或延迟SLO。[独立百万任务JSON](backend/docs/runtime-million-2026-10-14.json)保留六轮结果及逐阶段内存/队列采样。
+
+![Runtime 规模与排队延迟](backend/docs/runtime-scale-2026-10-14.svg)
+
+![代表轮次的内存与队列采样](backend/docs/runtime-memory-2026-10-14.svg)
+
+独立积压测试在提交10万任务后才放行Worker，实际排队99,992个任务，39.942秒排空，峰值59.07 MiB；其延迟包含人为等待，不能与正常吞吐混算。
+
+**Context压力：每种布局1轮。** 规范正文先晋升HOT，再驱逐、生成WARM概述、重新晋升HOT，最后重新打开磁盘存储并核对全部原文长度及哈希。L1概述有损，规范存储保留完整内容；不是无损压缩。生成的ASCII记录不是生产会话，没有把GiB级prompt发给模型。RSS包含正文缓存与JSON序列化，MMU的token预算不是整个进程的RAM上限。
+
+| Context布局 MiB | 峰值 RSS MiB | 驱逐 recall ms | WARM缓存 bytes | HOT恢复 ms | 磁盘重载 ms | 全文校验 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 512 / 128 / 10 | 2860.61 | 306.725 | 3,900 | 7330.594 | 1144.853 | 通过 |
+| 768 / 128 / 128 | 3197.01 | 887.189 | 3,900 | 15020.763 | 2014.049 | 通过 |
+
+原始JSON保留操作次数及P50/P95/P99；各大内存案例仅3次驱逐，不能据此建立尾延迟SLO。
+
+**真实崩溃恢复：** RUNNING任务及AVAILABLE快照→强制终止整个Runtime进程→重启识别INTERRUPTED→核对快照恢复内容→显式重放至DONE→后续任务继续。检测511.031 ms、快照恢复18.285 ms、显式重放54.946 ms、崩溃到DONE为591.759 ms。Windows用TerminateProcess，POSIX测试用SIGKILL；不是仅某个线程Worker崩溃。测试重放幂等文件替换，不自动重放外部操作，不承诺exactly-once或断电恢复。
+
+[完整报告](backend/docs/runtime-benchmark-expanded.md) · [技术白皮书及3张架构图](backend/docs/runtime-whitepaper.md) · [5分钟演示](backend/docs/runtime-demo-2026-10-14.webm)。
+
+```bash
+cd backend
+python tests/run_runtime_measurements.py --full --output docs
+python tests/run_runtime_measurements.py --million --compiler "实际编译器/版本/参数" --output docs
+```
+
+`--full`重测1万/10万任务及650 MiB/1 GiB Context；`--million`仅测100/1000 Agent各3轮百万任务，独立保存JSON，不覆盖旧规模或Context结果。
 
 ## Web 控制台
 
@@ -421,12 +465,20 @@ curl localhost:8080/metrics       # 指标：context.bytes_*、memory.*、tx.*
 质量门槛：CI 在 Windows（zig cc）、Linux（gcc 和 AddressSanitizer）、macOS Apple Silicon 与 macOS Intel 上构建和测试。
 
 ```
-unit:      2583 passed, 0 failed   （2026-09-29 本地 Windows 验证）
+unit:      3129 passed, 0 failed   （2026-10-14 本地 Windows 验证）
 scenario:  91 checks, 0 failed     （HTTP 服务器、插件、MCP stdio、Flow）
 e2e:       E2E PASS                （真实 HTTP，双协议）
 adapters:  ADAPTER PASS            （chat + SSE 流式，openai + anthropic）
 bench:     BFCL 风格 22 条          （simple / multiple / parallel / irrelevance / policy）
 ASAN:      0 内存错误
+```
+
+最近问题验证：[CI 38563004101](https://github.com/LeonQin-ai/cognitive-os-agent/actions/runs/38563004101) 五个平台全部通过。新增图片请求端到端用例覆盖真实上传和模型负载、模型完全不返回、持续零碎返回、固定接收截止时间、失败后图片重试及文本请求；Windows、Linux和两个macOS架构均执行。图片请求失败不会自动重复发送或再发摘要请求。另有真实进程强制终止后的快照恢复/显式重放、Runtime规模/MMU/队列积压smoke，以及5个浏览器状态/详情回归检查。
+
+```bash
+python backend/tests/test_vision_wait_e2e.py
+python backend/tests/test_runtime_benchmark.py
+python backend/tests/test_crash_recovery_e2e.py
 ```
 
 ### 自己动手跑测试
@@ -537,7 +589,7 @@ Claude Code 与 Codex 是前沿模型驱动、打磨成熟的终端 Agent 产品
 | 多智能体 | 子 Agent 工具 | — | — | **Flow DAG 编译器，每 Agent 独立记忆/上下文/工具/策略** |
 | 扩展 | MCP + 插件 | MCP | 函数调用 | **MCP + 自蒸馏技能（成功动作序列沉淀复用）+ 原生 / WASM 沙箱插件** |
 | 模型绑定 | Anthropic | OpenAI | DeepSeek | **任意 OpenAI 兼容 / Anthropic / 本地（Ollama）/ 离线 mock** |
-| 离线可验证 | 需 API 访问 | 需 API 访问 | 需 API 访问 | **1541 单元 + 91 场景 + e2e/适配器测试免密钥对 mock 运行，ASAN 干净** |
+| 离线可验证 | 需 API 访问 | 需 API 访问 | 需 API 访问 | **3129 单元 + 91 场景 + e2e/适配器测试免密钥对 mock 运行，ASAN 干净** |
 
 对比的重点不是"产品更好"，而是：**策略强制、事务、记忆生命周期、调度与隔离在这里是运行时服务，不是提示词约定或产品功能**。正因如此，同一套运行时用中端模型就能达到 GAIA 78.79%，并把策略遵循做成 4/4。
 

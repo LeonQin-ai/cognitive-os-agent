@@ -95,10 +95,14 @@ remain idle. Scale values are medians of 3 runs; peak RSS is the maximum of thos
 | 1,000 | 10,000 | 578.199 | 17,295 | 0.114 / 0.258 / 0.392 | 17.09 |
 | 100 | 100,000 | 5748.495 | 17,396 | 0.113 / 0.262 / 0.422 | 22.48 |
 | 1,000 | 100,000 | 5771.132 | 17,328 | 0.113 / 0.257 / 0.376 | 22.57 |
+| 100 | 1,000,000 | 65971.943 | 15,158 | 0.131 / 0.313 / 2.039 | 78.65 |
+| 1,000 | 1,000,000 | 72279.054 | 13,835 | 0.144 / 0.346 / 14.790 | 77.92 |
 
 All submitted tasks were admitted and completed, with zero failures/rejections;
 ending active/queued counts were zero. Completed history was bounded to 64 records.
 RSS samples include the retained benchmark verification arrays, not just task history.
+
+The million-task extension ran 6,000,000 tasks in total (100/1000 roles, three runs each). Duration ranges were 58.743–74.076 s and 71.629–73.305 s respectively. At 1000 roles, throughput was about 20% lower than the retained 100,000-task baseline and P99 queue latency increased to 14.790 ms; sampled queue bursts reached 6201 tasks. These measurements do not establish linear scaling or a latency SLO. [Independent million-task JSON](backend/docs/runtime-million-2026-10-14.json) retains every run and its memory/queue samples.
 
 ![Runtime scale measurements](backend/docs/runtime-scale-2026-10-14.svg)
 
@@ -146,6 +150,7 @@ Reproduce after building `runtime-bench` / `bench-runtime`:
 ```bash
 cd backend
 python tests/run_runtime_measurements.py --full --output docs
+python tests/run_runtime_measurements.py --million --compiler "actual compiler/version/flags" --output docs
 python tests/test_runtime_benchmark.py          # scale + MMU + backlog correctness smoke
 python tests/test_crash_recovery_e2e.py --report # owned process kill, restore, explicit replay
 ```
@@ -628,7 +633,7 @@ Claude Code and Codex are polished end-user agent products driven by frontier mo
 | Multi-agent | subagent tool | — | — | **Flow DAG compiler, per-agent isolation (own memory / context / tools / policy)** |
 | Extensions | MCP + plugins | MCP | function calling | **MCP + self-distilling skills (successful sequences become reusable) + native / WASM sandboxed plugins** |
 | Model lock-in | Anthropic | OpenAI | DeepSeek | **any OpenAI-compatible / Anthropic / local (Ollama) / offline mock** |
-| Verifiable offline | needs API access | needs API access | needs API access | **1391 unit + 85 scenario + e2e/adapter suites run keyless against the mock provider, ASAN-clean** |
+| Verifiable offline | needs API access | needs API access | needs API access | **3129 unit + 91 scenario + e2e/adapter suites run keyless against the mock provider, ASAN-clean** |
 
 The point of the comparison is not "better product" — it is that **policy enforcement, transactions, memory lifecycle, scheduling and isolation are runtime services here, not prompt conventions or product features**. That is what lets the same runtime score 78.79% on GAIA and enforce policy 4/4 with a mid-tier model.
 
