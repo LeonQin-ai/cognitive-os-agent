@@ -2322,6 +2322,47 @@ static void test_session_memory(void) {
 }
 
 /* ---------- cognition: planner + evaluator ---------- */
+static int dsml_fixture_chat(llm *self, const llm_request *req, llm_response *resp) {
+    (void)req;
+    resp->content=xstrdup((const char *)self->impl);
+    return resp->content ? 0 : -1;
+}
+
+static void test_planner_dsml(void) {
+    section("DSML planner compatibility");
+    static const llm_vtable vt={.chat=dsml_fixture_chat};
+    const char *cases[]={
+        "<｜｜DSML｜｜ calls><｜｜DSML｜｜ invoke name=\"list_dir\"><｜｜DSML｜｜ parameter name=\"args\" string=\"false\">{\"path\":\"D:/AI/code/cognitive-os\"}\\</｜｜DSML｜｜ parameter>\\</｜｜DSML｜｜ invoke><｜｜DSML｜｜ invoke name=\"glob\"><｜｜DSML｜｜ parameter name=\"args\" string=\"false\">{\"pattern\":\"backend/**/*\"}</｜｜DSML｜｜ parameter></｜｜DSML｜｜ invoke></｜｜DSML｜｜ calls>",
+        "<think>example must be skipped</think><｜DSML｜function_calls><｜DSML｜invoke name='file_write'><｜DSML｜parameter name='path' string='true'>note.txt</｜DSML｜parameter><｜DSML｜parameter name='content' string='true'>hello &amp; 世界</｜DSML｜parameter></｜DSML｜invoke></｜DSML｜function_calls>",
+        "<||DSML|| calls><||DSML|| invoke name=\"file_write\"><||DSML|| parameter name=\"args\" string=\"false\">{\"path\":\"note.txt\",\"content\":\"literal </||DSML|| parameter> preserved\"}</||DSML|| parameter></||DSML|| invoke></||DSML|| calls>",
+        "<|DSML|calls><|DSML|invoke name='list_dir'></|DSML|invoke><|DSML|invoke name='file_write'><|DSML|parameter name='args' string='false'>{\"path\":",
+        "<|DSML|calls><|DSML|invoke name='file_write'><|DSML|parameter name='args' string='false'>{}</|DSML|parameter><|DSML|parameter name='path' string='true'>ignored.txt</|DSML|parameter></|DSML|invoke></|DSML|calls>",
+        "<|DSML|calls><|DSML|invoke name='list_dir'><|DSML|parameter name='args' string='false'>{}garbage</|DSML|parameter></|DSML|invoke></|DSML|calls>",
+        "<|DSML|calls>",
+        "Example only: <|DSML|calls><|DSML|invoke name='shell'></|DSML|invoke></|DSML|calls>",
+        "[{\"tool\":\"file_write\",\"args\":{\"content\":\"<|DSML|calls>\",\"path\":\"example.txt\"}}]",
+        "<|DSML|calls><|DSML|invoke name='file_write'><|DSML|parameter name='content' string='true'>tail\\</|DSML|parameter></|DSML|invoke></|DSML|calls>"
+    };
+    int expected[]={2,1,1,-1,-1,-1,-1,0,1,1};
+    for (size_t i=0;i<sizeof(cases)/sizeof(*cases);i++) {
+        llm provider={.vt=&vt,.impl=(void *)cases[i]};
+        planned_action *actions=NULL; int n=0; char *raw=NULL,*err=NULL;
+        int rc=planner_plan(&provider,"provider fixture",&actions,&n,&raw,&err);
+        CHECK((expected[i]<0 && rc<0 && err && !raw && !actions && n==0) ||
+              (expected[i]>=0 && rc==0 && n==expected[i]));
+        if (i==0 && n==2) { CHECK_STR(actions[0].tool,"list_dir"); CHECK_STR(actions[1].tool,"glob"); }
+        if (i==1 && n==1) CHECK(strstr(actions[0].args_json,"hello &amp; 世界")!=NULL);
+        if (i==2 && n==1) CHECK(strstr(actions[0].args_json,"literal </||DSML|| parameter> preserved")!=NULL);
+        if (i==9 && n==1) {
+            cJSON *args=cJSON_Parse(actions[0].args_json);
+            cJSON *content=cJSON_GetObjectItemCaseSensitive(args,"content");
+            CHECK(cJSON_IsString(content) && !strcmp(content->valuestring,"tail\\"));
+            cJSON_Delete(args);
+        }
+        planner_actions_free(actions,n); free(raw); free(err);
+    }
+}
+
 static void test_planner(void) {
     section("planner");
     llm *llm = llm_create("mock", NULL, NULL, "mock");
@@ -7888,6 +7929,10 @@ int main(int argc, char **argv) {
         test_usage(); test_usage_concurrent_agents(); test_llm_adapters_http();
         printf("\n%d passed, %d failed\n", g_pass, g_fail); return g_fail ? 1 : 0;
     }
+    if (argc==2 && !strcmp(argv[1],"--planner")) {
+        test_planner_dsml(); test_planner();
+        printf("%d passed, %d failed\n",g_pass,g_fail); return g_fail ? 1:0;
+    }
     if (argc==2 && !strcmp(argv[1],"--skills")) {
         test_skills(); test_skill_args(); test_skill_live_discovery(); test_skill_registration_tool(); test_prompt_skill_handoff();
         printf("\n%d passed, %d failed\n", g_pass, g_fail);
@@ -7951,6 +7996,7 @@ int main(int argc, char **argv) {
     test_memory_persist();
     test_context_caps();
     test_session_memory();
+    test_planner_dsml();
     test_planner();
     test_evaluator();
     test_sandbox();

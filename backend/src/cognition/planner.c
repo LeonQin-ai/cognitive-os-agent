@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <ctype.h>
 #include "cJSON.h"
 
 static const char *SYS_PROMPT =
@@ -425,6 +426,128 @@ static int parse_tagged_tool_calls(const char *plan, planned_action **actions, i
     return 1;
 }
 
+/* DSML is sometimes returned in content by compatible gateways instead of
+ * native tool_calls. Parse only a complete top-level envelope, never examples
+ * embedded in prose/JSON. Payload bytes are not normalized or XML-unescaped. */
+typedef struct dsml_tag {
+    char kind[32], name[256];
+    int closing, string_value;
+} dsml_tag;
+
+static const char *dsml_space(const char *p) {
+    while (isspace((unsigned char)*p)) p++;
+    return p;
+}
+
+static int dsml_tag_read(const char **cursor, dsml_tag *tag) {
+    const char *p=dsml_space(*cursor), *start;
+    memset(tag,0,sizeof(*tag)); tag->string_value=-1;
+    if (*p=='\\' && p[1]=='<') p++; /* escaped closing tags in gateway content */
+    if (*p++!='<') return 0;
+    if (*p=='/') { tag->closing=1; p++; }
+    const char *prefixes[]={"｜｜DSML｜｜","｜DSML｜","||DSML||","|DSML|"};
+    int matched=0;
+    for (int i=0;i<4;i++) if (strncmp(p,prefixes[i],strlen(prefixes[i]))==0) {
+        p+=strlen(prefixes[i]); matched=1; break;
+    }
+    if (!matched) return 0;
+    p=dsml_space(p); start=p;
+    while (isalnum((unsigned char)*p) || *p=='_') p++;
+    size_t n=(size_t)(p-start);
+    if (!n || n>=sizeof(tag->kind)) return 0;
+    memcpy(tag->kind,start,n);
+    while (*(p=dsml_space(p))!='>') {
+        if (!*p || tag->closing) return 0;
+        start=p;
+        while (isalpha((unsigned char)*p) || *p=='_') p++;
+        size_t keylen=(size_t)(p-start);
+        p=dsml_space(p);
+        if (*p++!='=') return 0;
+        p=dsml_space(p); char quote=*p++;
+        if (quote!='\"' && quote!='\'') return 0;
+        const char *value=p, *end=strchr(p,quote);
+        if (!end) return 0;
+        n=(size_t)(end-value);
+        if (keylen==4 && strncmp(start,"name",4)==0) {
+            if (!n || n>=sizeof(tag->name) || tag->name[0]) return 0;
+            memcpy(tag->name,value,n);
+        } else if (keylen==6 && strncmp(start,"string",6)==0) {
+            if (tag->string_value!=-1) return 0;
+            if (n==4 && strncmp(value,"true",4)==0) tag->string_value=1;
+            else if (n==5 && strncmp(value,"false",5)==0) tag->string_value=0;
+            else return 0;
+        } else return 0;
+        p=end+1;
+    }
+    *cursor=p+1;
+    return 1;
+}
+
+/* 0 = another format, 1 = valid DSML, -1 = broken DSML (no partial execution). */
+static int parse_dsml_tool_calls(const char *plan, planned_action **actions, int *n_actions) {
+    const char *p=dsml_space(plan);
+    if (strncmp(p,"<｜",4) && strncmp(p,"<|",2)) return 0;
+    dsml_tag tag;
+    if (!strstr(p,"DSML")) return 0;
+    if (!dsml_tag_read(&p,&tag)) return -1;
+    if (tag.closing || (strcmp(tag.kind,"calls") && strcmp(tag.kind,"function_calls"))) return -1;
+    char outer[32]; snprintf(outer,sizeof(outer),"%s",tag.kind);
+    planned_action *out=NULL; int count=0; cJSON *args=NULL, *value=NULL;
+    for (;;) {
+        if (!dsml_tag_read(&p,&tag)) goto invalid;
+        if (tag.closing && !strcmp(tag.kind,outer)) break;
+        if (tag.closing || strcmp(tag.kind,"invoke") || !tag.name[0]) goto invalid;
+        char tool[256]; snprintf(tool,sizeof(tool),"%s",tag.name);
+        args=cJSON_CreateObject(); if (!args) goto invalid;
+        int envelope=0, params=0;
+        for (;;) {
+            if (!dsml_tag_read(&p,&tag)) goto invalid;
+            if (tag.closing && !strcmp(tag.kind,"invoke")) break;
+            if (tag.closing || strcmp(tag.kind,"parameter") || !tag.name[0]) goto invalid;
+            char key[256]; snprintf(key,sizeof(key),"%s",tag.name);
+            if (envelope || cJSON_GetObjectItemCaseSensitive(args,key)) goto invalid;
+            if (tag.string_value==1) {
+                const char *end=p;
+                dsml_tag close;
+                for (;;) {
+                    end=strchr(end,'<'); if (!end) goto invalid;
+                    const char *probe=end;
+                    if (dsml_tag_read(&probe,&close) && close.closing && !strcmp(close.kind,"parameter")) break;
+                    end++;
+                }
+                size_t len=(size_t)(end-p);
+                char *text=malloc(len+1); if (!text) goto invalid;
+                memcpy(text,p,len); text[len]=0; value=cJSON_CreateString(text); free(text); p=end;
+            } else {
+                const char *end=NULL;
+                value=cJSON_ParseWithOpts(p,&end,0);
+                if (!value) goto invalid;
+                p=end;
+            }
+            if (!value || !dsml_tag_read(&p,&tag) || !tag.closing || strcmp(tag.kind,"parameter")) goto invalid;
+            if (!strcmp(key,"args") || !strcmp(key,"arguments")) {
+                if (params || !cJSON_IsObject(value)) goto invalid;
+                cJSON_Delete(args); args=value; value=NULL; envelope=1;
+            } else {
+                if (!cJSON_AddItemToObject(args,key,value)) goto invalid;
+                value=NULL;
+            }
+            params++;
+        }
+        planned_action *grown=realloc(out,(size_t)(count+1)*sizeof(*out));
+        if (!grown) goto invalid;
+        out=grown; out[count].tool=xstrdup(tool); out[count].args_json=cJSON_PrintUnformatted(args);
+        if (!out[count].tool || !out[count].args_json) {
+            free(out[count].tool); free(out[count].args_json); goto invalid;
+        }
+        count++; cJSON_Delete(args); args=NULL;
+    }
+    if (!count || *dsml_space(p)) goto invalid;
+    *actions=out; *n_actions=count; return 1;
+invalid:
+    cJSON_Delete(value); cJSON_Delete(args); planner_actions_free(out,count); return -1;
+}
+
 /* Shared planning core. Takes ownership of nothing; frees sys_prompt. */
 static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_action **actions, int *n_actions,
                      char **raw_out, char **err_out, const char *attachments) {
@@ -587,7 +710,14 @@ static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_act
      * answer — the agent then "answered" instead of acting. */
     looks_like_plan = strstr(plan, "\"tool\"") != NULL || strstr(plan, "'tool'") != NULL ||
                       strstr(plan, "<tool_call>") != NULL;
-    have = parse_tagged_tool_calls(plan, actions, n_actions);
+    have = parse_dsml_tool_calls(plan, actions, n_actions);
+    if (have<0) {
+        if (err_out) *err_out=xstrdup("invalid or incomplete DSML tool-call response; no actions executed");
+        if (raw_out) *raw_out=NULL;
+        free(plan);
+        return -1;
+    }
+    if (!have) have = parse_tagged_tool_calls(plan, actions, n_actions);
     if (!have)
         have = parse_plan_actions(plan, actions, n_actions);
     if (!have && looks_like_plan) {

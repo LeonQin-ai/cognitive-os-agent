@@ -118,6 +118,8 @@ jobs:
           python tests/test_ssh_password_e2e.py
       - name: Source read completion API regressions
         run: python tests/test_source_read_e2e.py
+      - name: DSML tool-call execution regression
+        run: python tests/test_dsml_e2e.py
       - name: Multi-agent dependency API regressions
         run: python tests/test_flow_dependencies_e2e.py
       - name: Incomplete diagnostics and recovery API regression
