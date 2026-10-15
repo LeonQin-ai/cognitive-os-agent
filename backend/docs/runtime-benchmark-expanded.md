@@ -67,9 +67,30 @@ replayed automatically and exactly-once/power-loss recovery are not claimed.
 
 [Full benchmark report](runtime-benchmark-expanded.md) ·
 [Whitepaper and 3 architecture diagrams](runtime-whitepaper.md) ·
-[5-minute verification walkthrough](runtime-demo-2026-10-14.webm).
+[5-minute continuous live console recording](runtime-demo.mp4).
 
-[![Runtime demo](runtime-demo-cover.png)](runtime-demo-2026-10-14.webm)
+[![Runtime demo](runtime-demo-cover.png)](runtime-demo.mp4)
+
+The original-speed, silent recording has Chinese captions and shows the real web
+console, file tools, source paging, two-agent replies, a 100,000-task deterministic
+Runtime workload, Context recovery and regression commands. The model is a local
+deterministic fixture. [Video metadata, hash and captured tool evidence](runtime-demo-evidence.json).
+
+| Time | Live operation |
+|---|---|
+| 00:00 | DSML batch, directory listing, file write and read-back |
+| 00:30 | Read the current DSML source excerpt in contiguous pages |
+| 01:15 | Register two agents and receive both replies in a real group |
+| 02:05 | Run 1000-agent / 100,000-task Runtime benchmark |
+| 02:50 | Run 4 MiB Context eviction and canonical-content recovery |
+| 03:35 | Run planner, group persistence and hard-crash recovery tests |
+| 04:20 | Exact file edit, read-back, task journal and trace history |
+
+Re-record on Windows after building the CLI, unit tests and Runtime benchmark,
+from `backend` in PowerShell (requires Playwright, Edge and Python imageio-ffmpeg):
+`$env:NODE_PATH=(Resolve-Path webarena/node_modules).Path; node tools/record_live_demo.cjs`.
+The default take records 300 seconds continuously;
+`--smoke` checks the same flow at a smaller load and is not the delivered video.
 
 Reproduce after building `runtime-bench` / `bench-runtime`:
 
@@ -106,6 +127,6 @@ per-task memory probe scheme and is retained as history, not a direct scaling co
 
 #129修复未计费L2/COLD缓存；#130补RUNNING日志、启动INTERRUPTED识别和单调任务ID，修复ID0恢复，历史UI只显示最新终态/中断。#122提供基准扩展、指标、图表、白皮书与录像。Native回归、规模/MMU/backlog smoke、实际进程崩溃与UI用例进入CI。
 
-绘图：安装matplotlib后执行`python tools/plot_runtime_benchmarks.py`；SVG为最终图，build目录PNG仅供视觉检查。录屏：在已安装Playwright、Edge和Playwright FFmpeg的Windows环境，设置NODE_PATH指向webarena/node_modules，运行`node tools/record_runtime_demo.cjs`。录像约5分钟，实际运行小用例，另外展示保留的完整测量；视频容器duration经浏览器解码验证。
+绘图：安装matplotlib后执行`python tools/plot_runtime_benchmarks.py`；SVG为最终图，build目录PNG仅供视觉检查。真实录屏使用`node tools/record_live_demo.cjs`，连续原速展示应用交互和实际工具输出；本地fixture模型与真实Runtime执行范围在画面中明确标注，时长和分辨率经浏览器解码验证。
 
 大内存用例会实际分配多个GiB，包括规范正文缓存、活动表示和JSON序列化；应在明确可承受该负载的测试主机上执行。CI只运行4MiB压力用例，不把CI smoke标为已复测1GiB。

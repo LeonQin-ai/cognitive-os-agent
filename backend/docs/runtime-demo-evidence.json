@@ -1,0 +1,185 @@
+{
+  "recorded_at": "2026-10-15T15:10:29.125Z",
+  "commit": "c026e6497b3a87376df0f896f33df76932a2c194",
+  "recording": "continuous real console; original speed; silent with Chinese captions",
+  "model": "local deterministic fixture; no production model throughput claim",
+  "duration": 300.866667,
+  "width": 1440,
+  "height": 900,
+  "bytes": 4586503,
+  "sha256": "5bc3b6745661579363d625ebc60f95e6237aed17ac29c2f86f73d19f036c480b",
+  "source_excerpt_sha256": "8eb662ebbcb494b35ffaf3b12ee520bf117c59451d4dcfa06ae6a260409d3891",
+  "file_verification": "hello — verified after live demo",
+  "tasks": [
+    {
+      "id": 0,
+      "status": "DONE",
+      "tool_calls": 3,
+      "steps": [
+        {
+          "tool": "list_dir",
+          "id": 1,
+          "args": "{\"path\":\".\"}",
+          "out": "[list_dir] Directory listing of C:/Users/94207/AppData/Local/Temp/coa-live-demo-F9IWXo:\nC:/Users/94207/AppData/Local/Temp/coa-live-demo-F9IWXo/chat/\nC:/Users/94207/AppData/Local/Temp/coa-live-demo-F9IWXo/cognitive-os-agent.json\nC:/Users/94207/AppData/Local/Temp/coa-live-demo-F9IWXo/cron.json\nC:/Users/94207/AppData/Local/Temp/coa-live-demo-F9IWXo/hooks.jsonl\nC:/Users/94207/AppData/Local/Temp/coa-live-demo-F9IWXo/im/\nC:/Users/94207/AppData/Local/Temp/coa-live-demo-F9IWXo/journal/\nC:/Users/94207/AppData/Local/Temp/coa-live-demo-F9IWXo/mcp/\nC:/Users/94207/AppData/Local/Temp/coa-live-demo-F9IWXo/planner-dsml.c\nC:/Users/94207/AppData/Local/Temp/coa-live-demo-F9IWXo/security_audit.jsonl\nC:/Users/94207/AppData/Local/Temp/coa-live-demo-F9IWXo/skills/\nC:/Users/94207/AppData/Local/Temp/coa-live-demo-F9IWXo/snapshots/\nC:/Users/94207/AppData/Local/Temp/coa-live-demo-F9IWXo/state.json\n\n",
+          "ok": 1,
+          "ms": 2
+        },
+        {
+          "tool": "file_write",
+          "id": 2,
+          "args": "{\"path\":\"demo-note.txt\",\"content\":\"hello from real runtime\"}",
+          "out": "[file_write] wrote 23 bytes to C:\\Users\\94207\\AppData\\Local\\Temp\\coa-live-demo-F9IWXo\\demo-note.txt\n",
+          "target": "demo-note.txt",
+          "ok": 1,
+          "ms": 2
+        },
+        {
+          "tool": "file_read",
+          "id": 3,
+          "args": "{\"path\":\"demo-note.txt\"}",
+          "out": "[file_read] hello from real runtime\n",
+          "target": "demo-note.txt",
+          "ok": 1,
+          "ms": 0
+        }
+      ]
+    },
+    {
+      "id": 1,
+      "status": "DONE",
+      "tool_calls": 2,
+      "steps": [
+        {
+          "tool": "file_read",
+          "id": 1,
+          "args": "{\"path\":\"planner-dsml.c\",\"offset_bytes\":0,\"max_bytes\":4000}",
+          "out": "[file_read] [bytes 0-3999, more available; next_offset_bytes=4000]\n/* DSML is sometimes returned in content by compatible gateways instead of\n * native tool_calls. Parse only a complete top-level envelope, never examples\n * embedded in prose/JSON. Payload bytes are not normalized or XML-unescaped. */\ntypedef struct dsml_tag {\n    char kind[32], name[256];\n    int closing, string_value;\n} dsml_tag;\n\nstatic const char *dsml_space(const char *p) {\n    while (isspace((unsigned char)*p)) p++;\n    return p;\n}\n\nstatic int dsml_tag_read(const char **cursor, dsml_tag *tag) {\n    const char *p=dsml_space(*cursor), *start;\n    memset(tag,0,sizeof(*tag)); tag->string_value=-1;\n    if (*p=='\\\\' && p[1]=='<') p++; /* escaped closing tags in gateway content */\n    if (*p++!='<') return 0;\n    if (*p=='/') { tag->closing=1; p++; }\n    const char *prefixes[]={\"｜｜DSML｜｜\",\"｜DSML｜\",\"||DSML||\",\"|DSML|\"};\n    int matched=0;\n    for (int i=0;i<4;i++) if (strncmp(p,prefixes[i],strlen(prefixes[i]))==0) {\n        p+=strlen(prefixes[i]); matched=1; break;\n    }\n    if (!matched) return 0;\n    p=dsml_space(p); start=p;\n    while (isalnum((unsigned char)*p) || *p=='_') p++;\n    size_t n=(size_t)(p-start);\n    if (!n || n>=sizeof(tag->kind)) return 0;\n    memcpy(tag->kind,start,n);\n    while (*(p=dsml_space(p))!='>') {\n        if (!*p || tag->closing) return 0;\n        start=p;\n        while (isalpha((unsigned char)*p) || *p=='_') p++;\n        size_t keylen=(size_t)(p-start);\n        p=dsml_space(p);\n        if (*p++!='=') return 0;\n        p=dsml_space(p); char quote=*p++;\n        if (quote!='\\\"' && quote!='\\'') return 0;\n        const char *value=p, *end=strchr(p,quote);\n        if (!end) return 0;\n        n=(size_t)(end-value);\n        if (keylen==4 && strncmp(start,\"name\",4)==0) {\n            if (!n || n>=sizeof(tag->name) || tag->name[0]) return 0;\n            memcpy(tag->name,value,n);\n        } else if (keylen==6 && strncmp(start,\"string\",6)==0) {\n            if (tag->string_value!=-1) return 0;\n            if (n==4 && strncmp(value,\"true\",4)==0) tag->string_value=1;\n            else if (n==5 && strncmp(value,\"false\",5)==0) tag->string_value=0;\n            else return 0;\n        } else return 0;\n        p=end+1;\n    }\n    *cursor=p+1;\n    return 1;\n}\n\n/* 0 = another format, 1 = valid DSML, -1 = broken DSML (no partial execution). */\nstatic int parse_dsml_tool_calls(const char *plan, planned_action **actions, int *n_actions) {\n    const char *p=dsml_space(plan);\n    if (strncmp(p,\"<｜\",4) && strncmp(p,\"<|\",2)) return 0;\n    dsml_tag tag;\n    if (!strstr(p,\"DSML\")) return 0;\n    if (!dsml_tag_read(&p,&tag)) return -1;\n    if (tag.closing || (strcmp(tag.kind,\"calls\") && strcmp(tag.kind,\"function_calls\"))) return -1;\n    char outer[32]; snprintf(outer,sizeof(outer),\"%s\",tag.kind);\n    planned_action *out=NULL; int count=0; cJSON *args=NULL, *value=NULL;\n    for (;;) {\n        if (!dsml_tag_read(&p,&tag)) goto invalid;\n        if (tag.closing && !strcmp(tag.kind,outer)) break;\n        if (tag.closing || strcmp(tag.kind,\"invoke\") || !tag.name[0]) goto invalid;\n        char tool[256]; snprintf(tool,sizeof(tool),\"%s\",tag.name);\n        args=cJSON_CreateObject(); if (!args) goto invalid;\n        int envelope=0, params=0;\n        for (;;) {\n            if (!dsml_tag_read(&p,&tag)) goto invalid;\n            if (tag.closing && !strcmp(tag.kind,\"invoke\")) break;\n            if (tag.closing || strcmp(tag.kind,\"parameter\") || !tag.name[0]) goto invalid;\n            char key[256]; snprintf(key,sizeof(key),\"%s\",tag.name);\n            if (envelope || cJSON_GetObjectItemCaseSensitive(args,key)) goto invalid;\n            if (tag.string_value==1) {\n                const char *end=p;\n                dsml_tag close;\n                for (;;) {\n                    end=strchr(end,'<'); if (!end) goto invalid;\n                    const char *probe=end;\n                    if (dsml_tag_read(&probe,&close) && close.closing && !strcmp(close.kind,\"parameter\")) break;\n                    end++;\n                }\n                size_\n",
+          "target": "planner-dsml.c",
+          "ok": 1,
+          "ms": 0
+        },
+        {
+          "tool": "file_read",
+          "id": 2,
+          "args": "{\"path\":\"planner-dsml.c\",\"offset_bytes\":4000,\"max_bytes\":4000}",
+          "out": "[file_read] [bytes 4000-5472, end of file; next_offset_bytes=5473]\nt len=(size_t)(end-p);\n                char *text=malloc(len+1); if (!text) goto invalid;\n                memcpy(text,p,len); text[len]=0; value=cJSON_CreateString(text); free(text); p=end;\n            } else {\n                const char *end=NULL;\n                value=cJSON_ParseWithOpts(p,&end,0);\n                if (!value) goto invalid;\n                p=end;\n            }\n            if (!value || !dsml_tag_read(&p,&tag) || !tag.closing || strcmp(tag.kind,\"parameter\")) goto invalid;\n            if (!strcmp(key,\"args\") || !strcmp(key,\"arguments\")) {\n                if (params || !cJSON_IsObject(value)) goto invalid;\n                cJSON_Delete(args); args=value; value=NULL; envelope=1;\n            } else {\n                if (!cJSON_AddItemToObject(args,key,value)) goto invalid;\n                value=NULL;\n            }\n            params++;\n        }\n        planned_action *grown=realloc(out,(size_t)(count+1)*sizeof(*out));\n        if (!grown) goto invalid;\n        out=grown; out[count].tool=xstrdup(tool); out[count].args_json=cJSON_PrintUnformatted(args);\n        if (!out[count].tool || !out[count].args_json) {\n            free(out[count].tool); free(out[count].args_json); goto invalid;\n        }\n        count++; cJSON_Delete(args); args=NULL;\n    }\n    if (!count || *dsml_space(p)) goto invalid;\n    *actions=out; *n_actions=count; return 1;\ninvalid:\n    cJSON_Delete(value); cJSON_Delete(args); planner_actions_free(out,count); return -1;\n}\n\n\n",
+          "target": "planner-dsml.c",
+          "ok": 1,
+          "ms": 2
+        }
+      ]
+    },
+    {
+      "group": 1,
+      "messages": [
+        {
+          "id": 2,
+          "role": "user",
+          "sender": "me",
+          "content": "请每人简短介绍自己的职责。",
+          "ts_ms": 1792076763329
+        },
+        {
+          "id": 3,
+          "role": "assistant",
+          "sender": "reviewer",
+          "content": "我的职责是讨论技术方案和设计边界。本群正在演示注册成员依次回应；内容由本地确定性测试模型提供。",
+          "ts_ms": 1792076764875
+        },
+        {
+          "id": 4,
+          "role": "assistant",
+          "sender": "tester",
+          "content": "我的职责是讨论验收标准。群成员保存后下一轮生效；每条用户消息触发一轮，每位 Agent 回应一次。",
+          "ts_ms": 1792076766415
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "status": "DONE",
+      "tool_calls": 1,
+      "steps": [
+        {
+          "tool": "shell",
+          "id": 1,
+          "args": "{\"command\":\"\\\"D:/AI/code/cognitive-os/backend/build/bench-runtime.exe\\\" \\\"C:/Users/94207/AppData/Local/Temp/coa-live-demo-F9IWXo/bench\\\" 100000 4 8 1000 8\",\"timeout_ms\":60000}",
+          "out": "[shell] [full tool result saved] Read the complete content with file_read using these arguments, then follow next_offset_bytes until end of file. Do not reopen the browser to retrieve the same text.\n{\"path\":\"C:/Users/94207/AppData/Local/Temp/coa-live-demo-F9IWXo/.tool-results/58809011986-0.txt\",\"bytes\":10564,\"offset_bytes\":0,\"max_bytes\":4000}\nPreview (not the whole result):\n2026-10-15 15:06:49 INFO  hook: builtin audit -> C:/Users/94207/AppData/Local/Temp/coa-live-demo-F9IWXo/bench\\hooks.jsonl\r\n2026-10-15 15:06:49 INFO  mock llm provider ready (model=mock)\r\n2026-10-15 15:06:49 INFO  cognitive-os-agent 0.8.0 initialized (provider=mock workers=8 tx=on state=C:/Users/94207/AppData/Local/Temp/coa-live-demo-F9IWXo/bench)\r\n{\r\n\t\"scope\":\t\"real runtime; local deterministic runner/LLM; no remote inference\",\r\n\t\"backlog_gate\":\tfalse,\r\n\t\"agents\":\t1000,\r\n\t\"tasks_completed\":\t100000,\r\n\t\"workers\":\t8,\r\n\t\"tasks_submitted\":\t100000,\r\n\t\"tasks_admitted\":\t100000,\r\n\t\"tasks_failed\":\t0,\r\n\t\"tasks_rejected\":\t0,\r\n\t\"queue_at_end\":\t0,\r\n\t\"active_at_end\":\t0,\r\n\t\"observed_queue_max\":\t2872,\r\n\t\"observed_retained_max\":\t64,\r\n\t\"context_probes_per_task\":\t64,\r\n\t\"auxiliary_idle_runtime_workers\":\t8,\r\n\t\"\n",
+          "ok": 1,
+          "ms": 13899
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "status": "DONE",
+      "tool_calls": 1,
+      "steps": [
+        {
+          "tool": "shell",
+          "id": 1,
+          "args": "{\"command\":\"\\\"D:/AI/code/cognitive-os/backend/build/bench-runtime.exe\\\" --context \\\"C:/Users/94207/AppData/Local/Temp/coa-live-demo-F9IWXo/context\\\" 2 1 1\",\"timeout_ms\":60000}",
+          "out": "[shell] {\r\n\t\"scope\":\t\"real Context MMU with canonical persisted records; L1 deterministic overview is lossy, canonical source recovery is checksum verified\",\r\n\t\"source_bytes\":\t4194304,\r\n\t\"peak_rss_bytes\":\t31531008,\r\n\t\"first_recall_ms\":\t132.104,\r\n\t\"budget_shrink_recall_ms\":\t4.607,\r\n\t\"rehydrate_recall_ms\":\t90.196,\r\n\t\"canonical_reload_ms\":\t16.214,\r\n\t\"canonical_checksums_verified\":\ttrue,\r\n\t\"initial\":\t{\r\n\t\t\"pages\":\t3,\r\n\t\t\"hot\":\t3,\r\n\t\t\"warm\":\t0,\r\n\t\t\"cold\":\t0,\r\n\t\t\"token_budget\":\t1052672,\r\n\t\t\"token_used\":\t1048576,\r\n\t\t\"generation\":\t6,\r\n\t\t\"materialized_bytes\":\t4198207,\r\n\t\t\"rejected_promotions\":\t0,\r\n\t\t\"evictions\":\t0,\r\n\t\t\"evicted_bytes\":\t0,\r\n\t\t\"eviction_us\":\t0,\r\n\t\t\"summary_count\":\t3,\r\n\t\t\"summary_source_bytes\":\t4194304,\r\n\t\t\"summary_bytes\":\t3897,\r\n\t\t\"summary_us\":\t11095,\r\n\t\t\"rehydrations\":\t0,\r\n\t\t\"rehydrated_bytes\":\t0,\r\n\t\t\"rehydration_us\":\t0,\r\n\t\t\"eviction_sample_count\":\t0,\r\n\t\t\"eviction_p50_us\":\t0,\r\n\t\t\"eviction_p95_us\":\t0,\r\n\t\t\"eviction_p99_us\":\t0,\r\n\t\t\"summary_sample_count\":\t3,\r\n\t\t\"summary_p50_us\":\t3250,\r\n\t\t\"summary_p95_us\":\t5296,\r\n\t\t\"summary_p99_us\":\t5296,\r\n\t\t\"rehydration_sample_count\":\t0,\r\n\t\t\"rehydration_p50_us\":\t0,\r\n\t\t\"rehydration_p95_us\":\t0,\r\n\t\t\"rehydration_p99_us\":\t0\r\n\t},\r\n\t\"evicted\":\t{\r\n\t\t\"pages\":\t3,\r\n\t\t\"hot\":\t0,\r\n\t\t\"warm\":\t0,\r\n\t\t\"cold\":\t3,\r\n\t\t\"token_budget\":\t1,\r\n\t\t\"token_used\":\t0,\r\n\t\t\"generation\":\t9,\r\n\t\t\"materialized_bytes\":\t0,\r\n\t\t\"rejected_promotions\":\t0,\r\n\t\t\"evictions\":\t3,\r\n\t\t\"evicted_bytes\":\t4198207,\r\n\t\t\"eviction_us\":\t4307,\r\n\t\t\"summary_count\":\t3,\r\n\t\t\"summary_source_bytes\":\t4194304,\r\n\t\t\"summary_bytes\":\t3897,\r\n\t\t\"summary_us\":\t11095,\r\n\t\t\"rehydrations\":\t0,\r\n\t\t\"rehydrated_bytes\":\t0,\r\n\t\t\"rehydration_us\":\t0,\r\n\t\t\"eviction_sample_count\":\t3,\r\n\t\t\"eviction_p50_us\":\t1225,\r\n\t\t\"eviction_p95_us\":\t2025,\r\n\t\t\"eviction_p99_us\":\t2025,\r\n\t\t\"summary_sample_count\":\t3,\r\n\t\t\"summary_p50_us\":\t3250,\r\n\t\t\"summary_p95_us\":\t5296,\r\n\t\t\"summary_p99_us\":\t5296,\r\n\t\t\"rehydration_sample_count\":\t0,\r\n\t\t\"rehydration_p50_us\":\t0,\r\n\t\t\"rehydration_p95_us\":\t0,\r\n\t\t\"rehydration_p99_us\":\t0\r\n\t},\r\n\t\"recovered\":\t{\r\n\t\t\"pages\":\t3,\r\n\t\t\"hot\":\t3,\r\n\t\t\"warm\":\t0,\r\n\t\t\"cold\":\t0,\r\n\t\t\"token_budget\":\t1052672,\r\n\t\t\"token_used\":\t1048576,\r\n\t\t\"generation\":\t15,\r\n\t\t\"materialized_bytes\":\t4198207,\r\n\t\t\"rejected_promotions\":\t3,\r\n\t\t\"evictions\":\t3,\r\n\t\t\"evicted_bytes\":\t4198207,\r\n\t\t\"eviction_us\":\t4307,\r\n\t\t\"summary_count\":\t6,\r\n\t\t\"summary_source_bytes\":\t8388608,\r\n\t\t\"summary_bytes\":\t7794,\r\n\t\t\"summary_us\":\t20018,\r\n\t\t\"rehydrations\":\t3,\r\n\t\t\"rehydrated_bytes\":\t3897,\r\n\t\t\"rehydration_us\":\t8926,\r\n\t\t\"eviction_sample_count\":\t3,\r\n\t\t\"eviction_p50_us\":\t1225,\r\n\t\t\"eviction_p95_us\":\t2025,\r\n\t\t\"eviction_p99_us\":\t2025,\r\n\t\t\"summary_sample_count\":\t6,\r\n\t\t\"summary_p50_us\":\t2774,\r\n\t\t\"summary_p95_us\":\t5296,\r\n\t\t\"summary_p99_us\":\t5296,\r\n\t\t\"rehydration_sample_count\":\t3,\r\n\t\t\"rehydration_p50_us\":\t2775,\r\n\t\t\"rehydration_p95_us\":\t3695,\r\n\t\t\"rehydration_p99_us\":\t3695\r\n\t},\r\n\t\"overview\":\t{\r\n\t\t\"pages\":\t3,\r\n\t\t\"hot\":\t0,\r\n\t\t\"warm\":\t3,\r\n\t\t\"cold\":\t0,\r\n\t\t\"token_budget\":\t4096,\r\n\t\t\"token_used\":\t975,\r\n\t\t\"generation\":\t12,\r\n\t\t\"materialized_bytes\":\t3900,\r\n\t\t\"rejected_promotions\":\t3,\r\n\t\t\"evictions\":\t3,\r\n\t\t\"evicted_bytes\":\t4198207,\r\n\t\t\"eviction_us\":\t4307,\r\n\t\t\"summary_count\":\t6,\r\n\t\t\"summary_source_bytes\":\t8388608,\r\n\t\t\"summary_bytes\":\t7794,\r\n\t\t\"summary_us\":\t20018,\r\n\t\t\"rehydrations\":\t3,\r\n\t\t\"rehydrated_bytes\":\t3897,\r\n\t\t\"rehydration_us\":\t8926,\r\n\t\t\"eviction_sample_count\":\t3,\r\n\t\t\"eviction_p50_us\":\t1225,\r\n\t\t\"eviction_p95_us\":\t2025,\r\n\t\t\"eviction_p99_us\":\t2025,\r\n\t\t\"summary_sample_count\":\t6,\r\n\t\t\"summary_p50_us\":\t2774,\r\n\t\t\"summary_p95_us\":\t5296,\r\n\t\t\"summary_p99_us\":\t5296,\r\n\t\t\"rehydration_sample_count\":\t3,\r\n\t\t\"rehydration_p50_us\":\t2775,\r\n\t\t\"rehydration_p95_us\":\t3695,\r\n\t\t\"rehydration_p99_us\":\t3695\r\n\t}\r\n}\n",
+          "ok": 1,
+          "ms": 570
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "status": "DONE",
+      "tool_calls": 3,
+      "steps": [
+        {
+          "tool": "shell",
+          "id": 1,
+          "args": "{\"command\":\"\\\"D:/AI/code/cognitive-os/backend/build/cognitive-os-agent-test.exe\\\" --planner\",\"timeout_ms\":60000}",
+          "out": "[shell] \r\n== DSML planner compatibility ==\r\n\r\n== planner ==\r\n2026-10-15 15:08:19 INFO  mock llm provider ready (model=mock)\r\n2026-10-15 15:08:19 WARN  planner: invalid plan JSON (byte 207 / len 214) — requesting repair\r\n2026-10-15 15:08:19 WARN  planner: salvaged 2 complete action(s) from truncated plan\r\n36 passed, 0 failed\n",
+          "ok": 1,
+          "ms": 147
+        },
+        {
+          "tool": "shell",
+          "id": 2,
+          "args": "{\"command\":\"python \\\"D:/AI/code/cognitive-os/backend/tests/test_im_members_e2e.py\\\"\",\"timeout_ms\":60000}",
+          "out": "[shell] PASS: empty/unknown/duplicate group rejection, legacy repair, two-agent replies, persistence and stale roster\n",
+          "ok": 1,
+          "ms": 1922
+        },
+        {
+          "tool": "shell",
+          "id": 3,
+          "args": "{\"command\":\"python \\\"D:/AI/code/cognitive-os/backend/tests/test_crash_recovery_e2e.py\\\"\",\"timeout_ms\":60000}",
+          "out": "[shell] PASS: hard process kill while RUNNING + available snapshot -> INTERRUPTED -> verified Restore -> explicit Replay -> DONE -> Continue\r\n{\"date\": \"2026-10-14\", \"fault_boundary\": \"entire Runtime subprocess, not one in-process worker\", \"injection\": \"TerminateProcess\", \"killed_pid\": 3652, \"restarted_pid\": 16352, \"precondition_task_status\": \"RUNNING\", \"snapshot_id\": \"s1792076905309\", \"snapshot_available\": true, \"interrupted_detected\": true, \"restart_to_detect_ms\": 527.414600001066, \"snapshot_restore_ms\": 5.810899994685315, \"manual_replay_to_done_ms\": 124.1922000044724, \"crash_to_done_ms\": 667.9003000026569, \"old_task_id\": 0, \"replayed_task_id\": 1, \"following_task_id\": 2, \"restore_content_verified\": true, \"replay_content_verified\": true, \"following_task_done\": true, \"replay_mode\": \"explicit resume after verified snapshot restore; idempotent file replacement; no automatic external operation replay\", \"duplicate_fixture_writes\": 0}\n",
+          "ok": 1,
+          "ms": 2332
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "status": "DONE",
+      "tool_calls": 2,
+      "steps": [
+        {
+          "tool": "file_edit",
+          "id": 1,
+          "args": "{\"path\":\"demo-note.txt\",\"old_string\":\"hello from real runtime\",\"new_string\":\"hello — verified after live demo\"}",
+          "out": "[file_edit] edited C:\\Users\\94207\\AppData\\Local\\Temp\\coa-live-demo-F9IWXo\\demo-note.txt (1 replacement)\n",
+          "target": "demo-note.txt",
+          "ok": 1,
+          "ms": 13
+        },
+        {
+          "tool": "file_read",
+          "id": 2,
+          "args": "{\"path\":\"demo-note.txt\"}",
+          "out": "[file_read] hello — verified after live demo\n",
+          "target": "demo-note.txt",
+          "ok": 1,
+          "ms": 1
+        }
+      ]
+    }
+  ]
+}

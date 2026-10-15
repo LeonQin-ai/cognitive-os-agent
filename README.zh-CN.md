@@ -114,7 +114,9 @@ Cognitive OS 把这些职责**从提示词里搬进运行时**：
 
 **真实崩溃恢复：** RUNNING任务及AVAILABLE快照→强制终止整个Runtime进程→重启识别INTERRUPTED→核对快照恢复内容→显式重放至DONE→后续任务继续。检测511.031 ms、快照恢复18.285 ms、显式重放54.946 ms、崩溃到DONE为591.759 ms。Windows用TerminateProcess，POSIX测试用SIGKILL；不是仅某个线程Worker崩溃。测试重放幂等文件替换，不自动重放外部操作，不承诺exactly-once或断电恢复。
 
-[完整报告](backend/docs/runtime-benchmark-expanded.md) · [技术白皮书及3张架构图](backend/docs/runtime-whitepaper.md) · [5分钟演示](backend/docs/runtime-demo-2026-10-14.webm)。
+[完整报告](backend/docs/runtime-benchmark-expanded.md) · [技术白皮书及3张架构图](backend/docs/runtime-whitepaper.md) · [5分钟真实运行录像](backend/docs/runtime-demo.mp4)。
+
+原速连续录制 Web 控制台操作，中文字幕、无配音：真实文件读写、源码分页、双 Agent 群聊、10 万任务调度、Context 恢复及回归命令。模型采用**本地确定性测试 fixture**，Runtime 与工具实际执行。[录像验证数据](backend/docs/runtime-demo-evidence.json)。
 
 ```bash
 cd backend

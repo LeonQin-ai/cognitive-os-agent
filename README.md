@@ -141,9 +141,14 @@ replayed automatically and exactly-once/power-loss recovery are not claimed.
 
 [Full benchmark report](backend/docs/runtime-benchmark-expanded.md) ·
 [Whitepaper and 3 architecture diagrams](backend/docs/runtime-whitepaper.md) ·
-[5-minute verification walkthrough](backend/docs/runtime-demo-2026-10-14.webm).
+[5-minute continuous live console recording](backend/docs/runtime-demo.mp4).
 
-[![Runtime demo](backend/docs/runtime-demo-cover.png)](backend/docs/runtime-demo-2026-10-14.webm)
+[![Runtime demo](backend/docs/runtime-demo-cover.png)](backend/docs/runtime-demo.mp4)
+
+Original-speed application recording with Chinese captions (silent): real tool/file
+execution, paginated source reading, two-agent group replies, 100,000-task Runtime
+load, Context recovery and regression commands. The model is a **local deterministic
+fixture**, while the Runtime and tools execute normally. [Recording evidence](backend/docs/runtime-demo-evidence.json).
 
 Reproduce after building `runtime-bench` / `bench-runtime`:
 

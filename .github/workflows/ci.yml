@@ -136,6 +136,7 @@ jobs:
         run: |
           python tests/test_runtime_benchmark.py
           python tests/test_runtime_reports.py
+          python tests/test_live_demo_evidence.py
       - name: Skill discovery and execution API regressions
         run: python tests/test_skill_runtime_e2e.py
       - name: Recent status and file detail browser regressions
