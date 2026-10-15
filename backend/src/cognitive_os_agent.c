@@ -312,6 +312,10 @@ static int im_run_round(runtime_ctx *ctx, task *t, char **summary) {
         im_message *msgs = im_messages(ctx->im, room_id, &msg_n);
         if (!msgs || !msg_n) { im_messages_free(msgs, msg_n); break; }
         cJSON *history = cJSON_CreateArray();
+        const char *human_task="";
+        for (size_t m=0;m<msg_n;m++) if (msgs[m].id==trigger_id) { human_task=msgs[m].content; break; }
+        char *completion_task=xstrdup(human_task ? human_task:"");
+        if (!completion_task) { cJSON_Delete(history); im_messages_free(msgs,msg_n); continue; }
         size_t start = msg_n > 32 ? msg_n - 32 : 0;
         for (size_t m = start; m < msg_n; m++) {
             int include = msgs[m].id <= trigger_id;
@@ -339,11 +343,13 @@ static int im_run_round(runtime_ctx *ctx, task *t, char **summary) {
                 break;
             }
         }
-        size_t plen = strlen(transcript ? transcript : "[]") + strlen(name) + strlen(role) + 512;
+        size_t plen = strlen(transcript ? transcript : "[]") + strlen(name) + strlen(role) +
+            strlen(completion_task ? completion_task:"") + 544;
         char *prompt = malloc(plen);
         if (prompt) snprintf(prompt, plen,
-            "You are %s in an IM group. Your role: %s. Read the room transcript JSON below and contribute one concise message in your own voice. Reply to the latest human request and other agents when relevant. Do not impersonate another speaker. Do not claim to have done work you did not do. Transcript: %s",
-            name, role, transcript ? transcript : "[]");
+            "You are %s in an IM group. Your role: %s. Read the room transcript JSON below and contribute one concise message in your own voice. Reply to the latest human request and other agents when relevant. Do not impersonate another speaker. Do not claim to have done work you did not do. Transcript: %s\n## 用户任务\n%s",
+            name, role, transcript ? transcript : "[]",completion_task ? completion_task:"");
+        free(completion_task);
         cJSON_Delete(ro); free(roster); free(transcript);
         if (!prompt) continue;
         char agent_session[160];

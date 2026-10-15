@@ -6,10 +6,23 @@ import socket
 import subprocess
 import tempfile
 import time
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import urllib.error
 import urllib.request
 
 BACKEND = Path(__file__).resolve().parents[1]
+captures=[]
+
+class Provider(BaseHTTPRequestHandler):
+    def log_message(self,*args): pass
+    def do_POST(self):
+        body=json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+        text=body['messages'][-1]['content']; captures.append(text)
+        answer='我的职责是讨论注册、保存和写入方案。' if 'You are alpha ' in text else '我的职责是讨论这些操作的验收标准。'
+        data=json.dumps({'choices':[{'message':{'role':'assistant','content':answer},'finish_reason':'stop'}]}).encode()
+        self.send_response(200); self.send_header('Content-Type','application/json')
+        self.send_header('Content-Length',str(len(data))); self.end_headers(); self.wfile.write(data)
 
 
 def main():
@@ -18,8 +31,9 @@ def main():
         (state / 'im').mkdir()
         (state / 'im/sessions.json').write_text(json.dumps({'next_id': 2, 'sessions': [
             {'id': 1, 'name': 'legacy-empty', 'kind': 'group', 'members': [], 'messages': []}]}))
-        (state / 'cognitive-os-agent.json').write_text(json.dumps({'llm.provider': 'mock',
-            'llm.model': 'mock', 'scheduler.workers': 2}))
+        (state / 'cognitive-os-agent.json').write_text(json.dumps({'llm.provider': 'openai',
+            'llm.model': 'local-fixture', 'llm.api_key':'local-test-only',
+            'llm.base_url':f'http://127.0.0.1:{provider.server_port}', 'scheduler.workers': 2}))
         with socket.socket() as reservation:
             reservation.bind(('127.0.0.1', 0))
             port = reservation.getsockname()[1]
@@ -80,6 +94,8 @@ def main():
                 assert task['status'] == 'DONE', task
                 replies = request('GET', '/v1/im/sessions/1/messages')
                 assert [m['sender'] for m in replies if m['role'] == 'assistant'] == ['alpha', 'beta'], replies
+                assert len(captures)==2, 'Transcript action words must not cause completion retries'
+                assert '注册' in captures[1] and '保存' in captures[1], captures[1]
                 process.terminate()
                 process.wait(timeout=10)
                 process = start()
@@ -97,4 +113,7 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    provider=ThreadingHTTPServer(('127.0.0.1',0),Provider)
+    threading.Thread(target=provider.serve_forever,daemon=True).start()
+    try: main()
+    finally: provider.shutdown(); provider.server_close()
