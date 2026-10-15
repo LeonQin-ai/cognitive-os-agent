@@ -4096,6 +4096,63 @@ static void test_chat_upload_evolve(void) {
     }
 }
 
+/* #139: a completed safety/permissions explanation needs no tool operation,
+ * while the same answer cannot complete an explicit work request. */
+static void test_information_answers(void) {
+    section("information answers and action guards");
+    config cfg = {0};
+    cfg.state_root = "state-test/information-answers";
+    cfg.workspace = "state-test/loop-w";
+    cfg.provider = "mock";
+    runtime_ctx ctx;
+    if (init(&ctx, &cfg) != 0) { CHECK(0); return; }
+    const char *questions[] = {
+        "你的操作安全吗", "你的权限有哪些", "说明你的安全机制",
+        "你的能力限制是什么", "Are your operations safe?",
+        "Explain your permissions.", "请说明一下你的权限有哪些？",
+        " 你的操作安全吗？\n", "说明你的安全机制。",
+        "## 历史记录\n上次创建了文件。\n## 用户任务\n你的操作安全吗"
+    };
+    for (int deep = 0; deep < 2; ++deep) {
+        reasoning_set_thinking_mode(ctx.reasoning, deep);
+        for (size_t i = 0; i < sizeof(questions) / sizeof(questions[0]); ++i) {
+            char *ans = NULL;
+            CHECK(reasoning_run(ctx.reasoning, questions[i], &ans) == 0);
+            CHECK(ans && strstr(ans, "如果你让我执行危险命令") && !strstr(ans, "任务未完成"));
+            long long elapsed = 0, tin = 0, tout = 0;
+            int rounds = 0, tools = 0;
+            reasoning_progress(ctx.reasoning, &elapsed, &rounds, &tools, NULL, &tin, &tout);
+            CHECK(rounds == 1 && tools == 0);
+            free(ans);
+        }
+    }
+    const char *work[] = {
+        "你的操作安全吗？请创建 safety.txt",
+        "说明你的安全机制并保存为 safety.md",
+        "你的操作安全吗？请生成 PPT",
+        "你的操作安全吗？请制作 PPT",
+        "你的权限有哪些？请导出 safety.pdf",
+        "你的操作安全吗？复制文件到 backup.txt",
+        "你的操作安全吗？注册 safety skill",
+        "你的权限有哪些？读取 safety.txt 文件",
+        "你的操作安全吗？检查这个命令",
+        "Are your operations safe? Please create safety.txt",
+        "Explain your permissions and register safety skill",
+        "你的操作安全吗？帮我连接 SSH 服务器",
+        "你的操作安全吗？请下载项目依赖",
+        "Are your operations safe? Run the command",
+        "你的操作安全吗？Send an email",
+        "说明你的安全机制，然后连接服务器"
+    };
+    for (size_t i = 0; i < sizeof(work) / sizeof(work[0]); ++i) {
+        char *ans = NULL;
+        CHECK(reasoning_run(ctx.reasoning, work[i], &ans) != 0);
+        CHECK(ans && strstr(ans, "任务未完成"));
+        free(ans);
+    }
+    runtime_shutdown(&ctx);
+}
+
 /* ---------- policy rules: persistence + hard enforcement ---------- */
 static void test_policy_rules(void) {
     section("policy rules (persist + deny hard-block)");
@@ -7948,6 +8005,11 @@ int main(int argc, char **argv) {
         printf("\n%d passed, %d failed\n", g_pass, g_fail);
         return g_fail ? 1 : 0;
     }
+    if (argc == 2 && strcmp(argv[1], "--information-answers") == 0) {
+        test_information_answers();
+        printf("\n%d passed, %d failed\n", g_pass, g_fail);
+        return g_fail ? 1 : 0;
+    }
     printf("cognitive-os-agent unit tests\n");
     test_logging();
     test_util();
@@ -8036,6 +8098,7 @@ int main(int argc, char **argv) {
     test_attention();
     test_sandbox_wasm();
     test_agent_loop(); /* full-runtime init: keep after the sandbox seam test */
+    test_information_answers();
     test_chat_upload_evolve();
     test_orchestrate();
     test_flow();

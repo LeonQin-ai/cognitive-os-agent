@@ -35,6 +35,8 @@ jobs:
         run: COA_BUILD_DIR=build-macos python3 tests/test_crash_recovery_e2e.py
       - name: Visual provider timeout and recovery regression
         run: COA_BUILD_DIR=build-macos python3 tests/test_vision_wait_e2e.py
+      - name: Information answer completion regression
+        run: COA_BUILD_DIR=build-macos python3 tests/test_information_answers_e2e.py
       - name: Package native desktop
         run: bash package-macos.sh
       - uses: actions/upload-artifact@v4
@@ -62,6 +64,8 @@ jobs:
         run: python3 tests/test_crash_recovery_e2e.py
       - name: Visual provider timeout and recovery regression
         run: python3 tests/test_vision_wait_e2e.py
+      - name: Information answer completion regression
+        run: python3 tests/test_information_answers_e2e.py
       - name: Scenario tests
         run: ./build/cognitive-os-agent-scenario
       - name: Adapter tests (chat + SSE)
@@ -126,6 +130,8 @@ jobs:
         run: python tests/test_im_members_e2e.py
       - name: Incomplete diagnostics and recovery API regression
         run: python tests/test_completion_recovery_e2e.py
+      - name: Information answer completion regression
+        run: python tests/test_information_answers_e2e.py
       - name: Visual provider timeout and recovery regression
         run: python tests/test_vision_wait_e2e.py
       - name: Complete browser MCP results API regression

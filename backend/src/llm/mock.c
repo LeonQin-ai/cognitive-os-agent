@@ -238,6 +238,12 @@ static char *mock_respond(const char *msg) {
     }
     if (has_substr(msg, "脱敏解释回归测试"))
         return xstrdup("我需要说明脱敏原因：系统曾将普通 URL 路径误判为凭据。现在路径参数会保留。");
+    /* #139: conditional examples in a complete explanation are not plans. */
+    if (has_substr(msg, "你的操作安全吗") || has_substr(msg, "你的安全机制") ||
+        has_substr(msg, "你的权限") || has_substr(msg, "你的能力限制") ||
+        has_substr(msg, "Are your operations safe") || has_substr(msg, "Explain your permissions"))
+        return xstrdup("我需要说明权限边界：如果你让我执行危险命令，应先核对授权和工具策略。"
+                       "操作风险取决于具体动作，不能保证所有操作都安全。");
     if (has_substr(msg, "源码阅读恢复回归测试") && !has_substr(full, "已执行动作的观察记录")) {
         int previous = 0;
         const char *header = strstr(full, "## 之前轮次的动作结果 (第 ");

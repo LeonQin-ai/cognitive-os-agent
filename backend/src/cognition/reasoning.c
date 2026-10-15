@@ -2144,8 +2144,8 @@ static void compact_history(reasoning *r, size_t n_drop) {
  * Short intent-sounding text on the first round is a premature loop stop —
  * the model meant to act. NOTE: no length cap — chatty reasoning models
  * (e.g. GLM) emit multi-KB deliberation prose that is still narration, not
- * an answer; a nudge that wrongly fires on a real answer costs one round
- * (the bound re-accepts the text), while missing narration ends the run. */
+ * an answer. A false positive can exhaust recovery and mark a complete
+ * answer failed, so direct information questions are checked separately. */
 static int looks_like_intent(const char *text) {
     if (!text)
         return 0;
@@ -2193,7 +2193,61 @@ static int looks_like_intent(const char *text) {
     return 0;
 }
 
-/* A direct capability/help question is already answerable from the prompt and
+/* Match ASCII case without changing UTF-8 bytes. Return the remaining text. */
+static const char *information_prefix(const char *text, const char *prefix) {
+    while (*prefix) {
+        unsigned char a = (unsigned char)*text, b = (unsigned char)*prefix;
+        if (a >= 'A' && a <= 'Z') a += 'a' - 'A';
+        if (b >= 'A' && b <= 'Z') b += 'a' - 'A';
+        if (!a || a != b) return NULL;
+        ++text; ++prefix;
+    }
+    return text;
+}
+
+/* #139: only a standalone explanation is exempt from narration recovery.
+ * Matching the whole request avoids accepting an appended work instruction,
+ * including verbs the read/write guards do not know (e.g. connect/download). */
+static int prompt_is_self_explanation(const char *prompt) {
+    static const char *const intros[] = {
+        "please explain ", "please describe ", "explain ", "describe ",
+        "说明一下", "解释一下", "介绍一下", "说明", "解释", "介绍"
+    };
+    static const char *const subjects[] = {
+        "你的操作安全吗", "你的操作是否安全", "你的安全机制", "你的安全措施", "你的安全性",
+        "你的权限", "你的能力边界", "你的能力限制", "are your operations safe",
+        "your safety mechanisms", "your permissions", "your limitations"
+    };
+    static const char *const endings[] = { "是什么", "有哪些", "如何", "怎么样" };
+    while (*prompt == ' ' || *prompt == '\t' || *prompt == '\r' || *prompt == '\n') ++prompt;
+    const char *p = information_prefix(prompt, "请");
+    if (p) prompt = p;
+    for (size_t i = 0; i < sizeof(intros) / sizeof(intros[0]); ++i) {
+        p = information_prefix(prompt, intros[i]);
+        if (p) { prompt = p; break; }
+    }
+    for (size_t i = 0; i < sizeof(subjects) / sizeof(subjects[0]); ++i) {
+        p = information_prefix(prompt, subjects[i]);
+        if (!p) continue;
+        for (size_t j = 0; j < sizeof(endings) / sizeof(endings[0]); ++j) {
+            const char *end = information_prefix(p, endings[j]);
+            if (end) { p = end; break; }
+        }
+        while (*p) {
+            if (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n' ||
+                *p == '?' || *p == '!' || *p == '.') { ++p; continue; }
+            const char *end = information_prefix(p, "？");
+            if (!end) end = information_prefix(p, "。");
+            if (!end) end = information_prefix(p, "！");
+            if (!end) break;
+            p = end;
+        }
+        if (!*p) return 1;
+    }
+    return 0;
+}
+
+/* A direct capability/help/safety question is answerable from the prompt and
  * registered context. Some reasoning models preface a perfectly useful list
  * with "我需要…" or "Let me…"; treating that as an unfinished tool plan made
  * a simple "有哪些工具" question burn five model calls before accepting the
@@ -2217,6 +2271,7 @@ static int prompt_is_direct_information_request(const char *prompt) {
     for (size_t i = 0; i < sizeof(actions) / sizeof(actions[0]); i++)
         if (strstr(prompt, actions[i]))
             return 0;
+    if (prompt_is_self_explanation(prompt)) return 1;
     for (size_t i = 0; i < sizeof(questions) / sizeof(questions[0]); i++)
         if (strstr(prompt, questions[i]))
             return 1;
