@@ -86,7 +86,7 @@ Measured on Windows 11 (build 26200), Intel Family 6 Model 142, about 8 GiB RAM,
 Zig cc 0.14.1 `-O1`. These are actual Scheduler/AgentPool/MMU/file-recovery runs
 with deterministic local workloads; they exclude production model inference.
 Registered roles are not concurrent processes. The scale workload uses 8 workers,
-64 context probes per task and 8 MiB aggregate context; 2 auxiliary Runtime workers
+64 context probes per task and 8 MiB aggregate context; 8 auxiliary Runtime workers
 remain idle. Scale values are medians of 3 runs; peak RSS is the maximum of those runs.
 
 | Registered roles | Completed tasks | Elapsed ms | Tasks/s | Queue P50 / P95 / P99 ms | Peak RSS MiB |

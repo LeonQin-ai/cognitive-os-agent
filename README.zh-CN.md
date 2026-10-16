@@ -82,7 +82,7 @@ Cognitive OS 把这些职责**从提示词里搬进运行时**：
 
 ## Runtime 实测（2026-10-14）
 
-测试机器：Windows 11 build 26200、Intel Family 6 Model 142、约8 GiB RAM，Zig cc 0.14.1 `-O1`。实际运行 Scheduler、AgentPool、Context MMU及文件恢复；调度任务为本地确定性负载，不包含生产模型推理。Agent数表示注册角色数，不是并发进程数；8个工作Worker，每任务64次Context读取，聚合Context为8 MiB，另有2个空闲Runtime Worker。规模数据取3轮中位数，峰值RSS取该组最大值。
+测试机器：Windows 11 build 26200、Intel Family 6 Model 142、约8 GiB RAM，Zig cc 0.14.1 `-O1`。实际运行 Scheduler、AgentPool、Context MMU及文件恢复；调度任务为本地确定性负载，不包含生产模型推理。Agent数表示注册角色数，不是并发进程数；8个工作Worker，每任务64次Context读取，聚合Context为8 MiB，另有8个空闲Runtime Worker。规模数据取3轮中位数，峰值RSS取该组最大值。
 
 | 注册 Agent | 完成任务 | 总耗时 ms | 任务/秒 | 排队 P50 / P95 / P99 ms | 峰值 RSS MiB |
 | --- | --- | --- | --- | --- | --- |

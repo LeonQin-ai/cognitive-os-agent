@@ -27,7 +27,7 @@ flowchart LR
     D -->|否| B[blocked]
 ```
 
-基准使用真实Scheduler和AgentPool。注册1000个角色，不意味着1000个并发进程；测量负载是固定64次Context探测、角色指令拼接和任务完成，工作线程8个。辅助Runtime另外拥有2个空闲调度Worker。DAG测量使用离线mock模型，所有指标不包含生产模型推理或网络成本。
+基准使用真实Scheduler和AgentPool。注册1000个角色，不意味着1000个并发进程；测量负载是固定64次Context探测、角色指令拼接和任务完成，工作线程8个。辅助Runtime另外拥有8个空闲调度Worker。DAG测量使用离线mock模型，所有指标不包含生产模型推理或网络成本。
 
 ## 3. Context内存模型
 
