@@ -2344,9 +2344,10 @@ static void test_planner_dsml(void) {
         "<|DSML|calls>",
         "Example only: <|DSML|calls><|DSML|invoke name='shell'></|DSML|invoke></|DSML|calls>",
         "[{\"tool\":\"file_write\",\"args\":{\"content\":\"<|DSML|calls>\",\"path\":\"example.txt\"}}]",
-        "<|DSML|calls><|DSML|invoke name='file_write'><|DSML|parameter name='content' string='true'>tail\\</|DSML|parameter></|DSML|invoke></|DSML|calls>"
+        "<|DSML|calls><|DSML|invoke name='file_write'><|DSML|parameter name='content' string='true'>tail\\</|DSML|parameter></|DSML|invoke></|DSML|calls>",
+        "<｜｜DSML｜｜ calls>\n<｜｜DSML｜｜ invoke name=\"list_dir\">\n<｜｜DSML｜｜ parameter name=\"args\" string=\"false\">{\"path\":\"D:/AI/code/cognitive-os\"}</｜｜DSML｜｜ parameter>\n</｜｜DSML｜｜ invoke>\n<｜｜DSML｜｜ invoke name=\"list_dir\">\n<｜｜DSML｜｜ parameter name=\"args\" string=\"false\">{\"path\":\"D:/AI/code/cognitive-os/deliverables\"}</｜｜DSML｜｜ parameter>\n</｜｜DSML｜｜ invoke>\n<｜｜DSML｜｜ invoke name=\"glob\">\n<｜｜DSML｜｜ parameter name=\"args\" string=\"false\">{\"pattern\":\"backend/**/*\"}</｜｜DSML｜｜ parameter>\n</｜｜DSML｜｜ invoke>\n</｜｜DSML｜｜ calls>"
     };
-    int expected[]={4,2,1,1,-1,-1,-1,-1,0,1,1};
+    int expected[]={4,2,1,1,-1,-1,-1,-1,0,1,1,3};
     for (size_t i=0;i<sizeof(cases)/sizeof(*cases);i++) {
         llm provider={.vt=&vt,.impl=(void *)cases[i]};
         planned_action *actions=NULL; int n=0; char *raw=NULL,*err=NULL;
@@ -2357,6 +2358,7 @@ static void test_planner_dsml(void) {
         if (i==1 && n==2) { CHECK_STR(actions[0].tool,"list_dir"); CHECK_STR(actions[1].tool,"glob"); }
         if (i==2 && n==1) CHECK(strstr(actions[0].args_json,"hello &amp; 世界")!=NULL);
         if (i==3 && n==1) CHECK(strstr(actions[0].args_json,"literal </||DSML|| parameter> preserved")!=NULL);
+        if (i==11 && n==3) { CHECK_STR(actions[0].tool,"list_dir"); CHECK_STR(actions[1].tool,"list_dir"); CHECK_STR(actions[2].tool,"glob"); }
         if (i==10 && n==1) {
             cJSON *args=cJSON_Parse(actions[0].args_json);
             cJSON *content=cJSON_GetObjectItemCaseSensitive(args,"content");
@@ -2365,6 +2367,60 @@ static void test_planner_dsml(void) {
         }
         planner_actions_free(actions,n); free(raw); free(err);
     }
+}
+
+typedef struct recovery_fixture_state {
+    int calls;
+    int saw_error_and_verification_guidance;
+} recovery_fixture_state;
+
+static int recovery_fixture_chat(llm *self, const llm_request *req, llm_response *resp) {
+    recovery_fixture_state *state=(recovery_fixture_state *)self->impl;
+    state->calls++;
+    if (state->calls==1) {
+        resp->content=xstrdup("[{\"tool\":\"fixture_python_failure\",\"args\":{}}]");
+        return resp->content ? 0 : -1;
+    }
+    strbuf prompt;
+    strbuf_init(&prompt);
+    for (size_t i=0;req && i<req->num_messages;i++)
+        if (req->messages[i].content) strbuf_append(&prompt,req->messages[i].content);
+    const char *text=prompt.buf;
+    state->saw_error_and_verification_guidance=
+        text && strstr(text,"SyntaxError: invalid syntax at line 17") &&
+        strstr(text,"退出码") && strstr(text,"重新运行原命令") && strstr(text,"预期产物确实存在");
+    strbuf_free(&prompt);
+    resp->content=xstrdup("已分析错误并完成重试验证。");
+    return resp->content ? 0 : -1;
+}
+
+static tool_result *fixture_python_failure(const tool *self, const tool_ctx *ctx, const char *args) {
+    (void)self; (void)ctx; (void)args;
+    return tool_result_new(0,"Traceback: SyntaxError: invalid syntax at line 17");
+}
+
+static void test_failed_script_recovery_guidance(void) {
+    section("failed script recovery guidance");
+    recovery_fixture_state state={0};
+    static const llm_vtable vt={.chat=recovery_fixture_chat};
+    llm provider={.vt=&vt,.provider="fixture",.model="fixture",.impl=&state};
+    tool_registry *reg=tool_registry_new();
+    tool failure={"fixture_python_failure","fixture Python command failure",NULL,0,fixture_python_failure,NULL};
+    CHECK(reg && tool_register(reg,&failure)==0);
+    if (!reg) return;
+    reasoning_config cfg={0};
+    cfg.llm=&provider; cfg.tools=reg; cfg.workspace="state-test/script-recovery"; cfg.max_rounds=3;
+    reasoning *r=reasoning_new(&cfg);
+    CHECK(r!=NULL);
+    if (r) {
+        char *answer=NULL;
+        (void)reasoning_run(r,"分析脚本错误并说明处理结果",&answer);
+        CHECK(state.calls>=2);
+        CHECK(state.saw_error_and_verification_guidance);
+        free(answer);
+        reasoning_free(r);
+    }
+    tool_registry_free(reg);
 }
 
 static void test_planner(void) {
@@ -8039,7 +8095,7 @@ int main(int argc, char **argv) {
         printf("\n%d passed, %d failed\n", g_pass, g_fail); return g_fail ? 1 : 0;
     }
     if (argc==2 && !strcmp(argv[1],"--planner")) {
-        test_planner_dsml(); test_planner();
+        test_planner_dsml(); test_failed_script_recovery_guidance(); test_planner();
         printf("%d passed, %d failed\n",g_pass,g_fail); return g_fail ? 1:0;
     }
     if (argc==2 && !strcmp(argv[1],"--skills")) {
