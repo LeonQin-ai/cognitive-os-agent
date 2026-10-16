@@ -169,11 +169,13 @@ per-task memory probe scheme and is retained as history, not a direct scaling co
 
 ## Technical blog series
 
-[Eight Chinese engineering articles](backend/docs/blog/README.md) walk through the
+[Eight Chinese engineering articles](https://leonqin-ai.github.io/) walk through the
 C11 Runtime, reciprocal Agent discussions, Flow dependencies, Memory/Context,
 tool protocols, recovery, million-task measurements, and reproducible demos.
 Each article links to source and verification evidence, with measurement limits
 kept explicit.
+
+The blog is maintained in its [independent GitHub Pages repository](https://github.com/LeonQin-ai/LeonQin-ai.github.io).
 
 ## Web Console
 

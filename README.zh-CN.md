@@ -128,7 +128,7 @@ python tests/run_runtime_measurements.py --million --compiler "实际编译器/�
 
 ## 技术博客系列
 
-[8 篇中文技术博客](backend/docs/blog/README.md)从源码与实测介绍 C11 Runtime、Agent 相互讨论、Flow 依赖、Memory/Context、工具协议、故障恢复、百万任务基准和上手实验。每篇包含技术正文、源码或复现入口与能力边界，可用于系列连载和项目介绍。
+[8 篇中文技术博客](https://leonqin-ai.github.io/)从源码与实测介绍 C11 Runtime、Agent 相互讨论、Flow 依赖、Memory/Context、工具协议、故障恢复、百万任务基准和上手实验。文章与博客首页在[独立 GitHub Pages 仓库](https://github.com/LeonQin-ai/LeonQin-ai.github.io)维护。
 
 ## Web 控制台
 

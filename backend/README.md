@@ -317,8 +317,9 @@ Run `python tests/test_im_discussion_e2e.py` for reciprocal replies, consensus,
 failure, cancellation, takeover, strict settings and restart regressions. The
 fixture is a local deterministic model with real Runtime/API execution.
 
-The [Chinese technical blog series](docs/blog/README.md) explains these internals
+The [Chinese technical blog series](https://leonqin-ai.github.io/) explains these internals
 and the other Runtime subsystems through source references and reproducible cases.
+Articles and the blog website are maintained in a [separate repository](https://github.com/LeonQin-ai/LeonQin-ai.github.io).
 
 The web console's **外观与背景** control in the sidebar (and browser header)
 accepts a local PNG, JPEG, WebP or GIF background up to 10 MB. The image is
