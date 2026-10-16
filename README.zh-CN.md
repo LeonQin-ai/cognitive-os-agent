@@ -126,6 +126,10 @@ python tests/run_runtime_measurements.py --million --compiler "实际编译器/�
 
 `--full`重测1万/10万任务及650 MiB/1 GiB Context；`--million`仅测100/1000 Agent各3轮百万任务，独立保存JSON，不覆盖旧规模或Context结果。
 
+## 技术博客系列
+
+[8 篇中文技术博客](backend/docs/blog/README.md)从源码与实测介绍 C11 Runtime、Agent 相互讨论、Flow 依赖、Memory/Context、工具协议、故障恢复、百万任务基准和上手实验。每篇包含技术正文、源码或复现入口与能力边界，可用于系列连载和项目介绍。
+
 ## Web 控制台
 
 内嵌控制台支持持久化会话、可观测的 Agent 执行过程、执行中补充要求、多 Agent Flow、定时任务，以及本地 Skills/MCP/插件管理。

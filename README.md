@@ -167,6 +167,14 @@ Raw measurements: [scale](backend/docs/runtime-scale-2026-10-14.json),
 The previous [128 MiB baseline](backend/docs/runtime-benchmark.md) used a different
 per-task memory probe scheme and is retained as history, not a direct scaling comparator.
 
+## Technical blog series
+
+[Eight Chinese engineering articles](backend/docs/blog/README.md) walk through the
+C11 Runtime, reciprocal Agent discussions, Flow dependencies, Memory/Context,
+tool protocols, recovery, million-task measurements, and reproducible demos.
+Each article links to source and verification evidence, with measurement limits
+kept explicit.
+
 ## Web Console
 
 The embedded console supports persistent chat sessions, observable agent runs,
