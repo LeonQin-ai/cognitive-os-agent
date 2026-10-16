@@ -260,6 +260,7 @@ def main():
                     failing = room()
                     task = finished(send(failing, 'FAIL'))
                     assert task['status'] == 'FAILED', task
+                    assert task['discussion_round'] == 1, task
                     assert any(reply['sender'] == 'alpha' for reply in replies(failing)), messages(failing)
                     assert all(reply['sender'] != 'beta' for reply in replies(failing)), messages(failing)
                     print('PASS: a failed Agent fails the task while retaining completed contributions', flush=True)
@@ -271,6 +272,7 @@ def main():
                     fixture.release['CANCEL'].set()
                     task = finished(task_id)
                     assert task['status'] == 'CANCELLED', task
+                    assert task['discussion_round'] == 1, task
                     assert replies(cancelled) == [], messages(cancelled)
                     assert len(fixture.calls_for('CANCEL')) == 1
                     print('PASS: cancelling an in-flight model call discards its eventual reply', flush=True)
@@ -280,7 +282,8 @@ def main():
                     assert fixture.entered['OLD'].wait(10), 'Superseded fixture was not called'
                     new_id = send(superseded, 'NEW')
                     fixture.release['OLD'].set()
-                    assert finished(old_id)['status'] == 'CANCELLED'
+                    old = finished(old_id)
+                    assert old['status'] == 'CANCELLED' and old['discussion_round'] == 1, old
                     assert finished(new_id)['status'] == 'DONE'
                     expect_calls('NEW', 3)
                     assert len(fixture.calls_for('OLD')) == 1

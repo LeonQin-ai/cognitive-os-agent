@@ -393,7 +393,8 @@ static int im_run_round(runtime_ctx *ctx, task *t, char **summary) {
     rounds = room_session->discussion_rounds;
     if (rounds < 1 || rounds > IM_DISCUSSION_MAX_ROUNDS) rounds = IM_DISCUSSION_DEFAULT_ROUNDS;
     if (!room_session->n_members || room_session->n_members > 64) failed = 1;
-    for (round = 1; round <= rounds && !failed && !task_should_abort(t); ++round) {
+    for (int pass = 1; pass <= rounds && !failed && !task_should_abort(t); ++pass) {
+      round = pass;
       size_t votes = 0, participants = 0;
       for (size_t i = 0; i < room_session->n_members && !task_should_abort(t); i++) {
         const char *name = room_session->members[i];
