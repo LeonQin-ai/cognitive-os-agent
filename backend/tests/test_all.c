@@ -2345,9 +2345,13 @@ static void test_planner_dsml(void) {
         "Example only: <|DSML|calls><|DSML|invoke name='shell'></|DSML|invoke></|DSML|calls>",
         "[{\"tool\":\"file_write\",\"args\":{\"content\":\"<|DSML|calls>\",\"path\":\"example.txt\"}}]",
         "<|DSML|calls><|DSML|invoke name='file_write'><|DSML|parameter name='content' string='true'>tail\\</|DSML|parameter></|DSML|invoke></|DSML|calls>",
-        "<｜｜DSML｜｜ calls>\n<｜｜DSML｜｜ invoke name=\"list_dir\">\n<｜｜DSML｜｜ parameter name=\"args\" string=\"false\">{\"path\":\"D:/AI/code/cognitive-os\"}</｜｜DSML｜｜ parameter>\n</｜｜DSML｜｜ invoke>\n<｜｜DSML｜｜ invoke name=\"list_dir\">\n<｜｜DSML｜｜ parameter name=\"args\" string=\"false\">{\"path\":\"D:/AI/code/cognitive-os/deliverables\"}</｜｜DSML｜｜ parameter>\n</｜｜DSML｜｜ invoke>\n<｜｜DSML｜｜ invoke name=\"glob\">\n<｜｜DSML｜｜ parameter name=\"args\" string=\"false\">{\"pattern\":\"backend/**/*\"}</｜｜DSML｜｜ parameter>\n</｜｜DSML｜｜ invoke>\n</｜｜DSML｜｜ calls>"
+        "<｜｜DSML｜｜ calls>\n<｜｜DSML｜｜ invoke name=\"list_dir\">\n<｜｜DSML｜｜ parameter name=\"args\" string=\"false\">{\"path\":\"D:/AI/code/cognitive-os\"}</｜｜DSML｜｜ parameter>\n</｜｜DSML｜｜ invoke>\n<｜｜DSML｜｜ invoke name=\"list_dir\">\n<｜｜DSML｜｜ parameter name=\"args\" string=\"false\">{\"path\":\"D:/AI/code/cognitive-os/deliverables\"}</｜｜DSML｜｜ parameter>\n</｜｜DSML｜｜ invoke>\n<｜｜DSML｜｜ invoke name=\"glob\">\n<｜｜DSML｜｜ parameter name=\"args\" string=\"false\">{\"pattern\":\"backend/**/*\"}</｜｜DSML｜｜ parameter>\n</｜｜DSML｜｜ invoke>\n</｜｜DSML｜｜ calls>",
+        /* Reproduce the restart/PPT task's final model reply: it first
+         * explains the Python syntax error, then emits calls, and gateway
+         * serialization escapes the closing DSML tags. */
+        "脚本里中文全角冒号误当成了键值分隔符，需要用逗号替换。先写一个修复脚本并确认条目解析方式。\n\n<｜｜DSML｜｜ calls>\n<｜｜DSML｜｜ invoke name=\"file_write\">\n<｜｜DSML｜｜ parameter name=\"args\" string=\"false\">{\"path\":\"_fix_deck.py\",\"content\":\"print('fix and verify')\\n\"}\\</｜｜DSML｜｜ parameter>\n</｜｜DSML｜｜ invoke>\n<｜｜DSML｜｜ invoke name=\"grep\">\n<｜｜DSML｜｜ parameter name=\"args\" string=\"false\">{\"pattern\":\"content_slide\",\"path\":\"_generate_interview_deck.py\"}</｜｜DSML｜｜ parameter>\n</｜｜DSML｜｜ invoke>\n</｜｜DSML｜｜ calls>"
     };
-    int expected[]={4,2,1,1,-1,-1,-1,-1,0,1,1,3};
+    int expected[]={4,2,1,1,-1,-1,-1,-1,0,1,1,3,2};
     for (size_t i=0;i<sizeof(cases)/sizeof(*cases);i++) {
         llm provider={.vt=&vt,.impl=(void *)cases[i]};
         planned_action *actions=NULL; int n=0; char *raw=NULL,*err=NULL;
@@ -2359,6 +2363,7 @@ static void test_planner_dsml(void) {
         if (i==2 && n==1) CHECK(strstr(actions[0].args_json,"hello &amp; 世界")!=NULL);
         if (i==3 && n==1) CHECK(strstr(actions[0].args_json,"literal </||DSML|| parameter> preserved")!=NULL);
         if (i==11 && n==3) { CHECK_STR(actions[0].tool,"list_dir"); CHECK_STR(actions[1].tool,"list_dir"); CHECK_STR(actions[2].tool,"glob"); }
+        if (i==12 && n==2) { CHECK_STR(actions[0].tool,"file_write"); CHECK_STR(actions[1].tool,"grep"); }
         if (i==10 && n==1) {
             cJSON *args=cJSON_Parse(actions[0].args_json);
             cJSON *content=cJSON_GetObjectItemCaseSensitive(args,"content");

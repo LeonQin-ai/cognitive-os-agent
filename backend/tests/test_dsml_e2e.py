@@ -28,7 +28,11 @@ class Provider(BaseHTTPRequestHandler):
         text = body['messages'][-1]['content']
         calls.append(text)
         if len(calls) == 1:
-            answer = ('<｜｜DSML｜｜ calls>' + invoke('list_dir', {'path': '.'})
+            # Gateways can prepend a brief repair/execution explanation before
+            # their DSML envelope. Exercise the exact form that previously
+            # ended as plain text without executing any tools.
+            answer = ('先核对源码和目录，再创建结果文件。\n\n'
+                      '<｜｜DSML｜｜ calls>' + invoke('list_dir', {'path': '.'})
                       + invoke('file_read', {'path': 'source.txt'})
                       + invoke('file_write', {'path': 'note.txt', 'content': 'hello'})
                       + '</｜｜DSML｜｜ calls>')
@@ -88,13 +92,15 @@ def main():
                             break
                         assert time.monotonic() < deadline, task
                         time.sleep(.05)
+                    if task['status'] != 'DONE':
+                        print((state / 'runtime.log').read_text(encoding='utf-8', errors='replace'))
                     assert task['status'] == 'DONE', task
                     assert task['tool_calls'] == 3 and len(task['steps']) == 3, task
                     assert all(step['ok'] for step in task['steps']), task
                     assert [s['tool'] for s in task['steps']] == ['list_dir', 'file_read', 'file_write'], task
                     assert (state / 'note.txt').read_text() == 'hello'
                     assert len(calls) == 2, len(calls)
-                    print('PASS: DSML three-call batch -> real tools -> source evidence -> exact file -> DONE')
+                    print('PASS: prose-prefixed DSML batch -> real tools -> source evidence -> exact file -> DONE')
                 finally:
                     process.terminate()
                     process.wait(timeout=10)

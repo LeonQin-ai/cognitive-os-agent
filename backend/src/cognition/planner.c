@@ -486,7 +486,36 @@ static int dsml_tag_read(const char **cursor, dsml_tag *tag) {
 /* 0 = another format, 1 = valid DSML, -1 = broken DSML (no partial execution). */
 static int parse_dsml_tool_calls(const char *plan, planned_action **actions, int *n_actions) {
     const char *p=dsml_space(plan);
-    if (strncmp(p,"<｜",4) && strncmp(p,"<|",2)) return 0;
+    /* Some compatible models explain the repair before emitting the actual
+     * calls. Accept one complete DSML envelope after plain-text preamble, but
+     * never skip over another markup block: that could turn a quoted example
+     * into an executable plan. The envelope parser below still requires the
+     * entire remainder to be valid and consumes every invoke atomically. */
+    if (strncmp(p,"<｜",4) && strncmp(p,"<|",2) && strncmp(p,"<||",3)) {
+        const char *marker=p, *open=NULL;
+        while ((marker=strstr(marker,"DSML"))!=NULL) {
+            const char *tag_name=marker;
+            while (tag_name>p && tag_name[-1]!='<') tag_name--;
+            if (tag_name>p && tag_name[-1]=='<') { open=tag_name-1; break; }
+            marker+=4;
+        }
+        if (!open) return 0;
+        /* Do not execute an envelope shown as an example or embedded in a
+         * JSON/code reply. A real preamble is plain explanatory text. */
+        for (const char *q=p;q<open;q++)
+            if (*q=='<' || *q=='{' || *q=='}' || *q=='[' || *q==']' ||
+                *q=='"' || *q=='\'' || *q=='`') return 0;
+        size_t preamble_len=(size_t)(open-p);
+        char *preamble=malloc(preamble_len+1);
+        if (!preamble) return -1;
+        memcpy(preamble,p,preamble_len); preamble[preamble_len]=0;
+        int example = strstr(preamble,"Example") || strstr(preamble,"example") ||
+                      strstr(preamble,"For example") || strstr(preamble,"for example") ||
+                      strstr(preamble,"示例") || strstr(preamble,"例如") || strstr(preamble,"比如");
+        free(preamble);
+        if (example) return 0;
+        p=open;
+    }
     dsml_tag tag;
     if (!strstr(p,"DSML")) return 0;
     if (!dsml_tag_read(&p,&tag)) return -1;
