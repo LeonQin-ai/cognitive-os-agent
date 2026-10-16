@@ -2332,6 +2332,9 @@ static void test_planner_dsml(void) {
     section("DSML planner compatibility");
     static const llm_vtable vt={.chat=dsml_fixture_chat};
     const char *cases[]={
+        /* Exact final planner reply from the 90-step PPT incident. The
+         * installed 2026-10-14 binary treated this as a completed answer. */
+        "<｜｜DSML｜｜ calls>\n<｜｜DSML｜｜ invoke name=\"file_read\">\n<｜｜DSML｜｜ parameter name=\"args\" string=\"false\">{\"path\":\"interview-guide.zh-CN.md\",\"offset_bytes\":27994,\"max_bytes\":4000}</｜｜DSML｜｜ parameter>\n</｜｜DSML｜｜ invoke>\n<｜｜DSML｜｜ invoke name=\"file_read\">\n<｜｜DSML｜｜ parameter name=\"args\" string=\"false\">{\"path\":\"README.zh-CN.md\",\"offset_bytes\":19996,\"max_bytes\":4000}</｜｜DSML｜｜ parameter>\n</｜｜DSML｜｜ invoke>\n<｜｜DSML｜｜ invoke name=\"file_read\">\n<｜｜DSML｜｜ parameter name=\"args\" string=\"false\">{\"path\":\"_generate_process_docs.py\",\"offset_bytes\":7999,\"max_bytes\":4000}</｜｜DSML｜｜ parameter>\n</｜｜DSML｜｜ invoke>\n<｜｜DSML｜｜ invoke name=\"file_read\">\n<｜｜DSML｜｜ parameter name=\"args\" string=\"false\">{\"path\":\"interview-guide.zh-CN.md\",\"offset_bytes\":0,\"max_bytes\":4000}</｜｜DSML｜｜ parameter>\n</｜｜DSML｜｜ invoke>\n</｜｜DSML｜｜ calls>",
         "<｜｜DSML｜｜ calls><｜｜DSML｜｜ invoke name=\"list_dir\"><｜｜DSML｜｜ parameter name=\"args\" string=\"false\">{\"path\":\"D:/AI/code/cognitive-os\"}\\</｜｜DSML｜｜ parameter>\\</｜｜DSML｜｜ invoke><｜｜DSML｜｜ invoke name=\"glob\"><｜｜DSML｜｜ parameter name=\"args\" string=\"false\">{\"pattern\":\"backend/**/*\"}</｜｜DSML｜｜ parameter></｜｜DSML｜｜ invoke></｜｜DSML｜｜ calls>",
         "<think>example must be skipped</think><｜DSML｜function_calls><｜DSML｜invoke name='file_write'><｜DSML｜parameter name='path' string='true'>note.txt</｜DSML｜parameter><｜DSML｜parameter name='content' string='true'>hello &amp; 世界</｜DSML｜parameter></｜DSML｜invoke></｜DSML｜function_calls>",
         "<||DSML|| calls><||DSML|| invoke name=\"file_write\"><||DSML|| parameter name=\"args\" string=\"false\">{\"path\":\"note.txt\",\"content\":\"literal </||DSML|| parameter> preserved\"}</||DSML|| parameter></||DSML|| invoke></||DSML|| calls>",
@@ -2343,17 +2346,18 @@ static void test_planner_dsml(void) {
         "[{\"tool\":\"file_write\",\"args\":{\"content\":\"<|DSML|calls>\",\"path\":\"example.txt\"}}]",
         "<|DSML|calls><|DSML|invoke name='file_write'><|DSML|parameter name='content' string='true'>tail\\</|DSML|parameter></|DSML|invoke></|DSML|calls>"
     };
-    int expected[]={2,1,1,-1,-1,-1,-1,0,1,1};
+    int expected[]={4,2,1,1,-1,-1,-1,-1,0,1,1};
     for (size_t i=0;i<sizeof(cases)/sizeof(*cases);i++) {
         llm provider={.vt=&vt,.impl=(void *)cases[i]};
         planned_action *actions=NULL; int n=0; char *raw=NULL,*err=NULL;
         int rc=planner_plan(&provider,"provider fixture",&actions,&n,&raw,&err);
         CHECK((expected[i]<0 && rc<0 && err && !raw && !actions && n==0) ||
               (expected[i]>=0 && rc==0 && n==expected[i]));
-        if (i==0 && n==2) { CHECK_STR(actions[0].tool,"list_dir"); CHECK_STR(actions[1].tool,"glob"); }
-        if (i==1 && n==1) CHECK(strstr(actions[0].args_json,"hello &amp; 世界")!=NULL);
-        if (i==2 && n==1) CHECK(strstr(actions[0].args_json,"literal </||DSML|| parameter> preserved")!=NULL);
-        if (i==9 && n==1) {
+        if (i==0 && n==4) { CHECK_STR(actions[0].tool,"file_read"); CHECK_STR(actions[3].tool,"file_read"); }
+        if (i==1 && n==2) { CHECK_STR(actions[0].tool,"list_dir"); CHECK_STR(actions[1].tool,"glob"); }
+        if (i==2 && n==1) CHECK(strstr(actions[0].args_json,"hello &amp; 世界")!=NULL);
+        if (i==3 && n==1) CHECK(strstr(actions[0].args_json,"literal </||DSML|| parameter> preserved")!=NULL);
+        if (i==10 && n==1) {
             cJSON *args=cJSON_Parse(actions[0].args_json);
             cJSON *content=cJSON_GetObjectItemCaseSensitive(args,"content");
             CHECK(cJSON_IsString(content) && !strcmp(content->valuestring,"tail\\"));
