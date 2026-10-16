@@ -131,6 +131,8 @@ python tests/run_runtime_measurements.py --million --compiler "实际编译器/�
 内嵌控制台支持持久化会话、可观测的 Agent 执行过程、执行中补充要求、多 Agent Flow、定时任务，以及本地 Skills/MCP/插件管理。
 以下截图使用本地演示配置和 mock 执行任务。
 
+群聊支持 Agent 之间相互讨论：注册不同角色、选择群成员后发送话题，各角色会读取其他成员的最新发言，进行追问、回应和完善。默认讨论 3 轮，可设置 1–5 轮；左侧显示当前角色与轮次，并可停止讨论。新用户消息会接管旧讨论，全员明确同意结束时可提前停止。详见[群聊 API](backend/README.md#im-bridge-and-agent-groups)。
+
 ![当前聊天界面](screenshots/ui.png)
 
 执行历史展示模型与工具阶段、修改的文件、耗时和可展开的动作详情；Skills 与插件页面支持搜索、发现和已安装项管理。
@@ -469,7 +471,7 @@ curl http://localhost:18300/metrics       # 指标：context.bytes_*、memory.*�
 质量门槛：CI 在 Windows（zig cc）、Linux（gcc 和 AddressSanitizer）、macOS Apple Silicon 与 macOS Intel 上构建和测试。
 
 ```
-unit:      3129 passed, 0 failed   （2026-10-14 本地 Windows 验证）
+unit:      3331 passed, 0 failed   （2026-10-16 本地 Windows 验证）
 scenario:  91 checks, 0 failed     （HTTP 服务器、插件、MCP stdio、Flow）
 e2e:       E2E PASS                （真实 HTTP，双协议）
 adapters:  ADAPTER PASS            （chat + SSE 流式，openai + anthropic）
@@ -483,6 +485,13 @@ ASAN:      0 内存错误
 python backend/tests/test_vision_wait_e2e.py
 python backend/tests/test_runtime_benchmark.py
 python backend/tests/test_crash_recovery_e2e.py
+```
+
+群聊讨论本地验证（2026-10-16，Windows）：**109 项专项 Native 检查、3331 项全量检查**通过；真实 HTTP 回归覆盖三轮互相引用、单轮兼容、全员/单方结束、角色失败、停止、新消息接管、设置校验及重启持久化；浏览器回归覆盖左侧状态、停止重试和 390px 窄屏。模型使用本地确定性 provider，验证实际 Runtime 控制流，不代表生产模型的讨论质量评测。
+
+```bash
+python backend/tests/test_im_discussion_e2e.py
+python backend/tests/test_im_members_e2e.py
 ```
 
 ### 自己动手跑测试
@@ -593,7 +602,7 @@ Claude Code 与 Codex 是前沿模型驱动、打磨成熟的终端 Agent 产品
 | 多智能体 | 子 Agent 工具 | — | — | **Flow DAG 编译器，每 Agent 独立记忆/上下文/工具/策略** |
 | 扩展 | MCP + 插件 | MCP | 函数调用 | **MCP + 自蒸馏技能（成功动作序列沉淀复用）+ 原生 / WASM 沙箱插件** |
 | 模型绑定 | Anthropic | OpenAI | DeepSeek | **任意 OpenAI 兼容 / Anthropic / 本地（Ollama）/ 离线 mock** |
-| 离线可验证 | 需 API 访问 | 需 API 访问 | 需 API 访问 | **3129 单元 + 91 场景 + e2e/适配器测试免密钥对 mock 运行，ASAN 干净** |
+| 离线可验证 | 需 API 访问 | 需 API 访问 | 需 API 访问 | **3331 单元 + 91 场景 + e2e/适配器测试免密钥对 mock 运行，ASAN 干净** |
 
 对比的重点不是"产品更好"，而是：**策略强制、事务、记忆生命周期、调度与隔离在这里是运行时服务，不是提示词约定或产品功能**。正因如此，同一套运行时用中端模型就能达到 GAIA 78.79%，并把策略遵循做成 4/4。
 

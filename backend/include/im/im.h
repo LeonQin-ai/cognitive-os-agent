@@ -12,12 +12,16 @@ extern "C" {
 
 typedef struct im im;
 
+#define IM_DISCUSSION_DEFAULT_ROUNDS 3
+#define IM_DISCUSSION_MAX_ROUNDS 5
+
 typedef struct im_session {
     int64_t id;
     char *name;
     char *kind;     /* "direct" (default) | "group" */
     char **members; /* member names for group sessions */
     size_t n_members;
+    int discussion_rounds; /* group discussion limit; direct sessions use 1 */
     char *channel; /* linked external messaging channel (NULL = none) */
     int64_t created_ms;
 } im_session;
@@ -41,11 +45,16 @@ int64_t im_create_session(im *im, const char *name);
  * (copied). Returns id > 0, or -1 on error. */
 int64_t im_create_session_ex(im *im, const char *name, const char *kind, const char **members,
                                  size_t n_members);
+/* Same as ex, with a group discussion limit (0 = default). */
+int64_t im_create_session_discussion(im *im, const char *name, const char *kind,
+                                     const char **members, size_t n_members, int rounds);
 /* Delete a session and its messages. Returns 1 ok, 0 not found. */
 int im_delete_session(im *im, int64_t id);
 /* Replace group members for subsequent turns. 1 ok, 0 missing, -1 invalid/OOM,
  * -2 direct session. Names are copied; validation against the roster is at API. */
 int im_session_set_members(im *im, int64_t id, const char **members, size_t n_members);
+/* Atomically replace members and discussion limit. rounds=0 keeps the limit. */
+int im_session_configure(im *im, int64_t id, const char **members, size_t n_members, int rounds);
 
 /* List sessions (malloc'd array; free with im_sessions_free). */
 im_session *im_list_sessions(im *im, size_t *count);
@@ -60,6 +69,10 @@ int64_t im_send(im *im, int64_t session_id, const char *role, const char *conten
 
 /* Append a message with an optional sender (member/actor name). */
 int64_t im_send_ex(im *im, int64_t session_id, const char *role, const char *content, const char *sender);
+/* Append an agent reply only while trigger_id is the latest human message.
+ * Returns id > 0, -2 if a newer human message took over, or -1 on error. */
+int64_t im_send_agent_reply(im *im, int64_t session_id, int64_t trigger_id,
+                            const char *content, const char *sender);
 
 /* Total messages across all sessions (dashboard metric). */
 size_t im_total_messages(im *im);

@@ -81,7 +81,7 @@ def main():
                 request('PUT', f'/v1/im/sessions/{direct}/members', {'members': ['alpha']}, 400)
                 room = request('POST', '/v1/im/sessions', {'name': 'new', 'kind': 'group', 'members': ['beta']})['id']
                 assert room > 1
-                request('PUT', '/v1/im/sessions/1/members', {'members': ['alpha', 'beta']})
+                request('PUT', '/v1/im/sessions/1/members', {'members': ['alpha', 'beta'], 'discussion_rounds': 1})
                 queued = request('POST', '/v1/im/sessions/1/messages', {'content': 'Say hello briefly.'})
                 assert queued['task_id'] >= 0, queued
                 deadline = time.monotonic() + 20

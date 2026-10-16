@@ -248,14 +248,17 @@ static int h_task_get(const http_request *req, http_response *resp, void *ud) {
             free(fnodes);
         }
         cJSON_Delete(saved);
-    } else if (!t->userdata) {
+    } else if (!t->userdata || t->userdata == (void *)3) {
         char *snapshot = task_progress_copy(t);
         cJSON *progress = snapshot ? cJSON_Parse(snapshot) : NULL;
         free(snapshot);
         if (progress) {
             cJSON *field;
             cJSON_ArrayForEach(field, progress) {
-                if (field->string) cJSON_AddItemToObject(o, field->string, cJSON_Duplicate(field, 1));
+                /* The scheduler owns the task status/id/output. IM discussion
+                 * snapshots contribute progress without overwriting them. */
+                if (field->string && !cJSON_GetObjectItemCaseSensitive(o, field->string))
+                    cJSON_AddItemToObject(o, field->string, cJSON_Duplicate(field, 1));
             }
             cJSON_Delete(progress);
         } else {
@@ -4500,12 +4503,29 @@ invalid:
     return 0;
 }
 
+/* Optional group round limit. Reject strings, booleans and fractional values
+ * rather than silently truncating them; zero remains the internal default. */
+static int im_validate_rounds(cJSON *root, int *rounds, http_response *resp) {
+    cJSON *v = cJSON_GetObjectItemCaseSensitive(root, "discussion_rounds");
+    *rounds = 0;
+    if (!v) return 1;
+    if (cJSON_IsNumber(v) && v->valuedouble >= 1 &&
+        v->valuedouble <= IM_DISCUSSION_MAX_ROUNDS && v->valuedouble == (double)v->valueint) {
+        *rounds = v->valueint;
+        return 1;
+    }
+    resp->status = 400;
+    http_resp_json(resp, "{\"error\":\"discussion_rounds must be an integer between 1 and 5\"}");
+    return 0;
+}
+
 static int h_im_session_create(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
     char *b;
     cJSON *root;
     const char *members[64];
     size_t n_members = 0;
+    int rounds = 0;
     int64_t id;
 
     if (!authz_ok(ctx, req, resp))
@@ -4514,6 +4534,7 @@ static int h_im_session_create(const http_request *req, http_response *resp, voi
     root = b ? cJSON_Parse(b) : NULL;
     free(b);
     const char *name = NULL, *kind = NULL, *channel = NULL;
+    if (!im_validate_rounds(root, &rounds, resp)) { cJSON_Delete(root); return 0; }
     if (root && cJSON_IsObject(root)) {
         cJSON *n = cJSON_GetObjectItemCaseSensitive(root, "name");
         cJSON *k = cJSON_GetObjectItemCaseSensitive(root, "kind");
@@ -4545,7 +4566,7 @@ static int h_im_session_create(const http_request *req, http_response *resp, voi
         return 0;
     }
 
-    id = im_create_session_ex(ctx->im, name ? name : "", kind ? kind : "direct", members, n_members);
+    id = im_create_session_discussion(ctx->im, name ? name : "", kind ? kind : "direct", members, n_members, rounds);
     if (id > 0 && ctx->channels && channel && *channel)
         im_session_set_channel(ctx->im, id, channel);
     cJSON_Delete(root);
@@ -4810,12 +4831,13 @@ static int h_im_session_route(const http_request *req, http_response *resp, void
 
     if (!strcmp(req->method,"PUT") && is_members) {
         char *body=body_str(req); cJSON *root=body ? cJSON_Parse(body):NULL; free(body);
-        const char *members[64]; size_t count=0;
+        const char *members[64]; size_t count=0; int rounds=0;
+        if (!im_validate_rounds(root,&rounds,resp)) { cJSON_Delete(root); return 0; }
         if (!im_validate_members(ctx,cJSON_GetObjectItemCaseSensitive(root,"members"),members,&count,resp)) {
             cJSON_Delete(root); return 0;
         }
         char *end=NULL; int64_t exact_id=strtoll(idbuf,&end,10);
-        int result=(end && !*end && exact_id>0) ? im_session_set_members(ctx->im,exact_id,members,count):0;
+        int result=(end && !*end && exact_id>0) ? im_session_configure(ctx->im,exact_id,members,count,rounds):0;
         cJSON_Delete(root);
         if (result==1) http_resp_json(resp,"{\"ok\":true}");
         else { resp->status=result==0 ? 404:result==-2 ? 400:500;

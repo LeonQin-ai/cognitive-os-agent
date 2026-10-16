@@ -28,6 +28,7 @@ typedef struct im_sess {
     char *kind;
     char **members;
     size_t n_members;
+    int discussion_rounds;
     char *channel;
     int64_t created_ms;
     im_msg *msgs;
@@ -49,23 +50,29 @@ static im_sess *find_sess(im *im, int64_t id) {
     return NULL;
 }
 
-static void sess_add_msg(im_sess *s, int64_t id, const char *role, const char *sender, const char *content,
+static int sess_add_msg(im_sess *s, int64_t id, const char *role, const char *sender, const char *content,
                          int64_t ts) {
     if (s->count == s->cap) {
         size_t cap = s->cap ? s->cap * 2 : 8;
         im_msg *nm = realloc(s->msgs, cap * sizeof(im_msg));
         if (!nm)
-            return;
+            return -1;
         s->msgs = nm;
         s->cap = cap;
     }
 
-    s->msgs[s->count].id = id;
-    s->msgs[s->count].role = xstrdup(role);
-    s->msgs[s->count].sender = (sender && *sender) ? xstrdup(sender) : NULL;
-    s->msgs[s->count].content = xstrdup(content);
-    s->msgs[s->count].ts_ms = ts;
-    s->count++;
+    im_msg msg = {0};
+    msg.id = id;
+    msg.role = xstrdup(role);
+    msg.sender = (sender && *sender) ? xstrdup(sender) : NULL;
+    msg.content = xstrdup(content);
+    msg.ts_ms = ts;
+    if (!msg.role || !msg.content || ((sender && *sender) && !msg.sender)) {
+        free(msg.role); free(msg.sender); free(msg.content);
+        return -1;
+    }
+    s->msgs[s->count++] = msg;
+    return 0;
 }
 
 static void sess_free(im_sess *s) {
@@ -97,6 +104,7 @@ static void im_persist(im *im) {
         cJSON_AddNumberToObject(o, "id", (double)s->id);
         cJSON_AddStringToObject(o, "name", s->name ? s->name : "");
         cJSON_AddStringToObject(o, "kind", s->kind ? s->kind : "direct");
+        cJSON_AddNumberToObject(o, "discussion_rounds", s->discussion_rounds);
         cJSON *mem = cJSON_AddArrayToObject(o, "members");
         for (size_t j = 0; j < s->n_members; j++)
             cJSON_AddItemToArray(mem, cJSON_CreateString(s->members[j]));
@@ -168,6 +176,12 @@ static void im_load(im *im) {
             s.name = xstrdup(nm && cJSON_IsString(nm) ? nm->valuestring : "");
             kd = cJSON_GetObjectItemCaseSensitive(it, "kind");
             s.kind = xstrdup(kd && cJSON_IsString(kd) ? kd->valuestring : "direct");
+            s.discussion_rounds = !strcmp(s.kind, "group") ? IM_DISCUSSION_DEFAULT_ROUNDS : 1;
+            cJSON *rounds = cJSON_GetObjectItemCaseSensitive(it, "discussion_rounds");
+            if (!strcmp(s.kind, "group") && cJSON_IsNumber(rounds) &&
+                rounds->valuedouble >= 1 && rounds->valuedouble <= IM_DISCUSSION_MAX_ROUNDS &&
+                rounds->valuedouble == (double)rounds->valueint)
+                s.discussion_rounds = rounds->valueint;
             mem = cJSON_GetObjectItemCaseSensitive(it, "members");
             if (mem && cJSON_IsArray(mem)) {
                 int mn = cJSON_GetArraySize(mem);
@@ -272,7 +286,12 @@ int64_t im_create_session(im *im, const char *name) {
 
 int64_t im_create_session_ex(im *im, const char *name, const char *kind, const char **members,
                                  size_t n_members) {
-    if (!im)
+    return im_create_session_discussion(im, name, kind, members, n_members, 0);
+}
+
+int64_t im_create_session_discussion(im *im, const char *name, const char *kind,
+                                     const char **members, size_t n_members, int rounds) {
+    if (!im || rounds < 0 || rounds > IM_DISCUSSION_MAX_ROUNDS)
         return -1;
     mutex_lock(&im->mtx);
     if (im->count == im->cap) {
@@ -291,6 +310,12 @@ int64_t im_create_session_ex(im *im, const char *name, const char *kind, const c
     s->id = im->next_id++;
     s->name = xstrdup(name && *name ? name : "新会话");
     s->kind = xstrdup(kind && *kind ? kind : "direct");
+    s->discussion_rounds = (kind && !strcmp(kind, "group")) ?
+        (rounds ? rounds : IM_DISCUSSION_DEFAULT_ROUNDS) : 1;
+    if (!s->name || !s->kind) {
+        sess_free(s); memset(s, 0, sizeof(*s));
+        mutex_unlock(&im->mtx); return -1;
+    }
     if (members && n_members) {
         s->members = calloc(n_members, sizeof(char *));
         if (s->members) {
@@ -303,12 +328,18 @@ int64_t im_create_session_ex(im *im, const char *name, const char *kind, const c
     s->created_ms = time_now_ms();
     im->count++;
     im_persist(im);
+    int64_t id = s->id;
     mutex_unlock(&im->mtx);
-    return s->id;
+    return id;
 }
 
 int im_session_set_members(im *im, int64_t id, const char **members, size_t n_members) {
-    if (!im || !members || !n_members || n_members>64) return -1;
+    return im_session_configure(im, id, members, n_members, 0);
+}
+
+int im_session_configure(im *im, int64_t id, const char **members, size_t n_members, int rounds) {
+    if (!im || !members || !n_members || n_members>64 || rounds<0 ||
+        rounds>IM_DISCUSSION_MAX_ROUNDS) return -1;
     char **copy=calloc(n_members,sizeof(*copy));
     if (!copy) return -1;
     for (size_t i=0;i<n_members;i++) {
@@ -324,6 +355,7 @@ int im_session_set_members(im *im, int64_t id, const char **members, size_t n_me
         if (!s->kind || strcmp(s->kind,"group")) { result=-2; break; }
         for (size_t j=0;j<s->n_members;j++) free(s->members[j]);
         free(s->members); s->members=copy; s->n_members=n_members;
+        if (rounds) s->discussion_rounds=rounds;
         copy=NULL; im_persist(im); result=1; break;
     }
     mutex_unlock(&im->mtx);
@@ -370,6 +402,7 @@ im_session *im_list_sessions(im *im, size_t *count) {
                 out[i].id = im->sessions[i].id;
                 out[i].name = xstrdup(im->sessions[i].name);
                 out[i].kind = xstrdup(im->sessions[i].kind ? im->sessions[i].kind : "direct");
+                out[i].discussion_rounds = im->sessions[i].discussion_rounds;
                 out[i].channel = im->sessions[i].channel ? xstrdup(im->sessions[i].channel) : NULL;
                 out[i].created_ms = im->sessions[i].created_ms;
                 if (im->sessions[i].n_members) {
@@ -461,8 +494,48 @@ int64_t im_send_ex(im *im, int64_t session_id, const char *role, const char *con
         return -1;
     }
 
-    id = im->next_id++;
-    sess_add_msg(s, id, role ? role : "user", sender, content, time_now_ms());
+    id = im->next_id;
+    if (sess_add_msg(s, id, role ? role : "user", sender, content, time_now_ms()) < 0) {
+        mutex_unlock(&im->mtx);
+        return -1;
+    }
+    im->next_id++;
+    im_persist(im);
+    mutex_unlock(&im->mtx);
+    return id;
+}
+
+int64_t im_send_agent_reply(im *im, int64_t session_id, int64_t trigger_id,
+                            const char *content, const char *sender) {
+    if (!im || !content || !sender || !*sender || trigger_id <= 0)
+        return -1;
+    mutex_lock(&im->mtx);
+    im_sess *s = find_sess(im, session_id);
+    if (!s) {
+        mutex_unlock(&im->mtx);
+        return -1;
+    }
+    if (!s->kind || strcmp(s->kind, "group")) {
+        mutex_unlock(&im->mtx);
+        return -1;
+    }
+    int64_t latest_user = 0;
+    for (size_t i = s->count; i > 0; i--) {
+        if (!strcmp(s->msgs[i-1].role, "user")) {
+            latest_user = s->msgs[i-1].id;
+            break;
+        }
+    }
+    if (latest_user != trigger_id) {
+        mutex_unlock(&im->mtx);
+        return -2;
+    }
+    int64_t id = im->next_id;
+    if (sess_add_msg(s, id, "assistant", sender, content, time_now_ms()) < 0) {
+        mutex_unlock(&im->mtx);
+        return -1;
+    }
+    im->next_id++;
     im_persist(im);
     mutex_unlock(&im->mtx);
     return id;
@@ -498,6 +571,7 @@ char *im_sessions_json(im *im) {
         cJSON_AddNumberToObject(o, "id", (double)s->id);
         cJSON_AddStringToObject(o, "name", s->name ? s->name : "");
         cJSON_AddStringToObject(o, "kind", s->kind ? s->kind : "direct");
+        cJSON_AddNumberToObject(o, "discussion_rounds", s->discussion_rounds);
         cJSON *mem = cJSON_AddArrayToObject(o, "members");
         for (size_t j = 0; j < s->n_members; j++)
             cJSON_AddItemToArray(mem, cJSON_CreateString(s->members[j]));

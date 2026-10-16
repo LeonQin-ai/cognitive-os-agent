@@ -173,6 +173,12 @@ The embedded console supports persistent chat sessions, observable agent runs,
 task steering, multi-agent flows, scheduled jobs, and local Skills/MCP/plugins.
 Screenshots below use a local demo configuration and mock execution.
 
+Agent groups support reciprocal discussions: register role-based agents, select
+members, and send a topic. Each role sees the others' latest contributions across
+3 rounds by default (configurable from 1 to 5). The left-side status shows the
+speaker and round, with a stop control. A new human message takes over the older
+discussion; unanimous completion can end it early. See the [group API](backend/README.md#im-bridge-and-agent-groups).
+
 ![Current chat console](screenshots/ui.png)
 
 Execution history shows model and tool milestones, touched files, timing, and
@@ -516,7 +522,7 @@ Point it at a real LLM (or run fully offline with the mock provider):
 Quality gate: CI builds and tests on Windows (zig cc), Linux (gcc and AddressSanitizer), macOS Apple Silicon, and macOS Intel.
 
 ```
-unit:      3129 passed, 0 failed   (local Windows verification, 2026-10-14)
+unit:      3331 passed, 0 failed   (local Windows verification, 2026-10-16)
 scenario:  91 checks, 0 failed     (HTTP server, plugins, MCP stdio, flows)
 e2e:       E2E PASS                (real HTTP, both protocols)
 adapters:  ADAPTER PASS            (chat + SSE stream, openai + anthropic)
@@ -530,6 +536,13 @@ The image-wait regression also covers a permanently silent provider and a respon
 
 ```bash
 python backend/tests/test_vision_wait_e2e.py
+```
+
+Group discussion verification (2026-10-16, local Windows): **109 targeted native checks**, **3331 full-suite checks**, reciprocal three-round HTTP exchanges, one-round compatibility, unanimous/partial completion, Agent failure, cancellation, message takeover, settings/restart persistence, and browser controls at 390px all passed. The HTTP regressions use a local deterministic provider with real Runtime execution; they do not measure model discussion quality.
+
+```bash
+python backend/tests/test_im_discussion_e2e.py
+python backend/tests/test_im_members_e2e.py
 ```
 
 ### Running the tests yourself
@@ -641,7 +654,7 @@ Claude Code and Codex are polished end-user agent products driven by frontier mo
 | Multi-agent | subagent tool | — | — | **Flow DAG compiler, per-agent isolation (own memory / context / tools / policy)** |
 | Extensions | MCP + plugins | MCP | function calling | **MCP + self-distilling skills (successful sequences become reusable) + native / WASM sandboxed plugins** |
 | Model lock-in | Anthropic | OpenAI | DeepSeek | **any OpenAI-compatible / Anthropic / local (Ollama) / offline mock** |
-| Verifiable offline | needs API access | needs API access | needs API access | **3129 unit + 91 scenario + e2e/adapter suites run keyless against the mock provider, ASAN-clean** |
+| Verifiable offline | needs API access | needs API access | needs API access | **3331 unit + 91 scenario + e2e/adapter suites run keyless against the mock provider, ASAN-clean** |
 
 The point of the comparison is not "better product" — it is that **policy enforcement, transactions, memory lifecycle, scheduling and isolation are runtime services here, not prompt conventions or product features**. That is what lets the same runtime score 78.79% on GAIA and enforce policy 4/4 with a mid-tier model.
 

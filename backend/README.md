@@ -274,9 +274,14 @@ environment to remove its managed credential.
 Register agents in **多 Agent & Flow**, then select them from the IM group's
 Agent checkboxes. Use **成员** on an existing group to change its roster;
 `PUT /v1/im/sessions/<id>/members` accepts `{"members":["alpha","beta"]}`.
-Creation and updates require 1–64 unique registered names. Each user message queues a bounded round: every
-registered member reads the room transcript and replies once in member order.
-The next user message starts the next round. Replies persist in the room,
+Creation and updates require 1–64 unique registered names. Each user message starts
+a bounded discussion: every registered member reads the latest room transcript
+and contributes in member order, then earlier speakers can respond to later
+speakers in the next pass. Groups default to **3 rounds**, configurable from
+**1 to 5** using **讨论轮数** while creating or editing members. One round retains
+the original single-pass behavior. Both creation and `PUT .../members` accept
+`{"members":["alpha","beta"],"discussion_rounds":3}`; settings persist and are
+snapshotted when a discussion starts. Replies persist in the room,
 appear over WebSocket, and are sent to its linked external channel. Agent
 conversation state is isolated by room and agent. Legacy empty groups can be
 repaired through **成员**. Sending to an empty group or a group with removed
@@ -290,6 +295,27 @@ same path. Other external adapters can post an authenticated JSON body
 response includes the queued `task_id` (`-3` means no agent is bound); task
 state is available through `/v1/tasks/<id>`. The bridge does not treat agent
 replies as new user messages, so agents cannot trigger an endless loop.
+
+The left group column shows the current speaker and round. **停止讨论** uses
+`DELETE /v1/tasks/<task_id>`; after cancellation, a late model response is
+discarded. A new human message takes over the previous discussion, whose task
+becomes `CANCELLED`, and older queued topics are superseded. Discussion progress
+is delivered through `im.run` WebSocket events and `/v1/tasks/<task_id>` polling
+(`discussion_round`, `discussion_rounds`, `agent`, `im_status`, `reason`).
+Agent failures stop the discussion with `FAILED`, keeping earlier contributions.
+
+The role prompt asks agents to answer one another, raise questions and refine
+their conclusions. A role may append `[[DISCUSSION_DONE]]` to its final response
+to vote for ending the discussion; the marker is removed before publishing.
+Early completion requires **every member to vote in the same complete round**.
+Otherwise the configured limit ends the discussion. This is a coordination
+signal, not proof that a proposed technical solution is correct. Context includes
+the latest 128 room messages plus the original human task; model quality and
+context limits still affect the depth of the conversation.
+
+Run `python tests/test_im_discussion_e2e.py` for reciprocal replies, consensus,
+failure, cancellation, takeover, strict settings and restart regressions. The
+fixture is a local deterministic model with real Runtime/API execution.
 
 The web console's **外观与背景** control in the sidebar (and browser header)
 accepts a local PNG, JPEG, WebP or GIF background up to 10 MB. The image is

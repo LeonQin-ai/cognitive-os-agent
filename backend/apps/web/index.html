@@ -334,6 +334,12 @@
 
   /* ---------- IM ---------- */
   .im-layout{display:grid; grid-template-columns:250px 1fr; gap:14px; align-items:start}
+  .im-layout>div{min-width:0}
+  .im-run-controls{display:flex;align-items:center;gap:8px;padding:9px 10px;margin-bottom:10px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--card);position:sticky;top:0;z-index:2}
+  #im-run-status{flex:1;min-width:0;overflow-wrap:anywhere;font-size:12px;line-height:1.55}
+  .im-rounds{display:flex;align-items:center;gap:8px;font-size:12px;margin:0 0 8px}
+  .im-rounds[hidden]{display:none}
+  .im-rounds select{flex:1;min-width:0;font-size:12px}
   .im-sessions{display:flex; flex-direction:column; gap:6px; max-height:calc(100vh - 260px); overflow-y:auto; padding-right:2px}
   .im-session{padding:9px 12px; border:1px solid var(--border); border-radius:var(--radius-sm); cursor:pointer; font-size:12.5px; background:var(--bg); transition:all var(--tr-dur); display:flex; justify-content:space-between; align-items:center; gap:6px}
   .im-session:hover{border-color:var(--accent)}
@@ -348,6 +354,7 @@
   .im-msg .meta{font-size:10.5px; opacity:.75; margin-top:3px}
   .im-input-row{display:flex; gap:8px; margin-top:10px}
   .im-input-row input{flex:1}
+  .im-input-row input,.im-layout .row input{min-width:0}
   @media (max-width:760px){.im-layout{grid-template-columns:1fr}}
 
   /* ---------- 对话：多会话标签页 ---------- */
@@ -1424,6 +1431,10 @@ panels.im = `
   <div class="card">
     <div class="im-layout">
       <div>
+        <div class="im-run-controls">
+          <div id="im-run-status" class="muted" role="status" aria-live="polite">选择群聊后开始讨论</div>
+          <button id="im-stop" class="sec sm" onclick="imStop()" hidden>停止讨论</button>
+        </div>
         <div class="row" style="margin:0 0 8px">
           <input id="im-new" type="text" placeholder="会话名称" style="flex:1">
           <button id="im-create" onclick="imCreate()" aria-label="创建会话">＋</button>
@@ -1432,11 +1443,17 @@ panels.im = `
           <input type="checkbox" id="im-group" style="width:16px;height:16px;accent-color:var(--accent)"> 群聊
         </label>
         <div id="im-members" role="group" aria-label="群聊 Agent" style="margin-bottom:6px;max-height:180px;overflow:auto" hidden></div>
+        <label id="im-rounds-field" class="im-rounds" hidden>讨论轮数
+          <select id="im-rounds" aria-label="讨论轮数">
+            <option value="1">1 轮 · 依次回复</option><option value="2">2 轮</option>
+            <option value="3" selected>3 轮 · 默认</option><option value="4">4 轮</option><option value="5">5 轮 · 上限</option>
+          </select>
+        </label>
         <div id="im-members-edit" hidden><span id="im-members-title"></span>
           <button class="sec sm" onclick="imSaveMembers()">保存成员</button>
           <button class="sec sm" onclick="imCancelMembers()">取消</button></div>
         <div id="im-member-status" class="hint" role="status" aria-live="polite"></div>
-        <div class="hint" id="im-agent-hint" style="margin:0 0 8px" hidden>群内已注册的 Agent 会依次回复用户消息；每条消息最多触发每位 Agent 一次。发送下一条消息即可开始下一轮。</div>
+        <div class="hint" id="im-agent-hint" style="margin:0 0 8px" hidden>Agent 会阅读其他角色的发言，依次回应、提问并讨论，默认 3 轮，最多 5 轮。全员达成共识可提前结束；发送新消息会接管当前讨论。成员与轮数修改从下一条新消息生效。</div>
         <select id="im-channel" style="margin-bottom:10px;font-size:12.5px">
           <option value="">关联外部渠道（选填）</option>
         </select>
@@ -1451,9 +1468,8 @@ panels.im = `
         <div class="im-thread" id="im-thread">
           <span class="muted" style="font-size:12px">选择一个会话开始聊天</span>
         </div>
-        <div id="im-run-status" class="muted" style="min-height:22px;padding:3px 2px;font-size:12px" aria-live="polite"></div>
         <div class="im-input-row">
-          <input id="im-input" type="text" placeholder="发送消息，群内 Agent 将依次回应；Enter 发送">
+          <input id="im-input" type="text" placeholder="发送话题，让 Agent 相互讨论；Enter 发送">
           <button onclick="imSend()">Send</button>
         </div>
       </div>
@@ -2677,18 +2693,66 @@ let WS = null;
 let IM_CHANNELS = [];
 let IM_AGENTS = [], IM_SESSIONS = [], IM_EDITING = null;
 const IM_RUN_STATE = new Map();
+const IM_SESSION_TASK = new Map(), IM_RUN_POLL = new Set();
+
+function imRenderRunStatus(){
+  const el=$('im-run-status'), stop=$('im-stop'); if(!el) return;
+  const task_id=IM_SESSION_TASK.get(IM_ACTIVE), state=IM_RUN_STATE.get(task_id);
+  if(!state){ el.textContent=IM_ACTIVE===null?'选择群聊后开始讨论':'发送话题，让群内 Agent 开始讨论'; if(stop) stop.hidden=true; return; }
+  const active=state.status==='queued'||state.status==='running';
+  const round=state.discussion_round>0?'第 '+state.discussion_round+'/'+(state.discussion_rounds||3)+' 轮 · ':'';
+  const done={consensus:'全员已达成共识',round_limit:'已完成设定轮数'};
+  el.textContent=state.error || (state.stopping?'正在停止讨论，等待当前操作结束…':
+    state.status==='queued'?'已排队，等待 Agent…':
+    state.status==='running'?round+(state.agent||'Agent')+' 正在讨论…':
+    state.status==='failed'?'讨论执行失败，请查看任务 #'+task_id:
+    state.status==='timeout'?'讨论执行超时，请查看任务 #'+task_id:
+    state.status==='cancelled'?(state.reason==='new_message'?'新消息已接管本次讨论':'讨论已停止'):
+    (done[state.reason]||'讨论已完成'));
+  if(stop){stop.hidden=!active;stop.disabled=!!state.stopping;stop.textContent=state.stopping?'停止中…':'停止讨论';}
+}
 
 function imRunUpdate(m){
-  const rank = {queued:1,running:2,done:3,failed:3};
+  if(!Number.isInteger(m.task_id)||m.task_id<0||!Number.isInteger(m.session_id)) return;
+  const rank = {queued:1,running:2,done:3,failed:3,cancelled:3,timeout:3};
+  if(!rank[m.status]) return;
   const previous = IM_RUN_STATE.get(m.task_id);
-  if(previous && previous.rank > (rank[m.status] || 0)) return;
-  IM_RUN_STATE.set(m.task_id,{rank:rank[m.status] || 0,session_id:m.session_id,status:m.status,agent:m.agent});
+  if(previous && (previous.rank>rank[m.status] || (previous.rank===2&&rank[m.status]===2&&(previous.discussion_round||0)>(m.discussion_round||0)))) return;
+  const state={...previous,...m,rank:rank[m.status]};
+  if(rank[m.status]===3){state.stopping=false;delete state.error;}
+  IM_RUN_STATE.set(m.task_id,state);
+  const latest=IM_SESSION_TASK.get(m.session_id);
+  if(latest===undefined||m.task_id>latest) IM_SESSION_TASK.set(m.session_id,m.task_id);
   if(IM_RUN_STATE.size > 100) IM_RUN_STATE.delete(IM_RUN_STATE.keys().next().value);
-  if(IM_ACTIVE !== m.session_id) return;
-  const el = $('im-run-status'); if(!el) return;
-  el.textContent = m.status === 'queued' ? '已排队，等待 Agent…' :
-    m.status === 'running' ? ((m.agent || 'Agent') + ' 正在回应…') :
-    m.status === 'failed' ? '本轮执行失败，请查看任务 #' + m.task_id : '本轮已完成';
+  if(IM_ACTIVE===m.session_id) imRenderRunStatus();
+  if(state.rank<3) imWatchRun(m.task_id);
+}
+
+async function imWatchRun(task_id){
+  if(IM_RUN_POLL.has(task_id)) return;
+  IM_RUN_POLL.add(task_id);
+  try {
+    while(true){
+      await new Promise(resolve=>setTimeout(resolve,1000));
+      const state=IM_RUN_STATE.get(task_id);
+      if(!state||state.rank===3||IM_SESSION_TASK.get(state.session_id)!==task_id) return;
+      const r=await call('GET','/v1/tasks/'+task_id), task=r.obj;
+      if(!task||r.status!==200) continue;
+      const terminal={DONE:'done',FAILED:'failed',CANCELLED:'cancelled',TIMEOUT:'timeout'}[task.status];
+      const status=terminal||task.im_status||({QUEUED:'queued',PENDING:'queued',RUNNING:'running'}[task.status]);
+      if(status) imRunUpdate({...state,...task,task_id,session_id:state.session_id,status});
+      if(IM_ACTIVE===state.session_id&&IM_SESSION_TASK.get(state.session_id)===task_id) await renderImThread();
+    }
+  } finally {IM_RUN_POLL.delete(task_id);}
+}
+
+async function imStop(){
+  const task_id=IM_SESSION_TASK.get(IM_ACTIVE), state=IM_RUN_STATE.get(task_id);
+  if(!state||state.rank===3||state.stopping) return;
+  state.stopping=true; delete state.error; imRenderRunStatus();
+  const r=await call('DELETE','/v1/tasks/'+task_id);
+  if(r.status<200||r.status>=300){state.stopping=false;state.error=(r.obj&&r.obj.error)||'停止失败，请重试';}
+  imRenderRunStatus();
 }
 
 function imSelectedMembers(){
@@ -2727,6 +2791,7 @@ function imCancelMembers(){
   if($('im-members-edit')) $('im-members-edit').hidden=true;
   if($('im-create')) $('im-create').disabled=false;
   if($('im-group')) $('im-group').disabled=false;
+  if($('im-rounds')) $('im-rounds').value='3';
   imRenderMemberOptions([]);
 }
 
@@ -2734,8 +2799,9 @@ function imEditMembers(id){
   const session=IM_SESSIONS.find(s=>s.id===id); if(!session) return;
   IM_EDITING=id; $('im-group').checked=true; $('im-group').disabled=true;
   $('im-members').hidden=false; $('im-agent-hint').hidden=false;
+  $('im-rounds-field').hidden=false; $('im-rounds').value=String(session.discussion_rounds||3);
   $('im-create').disabled=true; $('im-members-edit').hidden=false;
-  $('im-members-title').textContent='编辑 '+session.name+' 的 Agent（下一轮生效）';
+  $('im-members-title').textContent='编辑 '+session.name+' 的成员与轮数（下一条新消息生效）';
   $('im-member-status').textContent=''; imRenderMemberOptions(session.members || []);
 }
 
@@ -2749,9 +2815,10 @@ function imValidateSelected(){
 
 async function imSaveMembers(){
   const id=IM_EDITING, members=imValidateSelected(); if(id===null || !members) return;
-  const r=await call('PUT','/v1/im/sessions/'+id+'/members',{members});
+  const discussion_rounds=Number($('im-rounds').value);
+  const r=await call('PUT','/v1/im/sessions/'+id+'/members',{members,discussion_rounds});
   if(r.status!==200){ $('im-member-status').textContent=(r.obj && r.obj.error)||'成员保存失败，请重试'; return; }
-  imCancelMembers(); $('im-member-status').textContent='群成员已保存'; await renderIm();
+  imCancelMembers(); $('im-member-status').textContent='群成员与讨论轮数已保存'; await renderIm();
 }
 
 async function imCreate(){
@@ -2761,7 +2828,7 @@ async function imCreate(){
   const members = isGroup ? imValidateSelected():[];
   if(isGroup && !members) return;
   const body = {name: name, kind: isGroup ? 'group' : 'direct'};
-  if(isGroup && members.length) body.members = members;
+  if(isGroup && members.length){body.members=members;body.discussion_rounds=Number($('im-rounds').value);}
   const sel = $('im-channel');
   if(sel && sel.value){ body.channel = sel.value; }
   const r=await call('POST', '/v1/im/sessions', body);
@@ -2848,10 +2915,7 @@ function channelSendTest(name){
 
 function imSelect(id){
   IM_ACTIVE = id;
-  const st = $('im-run-status'); if(st) st.textContent = '';
-  let latest = null;
-  for(const [task_id,state] of IM_RUN_STATE) if(state.session_id === id) latest = {task_id,...state};
-  if(latest) imRunUpdate(latest);
+  imRenderRunStatus();
   document.querySelectorAll('.im-session').forEach(s => s.classList.toggle('on', s.dataset.id === String(id)));
   renderImThread();
 }
@@ -2868,7 +2932,7 @@ function appendImMessage(m){
   const meta = document.createElement('div');
   meta.className = 'meta';
   const who = m.sender || (m.role === 'user' ? 'user' : 'assistant');
-  meta.textContent = who + ' · ' + time;
+  meta.textContent = who + (m.discussion_round?' · 第 '+m.discussion_round+' 轮':'') + ' · ' + time;
   div.appendChild(meta);
   t.appendChild(div);
   t.scrollTop = t.scrollHeight;
@@ -2882,7 +2946,9 @@ async function renderImThread(){
     return;
   }
   t.innerHTML = '<span class="muted"><span class="spin"></span> 加载中…</span>';
-  const r = await call('GET', '/v1/im/sessions/' + IM_ACTIVE + '/messages');
+  const session=IM_ACTIVE;
+  const r = await call('GET', '/v1/im/sessions/' + session + '/messages');
+  if(IM_ACTIVE!==session||!t.isConnected) return;
   t.innerHTML = '';
   if(Array.isArray(r.obj)){
     r.obj.forEach(m => appendImMessage(m));
@@ -2905,12 +2971,13 @@ async function renderIm(){
   if(g && !g.dataset.bound){
     imCancelMembers();
     g.dataset.bound = '1';
-    g.addEventListener('change', () => { const el = $('im-members'); if(el) el.hidden = !g.checked; const hint = $('im-agent-hint'); if(hint) hint.hidden = !g.checked; });
+    g.addEventListener('change', () => { ['im-members','im-agent-hint','im-rounds-field'].forEach(id=>{const el=$(id);if(el)el.hidden=!g.checked;}); });
   }
   await imLoadAgents();
   const r = await call('GET', '/v1/im/sessions');
   const sessions = (r.obj && Array.isArray(r.obj.sessions)) ? r.obj.sessions : [];
   IM_SESSIONS=sessions;
+  imRenderRunStatus();
   list.innerHTML = '';
   if(!sessions.length){
     list.innerHTML = '<span class="muted" style="font-size:12px">暂无会话，创建第一个吧</span>';
@@ -2925,7 +2992,7 @@ async function renderIm(){
     const name = document.createElement('span');
     name.className = 'name';
     name.textContent = (s.name || ('#' + s.id)) + ' · ' + (s.messages || 0);
-    if(isGroup) name.textContent += ' · ' + ((s.members || []).length) + '人';
+    if(isGroup) name.textContent += ' · ' + ((s.members || []).length) + '人 · ' + (s.discussion_rounds||3) + '轮';
     const badge = document.createElement('span');
     badge.className = 'badge ' + (isGroup ? 'badge-ok' : 'badge-warn');
     badge.textContent = isGroup ? '群' : '单';
@@ -2966,6 +3033,10 @@ async function imSend(){
   const session=IM_ACTIVE;
   const r=await call('POST', '/v1/im/sessions/' + session + '/messages', {role:'user', content, sender});
   if(!r.obj || !r.obj.ok){ $('im-run-status').textContent=(r.obj && r.obj.error)||'消息发送失败，请重试'; return; }
+  if(Number.isInteger(r.obj.task_id)&&r.obj.task_id>=0){
+    const room=IM_SESSIONS.find(s=>s.id===session);
+    imRunUpdate({task_id:r.obj.task_id,session_id:session,status:'queued',discussion_round:0,discussion_rounds:room?.discussion_rounds||3});
+  }
   if(IM_ACTIVE===session){ if(input.value.trim()===content) input.value=''; renderImThread(); }
 }
 

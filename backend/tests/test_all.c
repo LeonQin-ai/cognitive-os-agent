@@ -6072,20 +6072,67 @@ static void test_im_agent_round(void) {
     CHECK(t && t->status == TS_DONE);
     size_t n = 0;
     im_message *messages = im_messages(ctx.im, room, &n);
-    CHECK(n == 3);
-    if (n == 3) {
+    CHECK(n == 7);
+    if (n == 7) {
         CHECK_STR(messages[0].sender, "host");
         CHECK_STR(messages[1].sender, "wolf");
         CHECK_STR(messages[2].sender, "seer");
         CHECK_STR(messages[1].role, "assistant");
+        CHECK_STR(messages[3].sender, "wolf");
+        CHECK_STR(messages[4].sender, "seer");
+        CHECK(im_dispatch(&ctx, room, messages[1].id) == -4);
     }
     im_messages_free(messages, n);
     runtime_shutdown(&ctx);
     im *reloaded = im_new(root);
     messages = im_messages(reloaded, room, &n);
-    CHECK(n == 3);
+    CHECK(n == 7);
     im_messages_free(messages, n);
     im_free(reloaded);
+}
+
+static void test_im_discussion_limits(void) {
+    section("im discussion limits and stale replies");
+    const char *root = "state-im-discussion-test";
+    char path[256]; snprintf(path, sizeof(path), "%s/im/sessions.json", root); fs_remove(path);
+    config cfg = {0}; cfg.state_root = root; cfg.workspace = "."; cfg.provider = "mock";
+    runtime_ctx ctx;
+    if (init(&ctx, &cfg) != 0) { CHECK(0); return; }
+    char names[13][24]; const char *members[13];
+    for (int i = 0; i < 13; ++i) {
+        snprintf(names[i], sizeof(names[i]), "discussant%d", i); members[i] = names[i];
+        CHECK(agent_pool_add(ctx.agents, members[i], "Design reviewer") >= 0);
+    }
+    int64_t room = im_create_session_discussion(ctx.im, "large discussion", "group", members, 13, 5);
+    CHECK(room > 0);
+    CHECK(im_create_session_discussion(ctx.im, "invalid", "group", members, 13, 6) < 0);
+    CHECK(im_session_configure(ctx.im, room, members, 13, -1) < 0);
+    int64_t first = im_send(ctx.im, room, "user", "Share a concrete observation.");
+    CHECK(im_send_agent_reply(ctx.im, room, first, "Earlier observation", members[0]) > 0);
+    int64_t second = im_send(ctx.im, room, "user", "Discuss the final design.");
+    CHECK(im_send_agent_reply(ctx.im, room, first, "Stale observation", members[0]) == -2);
+    int64_t id = im_dispatch(&ctx, room, second);
+    CHECK(id >= 0);
+    CHECK(scheduler_wait_idle(ctx.scheduler, 30000) == 0);
+    task *t = scheduler_get(ctx.scheduler, id);
+    CHECK(t && t->status == TS_DONE);
+    size_t count = 0;
+    im_message *messages = im_messages(ctx.im, room, &count);
+    CHECK(count == 68); /* 3 existing messages plus 13*5 replies (> old 64 limit). */
+    for (size_t i = 3; i < count; ++i) CHECK_STR(messages[i].sender, members[(i-3)%13]);
+    im_messages_free(messages, count);
+    char *progress = t ? task_progress_copy(t) : NULL;
+    cJSON *o = progress ? cJSON_Parse(progress) : NULL;
+    CHECK(cJSON_GetNumberValue(cJSON_GetObjectItemCaseSensitive(o, "discussion_round")) == 5);
+    CHECK(cJSON_GetNumberValue(cJSON_GetObjectItemCaseSensitive(o, "discussion_rounds")) == 5);
+    cJSON_Delete(o); free(progress);
+    CHECK(im_session_configure(ctx.im, room, members, 2, 1) == 1);
+    CHECK(im_session_set_members(ctx.im, room, members, 2) == 1);
+    runtime_shutdown(&ctx);
+    im *store = im_new(root);
+    size_t n = 0; im_session *rooms = im_list_sessions(store, &n);
+    CHECK(n == 1 && rooms[0].discussion_rounds == 1 && rooms[0].n_members == 2);
+    im_sessions_free(rooms, n); im_free(store);
 }
 
 /* ---------- plugin intelligence: AI plugin generation (mock mode) ---------- */
@@ -8010,6 +8057,11 @@ int main(int argc, char **argv) {
         printf("\n%d passed, %d failed\n", g_pass, g_fail);
         return g_fail ? 1 : 0;
     }
+    if (argc == 2 && strcmp(argv[1], "--im-discussion") == 0) {
+        test_im_agent_round(); test_im_discussion_limits();
+        printf("\n%d passed, %d failed\n", g_pass, g_fail);
+        return g_fail ? 1 : 0;
+    }
     printf("cognitive-os-agent unit tests\n");
     test_logging();
     test_util();
@@ -8108,6 +8160,7 @@ int main(int argc, char **argv) {
     test_im_search();
     test_im_bridge();
     test_im_agent_round();
+    test_im_discussion_limits();
     test_plugin_generate();
     test_task();
     test_tasklog();
