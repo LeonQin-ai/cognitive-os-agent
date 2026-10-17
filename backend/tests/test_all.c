@@ -6914,10 +6914,12 @@ static cJSON *api_request_json(uint16_t port, const char *method, const char *pa
 }
 
 typedef struct selected_model_fixture {
-    atomic_int selected, stale, fail;
+    atomic_int selected, stale, fail, delay_ms;
 } selected_model_fixture;
 static int selected_model_http(const http_request *req,http_response *resp,void *ud) {
     selected_model_fixture *f=ud;
+    int delay=atomic_load(&f->delay_ms);
+    if (delay) time_sleep_ms(delay);
     char *body=malloc(req->body_len+1);
     if (!body) { resp->status=500; return 0; }
     memcpy(body,req->body,req->body_len); body[req->body_len]=0;
@@ -6999,6 +7001,61 @@ static void test_selected_model_routing(void) {
     atomic_store(&f.fail,1);
     assert_chat_model(&ctx,"nvidia/nemotron-3.5-super-vl:free",0);
     CHECK(atomic_load(&f.selected)==8 && atomic_load(&f.stale)==1); /* five attempts, no paid summary */
+    http_server_stop(ctx.http); thread_join(api_thread); runtime_shutdown(&ctx);
+    http_server_stop(provider); thread_join(provider_thread); http_server_free(provider);
+}
+
+static cJSON *wait_probe_result(int64_t id) {
+    char path[128]; snprintf(path,sizeof(path),"/v1/config/llm/test?request_id=%lld",(long long)id);
+    for (int i=0;i<100;i++) {
+        cJSON *j=api_request_json(18236,"GET",path,NULL,200);
+        if (!cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j,"pending"))) return j;
+        cJSON_Delete(j); time_sleep_ms(20);
+    }
+    CHECK(0); return NULL;
+}
+static void test_model_probe_lifecycle(void) {
+    section("model probe correlation and retained verdicts");
+    selected_model_fixture f={0}; atomic_store(&f.delay_ms,250);
+    http_server *provider=http_server_new_bind("127.0.0.1",18235); CHECK(provider!=NULL);
+    if (!provider) return;
+    http_server_route(provider,"POST","/v1/chat/completions",selected_model_http,&f);
+    thread_t *provider_thread=thread_create(th_serve_http,provider);
+    config cfg={0}; cfg.state_root="state-test/probe-lifecycle"; cfg.workspace=cfg.state_root;
+    cfg.provider="mock"; cfg.http_port=18236; cfg.workers=1;
+    runtime_ctx ctx;
+    if (init(&ctx,&cfg)!=0) { CHECK(0); http_server_stop(provider); thread_join(provider_thread); http_server_free(provider); return; }
+    thread_t *api_thread=thread_create(th_serve_ctx,&ctx); time_sleep_ms(100);
+    const char *body="{\"provider\":\"openai\",\"base_url\":\"http://127.0.0.1:18235/v1\","
+        "\"model\":\"nvidia/nemotron-3.5-super-vl:free\",\"api_key\":\"fixture-key\"}";
+    cJSON *j=api_request_json(18236,"POST","/v1/config/llm/test",body,200);
+    cJSON *value=cJSON_GetObjectItemCaseSensitive(j,"request_id");
+    int64_t id=cJSON_IsNumber(value) ? (int64_t)value->valuedouble : 0;
+    CHECK(id>0); cJSON_Delete(j);
+    j=api_request_json(18236,"POST","/v1/config/llm/test","{\"provider\":\"mock\"}",409);
+    CHECK(cJSON_IsString(cJSON_GetObjectItemCaseSensitive(j,"error"))); cJSON_Delete(j);
+    j=wait_probe_result(id);
+    CHECK(cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j,"ok")));
+    value=cJSON_GetObjectItemCaseSensitive(j,"model");
+    CHECK(cJSON_IsString(value) && !strcmp(value->valuestring,"nvidia/nemotron-3.5-super-vl:free"));
+    char *first=j ? cJSON_PrintUnformatted(j) : NULL; cJSON_Delete(j);
+    j=wait_probe_result(id); char *again=j ? cJSON_PrintUnformatted(j) : NULL;
+    CHECK(first && again && !strcmp(first,again)); free(first); free(again); cJSON_Delete(j);
+    CHECK(atomic_load(&f.selected)==1);
+    atomic_store(&f.delay_ms,0); atomic_store(&f.fail,1);
+    j=api_request_json(18236,"POST","/v1/config/llm/test",body,200);
+    value=cJSON_GetObjectItemCaseSensitive(j,"request_id");
+    int64_t next=cJSON_IsNumber(value) ? (int64_t)value->valuedouble : 0;
+    CHECK(next>id); cJSON_Delete(j);
+    char path[128]; snprintf(path,sizeof(path),"/v1/config/llm/test?request_id=%lld",(long long)id);
+    j=api_request_json(18236,"GET",path,NULL,409); cJSON_Delete(j);
+    j=wait_probe_result(next); value=cJSON_GetObjectItemCaseSensitive(j,"error");
+    CHECK(cJSON_IsString(value) && strstr(value->valuestring,"openai http 503") && strstr(value->valuestring,"fixture provider unavailable"));
+    cJSON_Delete(j);
+    j=api_request_json(18236,"GET","/v1/config/llm/test",NULL,200);
+    CHECK(cJSON_IsFalse(cJSON_GetObjectItemCaseSensitive(j,"ok"))); cJSON_Delete(j);
+    CHECK(atomic_load(&f.selected)==2);
+    CHECK(!strcmp(config_get_str(ctx.config,"llm.provider",""),"mock"));
     http_server_stop(ctx.http); thread_join(api_thread); runtime_shutdown(&ctx);
     http_server_stop(provider); thread_join(provider_thread); http_server_free(provider);
 }
@@ -8213,6 +8270,10 @@ static void test_crash_journal(void) {
 }
 
 int main(int argc, char **argv) {
+    if (argc==2 && !strcmp(argv[1],"--model-probe")) {
+        test_model_probe_lifecycle();
+        printf("%d passed, %d failed\n",g_pass,g_fail); return g_fail?1:0;
+    }
     if (argc==2 && !strcmp(argv[1],"--selected-model")) {
         test_selected_model_routing();
         printf("%d passed, %d failed\n",g_pass,g_fail); return g_fail?1:0;
@@ -8443,6 +8504,7 @@ int main(int argc, char **argv) {
     test_audit();
     test_llm_adapters_http();
     test_selected_model_routing();
+    test_model_probe_lifecycle();
     test_http_capacity();
     test_http_install_auth();
     test_http_api();

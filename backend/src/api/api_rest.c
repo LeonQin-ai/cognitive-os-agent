@@ -2455,7 +2455,10 @@ typedef struct {
 } llm_probe_cfg;
 
 static struct {
-    volatile int phase; /* 0 = idle, 1 = running, 2 = result ready */
+    atomic_int phase; /* release/acquire publishes the worker's result */
+    unsigned long long id;
+    long long started_ms, finished_ms;
+    char model[128];
     int ok;
     char reply[512];
 } g_llm_probe;
@@ -2495,8 +2498,11 @@ static void llm_probe_thread(void *arg) {
         free(lr.error);
         llm_destroy(nl);
     }
+    log_info("model probe model=%s result=%s elapsed_ms=%lld",cfg->model,
+             g_llm_probe.ok ? "ok" : g_llm_probe.reply,(long long)time_now_ms()-g_llm_probe.started_ms);
     free(cfg);
-    g_llm_probe.phase = 2; /* result fields written before the flag — display-grade */
+    g_llm_probe.finished_ms=(long long)time_now_ms();
+    atomic_store_explicit(&g_llm_probe.phase,2,memory_order_release);
 }
 
 static int h_config_llm_test(const http_request *req, http_response *resp, void *ud) {
@@ -2510,16 +2516,32 @@ static int h_config_llm_test(const http_request *req, http_response *resp, void 
         return 0;
 
     if (strcmp(req->method, "GET") == 0) {
+        char wanted[32]; query_param(req,"request_id",wanted,sizeof(wanted));
+        if (*wanted) {
+            char *end=NULL; unsigned long long id=strtoull(wanted,&end,10);
+            if (!id || !end || *end || id!=g_llm_probe.id) {
+                resp->status=409;
+                http_resp_json(resp,"{\"pending\":false,\"error\":\"model test request was replaced; start a new test\"}");
+                return 0;
+            }
+        }
+        int phase=atomic_load_explicit(&g_llm_probe.phase,memory_order_acquire);
         o = cJSON_CreateObject();
-        if (g_llm_probe.phase == 1) {
+        cJSON_AddNumberToObject(o,"request_id",(double)g_llm_probe.id);
+        cJSON_AddStringToObject(o,"model",g_llm_probe.model);
+        if (phase) cJSON_AddNumberToObject(o,"elapsed_ms",(double)((phase==1 ?
+            (long long)time_now_ms() : g_llm_probe.finished_ms)-g_llm_probe.started_ms));
+        if (phase == 1) {
             cJSON_AddBoolToObject(o, "pending", 1);
-        } else if (g_llm_probe.phase == 2) {
+        } else if (phase == 2) {
             cJSON_AddBoolToObject(o, "pending", 0);
             cJSON_AddBoolToObject(o, "ok", g_llm_probe.ok);
             cJSON_AddStringToObject(o, g_llm_probe.ok ? "reply" : "error", g_llm_probe.reply);
-            g_llm_probe.phase = 0; /* consumed; the next POST starts a fresh probe */
+            /* GET is repeatable: another tab must not consume this verdict. */
         } else {
             cJSON_AddBoolToObject(o, "pending", 0);
+            cJSON_AddBoolToObject(o,"idle",1);
+            cJSON_AddStringToObject(o,"error","no model test result; start a new test");
         }
         s = cJSON_PrintUnformatted(o);
         cJSON_Delete(o);
@@ -2544,9 +2566,10 @@ static int h_config_llm_test(const http_request *req, http_response *resp, void 
         http_resp_json(resp, "{\"error\":\"need 'provider' string\"}");
         return 0;
     }
-    if (g_llm_probe.phase == 1) {
+    if (atomic_load_explicit(&g_llm_probe.phase,memory_order_acquire) == 1) {
         cJSON_Delete(root);
-        http_resp_json(resp, "{\"pending\":true,\"running\":true}");
+        resp->status=409;
+        http_resp_json(resp, "{\"pending\":false,\"error\":\"another model test is running; wait for it to finish\"}");
         return 0;
     }
 
@@ -2570,7 +2593,11 @@ static int h_config_llm_test(const http_request *req, http_response *resp, void 
         v = json_str(root, "model");
         snprintf(cfg->model, sizeof(cfg->model), "%s", v ? v : "");
         cJSON_Delete(root);
-        g_llm_probe.phase = 1;
+        g_llm_probe.id++;
+        snprintf(g_llm_probe.model,sizeof(g_llm_probe.model),"%s",cfg->model);
+        g_llm_probe.started_ms=(long long)time_now_ms();
+        g_llm_probe.reply[0]=0;
+        atomic_store(&g_llm_probe.phase,1);
         th = thread_create(llm_probe_thread, cfg);
         if (!th) {
             g_llm_probe.phase = 0;
@@ -2581,7 +2608,7 @@ static int h_config_llm_test(const http_request *req, http_response *resp, void 
         }
         thread_detach(th);
     }
-    http_resp_json(resp, "{\"ok\":true,\"pending\":true}");
+    http_resp_appendf(resp, "{\"ok\":true,\"pending\":true,\"request_id\":%llu}",g_llm_probe.id);
     return 0;
 }
 
