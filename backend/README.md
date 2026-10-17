@@ -69,6 +69,15 @@ fine-grained cancellation/timeout checkpoint.
 
 ## Usage
 
+Chat uses the selected provider/endpoint/model in fixed mode by default.
+Changing the model with `POST /v1/config/llm` persists `llm.routing=fixed`,
+including across restart, and cannot be overridden by another saved route.
+Explicitly choosing a policy with `POST /v1/routes/policy` enables automatic
+routing (`llm.routing=auto`). Selecting a model again restores fixed mode.
+Progress and the terminal record identify the model actually used. Provider
+failures retain the HTTP/model diagnostic; persistent model failures do not
+trigger another model request just to summarize the failure.
+
 The CLI reads `state/cognitive-os-agent.json` from the current directory by
 default. To use another file, pass `--config FILE`; its directory becomes the
 state directory unless `--state DIR` is supplied. The `workspace` field in the

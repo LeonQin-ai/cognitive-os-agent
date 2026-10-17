@@ -2073,6 +2073,18 @@ static int h_route_policy(const http_request *req, http_response *resp, void *ud
         return 0;
     }
 
+    /* Explicit policy selection enables automatic routing. A subsequent
+     * manual model selection switches lanes back to fixed mode. */
+    for (int i=0;i<CHAT_LANE_MAX;i++) if (ctx->chat_lanes[i]) {
+        mutex_lock(&ctx->lane_mtx[i]);
+        reasoning_set_router(ctx->chat_lanes[i],ctx->router);
+        mutex_unlock(&ctx->lane_mtx[i]);
+    }
+    config_set_str(ctx->config,"llm.routing","auto");
+    config_set_str(ctx->config,"llm.route_policy",router_policy(ctx->router));
+    char config_path[600];
+    path_join(config_path,sizeof(config_path),ctx->state_root,"cognitive-os-agent.json");
+    if (config_save_file(ctx->config,config_path)!=0) log_warn("could not persist routing policy");
     http_resp_appendf(resp, "{\"ok\":true,\"policy\":\"%s\"}", router_policy(ctx->router));
     return 0;
 }
@@ -2266,6 +2278,7 @@ static int h_config_llm_get(const http_request *req, http_response *resp, void *
     o = cJSON_CreateObject();
     cJSON_AddStringToObject(o, "provider", config_get_str(ctx->config, "llm.provider", "mock"));
     cJSON_AddStringToObject(o, "model", config_get_str(ctx->config, "llm.model", ""));
+    cJSON_AddStringToObject(o, "routing", config_get_str(ctx->config,"llm.routing","fixed"));
     cJSON_AddStringToObject(o, "base_url", config_get_str(ctx->config, "llm.base_url", ""));
     const char *ak = config_get_str(ctx->config, "llm.api_key", NULL);
     cJSON_AddBoolToObject(o, "api_key_set", ak && *ak);

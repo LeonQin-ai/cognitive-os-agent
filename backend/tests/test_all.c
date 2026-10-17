@@ -6894,6 +6894,96 @@ static cJSON *api_request_json(uint16_t port, const char *method, const char *pa
     return json;
 }
 
+typedef struct selected_model_fixture {
+    atomic_int selected, stale, fail;
+} selected_model_fixture;
+static int selected_model_http(const http_request *req,http_response *resp,void *ud) {
+    selected_model_fixture *f=ud;
+    char *body=malloc(req->body_len+1);
+    if (!body) { resp->status=500; return 0; }
+    memcpy(body,req->body,req->body_len); body[req->body_len]=0;
+    cJSON *o=cJSON_Parse(body); free(body);
+    cJSON *m=cJSON_GetObjectItemCaseSensitive(o,"model");
+    if (cJSON_IsString(m) && !strcmp(m->valuestring,"nvidia/nemotron-3.5-super-vl:free"))
+        atomic_fetch_add(&f->selected,1);
+    else atomic_fetch_add(&f->stale,1);
+    cJSON_Delete(o);
+    if (atomic_load(&f->fail)) {
+        resp->status=503;
+        http_resp_json(resp,"{\"error\":{\"message\":\"fixture provider unavailable\"}}");
+    } else http_resp_json(resp,"{\"choices\":[{\"message\":{\"content\":\"我是当前配置的测试模型。\"}}]}");
+    return 0;
+}
+static void assert_chat_model(runtime_ctx *ctx,const char *expected,int success) {
+    cJSON *j=api_request_json(18232,"POST","/v1/chat","{\"message\":\"你是谁\",\"session\":\"model-selection\"}",200);
+    cJSON *id=cJSON_GetObjectItemCaseSensitive(j,"id");
+    int64_t task_id=cJSON_IsNumber(id) ? (int64_t)id->valuedouble : -1;
+    CHECK(task_id>=0); cJSON_Delete(j);
+    CHECK(scheduler_wait_idle(ctx->scheduler,10000)==0);
+    task *t=scheduler_acquire(ctx->scheduler,task_id); CHECK(t!=NULL);
+    if (!t) return;
+    CHECK(t->status==(success ? TS_DONE : TS_FAILED));
+    char *progress=task_progress_copy(t);
+    j=progress ? cJSON_Parse(progress) : NULL;
+    cJSON *model=cJSON_GetObjectItemCaseSensitive(j,"model");
+    CHECK(cJSON_IsString(model) && !strcmp(model->valuestring,expected));
+    cJSON_Delete(j); free(progress);
+    char *trace=task_trace_copy(t); j=trace ? cJSON_Parse(trace) : NULL;
+    CHECK(cJSON_IsArray(j) && cJSON_GetArraySize(j)>0);
+    const cJSON *event;
+    cJSON_ArrayForEach(event,j) {
+        model=cJSON_GetObjectItemCaseSensitive(event,"model");
+        if (cJSON_IsString(model)) CHECK(!strcmp(model->valuestring,expected));
+    }
+    cJSON_Delete(j); free(trace);
+    if (!success) CHECK(t->output && strstr(t->output,expected) && strstr(t->output,"openai http 503") &&
+                        strstr(t->output,"fixture provider unavailable"));
+    scheduler_release(ctx->scheduler,t);
+}
+static void test_selected_model_routing(void) {
+    section("selected model routing and actual request/trace identity");
+    selected_model_fixture f={0};
+    http_server *provider=http_server_new_bind("127.0.0.1",18231); CHECK(provider!=NULL);
+    if (!provider) return;
+    http_server_route(provider,"POST","/v1/chat/completions",selected_model_http,&f);
+    thread_t *provider_thread=thread_create(th_serve_http,provider); CHECK(provider_thread!=NULL);
+    const char *root="state-test/selected-model";
+    fs_mkdirs(root);
+    const char *settings="{\"llm.provider\":\"openai\",\"llm.base_url\":\"http://127.0.0.1:18231/v1\","
+        "\"llm.model\":\"nvidia/nemotron-3.5-super-vl:free\",\"llm.api_key\":\"fixture-key\",\"llm.routing\":\"fixed\"}";
+    CHECK(fs_write_file("state-test/selected-model/cognitive-os-agent.json",settings,strlen(settings))==0);
+    config cfg={0}; cfg.state_root=root; cfg.workspace=root; cfg.http_port=18232; cfg.workers=1;
+    runtime_ctx ctx;
+    if (init(&ctx,&cfg)!=0) { CHECK(0); http_server_stop(provider); thread_join(provider_thread); http_server_free(provider); return; }
+    /* Repeated test runs must not trigger compaction from an older fixture. */
+    (void)reasoning_session_clear(ctx.reasoning,"model-selection");
+    /* A cheap stale route would win automatic routing. It must not win a
+     * manual choice, including after reloading the persisted configuration. */
+    router_add_ex(ctx.router,"stale-deepseek","openai","http://127.0.0.1:18231/v1","fixture-key","deepseek-flash",1,1,1,NULL);
+    thread_t *api_thread=thread_create(th_serve_ctx,&ctx); time_sleep_ms(200);
+    const char *choice="{\"provider\":\"openai\",\"base_url\":\"http://127.0.0.1:18231/v1\","
+        "\"model\":\"nvidia/nemotron-3.5-super-vl:free\",\"api_key\":\"fixture-key\"}";
+    cJSON *j=api_request_json(18232,"POST","/v1/config/llm",choice,200); cJSON_Delete(j);
+    assert_chat_model(&ctx,"nvidia/nemotron-3.5-super-vl:free",1);
+    CHECK(atomic_load(&f.selected)==1 && atomic_load(&f.stale)==0);
+    j=api_request_json(18232,"POST","/v1/routes/policy","{\"policy\":\"cost\"}",200); cJSON_Delete(j);
+    assert_chat_model(&ctx,"deepseek-flash",1);
+    CHECK(atomic_load(&f.stale)==1);
+    j=api_request_json(18232,"POST","/v1/config/llm",choice,200); cJSON_Delete(j);
+    assert_chat_model(&ctx,"nvidia/nemotron-3.5-super-vl:free",1);
+    CHECK(atomic_load(&f.selected)==2 && atomic_load(&f.stale)==1);
+    http_server_stop(ctx.http); thread_join(api_thread); runtime_shutdown(&ctx);
+    CHECK(init(&ctx,&cfg)==0);
+    api_thread=thread_create(th_serve_ctx,&ctx); time_sleep_ms(200);
+    assert_chat_model(&ctx,"nvidia/nemotron-3.5-super-vl:free",1);
+    CHECK(atomic_load(&f.selected)==3 && atomic_load(&f.stale)==1);
+    atomic_store(&f.fail,1);
+    assert_chat_model(&ctx,"nvidia/nemotron-3.5-super-vl:free",0);
+    CHECK(atomic_load(&f.selected)==8 && atomic_load(&f.stale)==1); /* five attempts, no paid summary */
+    http_server_stop(ctx.http); thread_join(api_thread); runtime_shutdown(&ctx);
+    http_server_stop(provider); thread_join(provider_thread); http_server_free(provider);
+}
+
 static void test_http_api_contracts(uint16_t port) {
     section("http API management contracts");
     cJSON *j;
@@ -8104,6 +8194,10 @@ static void test_crash_journal(void) {
 }
 
 int main(int argc, char **argv) {
+    if (argc==2 && !strcmp(argv[1],"--selected-model")) {
+        test_selected_model_routing();
+        printf("%d passed, %d failed\n",g_pass,g_fail); return g_fail?1:0;
+    }
     if (argc==2 && !strcmp(argv[1],"--progress-loop")) {
         test_cross_round_progress();
         printf("%d passed, %d failed\n",g_pass,g_fail); return g_fail?1:0;
@@ -8329,6 +8423,7 @@ int main(int argc, char **argv) {
     test_catalog_skills_run();
     test_audit();
     test_llm_adapters_http();
+    test_selected_model_routing();
     test_http_capacity();
     test_http_install_auth();
     test_http_api();

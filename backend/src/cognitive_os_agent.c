@@ -1071,8 +1071,9 @@ int init(runtime_ctx *ctx, const config *cfg) {
             ctx->chat_lanes[i] = reasoning_new(&rc);
             if (ctx->chat_lanes[i]) {
                 reasoning_attach_sess_store(ctx->chat_lanes[i], ctx->sess);
-                /* wire the multi-provider router into the reasoning loop */
-                if (ctx->router)
+                /* A selected model is fixed by default. Routing is opt-in;
+                 * otherwise a saved route silently overrides the dropdown. */
+                if (ctx->router && !strcmp(config_get_str(ctx->config,"llm.routing","fixed"),"auto"))
                     reasoning_set_router(ctx->chat_lanes[i], ctx->router);
             }
         }
@@ -1340,6 +1341,7 @@ int set_llm(runtime_ctx *ctx, const char *provider, const char *base_url, const 
             continue;
         mutex_lock(&ctx->lane_mtx[i]);
         reasoning_set_llm(ctx->chat_lanes[i], nl);
+        reasoning_set_router(ctx->chat_lanes[i], NULL);
         mutex_unlock(&ctx->lane_mtx[i]);
     }
     old = ctx->llm;
@@ -1376,6 +1378,7 @@ int set_llm(runtime_ctx *ctx, const char *provider, const char *base_url, const 
         llm_destroy(old);
 
     if (ctx->config) {
+        config_set_str(ctx->config, "llm.routing", "fixed");
         config_set_str(ctx->config, "llm.provider", provider);
         config_set_str(ctx->config, "llm.model", model);
         config_set_str(ctx->config, "llm.base_url", base_url);

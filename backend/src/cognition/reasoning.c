@@ -254,6 +254,7 @@ struct reasoning {
     long long prog_tool_ms;  /* cumulative tool execution latency */
     int prog_model_failures; /* consecutive/total request failures this run */
     int visual_request_failed; /* avoid silently repeating expensive image requests */
+    char last_model_error[1024];
 
     /* per-model token ledger (borrowed; may be NULL). Deltas are computed
      * against the run-start snapshot of llm usage counters so per-round
@@ -324,6 +325,7 @@ static void progress_emit(reasoning *r, const char *stage) {
     cJSON_AddStringToObject(o, "stage", stage);
     cJSON_AddStringToObject(o, "activity", activity);
     cJSON_AddStringToObject(o, "model", model);
+    if (r->last_model_error[0]) cJSON_AddStringToObject(o,"model_error",r->last_model_error);
     cJSON_AddBoolToObject(o, "thinking", r->thinking_mode);
     cJSON_AddNumberToObject(o, "seq", ++r->progress_seq);
     cJSON_AddNumberToObject(o, "applied_updates", r->applied_updates);
@@ -1474,12 +1476,16 @@ static int h_reason(state_machine *sm, void *ud, const char *input, char **out) 
         char *msg = plan_err ? xstrdup(plan_err)
                              : xstrdup("(LLM 调用失败：请先用「测试」按钮验证模型配置 provider/key/base_url/model)");
         free(plan_err);
+        char *short_error=str_head(msg,900);
+        snprintf(r->last_model_error,sizeof(r->last_model_error),"%s",short_error ? short_error : "LLM request failed");
+        free(short_error);
         log_error("reasoning: LLM returned no plan: %s", msg);
         *out = msg; /* surfaced as the task result on FAILED */
         return -1;  /* move to FAILED */
     }
 
     log_info("reasoning: LLM plan: %s", raw);
+    r->last_model_error[0]=0;
     r->had_plan = r->n_actions > 0;
     /* remember this round's plan for stall detection (identical plan twice in
      * a row means the loop is not making progress); copy — raw flows out */
@@ -2932,7 +2938,7 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     r->prog_tool[0] = 0;
     r->prog_tool_calls = r->prog_llm_calls = r->round_idx = r->prog_model_failures = 0;
     r->prog_llm_ms = r->prog_tool_ms = 0;
-    progress_emit(r, "analyzing");
+    r->last_model_error[0]=0;
     /* Shared memory is a live runtime-wide policy, checked at each read/write. */
 
     /* Ingestion guard: a prompt with invalid UTF-8 (e.g. a non-UTF-8 API
@@ -2967,6 +2973,7 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     r->usage_base_reports = r->run_usage_reports;
     r->run_usage_in = r->usage_base_in;
     r->run_usage_out = r->usage_base_out;
+    progress_emit(r, "analyzing");
 
     free(r->last_prompt);
     r->last_prompt = xstrdup(prompt);
@@ -3281,7 +3288,8 @@ restart_planning:
      * transcript. Without this, a stage failure on the LAST round skipped
      * synthesis entirely (the old `st == ST_DONE` guard) and the caller
      * received the raw round log with no answer at all. */
-    if (!run_aborted(r) && !cycle_aborted && !final_text && r->round_log_len > 0 && r->llm) {
+    if (!run_aborted(r) && !cycle_aborted && !(fail_aborted && r->last_model_error[0]) &&
+        !final_text && r->round_log_len > 0 && r->llm) {
         r->prog_tool[0] = 0;
         progress_emit(r, "summarizing");
         char sys[320];
@@ -3337,6 +3345,10 @@ restart_planning:
     if (unfinished) {
         strbuf_append(&out, "任务未完成：尚未完成请求的阅读、操作或验证，当前结果仅为部分进展。");
         int explained=0;
+        if (r->last_model_error[0]) {
+            strbuf_appendf(&out,"\n模型 %s 请求失败：%s",r->llm && r->llm->model ? r->llm->model : "unknown",r->last_model_error);
+            explained=1;
+        }
         const char *instruction=completion_instruction(r,prompt);
         if (prompt_requires_mutation(instruction) && !run_has_mutating_action(r)) {
             strbuf_append(&out,"\n原因：尚无成功执行所请求操作的工具记录；读取文件或加载技能指令不能代替实际操作。");
@@ -3474,17 +3486,17 @@ restart_planning:
     }
 
     usage_book_round(r); /* include a final synthesis request, even on failure */
-    if (picked) {
-        r->llm = saved;
-        llm_destroy(picked);
-    }
-
     free(safe_prompt);
     mutex_lock(&r->ss->sess_mtx);
     if (r->cur)
         r->cur->in_run = 0;
     mutex_unlock(&r->ss->sess_mtx);
     progress_emit(r, ret == 0 ? "completed" : "failed");
+    /* The terminal snapshot must still describe the model actually called. */
+    if (picked) {
+        r->llm = saved;
+        llm_destroy(picked);
+    }
     return ret;
 }
 
