@@ -3042,6 +3042,7 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     int fail_aborted = 0;
     int unfinished = 0; /* text described future work, or requested write never ran */
     int search_only_rounds = 0;
+    int artifact_read_nudged = 0;
     int synthesized = 0; /* fallback answer may describe an incomplete run */
     int duplicate_rounds = 0;
     int no_progress_rounds = 0, cycle_reads = 0, cycle_nudged = 0, cycle_aborted = 0;
@@ -3062,7 +3063,7 @@ restart_planning:
             free(messages); free(safe_prompt); safe_prompt = updated; prompt = updated;
             r->stall_nudged = r->intent_nudged = 0;
             r->search_seen_n = 0;
-            search_only_rounds = 0;
+            search_only_rounds = artifact_read_nudged = 0;
             no_progress_rounds = cycle_reads = cycle_nudged = cycle_aborted = 0;
             r->observation_seen_n = 0;
             free(r->prev_plan); r->prev_plan = NULL;
@@ -3245,6 +3246,7 @@ restart_planning:
                 strcmp(r->actions[i].tool, "file_read") != 0 &&
                 strcmp(r->actions[i].tool, "list_dir") != 0) search_only = 0;
         search_only_rounds = search_only ? search_only_rounds + 1 : 0;
+        if (!search_only || run_has_mutating_action(r)) artifact_read_nudged = 0;
         if (r->n_actions > 0 && r->round_search_skips == r->n_actions) {
             round_log_append(r, "[system] 本轮读取或搜索与已有动作重复，但这不代表任务完成。"
                                 "请用目录清单选择未读源码，或按 next_offset_bytes 继续文件分页；"
@@ -3257,6 +3259,24 @@ restart_planning:
             break;
         }
         duplicate_rounds = 0;
+        /* A deliverable request cannot make unlimited progress by reading
+         * ever more source pages. Once the model has had ample discovery
+         * rounds, require an actual artifact action; research may continue
+         * after the first write. This bounds the stalled phase, not the task. */
+        if (search_only && prompt_requires_mutation(completion_instruction(r,prompt)) &&
+            !run_has_mutating_action(r)) {
+            if (search_only_rounds >= 12 && !artifact_read_nudged) {
+                artifact_read_nudged = 1;
+                round_log_append(r,"[system] 已连续多轮阅读资料，用户要求生成或修改实际文件。"
+                    "下一轮必须开始写入产物或运行生成命令；后续仍可按需读取源码。"
+                    "仅继续阅读不能算完成任务。");
+            } else if (search_only_rounds >= 16) {
+                round_log_append(r,"[system] 多轮提醒后仍未开始创建用户要求的产物；"
+                    "停止当前只读循环，报告未完成和已有证据。");
+                stalled = 1;
+                break;
+            }
+        }
         if ((search_only_rounds == 6 || (search_only_rounds > 6 && search_only_rounds % 12 == 0)) &&
             !prompt_requires_mutation(completion_instruction(r,prompt)))
             round_log_append(r, "[system] 已连续多轮读取或搜索资料。请评估已有证据是否足够回答；"

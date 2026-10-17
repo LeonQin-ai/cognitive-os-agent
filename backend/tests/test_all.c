@@ -2439,7 +2439,19 @@ static int progress_fixture_chat(llm *self,const llm_request *req,llm_response *
         if (s && strstr(s,"检测到跨轮次循环")) f->saw_recovery=1;
     }
     char plan[1024];
-    if (f->mode==1) { /* 80 genuine source pages: no fixed 32/40-round cutoff. */
+    if (f->mode==6) { /* A long deliverable may resume research after writing. */
+        if (f->calls==13)
+            resp->content=xstrdup("[{\"tool\":\"file_write\",\"args\":{\"path\":\"draft.ppt\",\"content\":\"draft\"}}]");
+        else if (f->calls>82) resp->content=xstrdup("已生成并核对文件");
+        else {
+            int page=f->calls<13 ? f->calls-1 : f->calls-2;
+            snprintf(plan,sizeof(plan),"[{\"tool\":\"file_read\",\"args\":{\"path\":\"long.txt\",\"offset_bytes\":%d}}]",page*4000);
+            resp->content=xstrdup(plan);
+        }
+    } else if (f->mode==5) { /* A PPT request must leave read-only discovery. */
+        snprintf(plan,sizeof(plan),"[{\"tool\":\"file_read\",\"args\":{\"path\":\"long.txt\",\"offset_bytes\":%d}}]",(f->calls-1)*4000);
+        resp->content=xstrdup(plan);
+    } else if (f->mode==1) { /* 80 genuine source pages: no fixed 32/40-round cutoff. */
         if (f->calls>80) resp->content=xstrdup("正常长任务已完成");
         else {
             snprintf(plan,sizeof(plan),"[{\"tool\":\"file_read\",\"args\":{\"path\":\"long.txt\",\"offset_bytes\":%d}}]",(f->calls-1)*4000);
@@ -2484,12 +2496,13 @@ static void test_cross_round_progress(void) {
     }
     free(source);
     CHECK(fs_write_file("state-test/progress-loop/new.txt","new evidence",12)==0);
-    for (int mode=0;mode<5;mode++) {
+    for (int mode=0;mode<7;mode++) {
         progress_fixture f={.mode=mode};
         static const llm_vtable vt={.chat=progress_fixture_chat};
         llm provider={.vt=&vt,.provider="fixture",.model="fixture",.impl=&f};
         tool_registry *reg=tool_registry_new(); CHECK(reg!=NULL); if (!reg) break;
         CHECK(tool_register(reg,tool_file_read())==0);
+        CHECK(tool_register(reg,tool_file_write())==0);
         tool failure={"fixture_loop_error","fixture failure",NULL,0,fixture_python_failure,NULL};
         CHECK(tool_register(reg,&failure)==0);
         reasoning_config cfg={0}; cfg.llm=&provider; cfg.tools=reg;
@@ -2497,11 +2510,17 @@ static void test_cross_round_progress(void) {
         reasoning *r=reasoning_new(&cfg); CHECK(r!=NULL);
         if (r) {
             char *answer=NULL;
-            int rc=reasoning_run(r,"分析资料并提供结论",&answer);
+            int rc=reasoning_run(r,mode>=5 ? "根据源码生成一份深度PPT文件" : "分析资料并提供结论",&answer);
             if (mode==0 || mode==4) {
                 CHECK(rc!=0 && answer && strstr(answer,"循环恢复提示后仍无新增进展"));
                 CHECK(f.calls<=12 && f.saw_recovery);
                 if (mode==0) CHECK(f.saw_fold);
+            } else if (mode==5) {
+                CHECK(rc!=0 && answer && strstr(answer,"未完成"));
+                CHECK(f.calls>=16 && f.calls<=17);
+            } else if (mode==6) {
+                CHECK(rc==0 && answer && strstr(answer,"已生成并核对"));
+                CHECK(f.calls==83 && fs_exists("state-test/progress-loop/draft.ppt"));
             } else {
                 CHECK(rc==0 && answer);
                 if (mode==1) CHECK(f.calls==81 && strstr(answer,"正常长任务已完成"));
@@ -2512,7 +2531,7 @@ static void test_cross_round_progress(void) {
         }
         tool_registry_free(reg);
     }
-    const char *cleanup[]={"a.txt","b.txt","c.txt","new.txt","long.txt","changed.txt"};
+    const char *cleanup[]={"a.txt","b.txt","c.txt","new.txt","long.txt","changed.txt","draft.ppt"};
     for (size_t i=0;i<sizeof(cleanup)/sizeof(cleanup[0]);i++) {
         char name[128]; snprintf(name,sizeof(name),"state-test/progress-loop/%s",cleanup[i]); fs_remove(name);
     }
