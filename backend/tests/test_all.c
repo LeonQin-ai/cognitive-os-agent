@@ -2428,6 +2428,34 @@ static void test_failed_script_recovery_guidance(void) {
     tool_registry_free(reg);
 }
 
+typedef struct rate_limit_fixture_state { int calls; } rate_limit_fixture_state;
+static int rate_limit_fixture_chat(llm *self, const llm_request *req, llm_response *resp) {
+    (void)req;
+    rate_limit_fixture_state *state=(rate_limit_fixture_state *)self->impl;
+    state->calls++;
+    resp->error=xstrdup("openai http 429: Rate limit exceeded: free-models-per-day");
+    return -1;
+}
+static void test_rate_limit_stops_without_retry(void) {
+    section("rate limit stops without retry or synthesis");
+    rate_limit_fixture_state state={0};
+    static const llm_vtable vt={.chat=rate_limit_fixture_chat};
+    llm provider={.vt=&vt,.provider="openai",.model="fixture",.impl=&state};
+    tool_registry *reg=tool_registry_new();
+    CHECK(reg!=NULL); if (!reg) return;
+    reasoning_config cfg={0}; cfg.llm=&provider; cfg.tools=reg; cfg.workspace="state-test/rate-limit"; cfg.max_rounds=-1;
+    reasoning *r=reasoning_new(&cfg); CHECK(r!=NULL);
+    if (r) {
+        char *answer=NULL;
+        int rc=reasoning_run(r,"生成一份技术PPT并保存文件",&answer);
+        CHECK(rc!=0);
+        CHECK(state.calls==1);
+        CHECK(answer && strstr(answer,"http 429") && strstr(answer,"free-models-per-day"));
+        free(answer); reasoning_free(r);
+    }
+    tool_registry_free(reg);
+}
+
 typedef struct progress_fixture {
     int mode, calls, saw_fold, saw_recovery, recovered;
 } progress_fixture;
@@ -8282,6 +8310,10 @@ int main(int argc, char **argv) {
         test_cross_round_progress();
         printf("%d passed, %d failed\n",g_pass,g_fail); return g_fail?1:0;
     }
+    if (argc==2 && !strcmp(argv[1],"--rate-limit-abort")) {
+        test_rate_limit_stops_without_retry();
+        printf("%d passed, %d failed\n",g_pass,g_fail); return g_fail?1:0;
+    }
 #ifdef _WIN32
     if (argc > 1 && (!strcmp(argv[0],"ssh") || !strcmp(argv[0],"ssh.exe") || strstr(argv[0],"issue-ssh"))) {
         printf("%s",argv[argc-1]); return 0;
@@ -8369,7 +8401,7 @@ int main(int argc, char **argv) {
         printf("\n%d passed, %d failed\n", g_pass, g_fail); return g_fail ? 1 : 0;
     }
     if (argc==2 && !strcmp(argv[1],"--planner")) {
-        test_planner_dsml(); test_failed_script_recovery_guidance(); test_planner();
+        test_planner_dsml(); test_failed_script_recovery_guidance(); test_rate_limit_stops_without_retry(); test_planner();
         printf("%d passed, %d failed\n",g_pass,g_fail); return g_fail ? 1:0;
     }
     if (argc==2 && !strcmp(argv[1],"--skills")) {
@@ -8422,6 +8454,7 @@ int main(int argc, char **argv) {
     test_incomplete_run_memory_gate();
     test_llm_caps_cancel();
     test_cross_round_progress();
+    test_rate_limit_stops_without_retry();
     test_retrieval_upgrade();
     test_state_store();
     test_memory_service();

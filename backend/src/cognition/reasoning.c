@@ -949,6 +949,16 @@ static void clear_actions(reasoning *r) {
                                config "reasoning.max_rounds" < 0 = unlimited */
 #define REASONING_CONSEC_FAIL_ABORT 5 /* consecutive stage failures before aborting the run */
 #define REASONING_CONSEC_FAIL_ABORT_STR "5"
+
+/* HTTP 429 is a provider/quota decision, not a transient planning failure.
+ * Retrying it in later reasoning rounds cannot help and can burn the user's
+ * remaining request budget. Keep this narrow: other failures still follow the
+ * normal recovery path. */
+static int reasoning_is_rate_limited(const char *error) {
+    if (!error || !*error) return 0;
+    return strstr(error, "http 429") != NULL || strstr(error, "HTTP 429") != NULL ||
+           strstr(error, "status=429") != NULL || strstr(error, "status 429") != NULL;
+}
 /* Tail-keep cap for accumulated round results. 16K was too small for long
  * agent runs: one file_read of a source file easily produces 5-15K, so a
  * multi-round SWE-style task overflowed within 2-3 reads and the halving
@@ -3128,6 +3138,11 @@ restart_planning:
             obs_log_append(r, result && *result ? result : "(run failed)");
             if (r->visual_request_failed) {
                 final_text=xstrdup(result && *result ? result:"图片模型请求失败");
+                fail_aborted = 1;
+                break;
+            }
+            if (!r->had_plan && reasoning_is_rate_limited(r->last_model_error)) {
+                round_log_append(r, "[system] 模型服务返回 HTTP 429（请求限额或速率限制）；停止自动重试，避免继续消耗请求额度。修复限额或等待重置后，可由用户重新发起任务。");
                 fail_aborted = 1;
                 break;
             }
