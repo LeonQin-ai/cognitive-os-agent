@@ -1520,7 +1520,7 @@ panels.models = `
   </div>
   <div class="card">
     <h2>免费模型广场</h2>
-    <div class="hint">市面上免费/低价模型一键配置。<b>配置</b> 填入表单后 Add route；<b>配置并设为当前</b> 直接切换（需要 key 的模型点卡片里的<b>申请 key</b> 链接到对应平台免费获取）。</div>
+    <div class="hint">市面上免费/低价模型一键配置。包含 NVIDIA NIM 托管模型；<b>配置</b> 填入表单后 Add route；<b>配置并设为当前</b> 直接切换（需要 key 的模型点卡片里的<b>申请 key</b>链接到对应平台）。</div>
     <div id="model-plaza" class="plaza">加载中…</div>
   </div>
   <div class="card">
@@ -1551,6 +1551,7 @@ panels.models = `
         <option value="gemini">Gemini（OpenAI 兼容）</option>
         <option value="groq">Groq</option>
         <option value="together">Together AI</option>
+        <option value="nvidia">NVIDIA NIM（OpenAI 兼容）</option>
         <option value="vllm">vLLM / llama.cpp（本地）</option>
         <option value="mock">mock（离线）</option>
       </select>
@@ -1560,7 +1561,7 @@ panels.models = `
       <input id="r-base" type="text" placeholder="base_url (如 https://api.deepseek.com/v1)" style="flex:3;min-width:220px">
     </div>
     <div class="row">
-      <input id="r-key" type="text" placeholder="api_key" style="flex:2;min-width:180px">
+      <input id="r-key" type="password" autocomplete="new-password" placeholder="api_key" style="flex:2;min-width:180px">
       <input id="r-weight" type="text" placeholder="weight (默认 1)" value="1" style="flex:1;min-width:80px">
     </div>
     <div class="row">
@@ -4325,6 +4326,7 @@ const PROVIDER_PRESETS = {
   gemini:    {provider:'openai',    base:'https://generativelanguage.googleapis.com/v1beta/openai',          model:'gemini-2.0-flash'},
   groq:      {provider:'openai',    base:'https://api.groq.com/openai/v1',                                   model:'llama-3.3-70b-versatile'},
   together:  {provider:'openai',    base:'https://api.together.xyz/v1',                                      model:'meta-llama/Llama-3.3-70B-Instruct-Turbo'},
+  nvidia:    {provider:'openai',    base:'https://integrate.api.nvidia.com/v1',                              model:'z-ai/glm-5.3-flash'},
   vllm:      {provider:'openai',    base:'http://localhost:8080/v1',                                         model:''},
 };
 

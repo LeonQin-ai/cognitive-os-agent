@@ -49,6 +49,10 @@ static const model_entry MODELS[] = {
      "Coding Plan 专用端点；可选模型：glm-5.3 / glm-5.3-flash / doubao-seed-2.0-lite / doubao-seed-2.1-turbo / "
      "deepseek-v4-flash / deepseek-v4-pro / kimi-k2.7-code / minimax-m3",
      "https://console.volcengine.com/ark", 0},
+    {"nvidia-nim-glm-flash", "NVIDIA NIM · GLM 5.3 Flash", "openai", "https://integrate.api.nvidia.com/v1",
+     "z-ai/glm-5.3-flash", "build.nvidia.com API Key",
+     "通过 NVIDIA 托管的 OpenAI 兼容端点调用；支持文本/图像输入、工具调用。",
+     "https://build.nvidia.com/z-ai/glm-5.3-flash", 0},
 };
 #define N_MODELS (int)(sizeof(MODELS) / sizeof(MODELS[0]))
 

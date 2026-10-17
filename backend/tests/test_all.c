@@ -6603,7 +6603,10 @@ static void test_catalog(void) {
     CHECK(m != NULL);
     if (m) {
         CHECK(strstr(m, "\"ollama\"") != NULL && strstr(m, "\"groq\"") != NULL &&
-              strstr(m, "\"deepseek\"") != NULL && strstr(m, "\"gemini\"") != NULL);
+              strstr(m, "\"deepseek\"") != NULL && strstr(m, "\"gemini\"") != NULL &&
+              strstr(m, "\"id\":\"nvidia-nim-glm-flash\"") != NULL &&
+              strstr(m, "\"base_url\":\"https://integrate.api.nvidia.com/v1\"") != NULL &&
+              strstr(m, "\"model\":\"z-ai/glm-5.3-flash\"") != NULL);
         /* free-key signup links + local-runtime flag (#60) */
         CHECK(strstr(m, "\"signup_url\":\"https://console.groq.com/keys\"") != NULL);
         CHECK(strstr(m, "\"signup_url\":\"https://platform.deepseek.com/api_keys\"") != NULL);
@@ -6621,7 +6624,7 @@ static void test_catalog(void) {
     CHECK(fs_write_file("state-test/catalog-custom/models.json", models, strlen(models)) == 0);
     m = catalog_models_json_for_state("state-test/catalog-custom");
     cJSON *model_arr = m ? cJSON_Parse(m) : NULL;
-    CHECK(cJSON_IsArray(model_arr) && cJSON_GetArraySize(model_arr) == 10);
+    CHECK(cJSON_IsArray(model_arr) && cJSON_GetArraySize(model_arr) == 11);
     CHECK(m && strstr(m, "custom-v1") && strstr(m, "my-local") && !strstr(m, "\"bad\""));
     cJSON_Delete(model_arr);
     free(m);
