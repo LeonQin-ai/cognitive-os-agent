@@ -1504,17 +1504,17 @@ panels.im = `
 panels.models = `
   <div class="card">
     <h2>本地模型（免费 · 无需 key）</h2>
-    <div class="hint">一键检测 / 启动本机 Ollama 或 llama.cpp 服务，配好后即可在下方卡片里<b>配置并设为当前</b>。</div>
+    <div class="hint">Ollama 未安装时会从官方地址自动下载、安装并启动；llama.cpp / vLLM 需先自行安装并配置启动命令。服务就绪后可在下方卡片里<b>配置并设为当前</b>。</div>
     <div class="row" style="gap:8px;align-items:center;flex-wrap:wrap">
       <span>Ollama（:11434）</span>
       <span id="loc-ollama" class="badge">检测中…</span>
       <button class="sec sm" onclick="localStatus('ollama')">检测</button>
-      <button class="sm" onclick="localStart('ollama')">一键启动</button>
+      <button class="sm" onclick="localStart('ollama')">一键下载并启动</button>
       <span style="width:18px"></span>
-      <span>llama.cpp / vLLM（:8080）</span>
+      <span id="loc-llamacpp-label">llama.cpp / vLLM（:8081）</span>
       <span id="loc-llamacpp" class="badge">检测中…</span>
       <button class="sec sm" onclick="localStatus('llamacpp')">检测</button>
-      <button class="sm" onclick="localStart('llamacpp')">一键启动</button>
+      <button class="sm" onclick="localStart('llamacpp')">启动已配置服务</button>
     </div>
     <div id="loc-msg" class="muted" style="margin-top:6px">检测本地运行时…</div>
   </div>
@@ -4394,6 +4394,8 @@ async function localStatus(engine){
   const r = await call('GET', '/v1/local/status');
   LOCAL_ST = (r.obj && typeof r.obj === 'object') ? r.obj : {};
   const o = LOCAL_ST.ollama || {}, l = LOCAL_ST.llamacpp || {};
+  const ll = $('loc-llamacpp-label');
+  if(ll) ll.textContent = 'llama.cpp / vLLM（:' + (Number(l.port) || 8081) + '）';
   const b1 = $('loc-ollama');
   if(b1){
     b1.textContent = o.running ? '● 运行中' : (o.installed ? '已安装 · 未运行' : '未安装');
@@ -4414,13 +4416,31 @@ async function localStart(engine){
   const r = await call('POST', '/v1/local/start', {engine});
   const o = r.obj || {};
   if(o.ok){
-    const running = o.already_running || o.spawned;
-    const note = o.already_running ? (engine + ' 已在运行') : (o.note || ('已启动 ' + engine));
-    if(m) m.textContent = note;
-    toast(note);
-    /* poll status for up to ~6s so the badge flips to running when ready */
-    for(let i = 0; i < 6 && !running; i++){ await sleep(1000); await localStatus(null); }
-    if(running) await localStatus(null);
+    if(o.already_running){
+      if(m) m.textContent = engine + ' 已在运行';
+      toast(engine + ' 已在运行');
+      await localStatus(null);
+      return;
+    }
+    if(m) m.textContent = o.note || (o.installing ? '正在下载并安装 Ollama…' : ('正在启动 ' + engine + '…'));
+    toast(o.installing ? '已开始下载并安装 Ollama' : ('已发送启动命令：' + engine));
+    /* Installations can take minutes. Verify the service itself becomes ready;
+       a successfully spawned process is not proof that the runtime started. */
+    const waitLimit = o.installing ? 180 : 20;
+    for(let i = 0; i < waitLimit; i++){
+      await sleep(1000);
+      await localStatus(null);
+      const status = engine === 'ollama' ? (LOCAL_ST.ollama || {}) : (LOCAL_ST.llamacpp || {});
+      if(status.running){
+        if(m) m.textContent = engine + ' 已就绪';
+        toast(engine + ' 已就绪');
+        return;
+      }
+      if(m && (i % 5 === 4)) m.textContent = (o.installing ? '正在下载/安装并等待 Ollama 服务启动' : ('等待 ' + engine + ' 服务就绪')) + '… ' + (i + 1) + ' 秒';
+    }
+    if(m) m.textContent = o.installing
+      ? '安装器已启动，但尚未检测到 Ollama 服务。请检查网络或安装窗口，再点检测。'
+      : '启动命令已发送，但尚未检测到服务；请检查启动命令与端口配置。';
   } else {
     const note = o.error || ('启动 ' + engine + ' 失败');
     if(m) m.textContent = note;

@@ -3863,6 +3863,21 @@ static int ollama_start_cmd(char *out, size_t cap) {
     return 0;
 }
 
+/* Use Ollama's documented Windows installer when the runtime is absent.
+ * Keep the command constant (no user-controlled shell content) and detached:
+ * installation can take minutes and must not block the HTTP worker. */
+static int ollama_install_cmd(char *out, size_t cap) {
+#if defined(_WIN32)
+    snprintf(out, cap,
+             "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"$ErrorActionPreference='Stop'; "
+             "irm https://ollama.com/install.ps1 | iex\"");
+    return 1;
+#else
+    (void)out; (void)cap;
+    return 0;
+#endif
+}
+
 /* Base URL of the llama.cpp server to probe. The default (8081) deliberately
  * avoids port 8080 where this HTTP server itself listens: the bundled server is
  * single-threaded, so probing our own port would wait on a request we can never
@@ -3886,6 +3901,7 @@ static int h_local_status(const http_request *req, http_response *resp, void *ud
     int o_running;
     char lp_url[128];
     int l_running;
+    long l_port;
     char cmdbuf[512];
     int o_installed;
 
@@ -3900,11 +3916,12 @@ static int h_local_status(const http_request *req, http_response *resp, void *ud
     o_running = local_probe("http://127.0.0.1:11434", "/api/version");
     llamacpp_probe_url(ctx->config, lp_url, sizeof lp_url);
     l_running = local_probe(lp_url, "/v1/models");
+    l_port = (long)config_get_int(ctx->config, "local.llamacpp_port", 8081);
     o_installed = ollama_start_cmd(cmdbuf, sizeof cmdbuf);
     http_resp_appendf(resp,
                           "{\"ollama\":{\"running\":%s,\"installed\":%s},"
-                          "\"llamacpp\":{\"running\":%s}}",
-                          o_running ? "true" : "false", o_installed ? "true" : "false", l_running ? "true" : "false");
+                          "\"llamacpp\":{\"running\":%s,\"port\":%ld}}",
+                          o_running ? "true" : "false", o_installed ? "true" : "false", l_running ? "true" : "false", l_port);
     if (resp->body.buf && resp->body.len > 0) {
         free(g_local_status_cache);
         g_local_status_cache = (char *)malloc(resp->body.len + 1);
@@ -3950,8 +3967,16 @@ static int h_local_start(const http_request *req, http_response *resp, void *ud)
         }
         char cmd[512];
         if (!ollama_start_cmd(cmd, sizeof cmd)) {
-            http_resp_json(resp, "{\"ok\":false,\"engine\":\"ollama\",\"error\":\"未找到 ollama，请先到 ollama.com "
-                                     "安装并确保它在 PATH\"}");
+            if (!ollama_install_cmd(cmd, sizeof cmd)) {
+                http_resp_json(resp, "{\"ok\":false,\"engine\":\"ollama\",\"error\":\"当前系统暂不支持自动安装 Ollama，请先从 ollama.com 安装\"}");
+                return 0;
+            }
+            int rc = proc_spawn_detached_native(cmd);
+            if (rc != 0) {
+                http_resp_json(resp, "{\"ok\":false,\"engine\":\"ollama\",\"error\":\"无法启动 Ollama 安装器，请检查 PowerShell 与网络连接\"}");
+                return 0;
+            }
+            http_resp_json(resp, "{\"ok\":true,\"engine\":\"ollama\",\"installing\":true,\"note\":\"已从 Ollama 官方地址开始下载安装。安装完成后会自动启动服务；首次使用还需下载模型。\"}");
             return 0;
         }
         int rc = proc_spawn_detached(cmd);

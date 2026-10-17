@@ -31,6 +31,10 @@ void proc_result_free(proc_result *r);
  * serve`) keep running after this call returns. Returns 0 on spawn success,
  * -1 on failure. Does NOT wait or capture output. */
 int proc_spawn_detached(const char *cmd);
+/* Fire-and-forget through the native Windows command interpreter even when
+ * the configured general shell is Bash. On POSIX this aliases the normal
+ * detached shell launcher. */
+int proc_spawn_detached_native(const char *cmd);
 
 /* Persistent child process with piped stdin/stdout (for stdio MCP servers).
  * NOTE: unlike proc_run*, this spawns `cmd` DIRECTLY (no shell): it takes

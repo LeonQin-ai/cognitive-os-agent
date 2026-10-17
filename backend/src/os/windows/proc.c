@@ -327,12 +327,17 @@ proc_result *proc_run(const char *cmd, int timeout_ms) {
     return proc_run_in(cmd, timeout_ms, NULL);
 }
 
-int proc_spawn_detached(const char *cmd) {
+static int proc_spawn_detached_mode(const char *cmd, int native_cmd) {
     char full[4096];
 
     if (!cmd || !*cmd)
         return -1;
-    compose_shell_command(cmd, full, sizeof(full));
+    if (native_cmd) {
+        if (snprintf(full, sizeof(full), "cmd.exe /s /c \"%s\"", cmd) >= (int)sizeof(full))
+            return -1;
+    } else {
+        compose_shell_command(cmd, full, sizeof(full));
+    }
     wchar_t *wfull = utf8_to_wide(full);
     if (!wfull)
         return -1;
@@ -352,6 +357,9 @@ int proc_spawn_detached(const char *cmd) {
     CloseHandle(pi.hThread);
     return 0;
 }
+
+int proc_spawn_detached(const char *cmd) { return proc_spawn_detached_mode(cmd, 0); }
+int proc_spawn_detached_native(const char *cmd) { return proc_spawn_detached_mode(cmd, 1); }
 
 /* --- Persistent piped child process (for stdio MCP servers) --- */
 

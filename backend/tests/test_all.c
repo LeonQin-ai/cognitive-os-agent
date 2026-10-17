@@ -8065,6 +8065,7 @@ static void test_local_model(void) {
     CHECK(strstr(r.body, "\"ollama\"") != NULL);
     CHECK(strstr(r.body, "\"llamacpp\"") != NULL);
     CHECK(strstr(r.body, "\"running\"") != NULL);
+    CHECK(strstr(r.body, "\"port\":8081") != NULL);
 
     /* unknown engine -> structured error, no spawn */
     CHECK(raw_http_request(18218, "POST", "/v1/local/start",

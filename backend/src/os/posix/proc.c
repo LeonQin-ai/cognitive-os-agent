@@ -161,6 +161,8 @@ int proc_spawn_detached(const char *cmd) {
     return 0;
 }
 
+int proc_spawn_detached_native(const char *cmd) { return proc_spawn_detached(cmd); }
+
 /* --- Persistent piped child process (for stdio MCP servers) --- */
 
 #include <poll.h>
