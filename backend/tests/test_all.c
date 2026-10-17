@@ -6606,7 +6606,9 @@ static void test_catalog(void) {
               strstr(m, "\"deepseek\"") != NULL && strstr(m, "\"gemini\"") != NULL &&
               strstr(m, "\"id\":\"nvidia-nim-glm-flash\"") != NULL &&
               strstr(m, "\"base_url\":\"https://integrate.api.nvidia.com/v1\"") != NULL &&
-              strstr(m, "\"model\":\"z-ai/glm-5.3-flash\"") != NULL);
+              strstr(m, "\"model\":\"z-ai/glm-5.3-flash\"") != NULL &&
+              strstr(m, "\"id\":\"nvidia-nim-deepseek-v41-flash\"") != NULL &&
+              strstr(m, "\"model\":\"deepseek-ai/deepseek-v4.1-flash\"") != NULL);
         /* free-key signup links + local-runtime flag (#60) */
         CHECK(strstr(m, "\"signup_url\":\"https://console.groq.com/keys\"") != NULL);
         CHECK(strstr(m, "\"signup_url\":\"https://platform.deepseek.com/api_keys\"") != NULL);
@@ -6624,7 +6626,7 @@ static void test_catalog(void) {
     CHECK(fs_write_file("state-test/catalog-custom/models.json", models, strlen(models)) == 0);
     m = catalog_models_json_for_state("state-test/catalog-custom");
     cJSON *model_arr = m ? cJSON_Parse(m) : NULL;
-    CHECK(cJSON_IsArray(model_arr) && cJSON_GetArraySize(model_arr) == 11);
+    CHECK(cJSON_IsArray(model_arr) && cJSON_GetArraySize(model_arr) == 12);
     CHECK(m && strstr(m, "custom-v1") && strstr(m, "my-local") && !strstr(m, "\"bad\""));
     cJSON_Delete(model_arr);
     free(m);
@@ -6945,7 +6947,7 @@ static cJSON *api_request_json(uint16_t port, const char *method, const char *pa
 }
 
 typedef struct selected_model_fixture {
-    atomic_int selected, stale, fail, delay_ms;
+    atomic_int selected, stale, deepseek_calls, deepseek_probe_config, deepseek_plan_config, fail, delay_ms;
 } selected_model_fixture;
 static int selected_model_http(const http_request *req,http_response *resp,void *ud) {
     selected_model_fixture *f=ud;
@@ -6958,6 +6960,18 @@ static int selected_model_http(const http_request *req,http_response *resp,void 
     cJSON *m=cJSON_GetObjectItemCaseSensitive(o,"model");
     if (cJSON_IsString(m) && !strcmp(m->valuestring,"nvidia/nemotron-3.5-super-vl:free"))
         atomic_fetch_add(&f->selected,1);
+    else if (cJSON_IsString(m) && !strcmp(m->valuestring,"deepseek-ai/deepseek-v4.1-flash")) {
+        atomic_fetch_add(&f->deepseek_calls,1);
+        cJSON *effort=cJSON_GetObjectItemCaseSensitive(o,"reasoning_effort");
+        cJSON *tokens=cJSON_GetObjectItemCaseSensitive(o,"max_tokens");
+        cJSON *temperature=cJSON_GetObjectItemCaseSensitive(o,"temperature");
+        if(cJSON_IsString(effort) && !strcmp(effort->valuestring,"none") && cJSON_IsNumber(tokens) &&
+           tokens->valueint==256 && cJSON_IsNumber(temperature) && temperature->valuedouble==1.0)
+            atomic_store(&f->deepseek_probe_config,1);
+        if(cJSON_IsString(effort) && !strcmp(effort->valuestring,"low") && cJSON_IsNumber(tokens) &&
+           tokens->valueint==32768 && cJSON_IsNumber(temperature) && temperature->valuedouble==1.0)
+            atomic_store(&f->deepseek_plan_config,1);
+    }
     else atomic_fetch_add(&f->stale,1);
     cJSON_Delete(o);
     if (atomic_load(&f->fail)) {
@@ -7032,6 +7046,12 @@ static void test_selected_model_routing(void) {
     atomic_store(&f.fail,1);
     assert_chat_model(&ctx,"nvidia/nemotron-3.5-super-vl:free",0);
     CHECK(atomic_load(&f.selected)==8 && atomic_load(&f.stale)==1); /* five attempts, no paid summary */
+    atomic_store(&f.fail,0);
+    const char *deepseek_choice="{\"provider\":\"openai\",\"base_url\":\"http://127.0.0.1:18231/v1\","
+        "\"model\":\"deepseek-ai/deepseek-v4.1-flash\",\"api_key\":\"fixture-key\"}";
+    j=api_request_json(18232,"POST","/v1/config/llm",deepseek_choice,200); cJSON_Delete(j);
+    assert_chat_model(&ctx,"deepseek-ai/deepseek-v4.1-flash",1);
+    CHECK(atomic_load(&f.deepseek_calls)==1 && atomic_load(&f.deepseek_plan_config)==1);
     http_server_stop(ctx.http); thread_join(api_thread); runtime_shutdown(&ctx);
     http_server_stop(provider); thread_join(provider_thread); http_server_free(provider);
 }
@@ -7087,6 +7107,16 @@ static void test_model_probe_lifecycle(void) {
     CHECK(cJSON_IsFalse(cJSON_GetObjectItemCaseSensitive(j,"ok"))); cJSON_Delete(j);
     CHECK(atomic_load(&f.selected)==2);
     CHECK(!strcmp(config_get_str(ctx.config,"llm.provider",""),"mock"));
+    atomic_store(&f.fail,0);
+    const char *deep_body="{\"provider\":\"openai\",\"base_url\":\"http://127.0.0.1:18235/v1\","
+        "\"model\":\"deepseek-ai/deepseek-v4.1-flash\",\"api_key\":\"fixture-key\"}";
+    j=api_request_json(18236,"POST","/v1/config/llm/test",deep_body,200);
+    value=cJSON_GetObjectItemCaseSensitive(j,"request_id");
+    int64_t deep_id=cJSON_IsNumber(value) ? (int64_t)value->valuedouble : 0;
+    CHECK(deep_id>0); cJSON_Delete(j);
+    j=wait_probe_result(deep_id);
+    CHECK(cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j,"ok"))); cJSON_Delete(j);
+    CHECK(atomic_load(&f.deepseek_calls)==1 && atomic_load(&f.deepseek_probe_config)==1);
     http_server_stop(ctx.http); thread_join(api_thread); runtime_shutdown(&ctx);
     http_server_stop(provider); thread_join(provider_thread); http_server_free(provider);
 }

@@ -653,7 +653,11 @@ static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_act
     }
     req.messages = msgs;
     req.num_messages = count;
-    req.temperature = 0.2;
+    int deepseek_v41 = llm->model && strstr(llm->model, "deepseek-v4.1-flash") != NULL;
+    req.temperature = deepseek_v41 ? 1.0 : 0.2;
+    /* Bound this model's hidden reasoning so it cannot consume the planner's
+     * entire output budget before returning a parseable plan. */
+    req.reasoning_effort = deepseek_v41 ? "low" : NULL;
     int visual = 0;
     for (int i=0;i<count;i++) if(msgs[i].image_b64 && *msgs[i].image_b64) visual=1;
     if (visual) {

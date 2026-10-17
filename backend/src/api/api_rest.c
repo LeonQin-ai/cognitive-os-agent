@@ -2443,10 +2443,10 @@ static int h_config_snapshot(const http_request *req, http_response *resp, void 
  * request. Creates a throwaway LLM instance (never persisted, never made active)
  * and returns {ok, reply|error}. Lets the UI prove a config works before saving.
  *
- * issue #3: the probe runs on a detached worker thread — this handler runs on
- * the single-threaded HTTP server, and an inline probe (up to its 20s timeout)
- * froze every other UI request, leaving all other panels "loading". POST starts
- * the probe and returns {pending:true}; GET polls for the verdict. */
+ * issue #3: the probe runs on a detached worker thread — an inline provider
+ * request froze every other UI request, leaving all other panels "loading".
+ * POST starts the probe and returns {pending:true}; GET polls for the verdict.
+ * Slow reasoning models receive a bounded longer timeout in the worker. */
 typedef struct {
     char provider[40];
     char base_url[256];
@@ -2480,11 +2480,16 @@ static void llm_probe_thread(void *arg) {
                                {.role = "user", .content = "Reply with exactly the word: ok"}};
         lreq.messages = msgs;
         lreq.num_messages = 2;
-        lreq.temperature = 0.2;
-        /* thinking models burn reasoning tokens from the SAME output budget:
-         * 64 left zero visible content for glm-5.3-flash (issue found live) */
-        lreq.max_tokens = 2048;
-        lreq.timeout_ms = 20000;
+        int deepseek_v41 = strstr(cfg->model, "deepseek-v4.1-flash") != NULL;
+        lreq.temperature = deepseek_v41 ? 1.0 : 0.2;
+        /* NVIDIA's DeepSeek V4.1 Flash defaults to hidden reasoning. A short
+         * connection probe must disable it and keep its output budget tiny,
+         * otherwise the test burns its whole budget before replying. */
+        lreq.reasoning_effort = deepseek_v41 ? "none" : NULL;
+        lreq.max_tokens = deepseek_v41 ? 256 : 2048;
+        /* This runs on a detached worker, so it cannot block other UI calls.
+         * NVIDIA NIM may take over a minute to cold-start this large model. */
+        lreq.timeout_ms = deepseek_v41 ? 300000 : 20000;
         rc = llm_chat(nl, &lreq, &lr);
         g_llm_probe.ok = (rc == 0 && lr.content && *lr.content);
         if (lr.content && *lr.content)

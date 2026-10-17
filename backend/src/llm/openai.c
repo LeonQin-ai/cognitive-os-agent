@@ -78,6 +78,8 @@ static char *build_request_body(const llm_request *req, const char *model, int s
     cJSON_AddNumberToObject(root, "temperature", req->temperature);
     if (req->max_tokens > 0)
         cJSON_AddNumberToObject(root, "max_tokens", req->max_tokens);
+    if (req->reasoning_effort && *req->reasoning_effort)
+        cJSON_AddStringToObject(root, "reasoning_effort", req->reasoning_effort);
     if (stream) {
         cJSON_AddBoolToObject(root, "stream", 1);
         cJSON *options = cJSON_AddObjectToObject(root, "stream_options");

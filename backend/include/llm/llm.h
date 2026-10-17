@@ -29,6 +29,7 @@ typedef struct llm_request {
     size_t num_messages;
     double temperature;
     int max_tokens;
+    const char *reasoning_effort; /* optional OpenAI-compatible reasoning control */
     int stream;      /* set by the streaming entry points */
     long timeout_ms; /* HTTP timeout override; 0 = llm_timeout_ms() default */
 } llm_request;

@@ -1552,6 +1552,7 @@ panels.models = `
         <option value="groq">Groq</option>
         <option value="together">Together AI</option>
         <option value="nvidia">NVIDIA NIM（OpenAI 兼容）</option>
+        <option value="nvidia-deepseek-v41">NVIDIA NIM（DeepSeek V4.1 Flash）</option>
         <option value="vllm">vLLM / llama.cpp（本地）</option>
         <option value="mock">mock（离线）</option>
       </select>
@@ -4327,6 +4328,7 @@ const PROVIDER_PRESETS = {
   groq:      {provider:'openai',    base:'https://api.groq.com/openai/v1',                                   model:'llama-3.3-70b-versatile'},
   together:  {provider:'openai',    base:'https://api.together.xyz/v1',                                      model:'meta-llama/Llama-3.3-70B-Instruct-Turbo'},
   nvidia:    {provider:'openai',    base:'https://integrate.api.nvidia.com/v1',                              model:'z-ai/glm-5.3-flash'},
+  'nvidia-deepseek-v41': {provider:'openai', base:'https://integrate.api.nvidia.com/v1',                     model:'deepseek-ai/deepseek-v4.1-flash'},
   vllm:      {provider:'openai',    base:'http://localhost:8080/v1',                                         model:''},
 };
 
@@ -4648,7 +4650,10 @@ async function testLlm(body, prefix){
   LLM_TEST_IN_FLIGHT = true;
   prefix = prefix || '';
   const st = $('models-stat'); if(st) st.textContent = '测试 ' + prefix + '请求中…';
-  const started = Date.now(), deadline = started + 60000;
+  const started = Date.now();
+  const slowNvidiaModel = (body.model || '').toLowerCase().includes('deepseek-v4.1-flash')
+    && (body.base_url || '').toLowerCase().includes('integrate.api.nvidia.com');
+  const deadline = started + (slowNvidiaModel ? 300000 : 60000);
   try {
   const r0 = await call('POST', '/v1/config/llm/test', body, deadline-Date.now());
   if(r0.status === 0 || r0.status >= 300 || r0.obj?.error)

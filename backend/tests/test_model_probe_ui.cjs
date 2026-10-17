@@ -13,6 +13,15 @@ const assert = require('node:assert/strict');
     await page.goto('http://ui.test/');
     await page.waitForTimeout(100);
     await page.evaluate(() => switchPanel('models'));
+    const preset=await page.evaluate(async()=>{
+      call=async()=>({status:200,obj:[]});
+      await loadModels();
+      const select=$('r-provider');
+      select.value='nvidia-deepseek-v41';
+      select.dispatchEvent(new Event('change'));
+      return {model:$('r-model').value,base:$('r-base').value,provider:presetProvider()};
+    });
+    assert.deepEqual(preset,{model:'deepseek-ai/deepseek-v4.1-flash',base:'https://integrate.api.nvidia.com/v1',provider:'openai'});
     const results=await page.evaluate(async()=>{
       const out=[], model='nvidia/nemotron-3.5-super-vl:free';
       let posts=0, polls=0;
@@ -41,6 +50,14 @@ const assert = require('node:assert/strict');
       try { await testLlm({model},'路由 openrouter '); }
       finally { Date.now=realNow; }
       out.push({case:'elapsed deadline',polls,text:$('models-stat').textContent,busy:LLM_TEST_IN_FLIGHT});
+      now=0; polls=0;
+      Date.now=()=>now;
+      call=async(method)=>{now+=90000; if(method!=='POST')polls++;
+        return method==='POST'?{status:200,obj:{request_id:12}}:
+          {status:200,obj:{request_id:12,pending:true,model:'deepseek-ai/deepseek-v4.1-flash'}};};
+      try { await testLlm({model:'deepseek-ai/deepseek-v4.1-flash',base_url:'https://integrate.api.nvidia.com/v1'},'NVIDIA '); }
+      finally { Date.now=realNow; }
+      out.push({case:'NVIDIA extended deadline',polls,text:$('models-stat').textContent,busy:LLM_TEST_IN_FLIGHT});
       return out;
     });
     assert.equal(results[0].posts,1); assert.equal(results[0].polls,1);
@@ -49,7 +66,8 @@ const assert = require('node:assert/strict');
     assert.match(results[2].text,/编号不匹配/); assert.doesNotMatch(results[2].text,/测试通过/);
     assert.match(results[3].text,/fixture transport failure/); assert.equal(results[3].busy,false);
     assert.match(results[4].text,/测试超时/); assert(results[4].polls<=2); assert.equal(results[4].busy,false);
+    assert.match(results[5].text,/测试超时/); assert(results[5].polls>=3); assert.equal(results[5].busy,false);
     assert.deepEqual(errors,[]);
-    console.log('PASS 5 model probe UI scenarios: duplicate clicks, provider errors, request identity, exception cleanup, elapsed deadline');
+    console.log('PASS 6 model probe UI scenarios: NVIDIA preset, duplicate clicks, provider errors, request identity, exception cleanup, provider-aware deadlines');
   } finally { await browser.close(); }
 })().catch(e=>{console.error(e);process.exitCode=1;});
