@@ -49,6 +49,16 @@ gcc-compatible C compiler with no system compiler required.
 
 ## Concurrency model
 
+Long tasks are not cut off by a default request/token budget. Loop detection
+tracks distinct successful tool observations across planning rounds separately
+from the bounded prompt log. New source pages, changed file contents, and new
+execution results reset the no-progress streak. Reordered old reads, interleaved
+failed checks, and log folding do not. A detected read/check cycle gets a recovery
+instruction; continued unchanged observations stop it with an explicit incomplete
+result and no extra model-summary call. Regressions:
+`build/cognitive-os-agent-test --progress-loop` (offline fixtures, including an
+80-page task and a recovery that resumes after the instruction).
+
 The scheduler is **M:N**: M coroutine tasks run cooperatively on a pool of N OS
 threads. Tasks are cheap (a coroutine is lazily created only when a worker first
 dequeues it, with a 256 KB stack), and a task can yield back to the scheduler with

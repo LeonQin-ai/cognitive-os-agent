@@ -233,6 +233,10 @@ struct reasoning {
     uint64_t search_seen[512]; /* successful read-only discoveries in this run */
     int search_seen_n;
     int round_search_skips;
+    /* Independent of the bounded prompt log/cache: folding observations must
+     * not make alternating old reads look like newly discovered evidence. */
+    uint64_t observation_seen[2048];
+    int observation_seen_n, round_new_observations, round_repeat_reads;
     struct { char *path; unsigned long long next; } pending_reads[128];
     int pending_reads_n;
     int read_tracking_overflow;
@@ -1561,6 +1565,52 @@ static void run_step_add(reasoning *r, const char *tool, const char *args, const
     progress_emit(r, "executing");
 }
 
+/* Object key order/whitespace are not progress. Arrays retain their order. */
+static uint64_t observation_json_hash(const cJSON *item) {
+    if (!item) return 0;
+    uint64_t h=(uint64_t)(item->type & 255)+1;
+    if (cJSON_IsObject(item) || cJSON_IsArray(item)) {
+        const cJSON *child;
+        cJSON_ArrayForEach(child,item) {
+            uint64_t part=observation_json_hash(child);
+            if (cJSON_IsObject(item)) {
+                if (child->string) part ^= hash64(child->string,strlen(child->string));
+                h += part * UINT64_C(0x9e3779b185ebca87);
+            } else h=(h ^ part)*UINT64_C(0x100000001b3);
+        }
+    } else {
+        char *scalar=cJSON_PrintUnformatted(item);
+        if (scalar) { h ^= hash64(scalar,strlen(scalar)); free(scalar); }
+    }
+    return h;
+}
+static void observe_action_progress(reasoning *r,const planned_action *action,uint64_t output_hash,int is_search) {
+    cJSON *args=cJSON_Parse(action->args_json ? action->args_json : "{}");
+    /* File identity is the resolved source, not spelling of its path or
+     * irrelevant argument fields. Returned byte ranges identify new pages. */
+    uint64_t identity=observation_json_hash(args);
+    if (is_search) {
+        cJSON *pj=cJSON_GetObjectItemCaseSensitive(args,"path");
+        if (cJSON_IsString(pj)) {
+            char full[2048]; path_resolve(full,sizeof(full),r->workspace,pj->valuestring);
+            identity=hash64(full,strlen(full));
+        }
+    }
+    cJSON_Delete(args);
+    uint64_t signature=(identity ^ hash64(action->tool,strlen(action->tool)))*UINT64_C(0x100000001b3) ^ output_hash;
+    for (int j=0;j<r->observation_seen_n;j++) if (r->observation_seen[j]==signature) {
+        if (is_search) r->round_repeat_reads++;
+        return;
+    }
+    int cap=(int)(sizeof(r->observation_seen)/sizeof(r->observation_seen[0]));
+    if (r->observation_seen_n==cap) {
+        memmove(r->observation_seen,r->observation_seen+1,(size_t)(cap-1)*sizeof(uint64_t));
+        r->observation_seen_n--;
+    }
+    r->observation_seen[r->observation_seen_n++]=signature;
+    r->round_new_observations++;
+}
+
 static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
     reasoning *r = ud;
     strbuf b;
@@ -1572,6 +1622,7 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
     (void)sm;
     r->all_actions_ok = 1;
     r->round_search_skips = 0;
+    r->round_new_observations = r->round_repeat_reads = 0;
     strbuf_init(&b);
 
     if (r->n_actions == 0) {
@@ -1711,6 +1762,7 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
                 repeated = r->search_seen[j] == action_sig;
             if (repeated) {
                 r->round_search_skips++;
+                r->round_repeat_reads++;
                 r->ok_actions++; /* cached observation satisfies verification */
                 strbuf_appendf(&b, "[%s] identical read/search already completed; use its earlier observation, "
                                  "continue with unread files or the next offset_bytes; this is not task completion\n", r->actions[i].tool);
@@ -1718,7 +1770,7 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
                              "previous search result reused", 1, 0);
                 continue;
             }
-        } else {
+        } else if (!is_search) {
             /* A write or opaque tool could change the files being searched. */
             r->search_seen_n = 0;
         }
@@ -1737,11 +1789,13 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
                                              span_name);
         char step_out[240] = ""; /* output head for the step registry */
         char *full_step_out = NULL;
+        uint64_t output_hash=0;
         if (tx) {
             /* per-action output = the chunk tx_run appends to the aggregate */
             size_t out_before = tx_output(tx) ? strlen(tx_output(tx)) : 0;
             rc = tx_run(tx, r->actions[i].tool, r->actions[i].args_json);
             const char *agg = tx_output(tx);
+            if (agg && strlen(agg)>out_before) output_hash=hash64(agg+out_before,strlen(agg+out_before));
             if (agg && strlen(agg) > out_before)
                 snprintf(step_out, sizeof(step_out), "%s", agg + out_before);
             if (agg && strlen(agg) > out_before) full_step_out = str_head(agg+out_before,65536);
@@ -1750,6 +1804,7 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
             int erc = executor_execute(exec, r->actions[i].tool, r->actions[i].args_json, &er);
             rc = (erc == 0 && er && er->ok) ? 0 : -1;
             if (er) {
+                output_hash=hash64(er->output ? er->output : "",er->output ? strlen(er->output) : 0);
                 /* executor output is already UTF-8 sanitized */
                 strbuf_appendf(&b, "[%s] %s\n", r->actions[i].tool, er->output ? er->output : "");
                 snprintf(step_out, sizeof(step_out), "%s", er->output ? er->output : "");
@@ -1784,6 +1839,7 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
                 hook_dispatch(r->hooks, "exec.on_failure", r->actions[i].tool);
         } else {
             r->last_failed_action_sig = 0;
+            observe_action_progress(r,&r->actions[i],output_hash,is_search);
             if (strcmp(r->actions[i].tool, "file_read") == 0)
                 record_read_page(r, r->actions[i].args_json, step_out);
             r->same_action_failures = 0;
@@ -2968,6 +3024,8 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     r->run_mutated = 0;
     r->search_seen_n = 0;
     r->round_search_skips = 0;
+    r->observation_seen_n = 0;
+    r->round_new_observations = r->round_repeat_reads = 0;
     pending_reads_clear(r);
 
      /* LLM's plain-text answer (had_plan == 0) */
@@ -2979,6 +3037,7 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     int search_only_rounds = 0;
     int synthesized = 0; /* fallback answer may describe an incomplete run */
     int duplicate_rounds = 0;
+    int no_progress_rounds = 0, cycle_reads = 0, cycle_nudged = 0, cycle_aborted = 0;
 restart_planning:
     for (r->round_idx = 1; r->round_idx <= r->max_rounds; r->round_idx++) {
         if (run_aborted(r)) { st = ST_FAILED; break; }
@@ -2997,6 +3056,8 @@ restart_planning:
             r->stall_nudged = r->intent_nudged = 0;
             r->search_seen_n = 0;
             search_only_rounds = 0;
+            no_progress_rounds = cycle_reads = cycle_nudged = cycle_aborted = 0;
+            r->observation_seen_n = 0;
             free(r->prev_plan); r->prev_plan = NULL;
             /* A steering message defines a revised task and needs a fresh
              * planning budget. Without resetting the per-plan counter, an
@@ -3007,6 +3068,7 @@ restart_planning:
         }
         free(result);
         result = NULL;
+        r->round_new_observations = r->round_repeat_reads = 0;
         st = state_machine_run(r->sm, prompt, &result);
         usage_book_round(r);
         if (run_aborted(r)) { st = ST_FAILED; break; }
@@ -3022,6 +3084,28 @@ restart_planning:
                 round_log_append(r, result); obs_log_append(r, result);
             }
             continue;
+        }
+        /* Count evidence, not rounds or API spend. Successful reads of new
+         * pages/changed content reset this streak, regardless of task length.
+         * Interleaved failures, cache evictions and reordered plans do not. */
+        if (r->had_plan && r->n_actions>0) {
+            if (r->round_new_observations>0) {
+                no_progress_rounds=cycle_reads=cycle_nudged=0;
+            } else {
+                no_progress_rounds++;
+                cycle_reads += r->round_repeat_reads;
+                if (no_progress_rounds>=4 && cycle_reads>=2 && !cycle_nudged) {
+                    cycle_nudged=1;
+                    round_log_append(r,"[system] 检测到跨轮次循环：多轮交替读取或检查只返回已有结果，没有新增进展。"
+                        "不要重读相同文件页或换序执行旧检查；请读取真正缺失的新页、修正失败原因并验证产物，"
+                        "或直接根据已有证据回答。继续重复将停止本次无进展循环。");
+                }
+                if (no_progress_rounds>=8 && cycle_reads>=2) {
+                    round_log_append(r,result ? result : "");
+                    obs_log_append(r,result ? result : "");
+                    stalled=cycle_aborted=1; st=ST_FAILED; break;
+                }
+            }
         }
         if (st != ST_DONE) {
             /* Stage failure (planner LLM error, VERIFY gate, …): the failed
@@ -3175,7 +3259,7 @@ restart_planning:
          * succeeded; answer from the observations instead of repeating them")
          * before giving up — models often re-emit a successful plan because
          * they lost track of the feedback, not because they are stuck. */
-        if (r->prev_plan && r->last_plan_raw && strcmp(r->prev_plan, r->last_plan_raw) == 0) {
+        if (!r->round_new_observations && r->prev_plan && r->last_plan_raw && strcmp(r->prev_plan, r->last_plan_raw) == 0) {
             if (!r->stall_nudged && r->round_idx < r->max_rounds) {
                 r->stall_nudged = 1;
                 free(r->prev_plan);
@@ -3197,7 +3281,7 @@ restart_planning:
      * transcript. Without this, a stage failure on the LAST round skipped
      * synthesis entirely (the old `st == ST_DONE` guard) and the caller
      * received the raw round log with no answer at all. */
-    if (!run_aborted(r) && !final_text && r->round_log_len > 0 && r->llm) {
+    if (!run_aborted(r) && !cycle_aborted && !final_text && r->round_log_len > 0 && r->llm) {
         r->prog_tool[0] = 0;
         progress_emit(r, "summarizing");
         char sys[320];
@@ -3268,7 +3352,9 @@ restart_planning:
             explained=1;
         }
         if (r->tool_fail_aborted) { strbuf_append(&out,"\n原因：相同工具连续失败3次；请查看最后一次失败的工具结果，修正参数或环境后恢复任务。"); explained=1; }
-        if (stalled) { strbuf_append(&out,"\n原因：重复工具动作没有新增进展；需调整路径、分页参数或执行方案。"); explained=1; }
+        if (stalled) { strbuf_append(&out,cycle_aborted ?
+            "\n原因：多轮交替读取或检查持续返回已有结果；循环恢复提示后仍无新增进展，已停止重复调用并保留记录。" :
+            "\n原因：重复工具动作没有新增进展；需调整路径、分页参数或执行方案。"); explained=1; }
         if (fail_aborted && !r->visual_request_failed) { strbuf_append(&out,"\n原因：模型规划或执行验证连续失败；请核对执行记录中的最后一条错误。"); explained=1; }
         if (r->visual_request_failed) explained=1;
         if (r->round_idx>=r->max_rounds) { strbuf_appendf(&out,"\n原因：达到配置的最大规划轮数 %d；当前步骤未全部完成。",r->max_rounds); explained=1; }

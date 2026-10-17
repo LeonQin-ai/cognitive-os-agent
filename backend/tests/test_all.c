@@ -2428,6 +2428,97 @@ static void test_failed_script_recovery_guidance(void) {
     tool_registry_free(reg);
 }
 
+typedef struct progress_fixture {
+    int mode, calls, saw_fold, saw_recovery, recovered;
+} progress_fixture;
+static int progress_fixture_chat(llm *self,const llm_request *req,llm_response *resp) {
+    progress_fixture *f=self->impl; f->calls++;
+    for (size_t i=0;i<req->num_messages;i++) {
+        const char *s=req->messages[i].content;
+        if (s && strstr(s,"earlier action results were folded")) f->saw_fold=1;
+        if (s && strstr(s,"检测到跨轮次循环")) f->saw_recovery=1;
+    }
+    char plan[1024];
+    if (f->mode==1) { /* 80 genuine source pages: no fixed 32/40-round cutoff. */
+        if (f->calls>80) resp->content=xstrdup("正常长任务已完成");
+        else {
+            snprintf(plan,sizeof(plan),"[{\"tool\":\"file_read\",\"args\":{\"path\":\"long.txt\",\"offset_bytes\":%d}}]",(f->calls-1)*4000);
+            resp->content=xstrdup(plan);
+        }
+    } else if (f->mode==2) { /* Same plan, but source really changed. */
+        if (f->calls>12) resp->content=xstrdup("变化资料读取完成");
+        else {
+            char changed[3500]; memset(changed,'x',3000);
+            snprintf(changed+3000,sizeof(changed)-3000,"content version %d",f->calls);
+            fs_write_file("state-test/progress-loop/changed.txt",changed,strlen(changed));
+            resp->content=xstrdup("[{\"tool\":\"file_read\",\"args\":{\"path\":\"changed.txt\"}}]");
+        }
+    } else if (f->mode==3 && f->recovered) {
+        resp->content=xstrdup("循环恢复后完成资料分析");
+    } else if (f->mode==3 && f->saw_recovery) {
+        f->recovered=1;
+        resp->content=xstrdup("[{\"tool\":\"file_read\",\"args\":{\"path\":\"new.txt\"}}]");
+    } else if (f->mode==4 && !(f->calls%2)) {
+        resp->content=xstrdup("[{\"tool\":\"fixture_loop_error\",\"args\":{}}]");
+    } else {
+        /* Alternate order and JSON key order; prompt folds after enough reads. */
+        snprintf(plan,sizeof(plan),
+            "[{\"tool\":\"file_read\",\"args\":{\"path\":\"%s.txt\",\"offset_bytes\":0}},"
+            "{\"args\":{\"offset_bytes\":0,\"path\":\"%s.txt\"},\"tool\":\"file_read\"},"
+            "{\"tool\":\"file_read\",\"args\":{\"path\":\"c.txt\"}}]",
+            f->calls%2 ? "a":"b",f->calls%2 ? "b":"a");
+        resp->content=xstrdup(plan);
+    }
+    return resp->content ? 0:-1;
+}
+static void test_cross_round_progress(void) {
+    section("cross-round progress instead of fixed task budgets");
+    fs_mkdirs("state-test/progress-loop");
+    char *source=malloc(320001); CHECK(source!=NULL); if (!source) return;
+    memset(source,'x',320000); source[320000]=0;
+    CHECK(fs_write_file("state-test/progress-loop/long.txt",source,320000)==0);
+    const char *files[]={"a.txt","b.txt","c.txt"};
+    for (int i=0;i<3;i++) {
+        char name[128]; snprintf(name,sizeof(name),"state-test/progress-loop/%s",files[i]);
+        CHECK(fs_write_file(name,source,4000)==0);
+    }
+    free(source);
+    CHECK(fs_write_file("state-test/progress-loop/new.txt","new evidence",12)==0);
+    for (int mode=0;mode<5;mode++) {
+        progress_fixture f={.mode=mode};
+        static const llm_vtable vt={.chat=progress_fixture_chat};
+        llm provider={.vt=&vt,.provider="fixture",.model="fixture",.impl=&f};
+        tool_registry *reg=tool_registry_new(); CHECK(reg!=NULL); if (!reg) break;
+        CHECK(tool_register(reg,tool_file_read())==0);
+        tool failure={"fixture_loop_error","fixture failure",NULL,0,fixture_python_failure,NULL};
+        CHECK(tool_register(reg,&failure)==0);
+        reasoning_config cfg={0}; cfg.llm=&provider; cfg.tools=reg;
+        cfg.workspace="state-test/progress-loop"; cfg.max_rounds=-1;
+        reasoning *r=reasoning_new(&cfg); CHECK(r!=NULL);
+        if (r) {
+            char *answer=NULL;
+            int rc=reasoning_run(r,"分析资料并提供结论",&answer);
+            if (mode==0 || mode==4) {
+                CHECK(rc!=0 && answer && strstr(answer,"循环恢复提示后仍无新增进展"));
+                CHECK(f.calls<=12 && f.saw_recovery);
+                if (mode==0) CHECK(f.saw_fold);
+            } else {
+                CHECK(rc==0 && answer);
+                if (mode==1) CHECK(f.calls==81 && strstr(answer,"正常长任务已完成"));
+                if (mode==2) CHECK(f.calls==13 && strstr(answer,"变化资料读取完成"));
+                if (mode==3) CHECK(f.recovered && f.calls<12 && strstr(answer,"循环恢复后完成"));
+            }
+            free(answer); reasoning_free(r);
+        }
+        tool_registry_free(reg);
+    }
+    const char *cleanup[]={"a.txt","b.txt","c.txt","new.txt","long.txt","changed.txt"};
+    for (size_t i=0;i<sizeof(cleanup)/sizeof(cleanup[0]);i++) {
+        char name[128]; snprintf(name,sizeof(name),"state-test/progress-loop/%s",cleanup[i]); fs_remove(name);
+    }
+    fs_remove("state-test/progress-loop");
+}
+
 static void test_planner(void) {
     section("planner");
     llm *llm = llm_create("mock", NULL, NULL, "mock");
@@ -8013,6 +8104,10 @@ static void test_crash_journal(void) {
 }
 
 int main(int argc, char **argv) {
+    if (argc==2 && !strcmp(argv[1],"--progress-loop")) {
+        test_cross_round_progress();
+        printf("%d passed, %d failed\n",g_pass,g_fail); return g_fail?1:0;
+    }
 #ifdef _WIN32
     if (argc > 1 && (!strcmp(argv[0],"ssh") || !strcmp(argv[0],"ssh.exe") || strstr(argv[0],"issue-ssh"))) {
         printf("%s",argv[argc-1]); return 0;
@@ -8152,6 +8247,7 @@ int main(int argc, char **argv) {
     test_llm_mock();
     test_incomplete_run_memory_gate();
     test_llm_caps_cancel();
+    test_cross_round_progress();
     test_retrieval_upgrade();
     test_state_store();
     test_memory_service();
