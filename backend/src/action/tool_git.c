@@ -32,7 +32,10 @@ static tool_result *git_exec(const tool *self, const tool_ctx *ctx, const char *
     if (!args)
         return tool_result_new(0, "git: invalid args JSON");
     sub = cJSON_GetObjectItemCaseSensitive(args, "args");
-    const char *subargs = (sub && cJSON_IsString(sub)) ? sub->valuestring : "";
+    /* Models sometimes emit git {} while checking the repository. Treat that
+     * read-only invocation as status rather than invoking bare git help. */
+    const char *subargs = (sub && cJSON_IsString(sub) && sub->valuestring[0])
+                              ? sub->valuestring : "status --short";
     dir_j = cJSON_GetObjectItemCaseSensitive(args, "dir");
     if (dir_j && cJSON_IsString(dir_j))
         dir = dir_j->valuestring;

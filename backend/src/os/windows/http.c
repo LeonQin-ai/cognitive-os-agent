@@ -17,6 +17,12 @@
 #include <winhttp.h>
 #pragma comment(lib, "winhttp.lib")
 
+static void record_winhttp_error(const char *stage, DWORD code) {
+    char message[160];
+    snprintf(message, sizeof message, "WinHTTP %s failed (code %lu)", stage, (unsigned long)code);
+    http_set_last_error(message);
+}
+
 struct http_stream {
     char *body;
     size_t len;
@@ -94,8 +100,10 @@ static http_response *do_request(const char *method, const char *base_url, const
 
     char host[256], basepath[1024];
     https = parse_url(base_url, host, sizeof(host), &port, basepath, sizeof(basepath));
-    if (https < 0)
+    if (https < 0) {
+        http_set_last_error("invalid HTTP base URL");
         return NULL;
+    }
 
     if (strcmp(basepath, "/") == 0) {
         snprintf(fpath, sizeof(fpath), "%s", path ? path : "/");
@@ -119,6 +127,7 @@ static http_response *do_request(const char *method, const char *base_url, const
     HINTERNET hSess = WinHttpOpen(L"0.1", WINHTTP_ACCESS_TYPE_NO_PROXY, WINHTTP_NO_PROXY_NAME,
                                   WINHTTP_NO_PROXY_BYPASS, 0);
     if (!hSess) {
+        record_winhttp_error("open", GetLastError());
         free(whost);
         free(wpath);
         free(wmethod);
@@ -134,6 +143,7 @@ static http_response *do_request(const char *method, const char *base_url, const
 
     HINTERNET hConn = WinHttpConnect(hSess, whost, (INTERNET_PORT)port, 0);
     if (!hConn) {
+        record_winhttp_error("connect", GetLastError());
         WinHttpCloseHandle(hSess);
         free(whost);
         free(wpath);
@@ -145,6 +155,7 @@ static http_response *do_request(const char *method, const char *base_url, const
     HINTERNET hReq =
         WinHttpOpenRequest(hConn, wmethod, wpath, NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, dwFlags);
     if (!hReq) {
+        record_winhttp_error("open request", GetLastError());
         WinHttpCloseHandle(hConn);
         WinHttpCloseHandle(hSess);
         free(whost);
@@ -158,6 +169,7 @@ static http_response *do_request(const char *method, const char *base_url, const
      * bound ReceiveResponse on every Windows version. */
     if (!WinHttpSetTimeouts(hReq, to, to, to, to) ||
         !WinHttpSetOption(hReq, WINHTTP_OPTION_RECEIVE_RESPONSE_TIMEOUT, &to, sizeof to)) {
+        record_winhttp_error("set timeout", GetLastError());
         WinHttpCloseHandle(hReq);
         WinHttpCloseHandle(hConn);
         WinHttpCloseHandle(hSess);
@@ -191,6 +203,7 @@ static http_response *do_request(const char *method, const char *base_url, const
     free(whdr);
     strbuf_free(&hdr);
     if (!ok) {
+        record_winhttp_error("send", GetLastError());
         WinHttpCloseHandle(hReq);
         WinHttpCloseHandle(hConn);
         WinHttpCloseHandle(hSess);
@@ -201,6 +214,7 @@ static http_response *do_request(const char *method, const char *base_url, const
     }
 
     if (WinHttpReceiveResponse(hReq, NULL) == FALSE) {
+        record_winhttp_error("receive response", GetLastError());
         WinHttpCloseHandle(hReq);
         WinHttpCloseHandle(hConn);
         WinHttpCloseHandle(hSess);
@@ -221,10 +235,14 @@ static http_response *do_request(const char *method, const char *base_url, const
         char tmp[16384];
         DWORD downloaded = 0;
         int64_t remaining=deadline-time_now_ms();
-        if(remaining<=0) { ok=FALSE; break; }
+        if(remaining<=0) {
+            http_set_last_error("WinHTTP read timed out (request deadline exceeded)");
+            ok=FALSE; break;
+        }
         DWORD receive=(DWORD)remaining;
         if(!WinHttpSetOption(hReq,WINHTTP_OPTION_RECEIVE_TIMEOUT,&receive,sizeof receive) ||
            !WinHttpReadData(hReq, tmp, sizeof(tmp), &downloaded)) {
+            record_winhttp_error("read response", GetLastError());
             ok=FALSE;
             break;
         }

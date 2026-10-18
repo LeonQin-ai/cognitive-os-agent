@@ -959,6 +959,12 @@ static int reasoning_is_rate_limited(const char *error) {
     return strstr(error, "http 429") != NULL || strstr(error, "HTTP 429") != NULL ||
            strstr(error, "status=429") != NULL || strstr(error, "status 429") != NULL;
 }
+/* Retrying an unchanged transport failure five times can spend 25 minutes
+ * waiting on the same 5-minute HTTP deadline without executing another tool.
+ * Allow one recovery attempt, then preserve the task for a later resume. */
+static int reasoning_is_transport_failure(const char *error) {
+    return error && strstr(error, "http request failed") != NULL;
+}
 /* Tail-keep cap for accumulated round results. 16K was too small for long
  * agent runs: one file_read of a source file easily produces 5-15K, so a
  * multi-round SWE-style task overflowed within 2-3 reads and the halving
@@ -3049,6 +3055,7 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
          /* per-round pipeline output */
     state st = ST_FAILED;
     int consec_fail = 0; /* consecutive stage failures → circuit breaker */
+    int transport_fail_streak = 0;
     int fail_aborted = 0;
     int unfinished = 0; /* text described future work, or requested write never ran */
     int search_only_rounds = 0;
@@ -3134,6 +3141,10 @@ restart_planning:
              * exhausted, and the report stays in the answer either way. */
             consec_fail++;
             if (!r->had_plan) r->prog_model_failures++;
+            if (!r->had_plan && reasoning_is_transport_failure(r->last_model_error))
+                transport_fail_streak++;
+            else
+                transport_fail_streak = 0;
             round_log_append(r, result && *result ? result : "(run failed)");
             obs_log_append(r, result && *result ? result : "(run failed)");
             if (r->visual_request_failed) {
@@ -3143,6 +3154,12 @@ restart_planning:
             }
             if (!r->had_plan && reasoning_is_rate_limited(r->last_model_error)) {
                 round_log_append(r, "[system] 模型服务返回 HTTP 429（请求限额或速率限制）；停止自动重试，避免继续消耗请求额度。修复限额或等待重置后，可由用户重新发起任务。");
+                fail_aborted = 1;
+                break;
+            }
+            if (transport_fail_streak >= 2) {
+                round_log_append(r, "[system] 模型 HTTP 连接连续失败两次，停止自动重试以避免重复等待。"
+                                    "请根据上面的传输阶段和错误码检查网络、代理或模型服务，然后恢复任务。");
                 fail_aborted = 1;
                 break;
             }
@@ -3176,6 +3193,7 @@ restart_planning:
             continue;
         }
         consec_fail = 0; /* a successful (ST_DONE) round resets the breaker */
+        transport_fail_streak = 0;
         if (!r->had_plan) { /* no actions planned → this is the final answer */
             /* Intent narration ("Let me check the files…") without a single
              * action is a premature stop: the model announced its plan

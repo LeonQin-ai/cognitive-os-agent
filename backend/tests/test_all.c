@@ -2456,6 +2456,47 @@ static void test_rate_limit_stops_without_retry(void) {
     tool_registry_free(reg);
 }
 
+static int transport_failure_fixture_chat(llm *self, const llm_request *req, llm_response *resp) {
+    (void)req;
+    rate_limit_fixture_state *state=(rate_limit_fixture_state *)self->impl;
+    state->calls++;
+    resp->error=xstrdup("http request failed: WinHTTP receive response failed (code 12002)");
+    return -1;
+}
+static void test_transport_failure_stops_after_recovery(void) {
+    section("transport failure stops after one recovery attempt");
+    rate_limit_fixture_state state={0};
+    static const llm_vtable vt={.chat=transport_failure_fixture_chat};
+    llm provider={.vt=&vt,.provider="openai",.model="fixture",.impl=&state};
+    tool_registry *reg=tool_registry_new();
+    CHECK(reg!=NULL); if (!reg) return;
+    reasoning_config cfg={0}; cfg.llm=&provider; cfg.tools=reg;
+    cfg.workspace="state-test/transport-failure"; cfg.max_rounds=-1;
+    reasoning *r=reasoning_new(&cfg); CHECK(r!=NULL);
+    if (r) {
+        char *answer=NULL;
+        int rc=reasoning_run(r,"生成一份技术PPT并保存文件",&answer);
+        CHECK(rc!=0);
+        CHECK(state.calls==2);
+        CHECK(answer && strstr(answer,"code 12002"));
+        free(answer); reasoning_free(r);
+    }
+    tool_registry_free(reg);
+}
+
+static void test_git_empty_args_checks_status(void) {
+    section("git empty args checks repository status");
+    tool_registry *reg=tool_registry_new();
+    CHECK(reg && tool_register(reg,tool_git())==0);
+    if (!reg) return;
+    tool_ctx ctx={0}; ctx.workspace=".";
+    tool_result *r=tool_execute(reg,"git","{}",&ctx);
+    CHECK(r && r->ok);
+    CHECK(r && r->output && !strstr(r->output,"usage: git"));
+    tool_result_free(r);
+    tool_registry_free(reg);
+}
+
 typedef struct progress_fixture {
     int mode, calls, saw_fold, saw_recovery, recovered;
 } progress_fixture;
@@ -6814,6 +6855,19 @@ static void stream_accum(const char *delta, void *ud) {
 
 static void test_llm_adapters_http(void) {
     section("llm_adapters_http");
+    /* A transport failure must tell the user which stage failed. The old
+     * generic message hid WinHTTP timeouts and made repeated retries opaque. */
+#ifdef _WIN32
+    llm *bad = llm_create("openai", "invalid-url", "test-key", "m");
+    if (bad) {
+        llm_message msg = {.role = "user", .content = "hi"};
+        llm_request req = {0}; req.messages = &msg; req.num_messages = 1;
+        llm_response out = {0};
+        CHECK(llm_chat(bad, &req, &out) != 0);
+        CHECK(out.error && strstr(out.error, "invalid HTTP base URL"));
+        free(out.content); free(out.error); llm_destroy(bad);
+    }
+#endif
     http_server *json_srv = http_server_new_bind("127.0.0.1", 18212);
     http_server *sse_srv  = http_server_new_bind("127.0.0.1", 18213);
     CHECK(json_srv != NULL && sse_srv != NULL);
@@ -8346,6 +8400,8 @@ int main(int argc, char **argv) {
     }
     if (argc==2 && !strcmp(argv[1],"--rate-limit-abort")) {
         test_rate_limit_stops_without_retry();
+        test_transport_failure_stops_after_recovery();
+        test_git_empty_args_checks_status();
         printf("%d passed, %d failed\n",g_pass,g_fail); return g_fail?1:0;
     }
 #ifdef _WIN32
@@ -8435,7 +8491,7 @@ int main(int argc, char **argv) {
         printf("\n%d passed, %d failed\n", g_pass, g_fail); return g_fail ? 1 : 0;
     }
     if (argc==2 && !strcmp(argv[1],"--planner")) {
-        test_planner_dsml(); test_failed_script_recovery_guidance(); test_rate_limit_stops_without_retry(); test_planner();
+        test_planner_dsml(); test_failed_script_recovery_guidance(); test_rate_limit_stops_without_retry(); test_transport_failure_stops_after_recovery(); test_git_empty_args_checks_status(); test_planner();
         printf("%d passed, %d failed\n",g_pass,g_fail); return g_fail ? 1:0;
     }
     if (argc==2 && !strcmp(argv[1],"--skills")) {
@@ -8489,6 +8545,8 @@ int main(int argc, char **argv) {
     test_llm_caps_cancel();
     test_cross_round_progress();
     test_rate_limit_stops_without_retry();
+    test_transport_failure_stops_after_recovery();
+    test_git_empty_args_checks_status();
     test_retrieval_upgrade();
     test_state_store();
     test_memory_service();

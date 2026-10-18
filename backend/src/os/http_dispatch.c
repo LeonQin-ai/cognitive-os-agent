@@ -5,6 +5,14 @@
 #include "os/platform.h"
 
 #include <string.h>
+#include <stdio.h>
+
+static _Thread_local char g_last_http_error[256];
+
+const char *http_last_error(void) { return g_last_http_error; }
+void http_set_last_error(const char *message) {
+    snprintf(g_last_http_error, sizeof g_last_http_error, "%s", message ? message : "");
+}
 
 static const os_http_hooks *g_http = NULL;
 
@@ -26,6 +34,7 @@ const char *os_http_backend_name(void) {
 
 http_response *http_post(const char *base_url, const char *path, const char *body,
                          const char *content_type, strmap *extra_headers, int timeout_ms) {
+    http_set_last_error(NULL);
     const os_http_hooks *h = os_http_active();
     return h && h->post ? h->post(base_url, path, body, content_type,
                                   extra_headers, timeout_ms)
@@ -34,6 +43,7 @@ http_response *http_post(const char *base_url, const char *path, const char *bod
 
 http_response *http_get(const char *base_url, const char *path,
                         strmap *extra_headers, int timeout_ms) {
+    http_set_last_error(NULL);
     const os_http_hooks *h = os_http_active();
     return h && h->get ? h->get(base_url, path, extra_headers, timeout_ms) : NULL;
 }

@@ -249,6 +249,10 @@ static http_stream *curl_open(const char *base_url, const char *method, const ch
     cu.easy_cleanup(h);
 
     if (rc != 0) {
+        char message[256];
+        snprintf(message, sizeof message, "libcurl code %d: %s", rc,
+                 errbuf[0] ? errbuf : "request failed");
+        http_set_last_error(message);
         strbuf_free(&sink.body);
         strmap_free(&sink.headers);
         return NULL;

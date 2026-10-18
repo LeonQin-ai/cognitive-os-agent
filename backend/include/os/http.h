@@ -23,6 +23,10 @@ http_response *http_post(const char *base_url, const char *path, const char *bod
                                  strmap *extra_headers, int timeout_ms);
 http_response *http_get(const char *base_url, const char *path, strmap *extra_headers, int timeout_ms);
 void http_response_free(http_response *r);
+/* Diagnostic for the most recent failed request on this thread. Contains no
+ * request headers or body, so it is safe to surface to the task log. */
+const char *http_last_error(void);
+void http_set_last_error(const char *message);
 
 /* Streaming request: sends the request and parses the response head, leaving the
  * connection open so the caller can read the (de-chunked) body line by line. */

@@ -146,7 +146,10 @@ static int anthropic_chat(llm *llm, const llm_request *req, llm_response *resp) 
     }
 
     if (!r) {
-        set_error(resp, "http request failed");
+        char err[320];
+        snprintf(err, sizeof err, "http request failed: %s",
+                 *http_last_error() ? http_last_error() : "transport failure");
+        set_error(resp, err);
         return -1;
     }
 
