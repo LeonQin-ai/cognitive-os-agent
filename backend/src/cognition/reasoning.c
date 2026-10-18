@@ -242,6 +242,7 @@ struct reasoning {
     int pending_reads_n;
     int read_tracking_overflow;
     int run_file_reads;
+    int run_successful_tools;
     int thinking_mode; /* task-local preference; set by the chat lane */
 
     /* live run progress for status display (polled via reasoning_progress):
@@ -1133,6 +1134,34 @@ static void obs_log_append(reasoning *r, const char *text) {
     log_append_entries(r, &r->obs_log, &r->obs_log_len, &r->obs_log_cap, text);
 }
 
+/* file_read defaults omitted fields, and providers vary JSON key order. Hash
+ * the effective page identity so a repeated read of the same page is caught
+ * while later offsets remain valid progress. */
+static uint64_t file_read_signature(reasoning *r, const char *args_json) {
+    cJSON *args = cJSON_Parse(args_json ? args_json : "{}");
+    cJSON *pj = args ? cJSON_GetObjectItemCaseSensitive(args, "path") : NULL;
+    cJSON *oj = args ? cJSON_GetObjectItemCaseSensitive(args, "offset_bytes") : NULL;
+    cJSON *sj = args ? cJSON_GetObjectItemCaseSensitive(args, "max_bytes") : NULL;
+    char resolved[2048];
+    uint64_t offset = cJSON_IsNumber(oj) && oj->valuedouble >= 0 ? (uint64_t)oj->valuedouble : 0;
+    size_t page = cJSON_IsNumber(sj) && sj->valuedouble >= 4 ? (size_t)sj->valuedouble : 4000;
+    if (page > 4000) page = 4000;
+    if (cJSON_IsString(pj) && pj->valuestring) {
+        path_resolve(resolved, sizeof(resolved), r->workspace, pj->valuestring);
+        char *absolute = fs_absolute_path(resolved);
+        const char *identity = absolute ? absolute : resolved;
+        uint64_t version = fs_file_version(identity);
+        strbuf key; strbuf_init(&key);
+        strbuf_appendf(&key, "file_read|%s|%llu|%zu|%llu", identity,
+                       (unsigned long long)offset, page, (unsigned long long)version);
+        uint64_t sig = hash64(key.buf ? key.buf : "file_read", key.len);
+        free(absolute); strbuf_free(&key); cJSON_Delete(args);
+        return sig;
+    }
+    cJSON_Delete(args);
+    return hash64(args_json ? args_json : "file_read", args_json ? strlen(args_json) : 9);
+}
+
 static void round_log_reset(reasoning *r) {
     mutex_lock(&r->progress_mtx);
     if (r->round_log)
@@ -1820,10 +1849,12 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
                         strcmp(r->actions[i].tool, "grep") == 0 ||
                         strcmp(r->actions[i].tool, "file_read") == 0 ||
                         strcmp(r->actions[i].tool, "list_dir") == 0;
-        if (is_search && strcmp(r->actions[i].tool,"file_read") != 0) {
+        if (is_search) {
             int repeated = 0;
+            uint64_t search_sig = !strcmp(r->actions[i].tool, "file_read")
+                ? file_read_signature(r, r->actions[i].args_json) : action_sig;
             for (int j = 0; j < r->search_seen_n && !repeated; j++)
-                repeated = r->search_seen[j] == action_sig;
+                repeated = r->search_seen[j] == search_sig;
             if (repeated) {
                 r->round_search_skips++;
                 r->round_repeat_reads++;
@@ -1929,6 +1960,7 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
                 record_read_page(r, r->actions[i].args_json, step_out);
             r->same_action_failures = 0;
             r->ok_actions++;
+            r->run_successful_tools++;
             int instruction_only = 0;
             if (!strcmp(r->actions[i].tool, "skill") && r->skills) {
                 cJSON *a = cJSON_Parse(r->actions[i].args_json);
@@ -1945,7 +1977,8 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
                             (size_t)(seen_cap - 1) * sizeof(r->search_seen[0]));
                     r->search_seen_n--;
                 }
-                r->search_seen[r->search_seen_n++] = action_sig;
+                r->search_seen[r->search_seen_n++] = !strcmp(r->actions[i].tool, "file_read")
+                    ? file_read_signature(r, r->actions[i].args_json) : action_sig;
             }
             strbuf_appendf(&b, "[%s] ok\n", r->actions[i].tool);
             if (r->hooks)
@@ -2425,6 +2458,18 @@ static int prompt_is_direct_information_request(const char *prompt) {
         if (strstr(prompt, questions[i]))
             return 1;
     return 0;
+}
+
+/* A machine-status request is read-only inspection: after a successful tool
+ * result, an answer prefaced by "我先/我来…" is still a valid synthesis. */
+static int prompt_is_machine_status_request(const char *prompt) {
+    if (!prompt) return 0;
+    const char *agent_task = strstr(prompt, "## 用户任务\n");
+    if (agent_task) prompt = agent_task + strlen("## 用户任务\n");
+    return strstr(prompt, "windows机器") || strstr(prompt, "Windows机器") ||
+           strstr(prompt, "电脑状态") || strstr(prompt, "机器状态") ||
+           strstr(prompt, "系统状态") || strstr(prompt, "computer status") ||
+           strstr(prompt, "system status");
 }
 
 /* A requested file/code change needs evidence of an action before a text-only
@@ -3117,6 +3162,7 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     r->tool_fail_aborted = 0;
     r->visual_request_failed = 0;
     r->run_mutated = 0;
+    r->run_successful_tools = 0;
     r->search_seen_n = 0;
     r->round_search_skips = 0;
     r->observation_seen_n = 0;
@@ -3284,7 +3330,10 @@ restart_planning:
             int needs_read = (prompt_requires_full_read(completion_instruction(r,prompt)) &&
                 (r->pending_reads_n || r->read_tracking_overflow || answer_reports_unread(txt))) ||
                 (prompt_requests_read(completion_instruction(r,prompt)) && !r->run_file_reads && !run_has_mutating_action(r));
-            int narrating = !prompt_is_direct_information_request(completion_instruction(r,prompt)) &&
+            int machine_status_complete = prompt_is_machine_status_request(completion_instruction(r,prompt)) &&
+                                          r->run_successful_tools > 0 && !r->last_failed_action_sig;
+            int narrating = !machine_status_complete &&
+                            !prompt_is_direct_information_request(completion_instruction(r,prompt)) &&
                             looks_like_intent(txt);
             if (needs_action || narrating || needs_read) {
                 /* Repeating the same intention is not evidence of completion.
