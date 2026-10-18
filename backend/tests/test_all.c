@@ -7663,10 +7663,28 @@ static void test_http_capacity(void) {
     config_free(ctx.config);
 }
 
+static void test_remove_tree(const char *path) {
+    dir_list entries = {0};
+    if (fs_list_dir(path, &entries) == 0) {
+        for (size_t i = 0; i < entries.count; i++) {
+            char child[1024];
+            path_join(child, sizeof(child), path, entries.items[i].name);
+            if (entries.items[i].is_dir) test_remove_tree(child);
+            else fs_remove(child);
+        }
+        fs_list_free(&entries);
+    }
+#ifdef _WIN32
+    RemoveDirectoryA(path);
+#else
+    rmdir(path);
+#endif
+}
+
 static void test_http_api(void) {
     section("http_api");
     const char *root = "state-http-test";
-    fs_remove(root);
+    test_remove_tree(root);
     fs_mkdirs(root);
     const char *capacity_config = "{\"scheduler.max.workers\":3,\"scheduler.max.active\":20}";
     CHECK(fs_write_file("state-http-test/cognitive-os-agent.json", capacity_config,
@@ -7990,7 +8008,7 @@ static void test_http_api(void) {
     runtime_shutdown(&ctx);
     fs_remove("a.txt");
     fs_remove("state-http-test/skills/audit.md");
-    fs_remove(root);
+    test_remove_tree(root);
 }
 
 /* ---------- WebSocket server round-trip (ws_server hub) ---------- */
