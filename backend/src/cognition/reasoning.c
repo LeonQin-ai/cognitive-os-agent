@@ -2321,57 +2321,15 @@ static void compact_history(reasoning *r, size_t n_drop) {
  * Called from the run path; also read from the HTTP thread by
  * reasoning_history_json, hence the hist_mtx guard. compact_history is
  * only ever invoked from here with the lock held (do not lock inside it). */
-/* Heuristic: the model narrated what it is about to do ("Let me check…",
- * "我需要先…") instead of emitting a JSON action array or a real answer.
- * Short intent-sounding text on the first round is a premature loop stop —
- * the model meant to act. NOTE: no length cap — chatty reasoning models
- * (e.g. GLM) emit multi-KB deliberation prose that is still narration, not
- * an answer. A false positive can exhaust recovery and mark a complete
- * answer failed, so direct information questions are checked separately. */
+/* Short first-person narration is only a reason to ask the planner again when
+ * the request still lacks all successful tool evidence. */
 static int looks_like_intent(const char *text) {
-    if (!text)
-        return 0;
     static const char *const marks[] = {
-        "I need to",
-        "Let me",
-        "I will",
-        "I'll",
-        "First,",
-        "First ",
-        "I'm going to",
-        "Let's",
-        "I should",
-        "Hmm",
-        "I recall",
-        "Wait,",
-        "\xe6\x88\x91\xe9\x9c\x80\xe8\xa6\x81", /* 我需要 */
-        "\xe8\xae\xa9\xe6\x88\x91",             /* 让我   */
-        "\xe6\x88\x91\xe5\xb0\x86",             /* 我将   */
-        "\xe6\x88\x91\xe5\x85\x88",             /* 我先   */
-        "我来", "我还需要", "还需要", "接下来", "让我继续", "继续读取",
-        "\xe7\xac\xac\xe4\xb8\x80\xe6\xad\xa5", /* 第一步 */
+        "I need to", "Let me", "I will", "I'll", "First,", "First ", "I'm going to",
+        "我需要", "让我", "我将", "我先", "我来", "我还需要", "接下来", "让我继续", "继续读取", "第一步"
     };
-    for (size_t i = 0; i < sizeof(marks) / sizeof(marks[0]); i++)
-        if (strstr(text, marks[i]))
-            return 1;
-    /* A long fenced code block in a narration-style answer usually means the
-     * model is dumping file content as text instead of writing it to disk
-     * with file_write — treat that as intent too and let the nudge redirect
-     * it. Genuine final answers rarely embed 15+ lines of fenced code. */
-    {
-        const char *f1 = strstr(text, "```");
-        if (f1) {
-            const char *f2 = strstr(f1 + 3, "```");
-            if (f2) {
-                int nl = 0;
-                for (const char *p = f1; p < f2 && nl < 15; p++)
-                    if (*p == '\n')
-                        nl++;
-                if (nl >= 15)
-                    return 1;
-            }
-        }
-    }
+    for (size_t i = 0; text && i < sizeof(marks) / sizeof(marks[0]); ++i)
+        if (strstr(text, marks[i])) return 1;
     return 0;
 }
 
@@ -2460,16 +2418,27 @@ static int prompt_is_direct_information_request(const char *prompt) {
     return 0;
 }
 
-/* A machine-status request is read-only inspection: after a successful tool
- * result, an answer prefaced by "我先/我来…" is still a valid synthesis. */
-static int prompt_is_machine_status_request(const char *prompt) {
+/* Explicit inspection requests require at least one successful observation.
+ * The planner's tool-action plan, not prose phrasing, drives continuation. */
+static int prompt_requires_observation(const char *prompt) {
     if (!prompt) return 0;
     const char *agent_task = strstr(prompt, "## 用户任务\n");
     if (agent_task) prompt = agent_task + strlen("## 用户任务\n");
-    return strstr(prompt, "windows机器") || strstr(prompt, "Windows机器") ||
-           strstr(prompt, "电脑状态") || strstr(prompt, "机器状态") ||
-           strstr(prompt, "系统状态") || strstr(prompt, "computer status") ||
-           strstr(prompt, "system status");
+    if (prompt_is_direct_information_request(prompt)) return 0;
+    static const char *const actions[] = {
+        "查看", "看看", "检查", "分析", "诊断", "读取", "检视", "搜索", "查找",
+        "inspect ", "review ", "check ", "analyze ", "diagnose ", "read ", "search "
+    };
+    static const char *const subjects[] = {
+        "状态", "系统", "机器", "电脑", "服务", "文件", "目录", "代码", "源码", "项目", "日志", "文档",
+        "status", "system", "machine", "computer", "service", "file", "directory", "code", "source", "project", "log", "document", "repository"
+    };
+    int has_action = 0, has_subject = 0;
+    for (size_t i = 0; i < sizeof(actions) / sizeof(actions[0]); ++i)
+        if (strstr(prompt, actions[i])) { has_action = 1; break; }
+    for (size_t i = 0; i < sizeof(subjects) / sizeof(subjects[0]); ++i)
+        if (strstr(prompt, subjects[i])) { has_subject = 1; break; }
+    return has_action && has_subject;
 }
 
 /* A requested file/code change needs evidence of an action before a text-only
@@ -3330,21 +3299,20 @@ restart_planning:
             int needs_read = (prompt_requires_full_read(completion_instruction(r,prompt)) &&
                 (r->pending_reads_n || r->read_tracking_overflow || answer_reports_unread(txt))) ||
                 (prompt_requests_read(completion_instruction(r,prompt)) && !r->run_file_reads && !run_has_mutating_action(r));
-            int machine_status_complete = prompt_is_machine_status_request(completion_instruction(r,prompt)) &&
-                                          r->run_successful_tools > 0 && !r->last_failed_action_sig;
-            int narrating = !machine_status_complete &&
-                            !prompt_is_direct_information_request(completion_instruction(r,prompt)) &&
-                            looks_like_intent(txt);
-            if (needs_action || narrating || needs_read) {
-                /* Repeating the same intention is not evidence of completion.
-                 * Stop rather than spending the remaining budget on identical
-                 * calls, and surface the task as failed/incomplete. */
+            int needs_observation = prompt_requires_observation(completion_instruction(r,prompt)) &&
+                                    r->run_successful_tools == 0;
+            int needs_intent_recovery = !prompt_is_direct_information_request(completion_instruction(r,prompt)) &&
+                                        r->run_successful_tools == 0 && looks_like_intent(txt);
+            if (needs_action || needs_read || needs_observation || needs_intent_recovery) {
+                /* A plain-text answer closes the loop once its explicit action,
+                 * read, and observation gates are met. If a gate is still
+                 * unmet, allow one correction request, then fail closed. */
                 if (last_narration && txt && strcmp(txt, last_narration) == 0) {
                     unfinished = 1;
                     final_text = xstrdup(txt);
                     break;
                 }
-                if (r->max_rounds <= 1 || r->intent_nudged >= 4 || r->round_idx >= r->max_rounds) {
+                if (r->max_rounds <= 1 || r->intent_nudged >= 1 || r->round_idx >= r->max_rounds) {
                     unfinished = 1;
                     final_text = xstrdup(txt ? txt : "");
                     break;
