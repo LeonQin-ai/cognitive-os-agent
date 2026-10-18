@@ -177,6 +177,23 @@ long long fs_file_size(const char *path) {
     return (long long)st.st_size;
 }
 
+uint64_t fs_file_version(const char *path) {
+    struct stat st;
+    if (!path || stat(path, &st) != 0) return 0;
+    uint64_t h = UINT64_C(1469598103934665603);
+#define MIX_VERSION(v) do { uint64_t x_=(uint64_t)(v); for(int i_=0;i_<8;i_++){h^=(unsigned char)(x_>>(i_*8));h*=UINT64_C(1099511628211);} } while(0)
+    MIX_VERSION(st.st_dev); MIX_VERSION(st.st_ino); MIX_VERSION(st.st_size);
+#if defined(__APPLE__)
+    MIX_VERSION(st.st_mtimespec.tv_sec); MIX_VERSION(st.st_mtimespec.tv_nsec);
+    MIX_VERSION(st.st_ctimespec.tv_sec); MIX_VERSION(st.st_ctimespec.tv_nsec);
+#else
+    MIX_VERSION(st.st_mtim.tv_sec); MIX_VERSION(st.st_mtim.tv_nsec);
+    MIX_VERSION(st.st_ctim.tv_sec); MIX_VERSION(st.st_ctim.tv_nsec);
+#endif
+#undef MIX_VERSION
+    return h ? h : 1;
+}
+
 void fs_list_free(dir_list *l) {
     for (size_t i = 0; i < l->count; i++)
         free(l->items[i].name);

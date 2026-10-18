@@ -26,6 +26,9 @@ int fs_exists(const char *path);
 int fs_is_dir(const char *path);
 /* 64-bit file size in bytes (-1 if the path does not exist / stat fails). */
 long long fs_file_size(const char *path);
+/* Stable per-file revision fingerprint (size + identity + high-resolution mtime);
+ * returns 0 when the file cannot be stat'ed. */
+uint64_t fs_file_version(const char *path);
 /* Recursively create a directory path. 0 ok, -1 on error. */
 int fs_mkdirs(const char *path);
 /* Remove a file. 0 ok, -1 if missing/error. */

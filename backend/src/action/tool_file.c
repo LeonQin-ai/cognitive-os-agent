@@ -2,11 +2,210 @@
 #include "action/tools.h"
 #include "os/os_fs.h"
 #include "infra/util.h"
+#include "os/os_thread.h"
 
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdatomic.h>
 #include "cJSON.h"
+
+/* Bounded process-local LRU of immutable file pages. The backing file remains
+ * authoritative: every lookup checks its current revision before returning a
+ * page, so external edits invalidate cached bytes automatically. */
+#define FILE_PAGE_CACHE_ENTRIES 256
+#define FILE_PAGE_CACHE_BYTES (8u * 1024u * 1024u)
+typedef struct file_page_entry {
+    char *session, *path, *data;
+    uint64_t version, offset, tick;
+    size_t page_bytes, length;
+    int has_more, used;
+} file_page_entry;
+static file_page_entry g_file_pages[FILE_PAGE_CACHE_ENTRIES];
+static size_t g_file_pages_bytes;
+static uint64_t g_file_page_tick;
+static mutex_t g_file_page_mutex;
+static atomic_int g_file_page_mutex_ready;
+static atomic_flag g_file_page_init_lock = ATOMIC_FLAG_INIT;
+
+static void file_page_lock(void) {
+    if (!atomic_load(&g_file_page_mutex_ready)) {
+        while (atomic_flag_test_and_set(&g_file_page_init_lock)) { }
+        if (!atomic_load(&g_file_page_mutex_ready)) {
+            mutex_init(&g_file_page_mutex);
+            atomic_store(&g_file_page_mutex_ready, 1);
+        }
+        atomic_flag_clear(&g_file_page_init_lock);
+    }
+    mutex_lock(&g_file_page_mutex);
+}
+static void file_page_drop(file_page_entry *e) {
+    if (!e->used) return;
+    g_file_pages_bytes -= e->length;
+    free(e->session); free(e->path); free(e->data);
+    memset(e, 0, sizeof(*e));
+}
+static int file_page_same(const file_page_entry *e, const char *session,
+                          const char *path, uint64_t version,
+                          uint64_t offset, size_t page_bytes) {
+    return e->used && e->version == version && e->offset == offset &&
+           e->page_bytes == page_bytes && !strcmp(e->session, session) &&
+           !strcmp(e->path, path);
+}
+static int file_page_get(const char *session, const char *path, uint64_t version,
+                         uint64_t offset, size_t page_bytes, char **data,
+                         size_t *length, int *has_more) {
+    int hit = 0;
+    file_page_lock();
+    for (size_t i=0; i<FILE_PAGE_CACHE_ENTRIES; ++i) {
+        file_page_entry *e = &g_file_pages[i];
+        if (e->used && !strcmp(e->session, session) && !strcmp(e->path, path) &&
+            e->version != version) file_page_drop(e);
+        if (file_page_same(e,session,path,version,offset,page_bytes)) {
+            *data = malloc(e->length + 1);
+            if (*data) {
+                memcpy(*data,e->data,e->length+1); *length=e->length;
+                *has_more=e->has_more; e->tick=++g_file_page_tick; hit=1;
+            }
+            break;
+        }
+    }
+    mutex_unlock(&g_file_page_mutex);
+    return hit;
+}
+static void file_page_put(const char *session, const char *path, uint64_t version,
+                          uint64_t offset, size_t page_bytes, const char *data,
+                          size_t length, int has_more) {
+    if (!session || !*session || length > FILE_PAGE_CACHE_BYTES) return;
+    char *s=xstrdup(session), *p=xstrdup(path), *d=malloc(length+1);
+    if (!s || !p || !d) { free(s); free(p); free(d); return; }
+    memcpy(d,data,length); d[length]=0;
+    file_page_lock();
+    size_t slot=FILE_PAGE_CACHE_ENTRIES;
+    for (size_t i=0;i<FILE_PAGE_CACHE_ENTRIES;++i) {
+        file_page_entry *e=&g_file_pages[i];
+        if (e->used && !strcmp(e->session,session) && !strcmp(e->path,path) && e->version!=version)
+            file_page_drop(e);
+        if (file_page_same(e,session,path,version,offset,page_bytes)) { slot=i; break; }
+        if (!e->used && slot==FILE_PAGE_CACHE_ENTRIES) slot=i;
+    }
+    if (slot==FILE_PAGE_CACHE_ENTRIES) {
+        uint64_t oldest=UINT64_MAX;
+        for(size_t i=0;i<FILE_PAGE_CACHE_ENTRIES;++i)
+            if(g_file_pages[i].tick<oldest){oldest=g_file_pages[i].tick;slot=i;}
+    }
+    if (slot<FILE_PAGE_CACHE_ENTRIES) {
+        file_page_drop(&g_file_pages[slot]);
+        while (g_file_pages_bytes + length > FILE_PAGE_CACHE_BYTES) {
+            size_t victim=FILE_PAGE_CACHE_ENTRIES; uint64_t oldest=UINT64_MAX;
+            for(size_t i=0;i<FILE_PAGE_CACHE_ENTRIES;++i)
+                if(g_file_pages[i].used && i!=slot && g_file_pages[i].tick<oldest){oldest=g_file_pages[i].tick;victim=i;}
+            if(victim==FILE_PAGE_CACHE_ENTRIES) break;
+            file_page_drop(&g_file_pages[victim]);
+        }
+        file_page_entry *e=&g_file_pages[slot];
+        e->session=s;e->path=p;e->data=d;e->version=version;e->offset=offset;
+        e->page_bytes=page_bytes;e->length=length;e->has_more=has_more;e->tick=++g_file_page_tick;e->used=1;
+        g_file_pages_bytes+=length; s=p=d=NULL;
+    }
+    mutex_unlock(&g_file_page_mutex);
+    free(s);free(p);free(d);
+}
+static void file_page_invalidate_path(const char *path) {
+    char *absolute=fs_absolute_path(path);
+    const char *target=absolute ? absolute : path;
+    file_page_lock();
+    for(size_t i=0;i<FILE_PAGE_CACHE_ENTRIES;++i)
+        if(g_file_pages[i].used && !strcmp(g_file_pages[i].path,target))
+            file_page_drop(&g_file_pages[i]);
+    mutex_unlock(&g_file_page_mutex);
+    free(absolute);
+}
+
+char *tool_file_cached_content(const char *session_id, const char *absolute_path) {
+    if (!session_id || !*session_id || !absolute_path) return NULL;
+    uint64_t version=fs_file_version(absolute_path);
+    if (!version) return NULL;
+    strbuf out; strbuf_init(&out);
+    uint64_t offset=0; int complete=0;
+    for (size_t page=0; page<FILE_PAGE_CACHE_ENTRIES; ++page) {
+        int found=0; char *copy=NULL; size_t len=0; int more=0;
+        file_page_lock();
+        for(size_t i=0;i<FILE_PAGE_CACHE_ENTRIES;++i){
+            file_page_entry *e=&g_file_pages[i];
+            if(e->used && e->version==version && e->offset==offset &&
+               !strcmp(e->session,session_id) && !strcmp(e->path,absolute_path)){
+                copy=malloc(e->length+1);
+                if(copy){memcpy(copy,e->data,e->length+1);len=e->length;more=e->has_more;e->tick=++g_file_page_tick;found=1;}
+                break;
+            }
+        }
+        mutex_unlock(&g_file_page_mutex);
+        if(!found){free(copy);break;}
+        strbuf_append_n(&out,copy,len);free(copy);offset+=len;
+        if(!more){complete=1;break;}
+    }
+    if(!complete){strbuf_free(&out);return NULL;}
+    return strbuf_detach(&out);
+}
+
+static int cached_line_relevant(const char *line, size_t len, const char *query) {
+    if (!line || !query || !*query) return 0;
+    for (const unsigned char *q=(const unsigned char *)query; *q;) {
+        if ((*q>='a'&&*q<='z')||(*q>='A'&&*q<='Z')||(*q>='0'&&*q<='9')||*q=='_'||*q=='-') {
+            char term[96]; size_t n=0;
+            while (((*q>='a'&&*q<='z')||(*q>='A'&&*q<='Z')||(*q>='0'&&*q<='9')||*q=='_'||*q=='-') && n+1<sizeof(term)) term[n++]=(char)*q++;
+            term[n]=0;
+            if (n>=3) {
+                for(size_t i=0;i+n<=len;++i) if(!memcmp(line+i,term,n)) return 1;
+            }
+        } else if (*q>=0xe0) {
+            size_t n=(*q>=0xf0)?4:3;
+            const unsigned char *next=q+n;
+            if (!next[0]) break;
+            if (*next>=0xe0) {
+                for(size_t i=0;i+2*n<=len;++i) if(!memcmp(line+i,q,n) && !memcmp(line+i+n,next,n)) return 1;
+            }
+            q=next;
+        } else q++;
+    }
+    return 0;
+}
+
+char *tool_file_cache_context(const char *session_id, const char *query, size_t max_bytes) {
+    if (!session_id || !*session_id || !query || !*query || !max_bytes) return NULL;
+    strbuf out; strbuf_init(&out);
+    file_page_lock();
+    for (size_t i=0;i<FILE_PAGE_CACHE_ENTRIES && out.len<max_bytes;++i) {
+        file_page_entry *e=&g_file_pages[i];
+        if (!e->used || strcmp(e->session,session_id) || !e->length) continue;
+        if (fs_file_version(e->path) != e->version) { file_page_drop(e); continue; }
+        const char *p=e->data; size_t line_no=0;
+        while (*p && out.len<max_bytes) {
+            const char *end=strchr(p,'\n'); if(!end) end=p+strlen(p);
+            size_t n=(size_t)(end-p);
+            if (n && cached_line_relevant(p,n,query)) {
+                char header[2200];
+                int hn=snprintf(header,sizeof(header),"- %s@%llu:%zu: ",e->path,(unsigned long long)e->offset,line_no);
+                size_t remain=max_bytes-out.len;
+                if(hn<0) break;
+                if((size_t)hn>=remain){strbuf_append_n(&out,header,remain);break;}
+                strbuf_append_n(&out,header,(size_t)hn);
+                remain=max_bytes-out.len;
+                size_t take=n;
+                if(take>=remain) take=remain ? remain-1 : 0;
+                if(take) strbuf_append_n(&out,p,take);
+                if(out.len<max_bytes) strbuf_append(&out,"\n");
+                e->tick=++g_file_page_tick;
+            }
+            if(!*end) break;
+            p=end+1; line_no++;
+        }
+    }
+    mutex_unlock(&g_file_page_mutex);
+    if(!out.len){strbuf_free(&out);return NULL;}
+    return strbuf_detach(&out);
+}
 
 /* Resolve a (possibly relative) path against the workspace. Caller frees. */
 static char *resolve_path(const tool_ctx *ctx, const char *path) {
@@ -26,6 +225,7 @@ static tool_result *file_read_exec(const tool *self, const tool_ctx *ctx, const 
     uint64_t offset = 0;
     size_t page_bytes = 4000;
     int clamped_page = 0;
+    int cache_hit = 0;
 
     (void)self;
     args = cJSON_Parse(args_json);
@@ -89,7 +289,13 @@ static tool_result *file_read_exec(const tool *self, const tool_ctx *ctx, const 
 
     /* Leave space for metadata and tool wrappers in the 6144-byte observation
      * budget. A page must reach the model intact, rather than lose its middle. */
-    content = fs_read_file_slice(rp, offset, page_bytes, &read_bytes, &has_more);
+    const char *session = ctx && ctx->session_id && *ctx->session_id ? ctx->session_id : "";
+    uint64_t version = fs_file_version(rp);
+    if (version && *session)
+        cache_hit = file_page_get(session, rp, version, offset, page_bytes,
+                                  &content, &read_bytes, &has_more);
+    if (!cache_hit)
+        content = fs_read_file_slice(rp, offset, page_bytes, &read_bytes, &has_more);
     cJSON_Delete(args);
     if (!content) {
         char msg[4096];
@@ -108,6 +314,9 @@ static tool_result *file_read_exec(const tool *self, const tool_ctx *ctx, const 
         free(rp); free(content);
         return tool_result_new(0, "file_read: binary file; use a format-specific extractor");
     }
+    if (!cache_hit && version && *session)
+        file_page_put(session, rp, version, offset, page_bytes, content,
+                      read_bytes, has_more);
     char *sanitized = NULL;
     if (has_more && read_bytes && !str_utf8_valid_n(content, (int)read_bytes)) {
         size_t lead = read_bytes-1;
@@ -123,11 +332,12 @@ static tool_result *file_read_exec(const tool *self, const tool_ctx *ctx, const 
     strbuf output;
     strbuf_init(&output);
     if (offset || has_more || clamped_page)
-        strbuf_appendf(&output, "[bytes %llu-%llu%s; next_offset_bytes=%llu]\n",
+        strbuf_appendf(&output, "[bytes %llu-%llu%s; next_offset_bytes=%llu; file_page_cache=%s; file_version=%llu]\n",
                        (unsigned long long)offset,
                        (unsigned long long)(offset + (read_bytes ? read_bytes - 1 : 0)),
                        has_more ? ", more available" : ", end of file",
-                       (unsigned long long)(offset + read_bytes));
+                       (unsigned long long)(offset + read_bytes),
+                       cache_hit ? "HIT" : "MISS", (unsigned long long)version);
     if (clamped_page)
         strbuf_append(&output, "[max_bytes capped to 4000; continue at next_offset_bytes, not the requested page size]\n");
     if (sanitized) strbuf_append(&output, sanitized);
@@ -208,6 +418,8 @@ static tool_result *file_write_exec(const tool *self, const tool_ctx *ctx, const
         free(rp);
         return tool_result_new(0, msg);
     }
+
+    file_page_invalidate_path(rp);
 
     snprintf(out, sizeof(out), "wrote %zu bytes to %s", content_len, rp);
     free(rp);
@@ -365,6 +577,8 @@ static tool_result *file_edit_exec(const tool *self, const tool_ctx *ctx, const 
         free(rp);
         return tool_result_new(0, msg);
     }
+
+    file_page_invalidate_path(rp);
 
     snprintf(out, sizeof(out), "edited %s (%zu replacement%s)", rp, occ, occ == 1 ? "" : "s");
     free(rp);

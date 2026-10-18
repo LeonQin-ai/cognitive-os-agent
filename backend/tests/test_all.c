@@ -868,6 +868,7 @@ static void test_snapshot_tx(void) {
     ctx.reg = reg;
     ctx.snapshot = snap;
     ctx.workspace = "state-test/w";
+    ctx.session_id = "file-page-cache-regression";
     fs_mkdirs("state-test/w");
     /* Issue #64: file_read pages through large text files without allocating
      * the full file or silently truncating a partial read. */
@@ -922,6 +923,40 @@ static void test_snapshot_tx(void) {
     }
     CHECK(joined.len == 9000 && memcmp(joined.buf, utf8_source, 9000) == 0);
     strbuf_free(&joined); fs_remove("state-test/w/utf8-read.txt");
+    /* Identical pages are served from the session cache; a content revision
+     * invalidates them, and complete cached pages can feed the index without
+     * reading the backing file again. */
+    char cache_source[101]; memset(cache_source, 'C', 100); cache_source[100]=0;
+    CHECK(fs_write_file("state-test/w/cache-read.txt", cache_source, 100) == 0);
+    tool_result *cache_page = tool_execute(reg, "file_read",
+        "{\"path\":\"cache-read.txt\",\"max_bytes\":64}", &ctx);
+    CHECK(cache_page && cache_page->ok && strstr(cache_page->output,"file_page_cache=MISS"));
+    tool_result_free(cache_page);
+    cache_page = tool_execute(reg, "file_read",
+        "{\"path\":\"cache-read.txt\",\"max_bytes\":64}", &ctx);
+    CHECK(cache_page && cache_page->ok && strstr(cache_page->output,"file_page_cache=HIT"));
+    tool_result_free(cache_page);
+    char *cached_excerpt = tool_file_cache_context(ctx.session_id, "CCCC", 512);
+    CHECK(cached_excerpt && strstr(cached_excerpt,"cache-read.txt") && strstr(cached_excerpt,"CCCC"));
+    free(cached_excerpt);
+    cache_page = tool_execute(reg, "file_read",
+        "{\"path\":\"cache-read.txt\",\"offset_bytes\":64,\"max_bytes\":64}", &ctx);
+    CHECK(cache_page && cache_page->ok && strstr(cache_page->output,"end of file"));
+    tool_result_free(cache_page);
+    char *cache_abs = fs_absolute_path("state-test/w/cache-read.txt");
+    char *cached_whole = tool_file_cached_content(ctx.session_id, cache_abs);
+    free(cache_abs);
+    CHECK(cached_whole && strlen(cached_whole)==100 && !memcmp(cached_whole,cache_source,100));
+    free(cached_whole);
+    tool_result *cache_write = tool_execute(reg, "file_write",
+        "{\"path\":\"cache-read.txt\",\"content\":\"new revision\"}", &ctx);
+    CHECK(cache_write && cache_write->ok);
+    tool_result_free(cache_write);
+    cache_page = tool_execute(reg, "file_read",
+        "{\"path\":\"cache-read.txt\",\"max_bytes\":4}", &ctx);
+    CHECK(cache_page && cache_page->ok && strstr(cache_page->output,"file_page_cache=MISS") &&
+          strstr(cache_page->output,"new ") && !strstr(cache_page->output,"CCCC"));
+    tool_result_free(cache_page); fs_remove("state-test/w/cache-read.txt");
     tx *tx = tx_begin(tm, snap, reg, &ctx);
 
     /* write a file inside the tx (workspace-relative path resolves to
@@ -2529,9 +2564,10 @@ static int progress_fixture_chat(llm *self,const llm_request *req,llm_response *
     } else if (f->mode==2) { /* Same plan, but source really changed. */
         if (f->calls>12) resp->content=xstrdup("变化资料读取完成");
         else {
-            char changed[3500]; memset(changed,'x',3000);
-            snprintf(changed+3000,sizeof(changed)-3000,"content version %d",f->calls);
-            fs_write_file("state-test/progress-loop/changed.txt",changed,strlen(changed));
+            char changed[3500]; size_t prefix=3000u+(size_t)f->calls;
+            memset(changed,'x',prefix);
+            int n=snprintf(changed+prefix,sizeof(changed)-prefix," content version %d",f->calls);
+            fs_write_file("state-test/progress-loop/changed.txt",changed,prefix+(size_t)n);
             resp->content=xstrdup("[{\"tool\":\"file_read\",\"args\":{\"path\":\"changed.txt\"}}]");
         }
     } else if (f->mode==3 && f->recovered) {

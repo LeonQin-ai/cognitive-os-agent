@@ -86,6 +86,11 @@ const tool *tool_file_read(void);
 const tool *tool_list_dir(void);
 const tool *tool_file_write(void);
 const tool *tool_file_edit(void);
+/* Assemble a fully cached text file for this session without disk I/O.
+ * Returns NULL until contiguous cached pages reach EOF. Caller frees. */
+char *tool_file_cached_content(const char *session_id, const char *absolute_path);
+/* Retrieve query-relevant lines from cached pages in the same session. */
+char *tool_file_cache_context(const char *session_id, const char *query, size_t max_bytes);
 const tool *tool_shell(void);
 const tool *tool_ssh(void);
 /* Local-only SSH credential vault. The returned secret must be wiped and freed

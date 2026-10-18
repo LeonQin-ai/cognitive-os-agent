@@ -257,6 +257,20 @@ long long fs_file_size(const char *path) {
     return sz;
 }
 
+uint64_t fs_file_version(const char *path) {
+    wchar_t *w = fs_wpath(path);
+    WIN32_FILE_ATTRIBUTE_DATA data;
+    if (!w || !GetFileAttributesExW(w, GetFileExInfoStandard, &data) ||
+        (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) { free(w); return 0; }
+    free(w);
+    uint64_t size = ((uint64_t)data.nFileSizeHigh << 32) | data.nFileSizeLow;
+    uint64_t stamp = ((uint64_t)data.ftLastWriteTime.dwHighDateTime << 32) | data.ftLastWriteTime.dwLowDateTime;
+    uint64_t h = UINT64_C(1469598103934665603);
+    h = (h ^ size) * UINT64_C(1099511628211);
+    h = (h ^ stamp) * UINT64_C(1099511628211);
+    return h ? h : 1;
+}
+
 void fs_list_free(dir_list *l) {
     for (size_t i = 0; i < l->count; i++)
         free(l->items[i].name);

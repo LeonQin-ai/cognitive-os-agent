@@ -237,6 +237,7 @@ struct reasoning {
      * not make alternating old reads look like newly discovered evidence. */
     uint64_t observation_seen[2048];
     int observation_seen_n, round_new_observations, round_repeat_reads;
+    int progress_cycle_warning_active;
     struct { char *path; unsigned long long next; } pending_reads[128];
     int pending_reads_n;
     int read_tracking_overflow;
@@ -1405,11 +1406,33 @@ static char *build_context(reasoning *r, const char *prompt) {
         free(hits);
     }
 
+    /* L1 page cache: recover older, still-version-valid source excerpts by
+     * relevance when their original tool output falls outside the bounded
+     * recent observation window. Scope is the active session only. */
+    char *cached_pages = tool_file_cache_context(r->cur->id, prompt, 4000);
+    if (cached_pages) {
+        strbuf_append(&b, "## Cached file excerpts (session/version validated)\n");
+        strbuf_append(&b, cached_pages);
+        strbuf_append(&b, "\n");
+        free(cached_pages);
+    }
+
     /* agent-loop feedback: results of the rounds executed so far in this run,
      * so the planner can decide "next actions" vs "task complete" */
     if (r->round_log_len > 0) {
         strbuf_appendf(&b, "## 之前轮次的动作结果 (第 %d/%d 轮)\n", r->round_idx - 1, r->max_rounds);
-        strbuf_append(&b, r->round_log);
+        /* Keep the full run log for the UI, but bound repeated planner input.
+         * Otherwise each round resends every prior page and burns tokens. */
+        size_t log_start = r->round_log_len > 12000 ? r->round_log_len - 12000 : 0;
+        while (log_start < r->round_log_len &&
+               (((unsigned char)r->round_log[log_start] & 0xc0) == 0x80)) log_start++;
+        if (log_start)
+            strbuf_append(&b, "[Earlier action log compressed; full log is retained. Recent observations follow.]\n");
+        if (strstr(r->round_log, "(earlier action results were folded away"))
+            strbuf_append(&b, "(earlier action results were folded away to fit the budget)\n");
+        if (r->progress_cycle_warning_active)
+            strbuf_append(&b, "[system] 检测到跨轮次循环：多轮交替读取或检查只返回已有结果，没有新增进展。不要重读相同文件页；请读取缺失的新页、修正失败原因并验证产物，或直接根据已有证据回答。\n");
+        strbuf_append(&b, r->round_log + log_start);
         if (r->round_idx >= r->max_rounds)
             strbuf_append(&b, "\n这是最后一轮。不要再调用任何工具，也不要输出 JSON 动作；"
                                   "直接基于以上动作结果用纯文本给出最终答案（说明完成了什么、"
@@ -1836,6 +1859,27 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
         } else {
             rc = -1;
         }
+        /* Cache-hit metadata intentionally differs from the first disk read,
+         * but that is not new source evidence. Compare the actual file page
+         * body so cache warming cannot reset the no-progress circuit breaker. */
+        if (!strcmp(r->actions[i].tool, "file_read") && rc == 0) {
+            const char *observed = full_step_out ? full_step_out : step_out;
+            const char *body = observed;
+            const char *range = observed ? strstr(observed, "[bytes ") : NULL;
+            const char *cache_tag = range ? strstr(range, "; file_page_cache=") : NULL;
+            const char *nl = range ? strchr(range, '\n') : NULL;
+            if (nl) body = nl + 1;
+            if (range && cache_tag) {
+                /* Keep byte range/status in the fingerprint so distinct
+                 * pages count as progress; exclude cache HIT/MISS and version
+                 * metadata, which do not change the source evidence. */
+                uint64_t range_hash = hash64(range, (size_t)(cache_tag - range));
+                uint64_t body_hash = hash64(body ? body : "", body ? strlen(body) : 0);
+                output_hash = range_hash ^ (body_hash * UINT64_C(0x9e3779b185ebca87));
+            } else {
+                output_hash = hash64(body ? body : "", body ? strlen(body) : 0);
+            }
+        }
         trace_end(r->trace, tool_span, rc == 0 ? 1 : -1);
         r->prog_tool_ms += time_now_ms() - t_tool0;
         run_step_add(r, r->actions[i].tool, r->actions[i].args_json, full_step_out ? full_step_out : step_out, rc == 0 ? 1 : 0,
@@ -1898,11 +1942,19 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
                 if (pj && cJSON_IsString(pj) && pj->valuestring) {
                     char full[2048];
                     path_resolve(full, sizeof(full), r->workspace, pj->valuestring);
-                    char *content = fs_read_file(full);
+                    char *canonical = fs_absolute_path(full);
+                    const char *index_path = canonical ? canonical : full;
+                    /* Avoid rereading the whole file from disk after each
+                     * page read just to populate the code index. Index only
+                     * once this session cache contains all pages through EOF. */
+                    char *content = !strcmp(r->actions[i].tool, "file_read")
+                        ? tool_file_cached_content(r->cur->id, index_path)
+                        : fs_read_file(index_path);
                     if (content) {
-                        index_add_file(r->index, full, content);
+                        index_add_file(r->index, index_path, content);
                         free(content);
                     }
+                    free(canonical);
                 }
                 if (ao)
                     cJSON_Delete(ao);
@@ -3049,6 +3101,7 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     r->round_search_skips = 0;
     r->observation_seen_n = 0;
     r->round_new_observations = r->round_repeat_reads = 0;
+    r->progress_cycle_warning_active = 0;
     pending_reads_clear(r);
 
      /* LLM's plain-text answer (had_plan == 0) */
@@ -3116,11 +3169,13 @@ restart_planning:
         if (r->had_plan && r->n_actions>0) {
             if (r->round_new_observations>0) {
                 no_progress_rounds=cycle_reads=cycle_nudged=0;
+                r->progress_cycle_warning_active=0;
             } else {
                 no_progress_rounds++;
                 cycle_reads += r->round_repeat_reads;
                 if (no_progress_rounds>=4 && cycle_reads>=2 && !cycle_nudged) {
                     cycle_nudged=1;
+                    r->progress_cycle_warning_active=1;
                     round_log_append(r,"[system] 检测到跨轮次循环：多轮交替读取或检查只返回已有结果，没有新增进展。"
                         "不要重读相同文件页或换序执行旧检查；请读取真正缺失的新页、修正失败原因并验证产物，"
                         "或直接根据已有证据回答。继续重复将停止本次无进展循环。");
