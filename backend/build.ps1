@@ -3,7 +3,27 @@ $ErrorActionPreference='Stop'
 Push-Location $PSScriptRoot
 try {
     $zigCompiler = Join-Path $PSScriptRoot 'tools/zig/zig.exe'
-    if (!(Test-Path -LiteralPath $zigCompiler)) { $zigCompiler = (Get-Command zig -ErrorAction Stop).Source }
+    $useBootstrap = !(Test-Path -LiteralPath $zigCompiler)
+    if (!$useBootstrap) {
+        $localVersion = (& $zigCompiler version 2>$null)
+        $versionExitCode = $LASTEXITCODE
+        $useBootstrap = $versionExitCode -ne 0 -or $localVersion.Trim() -ne '0.14.1'
+    }
+    if ($useBootstrap) {
+        $systemZig = Get-Command zig -ErrorAction SilentlyContinue
+        $systemVersion = $null
+        if ($systemZig) {
+            $systemVersion = (& $systemZig.Source version 2>$null)
+            $systemVersionExitCode = $LASTEXITCODE
+        }
+        if ($systemZig -and $systemVersionExitCode -eq 0 -and $systemVersion.Trim() -eq '0.14.1' -and
+            !(Test-Path -LiteralPath (Join-Path $PSScriptRoot 'tools/zig/zig.exe'))) {
+            $zigCompiler = $systemZig.Source
+        } else {
+            & (Join-Path $PSScriptRoot 'tools/ensure-zig.ps1')
+            $zigCompiler = Join-Path $PSScriptRoot 'tools/zig/zig.exe'
+        }
+    }
     python tools/gen_attachment_extractor.py
     if ($LASTEXITCODE) { throw 'Attachment processor generation failed' }
     python tools/gen_web_ui.py

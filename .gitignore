@@ -76,3 +76,5 @@ webarena-run/
 mcp-test/
 code.lnk
 backend/tools/zig/
+backend/tools/.zig-bootstrap-*/
+backend/tools/.zig-backup-*/

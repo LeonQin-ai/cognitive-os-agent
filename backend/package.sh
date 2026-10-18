@@ -11,7 +11,8 @@
 # backend (cognitive-os-agent.exe serve 18300) and opens the web console at
 # http://localhost:18300/ — no console, no separate browser.
 #
-# Prerequisites: bundled zig (tools/zig or PATH), python, and Inno Setup
+# Prerequisites: Windows + PowerShell, python, and Inno Setup.
+# Zig 0.14.1 is downloaded and checksum-verified on demand when needed.
 # (`winget install JRSoftware.InnoSetup`).
 #
 # Usage:
@@ -37,8 +38,26 @@ if   [ -x tools/zig/zig.exe ];            then ZIG="tools/zig/zig.exe"
 elif [ -x tools/zig/zig ];                then ZIG="tools/zig/zig"
 elif command -v zig >/dev/null 2>&1;      then ZIG="zig"
 else
-    echo "ERROR: zig not found (tools/zig or PATH)." >&2
-    exit 1
+    if command -v powershell.exe >/dev/null 2>&1; then
+        powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/ensure-zig.ps1
+    elif command -v pwsh >/dev/null 2>&1; then
+        pwsh -NoProfile -ExecutionPolicy Bypass -File tools/ensure-zig.ps1
+    else
+        echo "ERROR: zig not found and PowerShell is unavailable to download the pinned Windows compiler." >&2
+        exit 1
+    fi
+    ZIG="tools/zig/zig.exe"
+fi
+if [ "$("$ZIG" version 2>/dev/null || true)" != "0.14.1" ]; then
+    if command -v powershell.exe >/dev/null 2>&1; then
+        powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/ensure-zig.ps1
+    elif command -v pwsh >/dev/null 2>&1; then
+        pwsh -NoProfile -ExecutionPolicy Bypass -File tools/ensure-zig.ps1
+    else
+        echo "ERROR: Zig is not 0.14.1 and PowerShell is unavailable to update the cached Windows compiler." >&2
+        exit 1
+    fi
+    ZIG="tools/zig/zig.exe"
 fi
 command -v python >/dev/null 2>&1 || { echo "ERROR: python required to generate the icon." >&2; exit 1; }
 

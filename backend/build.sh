@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# cognitive-os-agent build script — compiles with the bundled portable zig toolchain.
+# cognitive-os-agent build script — compiles with the pinned Zig toolchain on Windows.
 #   build.sh            build everything
 #   build.sh cli        build only the CLI
 #   build.sh test       build only the test binary
@@ -14,8 +14,38 @@ elif [ -x tools/zig/zig.exe ]; then ZIG="tools/zig/zig.exe"
 elif [ -x tools/zig/zig     ]; then ZIG="tools/zig/zig"
 elif command -v zig >/dev/null 2>&1; then ZIG="zig"
 else
-  echo "ERROR: zig not found. Download it to tools/ (see README) or install zig into PATH." >&2
-  exit 1
+  case "$OS" in
+  MINGW*|MSYS*|CYGWIN*)
+    if command -v powershell.exe >/dev/null 2>&1; then
+      powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/ensure-zig.ps1
+      ZIG="tools/zig/zig.exe"
+    elif command -v pwsh >/dev/null 2>&1; then
+      pwsh -NoProfile -ExecutionPolicy Bypass -File tools/ensure-zig.ps1
+      ZIG="tools/zig/zig.exe"
+    else
+      echo "ERROR: zig not found and PowerShell is unavailable to download the pinned Windows compiler." >&2
+      exit 1
+    fi
+    ;;
+  *)
+    echo "ERROR: zig not found. Install Zig or use the platform's documented build command." >&2
+    exit 1
+    ;;
+  esac
+fi
+
+# Keep the local cached Windows compiler aligned with CI. A stale local Zig
+# should not silently build the release with a different toolchain version.
+if [[ "$OS" == MINGW* || "$OS" == MSYS* || "$OS" == CYGWIN* ]] && [ "$("$ZIG" version 2>/dev/null || true)" != "0.14.1" ]; then
+  if command -v powershell.exe >/dev/null 2>&1; then
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/ensure-zig.ps1
+  elif command -v pwsh >/dev/null 2>&1; then
+    pwsh -NoProfile -ExecutionPolicy Bypass -File tools/ensure-zig.ps1
+  else
+    echo "ERROR: tools/zig/zig.exe is not Zig 0.14.1 and PowerShell is unavailable to update it." >&2
+    exit 1
+  fi
+  ZIG="tools/zig/zig.exe"
 fi
 
 if [[ "$OS" == Darwin* ]]; then

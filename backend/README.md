@@ -38,8 +38,10 @@ Infrastructure      logging · config · metrics · audit (JSONL) · persistence
 
 ## Build
 
-The repo bundles a portable **Zig** toolchain under `tools/zig/` so `zig cc` acts as a
-gcc-compatible C compiler with no system compiler required.
+On Windows, the build scripts use Zig 0.14.1 from `tools/zig/` or `PATH`. If neither
+contains that version, the first build downloads the official Windows archive,
+verifies its SHA-256, and caches it under the git-ignored `tools/zig/` directory.
+No system C compiler is required.
 
 - **Windows**: `.\build.ps1 all` (or `build.bat` / `./build.sh`)
 - **Linux / macOS**: `make`; macOS can additionally run `bash package-macos.sh`
