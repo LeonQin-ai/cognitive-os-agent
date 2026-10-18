@@ -81,6 +81,7 @@ int router_add_ex(router *r, const char *name, const char *provider, const char 
             e->weight = weight;
             e->cost_rank = cost_rank;
             e->latency_ms = latency_ms;
+            e->context_window_tokens = 0;
             mutex_unlock(&r->mtx);
             return 0;
         }
@@ -110,6 +111,20 @@ int router_add_ex(router *r, const char *name, const char *provider, const char 
     e->latency_ms = latency_ms;
     mutex_unlock(&r->mtx);
     return 0;
+}
+
+int router_set_context_window(router *r, const char *name, long long tokens) {
+    if (!r || !name || tokens < 0 || tokens > 4000000) return -1;
+    mutex_lock(&r->mtx);
+    for (size_t i = 0; i < r->count; i++) {
+        if (strcmp(r->routes[i].name, name) == 0) {
+            r->routes[i].context_window_tokens = tokens;
+            mutex_unlock(&r->mtx);
+            return 0;
+        }
+    }
+    mutex_unlock(&r->mtx);
+    return -1;
 }
 
 int router_remove(router *r, const char *name) {
@@ -301,6 +316,8 @@ char *router_json(router *r) {
         cJSON_AddNumberToObject(o, "calls", (double)e->calls);
         cJSON_AddNumberToObject(o, "cost_rank", e->cost_rank);
         cJSON_AddNumberToObject(o, "latency_ms", e->latency_ms);
+        if (e->context_window_tokens > 0)
+            cJSON_AddNumberToObject(o, "context_window_tokens", (double)e->context_window_tokens);
         if (e->caps)
             cJSON_AddStringToObject(o, "caps", e->caps);
         cJSON_AddItemToArray(arr, o);
@@ -386,6 +403,7 @@ int router_load_file(router *r, const char *path) {
     cJSON *c;
     cJSON *l;
     cJSON *cp;
+    cJSON *cw;
     double weight;
     int cost;
     int lat;
@@ -403,6 +421,7 @@ int router_load_file(router *r, const char *path) {
         c = cJSON_GetObjectItemCaseSensitive(it, "cost_rank");
         l = cJSON_GetObjectItemCaseSensitive(it, "latency_ms");
         cp = cJSON_GetObjectItemCaseSensitive(it, "caps");
+        cw = cJSON_GetObjectItemCaseSensitive(it, "context_window_tokens");
         weight = (w && cJSON_IsNumber(w)) ? w->valuedouble : 1.0;
         cost = (c && cJSON_IsNumber(c)) ? (int)c->valuedouble : 0;
         lat = (l && cJSON_IsNumber(l)) ? (int)l->valuedouble : 0;
@@ -410,6 +429,7 @@ int router_load_file(router *r, const char *path) {
         router_add_ex(r, name->valuestring, prov->valuestring, (b && cJSON_IsString(b)) ? b->valuestring : NULL,
                           (k && cJSON_IsString(k)) ? k->valuestring : NULL,
                           (m && cJSON_IsString(m)) ? m->valuestring : NULL, weight, cost, lat, caps);
+        if (cw && cJSON_IsNumber(cw)) router_set_context_window(r, name->valuestring, (long long)cw->valuedouble);
     }
 
     cJSON_Delete(arr);

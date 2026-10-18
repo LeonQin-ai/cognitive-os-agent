@@ -178,6 +178,17 @@ const llm_caps *llm_capabilities(llm *llm) {
     return &unknown_caps;
 }
 
+long long llm_context_window_tokens(const llm *l) {
+    if (!l) return 32768;
+    if (l->context_window_tokens > 0) return l->context_window_tokens;
+    /* The offline mock emits synthetic 256-action plans for regression runs;
+     * it has no upstream context limit despite its legacy capability hint. */
+    if (l->provider && strcmp(l->provider, "mock") == 0) return 131072;
+    /* OpenAI-compatible is a protocol, not a model size. An unconfigured
+     * route gets a conservative fallback rather than the provider-wide cap. */
+    return 32768;
+}
+
 void llm_usage_totals(const llm *l, long long *tokens_in, long long *tokens_out) {
     if (tokens_in)
         *tokens_in = l ? l->usage_in : 0;

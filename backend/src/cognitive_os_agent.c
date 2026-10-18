@@ -958,6 +958,7 @@ int init(runtime_ctx *ctx, const config *cfg) {
                 if (best && best->provider && *best->provider) {
                     llm *nl = llm_create(best->provider, best->base_url, best->api_key, best->model);
                     if (nl) {
+                        nl->context_window_tokens = best->context_window_tokens;
                         char cfgfile[600];
                         llm_destroy(ctx->llm);
                         ctx->llm = nl;
@@ -984,6 +985,17 @@ int init(runtime_ctx *ctx, const config *cfg) {
         const char *pol = config_get_str(ctx->config, "llm.route_policy", "");
         if (pol && *pol)
             router_set_policy(ctx->router, pol);
+        for (int i = 0; i < router_count(ctx->router); i++) {
+            const route *rt = router_get(ctx->router, (size_t)i);
+            if (rt && rt->provider && strcmp(rt->provider, provider) == 0 &&
+                strcmp(rt->model ? rt->model : "", model ? model : "") == 0 &&
+                strcmp(rt->base_url ? rt->base_url : "", base_url ? base_url : "") == 0) {
+                if (rt->context_window_tokens > 0) {
+                    ctx->llm->context_window_tokens = rt->context_window_tokens;
+                    break;
+                }
+            }
+        }
     }
 
     /* built-in demo skill (cross-platform: echo works in cmd.exe and sh) */
@@ -1334,6 +1346,21 @@ int set_llm(runtime_ctx *ctx, const char *provider, const char *base_url, const 
     if (!nl)
         return -1;
 
+    /* The UI activates a saved route through set_llm. Carry its model-specific
+     * window into the live instance before any lane can plan with it. */
+    if (ctx->router) {
+        for (int i = 0; i < router_count(ctx->router); i++) {
+            const route *rt = router_get(ctx->router, (size_t)i);
+            if (rt && rt->provider && strcmp(rt->provider, provider) == 0 &&
+                strcmp(rt->model ? rt->model : "", model ? model : "") == 0 &&
+                strcmp(rt->base_url ? rt->base_url : "", base_url ? base_url : "") == 0) {
+                if (rt->context_window_tokens > 0) {
+                    nl->context_window_tokens = rt->context_window_tokens;
+                    break;
+                }
+            }
+        }
+    }
     /* swap the LLM into every chat lane; each lane lock excludes in-flight
      * runs on that lane (no global run-lock — lanes are the only runners) */
     for (int i = 0; i < CHAT_LANE_MAX; i++) {

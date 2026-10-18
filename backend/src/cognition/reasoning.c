@@ -1225,6 +1225,7 @@ static char *str_head(const char *s, size_t cap) {
  * Caller frees the returned string. */
 static char *build_context(reasoning *r, const char *prompt) {
     strbuf b;
+    size_t input_budget = planner_input_budget_bytes(r->llm, r->tools, r->skills, r->policy);
     size_t warm_used = 0;
     size_t hot_mark;
     size_t cold_mark;
@@ -1409,7 +1410,7 @@ static char *build_context(reasoning *r, const char *prompt) {
     /* L1 page cache: recover older, still-version-valid source excerpts by
      * relevance when their original tool output falls outside the bounded
      * recent observation window. Scope is the active session only. */
-    char *cached_pages = tool_file_cache_context(r->cur->id, prompt, 4000);
+    char *cached_pages = tool_file_cache_context(r->cur->id, prompt, input_budget / 3);
     if (cached_pages) {
         strbuf_append(&b, "## Cached file excerpts (session/version validated)\n");
         strbuf_append(&b, cached_pages);
@@ -1423,7 +1424,8 @@ static char *build_context(reasoning *r, const char *prompt) {
         strbuf_appendf(&b, "## 之前轮次的动作结果 (第 %d/%d 轮)\n", r->round_idx - 1, r->max_rounds);
         /* Keep the full run log for the UI, but bound repeated planner input.
          * Otherwise each round resends every prior page and burns tokens. */
-        size_t log_start = r->round_log_len > 12000 ? r->round_log_len - 12000 : 0;
+        size_t log_budget = input_budget / 2;
+        size_t log_start = r->round_log_len > log_budget ? r->round_log_len - log_budget : 0;
         while (log_start < r->round_log_len &&
                (((unsigned char)r->round_log[log_start] & 0xc0) == 0x80)) log_start++;
         if (log_start)
@@ -1472,6 +1474,23 @@ static char *build_context(reasoning *r, const char *prompt) {
         metrics_set(r->metrics, "context.bytes_cold", (double)(b.len - cold_mark));
     }
 
+    /* Drop the oldest background if other tiers already filled the selected
+     * model's input allowance. Keep the latest observations, constraints and
+     * current request; the complete log remains on disk and in the UI. */
+    size_t request_bytes = strlen(prompt) + strlen("## Current request\n");
+    if (b.len + request_bytes > input_budget) {
+        const char *omitted = "[Older context omitted to fit this model's window.]\n";
+        size_t allowance = input_budget > request_bytes ? input_budget - request_bytes : 0;
+        size_t keep = allowance > strlen(omitted) ? allowance - strlen(omitted) : 0;
+        size_t start = b.len > keep ? b.len - keep : 0;
+        while (start < b.len && ((unsigned char)b.buf[start] & 0xc0) == 0x80) start++;
+        strbuf tail;
+        strbuf_init(&tail);
+        if (allowance > strlen(omitted)) strbuf_append(&tail, omitted);
+        strbuf_append(&tail, b.buf + start);
+        strbuf_free(&b);
+        b = tail;
+    }
     strbuf_append(&b, "## Current request\n");
     strbuf_append(&b, prompt);
     return strbuf_detach(&b);
@@ -3031,6 +3050,7 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
         if (rt) {
             picked = llm_create(rt->provider, rt->base_url, rt->api_key, rt->model);
             if (picked) {
+                picked->context_window_tokens = rt->context_window_tokens;
                 saved = r->llm;
                 r->llm = picked;
             }

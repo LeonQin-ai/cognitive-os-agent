@@ -23,6 +23,7 @@ typedef struct route {
     int cost_rank;   /* 1 = cheapest; 0 = unknown (excluded from cost policy) */
     int latency_ms;  /* nominal latency; 0 = unknown (excluded from latency policy) */
     char *caps;      /* comma-separated capability tags ("tools,json,long_ctx") */
+    long long context_window_tokens; /* 0 = unknown */
 } route;
 
 router *router_new(void);
@@ -34,6 +35,7 @@ int router_add(router *r, const char *name, const char *provider, const char *ba
  * caps = comma-separated capability tags (may be NULL). */
 int router_add_ex(router *r, const char *name, const char *provider, const char *base_url, const char *api_key,
                       const char *model, double weight, int cost_rank, int latency_ms, const char *caps);
+int router_set_context_window(router *r, const char *name, long long tokens);
 /* Remove a route by name (no-op if absent). Returns 1 if removed, 0 otherwise. */
 int router_remove(router *r, const char *name);
 

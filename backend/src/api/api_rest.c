@@ -1908,10 +1908,14 @@ static int h_route_add(const http_request *req, http_response *resp, void *ud) {
         return 0;
     }
 
-    if (ctx->router)
+    if (ctx->router) {
         router_add_ex(ctx->router, name, provider, json_str(root, "base_url"), json_str(root, "api_key"),
                           json_str(root, "model"), json_dbl(root, "weight", 1.0), (int)json_dbl(root, "cost_rank", 0),
                           (int)json_dbl(root, "latency_ms", 0), json_str(root, "caps"));
+        cJSON *window = cJSON_GetObjectItemCaseSensitive(root, "context_window_tokens");
+        if (window && cJSON_IsNumber(window))
+            router_set_context_window(ctx->router, name, (long long)window->valuedouble);
+    }
     cJSON_Delete(root);
     s = ctx->router ? router_json(ctx->router) : xstrdup("[]");
     http_resp_json(resp, s ? s : "[]");

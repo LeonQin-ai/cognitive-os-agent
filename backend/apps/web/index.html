@@ -1532,8 +1532,8 @@ panels.models = `
     </div>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Name</th><th>Provider</th><th>Model</th><th>Base URL</th><th>W</th><th>Calls</th><th></th></tr></thead>
-        <tbody id="routes-body"><tr><td colspan="7" class="muted">加载中…</td></tr></tbody>
+        <thead><tr><th>Name</th><th>Provider</th><th>Model</th><th>Base URL</th><th>上下文 tokens</th><th>W</th><th>Calls</th><th></th></tr></thead>
+        <tbody id="routes-body"><tr><td colspan="8" class="muted">加载中…</td></tr></tbody>
       </table>
     </div>
   </div>
@@ -1564,6 +1564,7 @@ panels.models = `
     <div class="row">
       <input id="r-key" type="password" autocomplete="new-password" placeholder="api_key" style="flex:2;min-width:180px">
       <input id="r-weight" type="text" placeholder="weight (默认 1)" value="1" style="flex:1;min-width:80px">
+      <input id="r-context" type="number" min="1024" max="4000000" placeholder="上下文 tokens（未知留空）" style="flex:1;min-width:170px">
     </div>
     <div class="row">
       <button onclick="addRoute()">Add route</button>
@@ -4474,7 +4475,7 @@ async function loadModels(){
       + (ACTIVE.api_key_set ? '' : '（未配置 api_key）');
   const t = $('routes-body');
   if(!t) return;
-  if(!ROUTES.length){ t.innerHTML = '<tr><td colspan="7" class="muted">（暂无路由）</td></tr>'; return; }
+  if(!ROUTES.length){ t.innerHTML = '<tr><td colspan="8" class="muted">（暂无路由）</td></tr>'; return; }
   const ap = ACTIVE.provider || '';
   t.innerHTML = ROUTES.map((x, i) => {
     /* active = 路由与当前激活 LLM 的 provider+model+base_url 一致（自动路由已不再按名对应） */
@@ -4486,9 +4487,11 @@ async function loadModels(){
       + '<td>' + esc(x.provider || '') + '</td>'
       + '<td>' + esc(x.model || '') + '</td>'
       + '<td class="muted">' + esc(x.base_url || '') + '</td>'
+      + '<td>' + (x.context_window_tokens || '未知（按 32K）') + '</td>'
       + '<td>' + (x.weight != null ? x.weight : 1) + '</td>'
       + '<td>' + (x.calls != null ? x.calls : 0) + '</td>'
       + '<td><button onclick="testRoute(' + i + ')" class="sec sm">Test</button> '
+      + '<button onclick="editRouteContext(' + i + ')" class="sec sm">改窗口</button> '
       + '<button onclick="editRouteKey(' + i + ')" class="sec sm">改Key</button> '
       + '<button onclick="setActive(' + i + ')" class="sec sm"' + (isActive ? ' disabled' : '') + '>Set active</button> '
       + '<button onclick="deleteRoute(' + i + ')" class="sec sm danger">Delete</button></td></tr>';
@@ -4521,10 +4524,30 @@ async function editRouteKey(i){
   const st = $('models-stat'); if(st) st.textContent = 'updating key…';
   const r = await call('POST', '/v1/routes', {
     name: x.name, provider: x.provider, base_url: x.base_url || '', model: x.model || '',
-    api_key: k.trim(), weight: x.weight != null ? x.weight : 1
+    api_key: k.trim(), weight: x.weight != null ? x.weight : 1,
+    context_window_tokens: x.context_window_tokens || 0
   });
   if(st) st.textContent = (r.status < 300) ? 'API Key 已更新' : 'error ' + r.status;
   loadModels();
+}
+
+async function editRouteContext(i){
+  const x = ROUTES[i]; if(!x) return;
+  const raw = prompt('模型上下文窗口（tokens，按供应商公布值填写）：', x.context_window_tokens || '');
+  if(raw === null) return;
+  const tokens = Number(raw.trim());
+  if(!Number.isInteger(tokens) || tokens < 1024 || tokens > 4000000){
+    toast('请输入 1024 到 4000000 之间的整数'); return;
+  }
+  const r = await call('POST', '/v1/routes', {
+    name:x.name, provider:x.provider, base_url:x.base_url || '', model:x.model || '',
+    api_key:x.api_key || '', weight:x.weight != null ? x.weight : 1,
+    context_window_tokens:tokens
+  });
+  if(r.status < 300 && (x.provider || '') === (ACTIVE.provider || '') &&
+     (x.model || '') === (ACTIVE.model || '') && (x.base_url || '') === (ACTIVE.base_url || ''))
+    await setActive(i);
+  else loadModels();
 }
 
 /* ===== 拉取供应商可用模型列表（issue #18）===== */
@@ -4632,11 +4655,14 @@ async function addRoute(){
   };
   const w = parseFloat($('r-weight').value);
   if(!isNaN(w)) body.weight = w;
+  const context = Number($('r-context').value);
+  if($('r-context').value.trim() && Number.isInteger(context) && context >= 1024)
+    body.context_window_tokens = context;
   const r = await call('POST', '/v1/routes', body);
   if(msg) msg.textContent = (r.status < 300) ? 'route saved'
       : (r.obj && r.obj.error) ? 'error: ' + r.obj.error : 'error ' + r.status;
   if(r.status < 300){
-    $('r-name').value = ''; $('r-base').value = ''; $('r-key').value = ''; $('r-model').value = '';
+    $('r-name').value = ''; $('r-base').value = ''; $('r-key').value = ''; $('r-model').value = ''; $('r-context').value = '';
   }
   loadModels();
 }

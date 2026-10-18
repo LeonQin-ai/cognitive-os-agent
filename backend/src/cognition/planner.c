@@ -578,6 +578,25 @@ invalid:
 }
 
 /* Shared planning core. Takes ownership of nothing; frees sys_prompt. */
+static int planner_output_tokens(llm *l) {
+    long long window = llm_context_window_tokens(l);
+    long long output = window / 4;
+    if (output > 32768) output = 32768;
+    if (output < 1024) output = 1024;
+    return (int)output;
+}
+
+size_t planner_input_budget_bytes(llm *l, const tool_registry *tools,
+    struct skill_registry *skills, struct policy_engine *policy) {
+    char *sys = build_catalog_prompt(tools, skills, policy);
+    size_t sys_bytes = strlen(sys ? sys : SYS_PROMPT);
+    free(sys);
+    long long available = llm_context_window_tokens(l) - planner_output_tokens(l) - 1024;
+    /* Two UTF-8 bytes per token leaves room for Chinese, code and JSON. */
+    available -= (long long)(sys_bytes + 1) / 2;
+    return available > 0 ? (size_t)available * 2 : 0;
+}
+
 static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_action **actions, int *n_actions,
                      char **raw_out, char **err_out, const char *attachments) {
     llm_request req = {0};
@@ -673,14 +692,14 @@ static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_act
         req.timeout_ms=limit<global ? limit:global;
         log_info("planner: visual request model=%s timeout_ms=%ld max_tokens=8192",llm->model ? llm->model:"unknown",req.timeout_ms);
     }
-    req.max_tokens = 32768; /* tool plans carrying file_write content (whole
+    req.max_tokens = planner_output_tokens(llm); /* tool plans carrying file_write content (whole
                              * scripts) need real headroom; 2048 truncated the
                              * JSON mid-string and the plan was lost. Thinking
                              * models spend reasoning tokens from the SAME
                              * budget — glm-5.3-flash burned all 8192 on
                              * invisible reasoning and returned empty content
                              * (finish_reason=length) */
-    if(visual) req.max_tokens=8192;
+    if(visual && req.max_tokens>8192) req.max_tokens=8192;
     rc = llm_chat(llm, &req, &resp);
     for (int i=0;i<28;i++) free(owned[i]);
     cJSON_Delete(files);

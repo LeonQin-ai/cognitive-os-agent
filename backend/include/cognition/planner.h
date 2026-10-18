@@ -14,6 +14,11 @@ struct tool_registry;  /* action/tools.h */
 struct skill_registry; /* action/skill.h */
 struct policy_engine;  /* runtime/policy_engine.h */
 
+/* Conservative user-prompt byte allowance after system catalog, response and
+ * protocol headroom are reserved from the selected model's context window. */
+size_t planner_input_budget_bytes(llm *llm, const struct tool_registry *tools,
+    struct skill_registry *skills, struct policy_engine *policy);
+
 typedef struct planned_action {
     char *tool;      /* tool name, e.g. "file_write" */
     char *args_json; /* JSON object string of arguments, e.g. "{\"path\":\"a\"}" */

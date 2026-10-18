@@ -1349,6 +1349,14 @@ static void test_llm_caps_cancel(void) {
     if (oai) {
         const llm_caps *c = llm_capabilities(oai);
         CHECK(c && c->stream == 1 && c->tools == 1 && c->max_ctx == 128000);
+        size_t fallback = planner_input_budget_bytes(oai, NULL, NULL, NULL);
+        oai->context_window_tokens = 8192;
+        size_t small = planner_input_budget_bytes(oai, NULL, NULL, NULL);
+        oai->context_window_tokens = 131072;
+        size_t large = planner_input_budget_bytes(oai, NULL, NULL, NULL);
+        CHECK(llm_context_window_tokens(oai) == 131072);
+        CHECK(small < fallback && fallback < large);
+        CHECK(large > small * 10);
         llm_destroy(oai);
     }
     llm *ant = llm_create("anthropic", NULL, "k", NULL);
@@ -2891,6 +2899,14 @@ static void test_router(void) {
     if (!r) return;
     CHECK(router_add(r, "a", "openai", "https://a", "k", "gpt-4", 1.0) == 0);
     CHECK(router_add(r, "b", "anthropic", "https://b", NULL, "claude", 2.0) == 0);
+    CHECK(router_set_context_window(r, "a", 16384) == 0);
+    CHECK(router_get(r, 0)->context_window_tokens == 16384);
+    CHECK(router_save_file(r, "state-test/routes-context.json") == 0);
+    router *loaded = router_new();
+    CHECK(router_load_file(loaded, "state-test/routes-context.json") == 0);
+    CHECK(router_get(loaded, 0)->context_window_tokens == 16384);
+    router_free(loaded);
+    fs_remove("state-test/routes-context.json");
     CHECK(router_count(r) == 2);
     CHECK(router_pick(r) != NULL);
     CHECK(router_pick(r) != NULL);
@@ -7059,7 +7075,7 @@ static int selected_model_http(const http_request *req,http_response *resp,void 
            tokens->valueint==256 && cJSON_IsNumber(temperature) && temperature->valuedouble==1.0)
             atomic_store(&f->deepseek_probe_config,1);
         if(cJSON_IsString(effort) && !strcmp(effort->valuestring,"low") && cJSON_IsNumber(tokens) &&
-           tokens->valueint==32768 && cJSON_IsNumber(temperature) && temperature->valuedouble==1.0)
+           tokens->valueint==8192 && cJSON_IsNumber(temperature) && temperature->valuedouble==1.0)
             atomic_store(&f->deepseek_plan_config,1);
     }
     else atomic_fetch_add(&f->stale,1);
@@ -7116,10 +7132,14 @@ static void test_selected_model_routing(void) {
     /* A cheap stale route would win automatic routing. It must not win a
      * manual choice, including after reloading the persisted configuration. */
     router_add_ex(ctx.router,"stale-deepseek","openai","http://127.0.0.1:18231/v1","fixture-key","deepseek-flash",1,1,1,NULL);
+    CHECK(router_add(ctx.router,"window-route","openai","http://127.0.0.1:18231/v1",
+                     "fixture-key","nvidia/nemotron-3.5-super-vl:free",1)==0);
+    CHECK(router_set_context_window(ctx.router,"window-route",16384)==0);
     thread_t *api_thread=thread_create(th_serve_ctx,&ctx); time_sleep_ms(200);
     const char *choice="{\"provider\":\"openai\",\"base_url\":\"http://127.0.0.1:18231/v1\","
         "\"model\":\"nvidia/nemotron-3.5-super-vl:free\",\"api_key\":\"fixture-key\"}";
     cJSON *j=api_request_json(18232,"POST","/v1/config/llm",choice,200); cJSON_Delete(j);
+    CHECK(ctx.llm->context_window_tokens==16384);
     assert_chat_model(&ctx,"nvidia/nemotron-3.5-super-vl:free",1);
     CHECK(atomic_load(&f.selected)==1 && atomic_load(&f.stale)==0);
     j=api_request_json(18232,"POST","/v1/routes/policy","{\"policy\":\"cost\"}",200); cJSON_Delete(j);
@@ -7130,6 +7150,7 @@ static void test_selected_model_routing(void) {
     CHECK(atomic_load(&f.selected)==2 && atomic_load(&f.stale)==1);
     http_server_stop(ctx.http); thread_join(api_thread); runtime_shutdown(&ctx);
     CHECK(init(&ctx,&cfg)==0);
+    CHECK(ctx.llm->context_window_tokens==16384);
     api_thread=thread_create(th_serve_ctx,&ctx); time_sleep_ms(200);
     assert_chat_model(&ctx,"nvidia/nemotron-3.5-super-vl:free",1);
     CHECK(atomic_load(&f.selected)==3 && atomic_load(&f.stale)==1);

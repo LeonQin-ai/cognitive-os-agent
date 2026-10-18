@@ -53,6 +53,7 @@ struct llm {
     char *base_url;
     char *api_key;
     char *model;
+    long long context_window_tokens; /* route-specific override; 0 = unknown */
     void *impl;
     volatile int cancel; /* set by llm_cancel(); checked between stream deltas */
     /* cumulative token usage from provider "usage" objects (polled without a
@@ -99,6 +100,7 @@ void llm_cancel(llm *llm);
 
 /* Borrowed capability record for this provider (static, do not free). */
 const llm_caps *llm_capabilities(llm *llm);
+long long llm_context_window_tokens(const llm *llm);
 
 /* Cumulative token usage observed from provider "usage" objects across all
  * chats/streams on this instance (0 if the provider never reported usage).
