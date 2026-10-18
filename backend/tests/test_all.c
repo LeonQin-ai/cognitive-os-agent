@@ -2494,6 +2494,7 @@ static void test_rate_limit_stops_without_retry(void) {
         CHECK(rc!=0);
         CHECK(state.calls==1);
         CHECK(answer && strstr(answer,"http 429") && strstr(answer,"free-models-per-day"));
+        CHECK(answer && !strstr(answer,"连续 5 轮阶段失败"));
         free(answer); reasoning_free(r);
     }
     tool_registry_free(reg);

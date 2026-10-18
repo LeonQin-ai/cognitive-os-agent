@@ -3565,7 +3565,7 @@ restart_planning:
         }
     }
 
-    if (fail_aborted && !r->visual_request_failed)
+    if (fail_aborted && !r->visual_request_failed && consec_fail >= REASONING_CONSEC_FAIL_ABORT)
         strbuf_appendf(&out, "\n(连续 %s 轮阶段失败，任务中止 — 请根据执行记录中的真实错误修正后重试)",
                        REASONING_CONSEC_FAIL_ABORT_STR);
 
