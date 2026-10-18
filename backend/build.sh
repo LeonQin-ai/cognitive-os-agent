@@ -111,11 +111,15 @@ case "$TARGET" in
     echo "[build] cognitive-os-agent-bench-gaia"
     $CC $CFLAGS -o build/cognitive-os-agent-bench-gaia$EXE $SRCS tests/bench_gaia.c $LIBS
     ;;
+  test-plan-cycle)
+    echo "[build] cognitive-os-agent-test-plan-cycle"
+    $CC $CFLAGS -o build/cognitive-os-agent-test-plan-cycle$EXE $SRCS tests/test_plan_cycle.c $LIBS
+    ;;
   clean)
     rm -rf build
     ;;
   *)
-    echo "usage: $0 [all|cli|test|mock|e2e|bench|bench-real|bench-bfcl|bench-gaia|clean]" >&2
+    echo "usage: $0 [all|cli|test|mock|e2e|bench|bench-real|bench-bfcl|bench-gaia|test-plan-cycle|clean]" >&2
     exit 1
     ;;
 esac

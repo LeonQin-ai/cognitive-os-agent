@@ -222,12 +222,14 @@ struct reasoning {
     int had_plan;        /* last REASON produced tool actions (vs final text) */
     char *last_plan_raw; /* this round's raw plan (stall detection) */
     char *prev_plan;     /* previous round's raw plan (stall detection) */
+    uint64_t last_plan_action_sig, prev_plan_action_sig; /* JSON-semantic plan identity */
     char *round_log;     /* accumulated action results of previous rounds */
     size_t round_log_len, round_log_cap;
     char *obs_log;       /* user-facing executed-action log (no narrations/nudges) */
     size_t obs_log_len, obs_log_cap;
     uint64_t last_failed_action_sig;
     int same_action_failures;
+    int run_had_action_failure;
     int tool_fail_aborted;
     int run_mutated; /* successful effects retained; independent of UI step cap */
     uint64_t search_seen[512]; /* successful read-only discoveries in this run */
@@ -1525,6 +1527,8 @@ static char *build_context(reasoning *r, const char *prompt) {
     return strbuf_detach(&b);
 }
 
+static uint64_t plan_action_signature(const planned_action *actions, int n_actions);
+
 /* REASON: ask the LLM for a plan (JSON array of actions, or plain text). */
 static int h_reason(state_machine *sm, void *ud, const char *input, char **out) {
     reasoning *r = ud;
@@ -1574,6 +1578,8 @@ static int h_reason(state_machine *sm, void *ud, const char *input, char **out) 
     log_info("reasoning: LLM plan: %s", raw);
     r->last_model_error[0]=0;
     r->had_plan = r->n_actions > 0;
+    r->prev_plan_action_sig = r->last_plan_action_sig;
+    r->last_plan_action_sig = plan_action_signature(r->actions, r->n_actions);
     /* remember this round's plan for stall detection (identical plan twice in
      * a row means the loop is not making progress); copy — raw flows out */
     free(r->prev_plan);
@@ -1677,6 +1683,44 @@ static uint64_t observation_json_hash(const cJSON *item) {
     }
     return h;
 }
+
+/* Plan identity ignores object-key order and JSON whitespace. The LLM may
+ * serialize the same tool call differently from one round to the next; raw
+ * string comparison lets that formatting variation evade the stall breaker. */
+static uint64_t plan_action_signature(const planned_action *actions, int n_actions) {
+    if (!actions || n_actions <= 0) return 0;
+    uint64_t h = UINT64_C(0xcbf29ce484222325) ^ (uint64_t)n_actions;
+    for (int i = 0; i < n_actions; i++) {
+        cJSON *args = cJSON_Parse(actions[i].args_json ? actions[i].args_json : "{}");
+        uint64_t part = hash64(actions[i].tool ? actions[i].tool : "",
+                               actions[i].tool ? strlen(actions[i].tool) : 0);
+        if (args) {
+            part ^= observation_json_hash(args);
+            cJSON_Delete(args);
+        } else {
+            const char *raw = actions[i].args_json ? actions[i].args_json : "";
+            part ^= hash64(raw, strlen(raw));
+        }
+        /* Preserve action order: two plans that call the same actions in a
+         * different sequence may have different side effects. */
+        h = (h ^ part) * UINT64_C(0x100000001b3);
+    }
+    return h ? h : 1;
+}
+
+static uint64_t semantic_action_signature(const char *tool, const char *args_json) {
+    cJSON *args = cJSON_Parse(args_json ? args_json : "{}");
+    uint64_t h = hash64(tool ? tool : "", tool ? strlen(tool) : 0);
+    if (args) {
+        h ^= observation_json_hash(args);
+        cJSON_Delete(args);
+    } else {
+        const char *raw = args_json ? args_json : "";
+        h ^= hash64(raw, strlen(raw));
+    }
+    return h ? h : 1;
+}
+
 static void observe_action_progress(reasoning *r,const planned_action *action,uint64_t output_hash,int is_search) {
     cJSON *args=cJSON_Parse(action->args_json ? action->args_json : "{}");
     /* File identity is the resolved source, not spelling of its path or
@@ -1842,9 +1886,7 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
             free(hp);
         }
         int rc;
-        uint64_t action_sig = hash64(r->actions[i].tool, strlen(r->actions[i].tool));
-        action_sig ^= hash64(r->actions[i].args_json ? r->actions[i].args_json : "",
-                             r->actions[i].args_json ? strlen(r->actions[i].args_json) : 0);
+        uint64_t action_sig = semantic_action_signature(r->actions[i].tool, r->actions[i].args_json);
         int is_search = strcmp(r->actions[i].tool, "glob") == 0 ||
                         strcmp(r->actions[i].tool, "grep") == 0 ||
                         strcmp(r->actions[i].tool, "file_read") == 0 ||
@@ -1937,6 +1979,7 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
         free(full_step_out);
         if (rc != 0) {
             r->all_actions_ok = 0;
+            r->run_had_action_failure = 1;
             strbuf_appendf(&b, "[%s] FAILED\n", r->actions[i].tool);
             log_warn("reasoning: action '%s' failed", r->actions[i].tool);
             if (r->last_failed_action_sig == action_sig)
@@ -2321,8 +2364,8 @@ static void compact_history(reasoning *r, size_t n_drop) {
  * Called from the run path; also read from the HTTP thread by
  * reasoning_history_json, hence the hist_mtx guard. compact_history is
  * only ever invoked from here with the lock held (do not lock inside it). */
-/* Short first-person narration is only a reason to ask the planner again when
- * the request still lacks all successful tool evidence. */
+/* Detect a text answer that only announces work instead of reporting its
+ * outcome. The caller decides whether existing observations make that safe. */
 static int looks_like_intent(const char *text) {
     static const char *const marks[] = {
         "I need to", "Let me", "I will", "I'll", "First,", "First ", "I'm going to",
@@ -3119,6 +3162,7 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     r->last_plan_raw = NULL;
     free(r->prev_plan);
     r->prev_plan = NULL;
+    r->last_plan_action_sig = r->prev_plan_action_sig = 0;
     r->stall_nudged = 0;
     r->intent_nudged = 0;
     r->prog_tool_calls = 0;
@@ -3128,6 +3172,7 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     r->prog_tool[0] = '\0';
     r->last_failed_action_sig = 0;
     r->same_action_failures = 0;
+    r->run_had_action_failure = 0;
     r->tool_fail_aborted = 0;
     r->visual_request_failed = 0;
     r->run_mutated = 0;
@@ -3302,7 +3347,9 @@ restart_planning:
             int needs_observation = prompt_requires_observation(completion_instruction(r,prompt)) &&
                                     r->run_successful_tools == 0;
             int needs_intent_recovery = !prompt_is_direct_information_request(completion_instruction(r,prompt)) &&
-                                        r->run_successful_tools == 0 && looks_like_intent(txt);
+                                        (r->run_successful_tools == 0 || r->last_failed_action_sig != 0 ||
+                                         r->run_had_action_failure) &&
+                                        looks_like_intent(txt);
             if (needs_action || needs_read || needs_observation || needs_intent_recovery) {
                 /* A plain-text answer closes the loop once its explicit action,
                  * read, and observation gates are met. If a gate is still
@@ -3411,7 +3458,11 @@ restart_planning:
          * succeeded; answer from the observations instead of repeating them")
          * before giving up — models often re-emit a successful plan because
          * they lost track of the feedback, not because they are stuck. */
-        if (!r->round_new_observations && r->prev_plan && r->last_plan_raw && strcmp(r->prev_plan, r->last_plan_raw) == 0) {
+        int same_action_plan = r->prev_plan_action_sig != 0 &&
+                               r->prev_plan_action_sig == r->last_plan_action_sig;
+        int same_raw_plan = r->prev_plan && r->last_plan_raw &&
+                            strcmp(r->prev_plan, r->last_plan_raw) == 0;
+        if (!r->round_new_observations && (same_action_plan || same_raw_plan)) {
             if (!r->stall_nudged && r->round_idx < r->max_rounds) {
                 r->stall_nudged = 1;
                 free(r->prev_plan);
@@ -3576,6 +3627,7 @@ restart_planning:
     r->last_plan_raw = NULL;
     free(r->prev_plan);
     r->prev_plan = NULL;
+    r->last_plan_action_sig = r->prev_plan_action_sig = 0;
     combined = strbuf_detach(&out);
 
     /* accumulate execution duration into the session state (会话执行时长) and
