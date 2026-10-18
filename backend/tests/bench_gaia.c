@@ -35,6 +35,8 @@
 #define WS_ROOT "state-bench-gaia/ws"
 #define FIXDIR  "state-bench-gaia/ws/gaia"
 
+static const char *g_executable_path = NULL;
+
 typedef struct {
     int level;
     const char *name;
@@ -179,14 +181,87 @@ static void make_text_fixtures(void) {
     write_fixture("sales.txt", "Month,units\nJan,240\nFeb,300\n");
 }
 
-static int run_python_fixtures(void) {
-    if (system("python3 tools/gen_gaia_fixtures.py " FIXDIR " > gaia_fixtures.log 2>&1") != 0 &&
-        system("python tools/gen_gaia_fixtures.py " FIXDIR " >> gaia_fixtures.log 2>&1") != 0)
-        return 0;
-    char full[1024];
-    path_resolve(full, sizeof(full), FIXDIR, "contact.docx");
-    if (fs_read_file(full)) return 1;
+static int locate_fixture_generator(char *out, size_t cap) {
+    static const char *const cwd_candidates[] = {
+        "tools/gen_gaia_fixtures.py",
+        "../tools/gen_gaia_fixtures.py",
+        "../../tools/gen_gaia_fixtures.py",
+    };
+    char candidate[2048];
+    for (size_t i = 0; i < sizeof(cwd_candidates) / sizeof(cwd_candidates[0]); i++) {
+        if (fs_exists(cwd_candidates[i])) {
+            char *absolute = fs_absolute_path(cwd_candidates[i]);
+            if (!absolute) return 0;
+            snprintf(out, cap, "%s", absolute);
+            free(absolute);
+            return 1;
+        }
+    }
+
+    if (!g_executable_path || !*g_executable_path) return 0;
+    char *absolute_exe = fs_absolute_path(g_executable_path);
+    if (!absolute_exe) return 0;
+    char *slash = strrchr(absolute_exe, '/');
+    char *backslash = strrchr(absolute_exe, '\\');
+    if (!slash || (backslash && backslash > slash)) slash = backslash;
+    if (!slash) { free(absolute_exe); return 0; }
+    *slash = '\0';
+
+    static const char *const exe_candidates[] = {
+        "../tools/gen_gaia_fixtures.py",
+        "tools/gen_gaia_fixtures.py",
+        "../../tools/gen_gaia_fixtures.py",
+    };
+    for (size_t i = 0; i < sizeof(exe_candidates) / sizeof(exe_candidates[0]); i++) {
+        path_join(candidate, sizeof(candidate), absolute_exe, exe_candidates[i]);
+        if (fs_exists(candidate)) {
+            snprintf(out, cap, "%s", candidate);
+            free(absolute_exe);
+            return 1;
+        }
+    }
+    free(absolute_exe);
     return 0;
+}
+
+static int run_python_fixtures(int *image_ok) {
+    char generator[2048], command[8192];
+    if (image_ok) *image_ok = 0;
+    if (!locate_fixture_generator(generator, sizeof(generator))) {
+        fprintf(stderr, "GAIA fixture generator not found from the working directory or benchmark executable.\n");
+        return 0;
+    }
+    char *absolute_fixture_dir = fs_absolute_path(FIXDIR);
+    if (!absolute_fixture_dir) return 0;
+
+    int rc = -1;
+    snprintf(command, sizeof(command), "python3 \"%s\" \"%s\" > gaia_fixtures.log 2>&1",
+             generator, absolute_fixture_dir);
+    rc = system(command);
+    if (rc != 0) {
+        snprintf(command, sizeof(command), "python \"%s\" \"%s\" >> gaia_fixtures.log 2>&1",
+                 generator, absolute_fixture_dir);
+        rc = system(command);
+    }
+    free(absolute_fixture_dir);
+    if (rc != 0) {
+        fprintf(stderr, "GAIA fixtures could not be generated; see gaia_fixtures.log.\n");
+        return 0;
+    }
+
+    char contact[1024], report[1024], diagram[1024];
+    path_resolve(contact, sizeof(contact), FIXDIR, "contact.docx");
+    path_resolve(report, sizeof(report), FIXDIR, "report.docx");
+    path_resolve(diagram, sizeof(diagram), FIXDIR, "diagram.png");
+    int docs_ok = fs_exists(contact) && fs_exists(report);
+    if (image_ok) *image_ok = fs_exists(diagram);
+    if (!docs_ok || (image_ok && !*image_ok)) {
+        fprintf(stderr, "GAIA fixture coverage incomplete: contact=%s report=%s image=%s. See gaia_fixtures.log.\n",
+                fs_exists(contact) ? "ok" : "missing",
+                fs_exists(report) ? "ok" : "missing",
+                fs_exists(diagram) ? "ok" : "missing");
+    }
+    return docs_ok;
 }
 
 /* ---- vision task (LLM layer; needs a multimodal model) ---- */
@@ -230,12 +305,26 @@ static int vision_task(llm *llm, char **answer_out) {
 }
 
 int main(int argc, char **argv) {
-    int real = 1, vision = 0;
+    int real = 1, vision = 0, strict = 0, fixtures_only = 0;
+    g_executable_path = argv[0];
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--real") == 0) real = 1;
         else if (strcmp(argv[i], "--mock") == 0) real = 0;
         else if (strcmp(argv[i], "--vision") == 0) vision = 1;
-        else { fprintf(stderr, "usage: %s [--mock|--real] [--vision]\n", argv[0]); return 2; }
+        else if (strcmp(argv[i], "--strict") == 0) strict = 1;
+        else if (strcmp(argv[i], "--fixtures-only") == 0) fixtures_only = 1;
+        else { fprintf(stderr, "usage: %s [--mock|--real] [--vision] [--strict] [--fixtures-only]\n", argv[0]); return 2; }
+    }
+
+    if (fixtures_only) {
+        fs_mkdirs(WS_ROOT);
+        make_text_fixtures();
+        int image_ok = 0;
+        int docs_ok = run_python_fixtures(&image_ok);
+        printf("fixtures-only: contact=%s report=%s image=%s\n",
+               docs_ok ? "ok" : "missing", docs_ok ? "ok" : "missing",
+               image_ok ? "ok" : "missing");
+        return docs_ok && image_ok ? 0 : 1;
     }
 
     config cfg;
@@ -265,8 +354,10 @@ int main(int argc, char **argv) {
 
     fs_mkdirs(WS_ROOT);
     make_text_fixtures();
-    int docx_ok = run_python_fixtures();
-    printf("fixtures: text=ok docx=%s\n\n", docx_ok ? "ok" : "SKIP");
+    int image_fixture_ok = 0;
+    int docx_ok = run_python_fixtures(&image_fixture_ok);
+    printf("fixtures: text=ok docx=%s image=%s\n\n",
+           docx_ok ? "ok" : "SKIP", image_fixture_ok ? "ok" : "SKIP");
 
     int l1_ok = 0, l1_n = 0, l2_ok = 0, l2_n = 0;
     int64_t t0 = time_now_ms();
@@ -290,19 +381,23 @@ int main(int argc, char **argv) {
 
     int vis_ok = -1; /* -1 = skipped */
     if (vision) {
-        char *answer = NULL;
-        int64_t s0 = time_now_ms();
-        int rc = vision_task(ctx.llm, &answer);
-        int64_t lat = time_now_ms() - s0;
-        if (rc == 0) {
-            vis_ok = gaia_match(answer, "7392");
-            printf("  [V/vision-code] %s lat=%lldms answer=\"%.80s\" expect=7392\n",
-                   vis_ok ? "PASS" : "FAIL", (long long)lat, answer);
+        if (!image_fixture_ok) {
+            printf("  [V/vision-code] SKIP (image fixture unavailable)\n");
         } else {
-            printf("  [V/vision-code] FAIL lat=%lldms (image request failed - model may be text-only)\n",
-                   (long long)lat);
+            char *answer = NULL;
+            int64_t s0 = time_now_ms();
+            int rc = vision_task(ctx.llm, &answer);
+            int64_t lat = time_now_ms() - s0;
+            if (rc == 0) {
+                vis_ok = gaia_match(answer, "7392");
+                printf("  [V/vision-code] %s lat=%lldms answer=\"%.80s\" expect=7392\n",
+                       vis_ok ? "PASS" : "FAIL", (long long)lat, answer);
+            } else {
+                vis_ok = 0;
+                printf("  [V/vision-code] FAIL lat=%lldms (image request failed)\n", (long long)lat);
+            }
+            free(answer);
         }
-        free(answer);
     }
 
     int64_t total = time_now_ms() - t0;
@@ -315,6 +410,8 @@ int main(int argc, char **argv) {
     double avg_pct = tot_n ? 100.0 * tot_ok / tot_n : 0.0;
     printf("\n== scores (leaderboard format) ==\n");
     printf("  Average score   : %.2f%%  (%d/%d)\n", avg_pct, tot_ok, tot_n);
+    printf("  Coverage        : %d/%d text tasks; vision=%s\n", tot_n, N_TASKS,
+           vision ? (vis_ok < 0 ? "SKIP" : "included") : "not requested");
     printf("  Level 1 score   : %.2f%%  (%d/%d)\n", l1_pct, l1_ok, l1_n);
     printf("  Level 2 score   : %.2f%%  (%d/%d)\n", l2_pct, l2_ok, l2_n);
     if (vision) printf("  vision (L1-style) : %s\n",
@@ -338,5 +435,5 @@ int main(int argc, char **argv) {
     printf("  JSON: %s\n", js ? js : "{}");
     free(js);
     cJSON_Delete(j);
-    return 0;
+    return strict && (!docx_ok || (vision && !image_fixture_ok)) ? 2 : 0;
 }
