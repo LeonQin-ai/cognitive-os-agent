@@ -113,7 +113,8 @@ if __name__ == '__main__':
                 saved = None
                 for _ in range(25):
                     journal = request('/v1/tasks/journal?limit=20')
-                    saved = next((row for row in journal if row['id'] == first), None)
+                    saved = next((row for row in journal if row['id'] == first and
+                                  row.get('status') != 'RUNNING'), None)
                     if saved: break
                     time.sleep(0.04)
                 assert saved, journal
@@ -122,6 +123,8 @@ if __name__ == '__main__':
                     assert all('args' not in step and 'out' not in step for step in event.get('steps', [])), event
                 cancelled, _ = wait(submit('progress-c','SLOW_FIXTURE'),'progress-c',cancel=True)
                 assert cancelled['status'] == 'CANCELLED', cancelled
+                assert '任务已取消' in cancelled.get('output', ''), cancelled
+                assert 'MOCK_STEP_DONE' not in cancelled.get('output', ''), cancelled
                 steering = submit('progress-s','SLOW_FIXTURE')
                 for _ in range(100):
                     task = request(f'/v1/tasks/{steering}')

@@ -3473,6 +3473,13 @@ restart_planning:
         stalled = consec_fail = fail_aborted = synthesized = unfinished = 0;
         goto restart_planning;
     }
+    /* Cancellation is a terminal outcome of its own. In particular, do not
+     * fall through to the observation-log fallback below: large shell outputs
+     * (for example PowerShell CLIXML progress records) belong in the expandable
+     * execution details, not in the user-facing cancellation message. */
+    int cancelled = (r->run_task && r->run_task->cancel_flag) ||
+                    (r->abort_parent && r->abort_parent->cancel_flag);
+    int timed_out = !cancelled && run_aborted(r);
     /* A read-only final round may exhaust the budget without ever reaching
      * the no-plan guard above. It is still incomplete if a write was asked. */
     if (prompt_requires_mutation(completion_instruction(r,prompt)) && !run_has_mutating_action(r))
@@ -3487,7 +3494,11 @@ restart_planning:
      * [tool]/action logs are execution details (visible live via
      * process_log / the UI's process panel), never part of the answer. The
      * obs_log is a fallback for runs that ended without a final answer. */
-    if (unfinished) {
+    if (cancelled) {
+        strbuf_append(&out, "任务已取消。取消前的执行记录和已完成步骤已保留，可在“详细执行记录”中查看。");
+    } else if (timed_out) {
+        strbuf_append(&out, "任务执行超时。超时前的执行记录和已完成步骤已保留，可在“详细执行记录”中查看。");
+    } else if (unfinished) {
         strbuf_append(&out, "任务未完成：尚未完成请求的阅读、操作或验证，当前结果仅为部分进展。");
         int explained=0;
         if (r->last_model_error[0]) {
@@ -3580,7 +3591,8 @@ restart_planning:
     }
 
     if (r->metrics)
-        metrics_inc(r->metrics, st == ST_DONE ? "tasks.done" : "tasks.failed");
+        metrics_inc(r->metrics, cancelled ? "tasks.cancelled" : timed_out ? "tasks.timed_out" :
+                    st == ST_DONE ? "tasks.done" : "tasks.failed");
 
     if (st == ST_DONE) {
         /* A forced summary or a stalled loop is useful to the user, but it
@@ -3612,7 +3624,7 @@ restart_planning:
             free(combined);
         ret = 0;
     } else {
-        if (r->hooks) {
+        if (r->hooks && !cancelled && !timed_out) {
             cJSON *o = cJSON_CreateObject();
             if (o) {
                 cJSON_AddStringToObject(o, "prompt", prompt);
@@ -3636,7 +3648,8 @@ restart_planning:
     if (r->cur)
         r->cur->in_run = 0;
     mutex_unlock(&r->ss->sess_mtx);
-    progress_emit(r, ret == 0 ? "completed" : "failed");
+    progress_emit(r, cancelled ? "cancelled" : timed_out ? "timed_out" :
+                  ret == 0 ? "completed" : "failed");
     /* The terminal snapshot must still describe the model actually called. */
     if (picked) {
         r->llm = saved;
