@@ -2471,6 +2471,60 @@ static void test_failed_script_recovery_guidance(void) {
     tool_registry_free(reg);
 }
 
+typedef struct unresolved_tool_fixture { int model_calls, tool_calls, retry; } unresolved_tool_fixture;
+
+static int unresolved_tool_chat(llm *self, const llm_request *req, llm_response *resp) {
+    (void)req;
+    unresolved_tool_fixture *f = (unresolved_tool_fixture *)self->impl;
+    ++f->model_calls;
+    if (f->model_calls == 1 || (f->retry && f->model_calls == 2)) {
+        resp->content = xstrdup("[{\"tool\":\"fixture_retryable_failure\",\"args\":{}}]");
+    } else {
+        resp->content = xstrdup("任务已完成，所有检查均通过。");
+    }
+    return resp->content ? 0 : -1;
+}
+
+static tool_result *unresolved_tool_execute(const tool *self, const tool_ctx *ctx, const char *args) {
+    (void)ctx; (void)args;
+    unresolved_tool_fixture *f = (unresolved_tool_fixture *)self->ud;
+    ++f->tool_calls;
+    if (f->tool_calls == 1) return tool_result_new(0, "fixture failure: command exited with status 1");
+    return tool_result_new(1, "retry verified successfully");
+}
+
+static void test_unresolved_action_failure_cannot_report_done(void) {
+    section("unresolved action failure cannot report task complete");
+    static const llm_vtable vt = {.chat = unresolved_tool_chat};
+    for (int retry = 0; retry <= 1; ++retry) {
+        unresolved_tool_fixture f = {.retry = retry};
+        llm provider = {.vt = &vt, .provider = "fixture", .model = "fixture", .impl = &f};
+        tool_registry *reg = tool_registry_new();
+        CHECK(reg != NULL); if (!reg) continue;
+        tool failure = {"fixture_retryable_failure", "fails once and succeeds on retry", NULL, 0,
+                        unresolved_tool_execute, &f};
+        CHECK(tool_register(reg, &failure) == 0);
+        reasoning_config cfg = {0}; cfg.llm = &provider; cfg.tools = reg;
+        cfg.workspace = "state-test/unresolved-failure"; cfg.max_rounds = 4;
+        reasoning *r = reasoning_new(&cfg); CHECK(r != NULL);
+        if (r) {
+            char *answer = NULL;
+            int rc = reasoning_run(r, "检查运行结果并汇总", &answer);
+            if (retry) {
+                CHECK(rc == 0 && answer && strstr(answer, "所有检查均通过"));
+                CHECK(f.tool_calls == 2);
+            } else {
+                CHECK(rc != 0 && answer && strstr(answer, "任务未完成"));
+                CHECK(answer && strstr(answer, "fixture_retryable_failure"));
+                CHECK(answer && strstr(answer, "阶段性总结"));
+                CHECK(f.tool_calls == 1);
+            }
+            free(answer); reasoning_free(r);
+        }
+        tool_registry_free(reg);
+    }
+}
+
 typedef struct rate_limit_fixture_state { int calls; } rate_limit_fixture_state;
 static int rate_limit_fixture_chat(llm *self, const llm_request *req, llm_response *resp) {
     (void)req;
@@ -8593,6 +8647,10 @@ int main(int argc, char **argv) {
         test_planner_dsml(); test_failed_script_recovery_guidance(); test_rate_limit_stops_without_retry(); test_transport_failure_stops_after_recovery(); test_git_empty_args_checks_status(); test_planner();
         printf("%d passed, %d failed\n",g_pass,g_fail); return g_fail ? 1:0;
     }
+    if (argc==2 && !strcmp(argv[1],"--action-failure-status")) {
+        test_unresolved_action_failure_cannot_report_done();
+        printf("%d passed, %d failed\n",g_pass,g_fail); return g_fail ? 1:0;
+    }
     if (argc==2 && !strcmp(argv[1],"--skills")) {
         test_skills(); test_skill_args(); test_skill_live_discovery(); test_skill_registration_tool(); test_prompt_skill_handoff();
         printf("\n%d passed, %d failed\n", g_pass, g_fail);
@@ -8643,6 +8701,7 @@ int main(int argc, char **argv) {
     test_incomplete_run_memory_gate();
     test_llm_caps_cancel();
     test_cross_round_progress();
+    test_unresolved_action_failure_cannot_report_done();
     test_rate_limit_stops_without_retry();
     test_transport_failure_stops_after_recovery();
     test_git_empty_args_checks_status();

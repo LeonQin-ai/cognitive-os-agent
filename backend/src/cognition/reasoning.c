@@ -230,6 +230,9 @@ struct reasoning {
     uint64_t last_failed_action_sig;
     int same_action_failures;
     int run_had_action_failure;
+    char unresolved_failed_tools[32][48];
+    int unresolved_failed_tool_count;
+    int unresolved_failed_tools_overflow;
     int tool_fail_aborted;
     int run_mutated; /* successful effects retained; independent of UI step cap */
     uint64_t search_seen[512]; /* successful read-only discoveries in this run */
@@ -267,6 +270,39 @@ struct reasoning {
     long long usage_base_in, usage_base_out, usage_base_reason, usage_base_reports;
     long long run_usage_in, run_usage_out, run_usage_reports;
 };
+
+/* A failed action is not resolved just because the model later writes a
+ * confident summary. Require a successful retry through that tool before
+ * allowing the run to be reported as complete. Keep one entry per tool so a
+ * later successful call can close earlier failures of the same kind. */
+static void note_failed_tool(reasoning *r, const char *tool_name) {
+    if (!r || !tool_name || !*tool_name) return;
+    for (int i = 0; i < r->unresolved_failed_tool_count; ++i)
+        if (!strcmp(r->unresolved_failed_tools[i], tool_name)) return;
+    if (r->unresolved_failed_tool_count >=
+        (int)(sizeof(r->unresolved_failed_tools) / sizeof(r->unresolved_failed_tools[0]))) {
+        r->unresolved_failed_tools_overflow = 1;
+        return;
+    }
+    snprintf(r->unresolved_failed_tools[r->unresolved_failed_tool_count++],
+             sizeof(r->unresolved_failed_tools[0]), "%s", tool_name);
+}
+
+static void resolve_failed_tool(reasoning *r, const char *tool_name) {
+    if (!r || !tool_name || !*tool_name) return;
+    for (int i = 0; i < r->unresolved_failed_tool_count;) {
+        if (!strcmp(r->unresolved_failed_tools[i], tool_name)) {
+            --r->unresolved_failed_tool_count;
+            if (i < r->unresolved_failed_tool_count)
+                memmove(r->unresolved_failed_tools[i], r->unresolved_failed_tools[i + 1],
+                        (size_t)(r->unresolved_failed_tool_count - i) * sizeof(r->unresolved_failed_tools[0]));
+            memset(r->unresolved_failed_tools[r->unresolved_failed_tool_count], 0,
+                   sizeof(r->unresolved_failed_tools[0]));
+        } else {
+            ++i;
+        }
+    }
+}
 
 /* Only the worker constructs snapshots. Readers copy immutable JSON. */
 static void usage_book_round(reasoning *r) {
@@ -1983,6 +2019,7 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
         if (rc != 0) {
             r->all_actions_ok = 0;
             r->run_had_action_failure = 1;
+            note_failed_tool(r, r->actions[i].tool);
             strbuf_appendf(&b, "[%s] FAILED\n", r->actions[i].tool);
             log_warn("reasoning: action '%s' failed", r->actions[i].tool);
             if (r->last_failed_action_sig == action_sig)
@@ -2000,6 +2037,7 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
             if (r->hooks)
                 hook_dispatch(r->hooks, "exec.on_failure", r->actions[i].tool);
         } else {
+            resolve_failed_tool(r, r->actions[i].tool);
             r->last_failed_action_sig = 0;
             observe_action_progress(r,&r->actions[i],output_hash,is_search);
             if (strcmp(r->actions[i].tool, "file_read") == 0)
@@ -3176,6 +3214,9 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     r->last_failed_action_sig = 0;
     r->same_action_failures = 0;
     r->run_had_action_failure = 0;
+    memset(r->unresolved_failed_tools, 0, sizeof(r->unresolved_failed_tools));
+    r->unresolved_failed_tool_count = 0;
+    r->unresolved_failed_tools_overflow = 0;
     r->tool_fail_aborted = 0;
     r->visual_request_failed = 0;
     r->run_mutated = 0;
@@ -3539,6 +3580,7 @@ restart_planning:
     if (prompt_requires_mutation(completion_instruction(r,prompt)) && !run_has_mutating_action(r))
         unfinished = 1;
     if (stalled || synthesized || fail_aborted || r->tool_fail_aborted ||
+        r->unresolved_failed_tool_count > 0 || r->unresolved_failed_tools_overflow ||
         (prompt_requires_full_read(completion_instruction(r,prompt)) && (r->pending_reads_n || r->read_tracking_overflow || answer_reports_unread(final_text))))
         unfinished = 1;
     if (unfinished)
@@ -3574,6 +3616,15 @@ restart_planning:
             explained=1;
         }
         if (r->tool_fail_aborted) { strbuf_append(&out,"\n原因：相同工具连续失败3次；请查看最后一次失败的工具结果，修正参数或环境后恢复任务。"); explained=1; }
+        if (r->unresolved_failed_tool_count > 0 || r->unresolved_failed_tools_overflow) {
+            strbuf_append(&out, "\n原因：以下失败工具之后没有成功重试核实，不能将任务标记为完成：");
+            for (int i = 0; i < r->unresolved_failed_tool_count; ++i)
+                strbuf_appendf(&out, "%s%s", i ? "、" : " ", r->unresolved_failed_tools[i]);
+            if (r->unresolved_failed_tools_overflow)
+                strbuf_append(&out, "（失败工具记录过多，已按未完成处理）");
+            strbuf_append(&out, "。请查看详细执行记录并恢复验证。");
+            explained=1;
+        }
         if (stalled) { strbuf_append(&out,cycle_aborted ?
             "\n原因：多轮交替读取或检查持续返回已有结果；循环恢复提示后仍无新增进展，已停止重复调用并保留记录。" :
             "\n原因：重复工具动作没有新增进展；需调整路径、分页参数或执行方案。"); explained=1; }
@@ -3584,7 +3635,10 @@ restart_planning:
 
         if (final_text && *final_text) {
             strbuf_append(&out, "\n\n");
-            strbuf_append(&out, final_text);
+            if (r->unresolved_failed_tool_count > 0 || r->unresolved_failed_tools_overflow)
+                strbuf_appendf(&out, "模型阶段性总结（失败调用尚未核实，不代表任务完成）：\n%s", final_text);
+            else
+                strbuf_append(&out, final_text);
         }
     } else if (final_text && *final_text) {
         strbuf_append(&out, final_text);
