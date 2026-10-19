@@ -4276,6 +4276,28 @@ static void test_agent_loop(void) {
         fs_remove("state-test/loop-w/readme.txt");
     }
 
+    /* Deterministic schema errors cannot reset through unrelated successes;
+     * a corrected invocation must still run and resolve the failure. */
+    {
+        fs_write_file("state-test/loop-w/readme.txt","project evidence",16);
+        config cfg={0};cfg.state_root="state-test/invalid-args-guard";
+        cfg.workspace="state-test/loop-w";cfg.provider="mock";
+        runtime_ctx ctx;
+        if(init(&ctx,&cfg)!=0) { CHECK(0); return; }
+        char *answer=NULL;
+        CHECK(reasoning_run(ctx.reasoning,"交替无效参数回归测试：查询 evidence",&answer)==0);
+        char *steps=reasoning_steps_json(ctx.reasoning);
+        CHECK(steps && strstr(steps,"repeated invalid arguments suppressed"));
+        CHECK(steps && strstr(steps,"project evidence"));
+        char *log=reasoning_round_log_tail(ctx.reasoning,65536);
+        CHECK(log && strstr(log,"schema:") && strstr(log,"pattern"));
+        free(log);free(steps);free(answer);answer=NULL;
+        CHECK(reasoning_run(ctx.reasoning,"交替无效熔断回归测试：查询",&answer)!=0);
+        long long elapsed=0,tin=0,tout=0;int round=0,calls=0;const char *tool=NULL;
+        reasoning_progress(ctx.reasoning,&elapsed,&round,&calls,&tool,&tin,&tout);
+        CHECK(round==1 && calls==3);
+        free(answer);runtime_shutdown(&ctx);fs_remove("state-test/loop-w/readme.txt");
+    }
     /* Opaque commands preserve unchanged file/directory identities. Actual
      * content changes and newly created entries still execute fresh reads. */
     {

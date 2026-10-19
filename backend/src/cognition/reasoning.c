@@ -229,6 +229,8 @@ struct reasoning {
     size_t obs_log_len, obs_log_cap;
     uint64_t last_failed_action_sig;
     int same_action_failures;
+    struct { uint64_t sig; int attempts; } invalid_args[32];
+    int invalid_args_n;
     int run_had_action_failure;
     char unresolved_failed_tools[32][48];
     char unresolved_failed_scopes[32][2048];
@@ -2081,6 +2083,35 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
         }
         int rc;
         uint64_t action_sig = semantic_action_signature(r->actions[i].tool, r->actions[i].args_json);
+        /* Schema failures are deterministic for unchanged arguments. Remember
+         * them across unrelated successful actions; return the schema so the
+         * model can correct the invocation instead of retrying the same JSON. */
+        const tool *planned_tool=tool_find(r->tools,r->actions[i].tool);
+        char *arg_error=NULL;
+        if(planned_tool && tool_validate_args(planned_tool,r->actions[i].args_json,&arg_error)!=0) {
+            int k=0;
+            while(k<r->invalid_args_n && r->invalid_args[k].sig!=action_sig) ++k;
+            if(k==r->invalid_args_n) {
+                if(k==32) { memmove(r->invalid_args,r->invalid_args+1,31*sizeof(r->invalid_args[0])); k=31; }
+                else r->invalid_args_n++;
+                r->invalid_args[k].sig=action_sig; r->invalid_args[k].attempts=0;
+            }
+            int attempts=++r->invalid_args[k].attempts;
+            strbuf_appendf(&b,"[system] %s 参数无效：%s。先修正参数再调用；所需 schema: %s\n",
+                r->actions[i].tool,arg_error ? arg_error : "invalid",
+                planned_tool->json_schema ? planned_tool->json_schema : "{}");
+            if(attempts>1) {
+                r->all_actions_ok=0; r->run_had_action_failure=1;
+                note_failed_tool(r,r->actions[i].tool,r->actions[i].args_json);
+                r->round_repeat_reads++;
+                run_step_add(r,r->actions[i].tool,r->actions[i].args_json,
+                    "repeated invalid arguments suppressed; correct arguments using tool schema",0,0);
+                if(attempts>=3) r->tool_fail_aborted=1;
+                free(arg_error);
+                continue;
+            }
+        }
+        free(arg_error);
         int is_search = strcmp(r->actions[i].tool, "glob") == 0 ||
                         strcmp(r->actions[i].tool, "grep") == 0 ||
                         strcmp(r->actions[i].tool, "file_read") == 0 ||
@@ -3569,6 +3600,7 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     r->prog_tool[0] = '\0';
     r->last_failed_action_sig = 0;
     r->same_action_failures = 0;
+    r->invalid_args_n = 0;
     r->run_had_action_failure = 0;
     memset(r->unresolved_failed_tools, 0, sizeof(r->unresolved_failed_tools));
     memset(r->unresolved_failed_scopes, 0, sizeof(r->unresolved_failed_scopes));
@@ -3616,6 +3648,7 @@ restart_planning:
             snprintf(updated, size, "%s%s%s", prompt, separator, messages);
             free(messages); free(safe_prompt); safe_prompt = updated; prompt = updated;
             r->stall_nudged = r->intent_nudged = 0;
+            r->invalid_args_n = 0;
             r->search_seen_n = r->versioned_seen_n = 0;
             search_only_rounds = artifact_read_nudged = 0;
             no_progress_rounds = cycle_reads = cycle_nudged = cycle_aborted = 0;

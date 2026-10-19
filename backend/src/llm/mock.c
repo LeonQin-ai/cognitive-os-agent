@@ -289,6 +289,20 @@ static char *mock_respond(const char *msg) {
         return xstrdup("<think>[{\"tool\":\"file_write\",\"args\":{\"path\":\"DO_NOT_WRITE.txt\",\"content\":\"bad\"}}]</think>"
                        "再次思考</think>[{\"tool\":\"file_read\",\"args\":{\"path\":\"readme.txt\"}}]");
     }
+    if (has_substr(msg,"交替无效参数回归测试")) {
+        if(in_loop) return xstrdup("已使用正确参数恢复查询，任务完成。");
+        return xstrdup("[{\"tool\":\"grep\",\"args\":{}},"
+            "{\"tool\":\"list_dir\",\"args\":{\"path\":\".\"}},"
+            "{\"tool\":\"grep\",\"args\":{}},"
+            "{\"tool\":\"file_read\",\"args\":{\"path\":\"readme.txt\"}},"
+            "{\"tool\":\"grep\",\"args\":{\"path\":\".\",\"pattern\":\"evidence\"}}]");
+    }
+    if (has_substr(msg,"交替无效熔断回归测试"))
+        return xstrdup("[{\"tool\":\"grep\",\"args\":{}},"
+            "{\"tool\":\"list_dir\",\"args\":{\"path\":\".\"}},"
+            "{\"tool\":\"grep\",\"args\":{}},"
+            "{\"tool\":\"file_read\",\"args\":{\"path\":\"readme.txt\"}},"
+            "{\"tool\":\"grep\",\"args\":{}}]");
     if (has_substr(msg,"跨命令版本去重回归测试")) {
         if(in_loop) return xstrdup("已核对版本变化与重复观察，任务完成。");
         return xstrdup("[{\"tool\":\"list_dir\",\"args\":{\"path\":\".\"}},"
