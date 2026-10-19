@@ -2729,7 +2729,7 @@ static void test_cross_round_progress(void) {
                 CHECK(rc==0 && answer && strstr(answer,"系统运行正常"));
                 CHECK(f.calls==2 && round==2 && calls==1);
             } else if (mode==3) {
-                CHECK(rc!=0 && f.calls<12 && answer);
+                CHECK(rc==0 && f.saw_recovery && f.recovered && f.calls<12 && answer);
             } else {
                 CHECK(rc==0 && answer);
                 if (mode==1) CHECK(f.calls==81 && strstr(answer,"正常长任务已完成"));
@@ -3952,12 +3952,12 @@ static void test_agent_loop(void) {
         char *ans = NULL;
         CHECK(reasoning_run(ctx.reasoning, "重复读取回归测试：分析项目", &ans) != 0);
         CHECK(ans && strstr(ans, "任务未完成") != NULL);
-        CHECK(ans && strstr(ans, "综合回答") != NULL);
+        CHECK(ans && *ans && !strstr(ans, "[file_read]"));
         long long elapsed = 0, in = 0, out = 0;
         int round = 0, calls = 0;
         const char *tool = NULL;
         reasoning_progress(ctx.reasoning, &elapsed, &round, &calls, &tool, &in, &out);
-        CHECK(round <= 3);
+        CHECK(round <= 10); /* bounded recovery, then one evidence summary */
         CHECK(calls > 0 && calls <= 3);
         free(ans); ans=NULL;
         CHECK(reasoning_run(ctx.reasoning,"重读观察恢复回归测试：重新读取文件",&ans)==0);
@@ -4010,12 +4010,12 @@ static void test_agent_loop(void) {
         char *ans = NULL;
         CHECK(reasoning_run(ctx.reasoning, "目录读取回归测试：分析项目并给出清单", &ans) != 0);
         CHECK(ans && strstr(ans, "任务未完成") != NULL);
-        CHECK(ans && strstr(ans, "综合回答") != NULL);
+        CHECK(ans && *ans && !strstr(ans, "[list_dir]"));
         long long elapsed = 0, in = 0, out = 0;
         int round = 0, calls = 0;
         const char *tool = NULL;
         reasoning_progress(ctx.reasoning, &elapsed, &round, &calls, &tool, &in, &out);
-        CHECK(round <= 3);
+        CHECK(round <= 10);
         CHECK(calls == 1);
         free(ans);
         ans = NULL;
