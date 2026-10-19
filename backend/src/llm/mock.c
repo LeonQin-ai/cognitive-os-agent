@@ -289,6 +289,18 @@ static char *mock_respond(const char *msg) {
         return xstrdup("<think>[{\"tool\":\"file_write\",\"args\":{\"path\":\"DO_NOT_WRITE.txt\",\"content\":\"bad\"}}]</think>"
                        "再次思考</think>[{\"tool\":\"file_read\",\"args\":{\"path\":\"readme.txt\"}}]");
     }
+    if (has_substr(msg,"跨命令版本去重回归测试")) {
+        if(in_loop) return xstrdup("已核对版本变化与重复观察，任务完成。");
+        return xstrdup("[{\"tool\":\"list_dir\",\"args\":{\"path\":\".\"}},"
+            "{\"tool\":\"file_read\",\"args\":{\"path\":\"readme.txt\"}},"
+            "{\"tool\":\"shell\",\"args\":{\"command\":\"echo probe\"}},"
+            "{\"tool\":\"list_dir\",\"args\":{\"path\":\".\"}},"
+            "{\"tool\":\"file_read\",\"args\":{\"path\":\"./readme.txt\",\"max_bytes\":4000}},"
+            "{\"tool\":\"file_write\",\"args\":{\"path\":\"created.txt\",\"content\":\"new entry\"}},"
+            "{\"tool\":\"list_dir\",\"args\":{\"path\":\".\"}},"
+            "{\"tool\":\"file_write\",\"args\":{\"path\":\"readme.txt\",\"content\":\"changed evidence longer\"}},"
+            "{\"tool\":\"file_read\",\"args\":{\"path\":\"readme.txt\"}}]");
+    }
     if (has_substr(msg,"重读观察恢复回归测试")) {
         int previous=0; const char *header=strstr(full,"## 之前轮次的动作结果 (第 ");
         if(header) sscanf(header,"## 之前轮次的动作结果 (第 %d/",&previous);

@@ -172,7 +172,19 @@ static int cached_line_relevant(const char *line, size_t len, const char *query)
     return 0;
 }
 
+static int excerpt_already_present(const char *text, const char *line, size_t n) {
+    if(!text || !n) return 0;
+    for(const char *p=text; (p=strchr(p,*line))!=NULL; ++p)
+        if(strlen(p)>=n && !memcmp(p,line,n)) return 1;
+    return 0;
+}
+
 char *tool_file_cache_context(const char *session_id, const char *query, size_t max_bytes) {
+    return tool_file_cache_context_excluding(session_id,query,max_bytes,NULL);
+}
+
+char *tool_file_cache_context_excluding(const char *session_id, const char *query, size_t max_bytes,
+                                       const char *recent_observations) {
     if (!session_id || !*session_id || !query || !*query || !max_bytes) return NULL;
     strbuf out; strbuf_init(&out);
     file_page_lock();
@@ -184,7 +196,7 @@ char *tool_file_cache_context(const char *session_id, const char *query, size_t 
         while (*p && out.len<max_bytes) {
             const char *end=strchr(p,'\n'); if(!end) end=p+strlen(p);
             size_t n=(size_t)(end-p);
-            if (n && cached_line_relevant(p,n,query)) {
+            if (n && cached_line_relevant(p,n,query) && !excerpt_already_present(recent_observations,p,n)) {
                 char header[2200];
                 int hn=snprintf(header,sizeof(header),"- %s@%llu:%zu: ",e->path,(unsigned long long)e->offset,line_no);
                 size_t remain=max_bytes-out.len;

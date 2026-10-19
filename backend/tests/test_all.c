@@ -944,6 +944,12 @@ static void test_snapshot_tx(void) {
     tool_result_free(cache_page);
     char *cached_excerpt = tool_file_cache_context(ctx.session_id, "CCCC", 512);
     CHECK(cached_excerpt && strstr(cached_excerpt,"cache-read.txt") && strstr(cached_excerpt,"CCCC"));
+    char *excluded_excerpt=tool_file_cache_context_excluding(ctx.session_id,"CCCC",512,cached_excerpt);
+    CHECK(excluded_excerpt == NULL);
+    free(excluded_excerpt);
+    excluded_excerpt=tool_file_cache_context_excluding(ctx.session_id,"CCCC",512,"unrelated result");
+    CHECK(excluded_excerpt && strstr(excluded_excerpt,"CCCC"));
+    free(excluded_excerpt);
     free(cached_excerpt);
     cache_page = tool_execute(reg, "file_read",
         "{\"path\":\"cache-read.txt\",\"offset_bytes\":64,\"max_bytes\":64}", &ctx);
@@ -4270,6 +4276,28 @@ static void test_agent_loop(void) {
         fs_remove("state-test/loop-w/readme.txt");
     }
 
+    /* Opaque commands preserve unchanged file/directory identities. Actual
+     * content changes and newly created entries still execute fresh reads. */
+    {
+        fs_write_file("state-test/loop-w/readme.txt","old evidence",12);
+        fs_remove("state-test/loop-w/created.txt");
+        config cfg={0}; cfg.state_root="state-test/versioned-guard";
+        cfg.workspace="state-test/loop-w"; cfg.provider="mock";
+        runtime_ctx ctx;
+        if(init(&ctx,&cfg)!=0) { CHECK(0); return; }
+        char *answer=NULL;
+        CHECK(reasoning_run(ctx.reasoning,"跨命令版本去重回归测试：核对文件",&answer)==0);
+        char *steps=reasoning_steps_json(ctx.reasoning);
+        CHECK(steps && strstr(steps,"changed evidence longer") && strstr(steps,"created.txt"));
+        int reused=0; const char *p=steps;
+        while(p && (p=strstr(p,"previous search result reused"))) { reused++; p++; }
+        CHECK(reused==2);
+        long long elapsed=0,tin=0,tout=0; int round=0,calls=0; const char *tool=NULL;
+        reasoning_progress(ctx.reasoning,&elapsed,&round,&calls,&tool,&tin,&tout);
+        CHECK(calls==7);
+        free(steps);free(answer);runtime_shutdown(&ctx);
+        fs_remove("state-test/loop-w/readme.txt");fs_remove("state-test/loop-w/created.txt");
+    }
     /* Directory browsing is read-only. It must use the same
      * duplicate guard and cannot count as proof that a PPT was written. */
     {

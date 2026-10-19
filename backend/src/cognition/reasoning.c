@@ -239,6 +239,8 @@ struct reasoning {
     int run_mutated; /* successful effects retained; independent of UI step cap */
     uint64_t search_seen[512]; /* successful read-only discoveries in this run */
     int search_seen_n;
+    uint64_t versioned_seen[512]; /* file pages and directory contents survive opaque tools */
+    int versioned_seen_n;
     int round_search_skips;
     /* Independent of the bounded prompt log/cache: folding observations must
      * not make alternating old reads look like newly discovered evidence. */
@@ -1270,7 +1272,7 @@ static void record_read_page(reasoning *r, const char *args_json, const char *ou
 static void round_log_append(reasoning *r, const char *text) {
     mutex_lock(&r->progress_mtx);
     if (log_append_entries(r, &r->round_log, &r->round_log_len, &r->round_log_cap, text))
-        r->search_seen_n = 0; /* folded observations can be read again */
+        r->search_seen_n = r->versioned_seen_n = 0; /* folded observations can be read again */
     mutex_unlock(&r->progress_mtx);
 }
 
@@ -1297,7 +1299,9 @@ static uint64_t file_read_signature(reasoning *r, const char *args_json) {
     if (cJSON_IsString(pj) && pj->valuestring) {
         path_resolve(resolved, sizeof(resolved), r->workspace, pj->valuestring);
         char *absolute = fs_absolute_path(resolved);
-        const char *identity = absolute ? absolute : resolved;
+        char normalized[2048];
+        normalized_evidence_path(r, absolute ? absolute : resolved, normalized, sizeof(normalized));
+        const char *identity = normalized;
         uint64_t version = fs_file_version(identity);
         strbuf key; strbuf_init(&key);
         strbuf_appendf(&key, "file_read|%s|%llu|%zu|%llu", identity,
@@ -1308,6 +1312,25 @@ static uint64_t file_read_signature(reasoning *r, const char *args_json) {
     }
     cJSON_Delete(args);
     return hash64(args_json ? args_json : "file_read", args_json ? strlen(args_json) : 9);
+}
+
+/* Directory identity depends on its entries, not on unrelated shell calls.
+ * Content edits do not change a directory listing; create/delete/rename does. */
+static uint64_t directory_signature(reasoning *r, const char *args_json) {
+    cJSON *a=cJSON_Parse(args_json ? args_json : "{}");
+    cJSON *p=a ? cJSON_GetObjectItemCaseSensitive(a,"path") : NULL;
+    char path[2048];
+    normalized_evidence_path(r,cJSON_IsString(p) ? p->valuestring : ".",path,sizeof(path));
+    dir_list entries={0};
+    uint64_t sig=hash64(path,strlen(path));
+    if(fs_list_dir(path,&entries)!=0) { cJSON_Delete(a); return 0; }
+    uint64_t contents=0;
+    for(size_t i=0;i<entries.count;i++)
+        contents += hash64(entries.items[i].name,strlen(entries.items[i].name)) ^
+                    ((uint64_t)entries.items[i].is_dir * UINT64_C(0x9e3779b185ebca87));
+    sig ^= contents ^ ((uint64_t)entries.count * UINT64_C(0x517cc1b727220a95));
+    fs_list_free(&entries); cJSON_Delete(a);
+    return sig;
 }
 
 static void round_log_reset(reasoning *r) {
@@ -1591,7 +1614,9 @@ static char *build_context(reasoning *r, const char *prompt) {
     /* L1 page cache: recover older, still-version-valid source excerpts by
      * relevance when their original tool output falls outside the bounded
      * recent observation window. Scope is the active session only. */
-    char *cached_pages = tool_file_cache_context(r->cur->id, prompt, input_budget / 3);
+    size_t recent_start = r->round_log_len > input_budget / 2 ? r->round_log_len - input_budget / 2 : 0;
+    const char *recent = r->round_log ? r->round_log + recent_start : "";
+    char *cached_pages = tool_file_cache_context_excluding(r->cur->id, prompt, input_budget / 3, recent);
     if (cached_pages) {
         strbuf_append(&b, "## Cached file excerpts (session/version validated)\n");
         strbuf_append(&b, cached_pages);
@@ -1622,7 +1647,9 @@ static char *build_context(reasoning *r, const char *prompt) {
                                   "或还缺什么信息）。\n\n");
         else
             strbuf_append(&b, "\n你是多轮 agent 循环：根据以上动作结果，(a) 任务已完成 → 直接用纯文本回答；"
-                                  "(b) 未完成 → 给出下一批 JSON 动作。不要重复已成功的动作。\n\n");
+                                  "(b) 未完成 → 给出下一批 JSON 动作。不要重复已成功的动作。"
+                                  "独立且已知参数的读取/检查应合并到同一批动作；后续动作依赖上游结果时再分轮。"
+                                  "已知文件路径时直接使用，不要反复列出工作目录；已获取页面只在版本变化或证据缺失时重读。\n\n");
     }
 
     /* anti-pollution caution: history/notes/retrieved context are reference
@@ -2060,10 +2087,14 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
                         strcmp(r->actions[i].tool, "list_dir") == 0;
         if (is_search) {
             int repeated = 0;
-            uint64_t search_sig = !strcmp(r->actions[i].tool, "file_read")
-                ? file_read_signature(r, r->actions[i].args_json) : action_sig;
-            for (int j = 0; j < r->search_seen_n && !repeated; j++)
-                repeated = r->search_seen[j] == search_sig;
+            int versioned = !strcmp(r->actions[i].tool,"file_read") || !strcmp(r->actions[i].tool,"list_dir");
+            uint64_t search_sig = !strcmp(r->actions[i].tool,"file_read")
+                ? file_read_signature(r,r->actions[i].args_json)
+                : !strcmp(r->actions[i].tool,"list_dir") ? directory_signature(r,r->actions[i].args_json) : action_sig;
+            uint64_t *seen=versioned ? r->versioned_seen : r->search_seen;
+            int count=versioned ? r->versioned_seen_n : r->search_seen_n;
+            for (int j = 0; search_sig && j < count && !repeated; j++)
+                repeated = seen[j] == search_sig;
             if (repeated) {
                 r->round_search_skips++;
                 r->round_repeat_reads++;
@@ -2184,14 +2215,13 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
             }
             if (!is_search && !instruction_only) round_mutated = 1;
             if (is_search) {
-                const int seen_cap = (int)(sizeof(r->search_seen) / sizeof(r->search_seen[0]));
-                if (r->search_seen_n == seen_cap) {
-                    memmove(r->search_seen, r->search_seen + 1,
-                            (size_t)(seen_cap - 1) * sizeof(r->search_seen[0]));
-                    r->search_seen_n--;
-                }
-                r->search_seen[r->search_seen_n++] = !strcmp(r->actions[i].tool, "file_read")
-                    ? file_read_signature(r, r->actions[i].args_json) : action_sig;
+                int versioned = !strcmp(r->actions[i].tool,"file_read") || !strcmp(r->actions[i].tool,"list_dir");
+                uint64_t *seen=versioned ? r->versioned_seen : r->search_seen;
+                int *count=versioned ? &r->versioned_seen_n : &r->search_seen_n;
+                if (*count == 512) { memmove(seen,seen+1,511*sizeof(*seen)); --*count; }
+                seen[(*count)++] = !strcmp(r->actions[i].tool,"file_read")
+                    ? file_read_signature(r,r->actions[i].args_json)
+                    : !strcmp(r->actions[i].tool,"list_dir") ? directory_signature(r,r->actions[i].args_json) : action_sig;
             }
             strbuf_appendf(&b, "[%s] ok\n", r->actions[i].tool);
             if (r->hooks)
@@ -3549,7 +3579,7 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     r->visual_request_failed = 0;
     r->run_mutated = 0;
     r->run_successful_tools = 0;
-    r->search_seen_n = 0;
+    r->search_seen_n = r->versioned_seen_n = 0;
     r->round_search_skips = 0;
     r->observation_seen_n = 0;
     r->round_new_observations = r->round_repeat_reads = 0;
@@ -3586,7 +3616,7 @@ restart_planning:
             snprintf(updated, size, "%s%s%s", prompt, separator, messages);
             free(messages); free(safe_prompt); safe_prompt = updated; prompt = updated;
             r->stall_nudged = r->intent_nudged = 0;
-            r->search_seen_n = 0;
+            r->search_seen_n = r->versioned_seen_n = 0;
             search_only_rounds = artifact_read_nudged = 0;
             no_progress_rounds = cycle_reads = cycle_nudged = cycle_aborted = 0;
             r->observation_seen_n = 0;
