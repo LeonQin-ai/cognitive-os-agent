@@ -69,6 +69,8 @@ Cognitive OS 把这些职责**从提示词里搬进运行时**：
 
 下表为完整 agent 循环评测，后面的 Runtime 指标采用本地确定性负载，两者分别统计。纯净分数表：[`backend/docs/BENCHMARK_RESULTS.md`](backend/docs/BENCHMARK_RESULTS.md) · 方法论与失败归因详录：[`backend/docs/benchmark-report.md`](backend/docs/benchmark-report.md)。
 
+Token 与完成判定回归：真实模型定向用例已能自然结束，**5 次请求 / 14,534 输入 token**（此前 8 次 / 24,463 且失败）。长任务产物在恢复修复后通过独立验证；中止、失败和所有 API 成本均见[回归报告](backend/docs/token-regression-report.md)，不作为通用节省比例。
+
 | 评测 | 分数 | 模型 |
 |---|---|---|
 | GAIA 2023 validation（官方 165 题） | **78.79%**（L1 84.91 / L2 81.40 / L3 57.69） | GLM-5.3-flash |
