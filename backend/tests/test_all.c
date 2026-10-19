@@ -3860,6 +3860,17 @@ static void test_search_work_bounds(void) {
     abort.checks=0;abort.stop_after=1;
     r=tool_execute(reg,"grep","{\"pattern\":\"MATCH\",\"path\":\"large.txt\"}",&ctx);
     CHECK(r && !r->ok && strstr(r->output,"cancelled") && abort.checks==1);tool_result_free(r);
+    char unicode_line[9001];for(int i=0;i<9000;i+=3) memcpy(unicode_line+i,"中",3);unicode_line[9000]=0;
+    CHECK(fs_write_file("state-test/search-bounds/unicode.txt",unicode_line,9000)==0);
+    ctx.should_abort=NULL;ctx.abort_ud=NULL;
+    r=tool_execute(reg,"grep","{\"pattern\":\"中\",\"path\":\"unicode.txt\",\"output_mode\":\"content\",\"head_limit\":1}",&ctx);
+    CHECK(r && r->ok && str_utf8_valid_n(r->output,-1));
+    const char *metadata=r && r->output ? strchr(r->output,'{') : NULL;
+    cJSON *meta=metadata ? cJSON_Parse(metadata) : NULL;
+    const char *saved=meta ? cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(meta,"path")) : NULL;
+    char *full=saved ? fs_read_file(saved) : NULL;
+    CHECK(full && str_utf8_valid_n(full,-1) && strstr(full,"line preview truncated"));
+    free(full);cJSON_Delete(meta);tool_result_free(r);fs_remove("state-test/search-bounds/unicode.txt");
     tool_registry_free(reg);
     fs_remove("state-test/search-bounds/build/secret.txt");fs_remove("state-test/search-bounds/binary.bin");
     fs_remove("state-test/search-bounds/large.txt");fs_remove("state-test/search-bounds/chunks.txt");fs_remove("state-test/search-bounds/budget.txt");

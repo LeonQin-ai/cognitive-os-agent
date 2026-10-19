@@ -296,11 +296,11 @@ static int grep_line(const char *rel, size_t lineno, strbuf *line, size_t total,
     (*hits)++;
     if(g->mode==0) return 1;
     if(g->mode==1) {
-        size_t n=line->len;
+        size_t n=line->len>8192 ? 8192 : line->len;
         while(n && ((unsigned char)line->buf[n]&0xc0)==0x80) --n;
         strbuf_appendf(&g->sb,"%s:%zu:",rel,lineno);
         strbuf_append_n(&g->sb,line->buf ? line->buf : "",n);
-        if(total>line->len) strbuf_append(&g->sb," [line preview truncated; inspect file]");
+        if(total>n) strbuf_append(&g->sb," [line preview truncated; inspect file]");
         strbuf_append(&g->sb,"\n");g->out_n++;
         if(g->out_n>=g->head_limit) { g->stop_reason="head_limit reached; results may be truncated";return 1; }
     }
@@ -329,7 +329,7 @@ static void grep_file(const char *rel, const char *full, grep_state *g) {
                 continue;
             }
             total++;
-            if(line.len<8192) strbuf_append_n(&line,chunk+i,1);
+            if(line.len<8196) strbuf_append_n(&line,chunk+i,1);
             if(g->ignore_case) c=(unsigned char)ci_char(c);
             while(matched_len && c!=(unsigned char)(g->ignore_case ? ci_char((unsigned char)g->needle[matched_len]) : g->needle[matched_len]))
                 matched_len=g->prefix[matched_len-1];
