@@ -40,6 +40,27 @@ static int save_meta(const char *root, cJSON *o) {
     char *s = cJSON_PrintUnformatted(o);
     int rc = s ? fs_write_file(path, s, strlen(s)) : -1; free(s); return rc;
 }
+
+cJSON *attachment_image_preview(const char *root, const char *session, const char *id) {
+    cJSON *meta=load_meta(root,id), *result=NULL;
+    if (!meta || strcmp(field(meta,"session"),session && *session ? session : "default")) goto done;
+    const char *mime=field(meta,"mime");
+    if (strcmp(mime,"image/png") && strcmp(mime,"image/jpeg") && strcmp(mime,"image/webp") && strcmp(mime,"image/gif")) goto done;
+    char path[1200]; file_path(path,root,id,"raw");
+    long long size=fs_file_size(path);
+    if (size<=0 || size>ATTACHMENT_MAX_BYTES) goto done;
+    char *raw=fs_read_file(path);
+    char *b64=raw ? base64_encode((const unsigned char *)raw,(size_t)size) : NULL;
+    free(raw);
+    if (!b64) goto done;
+    strbuf url; strbuf_init(&url); strbuf_appendf(&url,"data:%s;base64,%s",mime,b64); free(b64);
+    result=cJSON_CreateObject();
+    cJSON_AddStringToObject(result,"data_url",url.buf ? url.buf : "");
+    cJSON_AddStringToObject(result,"name",field(meta,"name"));
+    strbuf_free(&url);
+done:
+    cJSON_Delete(meta); return result;
+}
 static const char *image_mime(const unsigned char *p, size_t n) {
     if (n >= 24 && !memcmp(p,"\x89PNG\r\n\x1a\n",8)) return "image/png";
     if (n >= 4 && p[0]==255 && p[1]==216 && p[2]==255) return "image/jpeg";

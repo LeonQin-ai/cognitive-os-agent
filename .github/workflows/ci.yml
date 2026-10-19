@@ -162,3 +162,6 @@ jobs:
           npm ci --prefix webarena --ignore-scripts --no-audit --no-fund
           NODE_PATH="$PWD/webarena/node_modules" node tests/test_issue_ui.cjs
           NODE_PATH="$PWD/webarena/node_modules" node tests/test_im_members_ui.cjs
+          NODE_PATH="$PWD/webarena/node_modules" node tests/test_flow_resume_ui.cjs
+          NODE_PATH="$PWD/webarena/node_modules" node tests/test_image_chat_ui.cjs
+          python tests/test_image_preview.py

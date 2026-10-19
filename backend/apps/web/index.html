@@ -470,6 +470,9 @@
 .chat-copy{position:absolute;right:4px;top:-10px;opacity:0;padding:3px 8px;border:1px solid var(--border);border-radius:8px;background:var(--card);color:var(--muted);font-size:11px;cursor:pointer;transition:opacity var(--tr-dur)}
 .chat-message:hover .chat-copy,.chat-copy:focus-visible{opacity:1}
 .chat-answer{font-family:var(--sans);font-size:14px;line-height:1.85;white-space:pre-wrap;overflow-wrap:anywhere;margin:18px 0 0}
+.chat-image{display:block;max-width:min(300px,100%);max-height:240px;object-fit:contain;border-radius:12px;cursor:zoom-in;margin:6px 0}
+.chat-images{display:flex;flex-wrap:wrap;gap:8px;max-width:100%}
+.chat-image-button{background:transparent;border:0;padding:0;color:inherit;max-width:100%;text-align:left}
 .run-card{margin:8px 0;padding:18px 20px;border:1px solid var(--border);border-radius:16px;background:color-mix(in srgb,var(--card) 85%,transparent)}
 .run-header{display:flex;align-items:center;gap:10px;font-size:13px}
 .run-card[data-active=true]{border-color:color-mix(in srgb,var(--accent) 24%,var(--border))}
@@ -954,7 +957,7 @@ panels.chat = `
       <button class="sec" id="chat-cancel" onclick="chatCancel()" style="display:none;padding:6px 10px" title="取消当前运行中的任务">取消</button>
       <button class="sec" id="chat-resume" onclick="chatResume()" style="display:none;padding:6px 10px" title="恢复：重跑本会话上一条输入">恢复</button>
       <button class="pill-send" id="chat-send" onclick="chatSend()" title="发送">↑</button>
-      <input type="file" id="chat-file" style="display:none" onchange="uploadFile(this)">
+      <input type="file" id="chat-file" accept="image/*,video/*,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt,.md,.csv" style="display:none" onchange="uploadFile(this)">
     </div>
   </div>`;
 
@@ -2149,7 +2152,7 @@ async function loadDashboard(){
     const tot = usg.obj && usg.obj.total ? usg.obj.total : {prompt:0, completion:0};
     const cells = st.querySelectorAll('.stat .num');
     if(cells.length >= 7){
-      cells[0].textContent = '0.8.0';
+      cells[0].textContent = '0.8.1';
       cells[1].textContent = provider;
       cells[2].textContent = agents;
       cells[3].textContent = wmem;
@@ -3083,7 +3086,7 @@ function wsConnect(){
             const p = m.payload;
             let line = '';
             if(p.stage === 'execute') line = '→ [' + (p.node || '') + ':' + (p.agent || '') + '] ' + (p.detail || '');
-            else if(p.stage === 'done') line = '✓ [' + (p.node || '') + ':' + (p.agent || '') + '] ' + (p.detail || '完成');
+            else if(p.stage === 'done') line = (p.detail === 'ok' ? '✓' : '✗') + ' [' + (p.node || '') + ':' + (p.agent || '') + '] ' + (p.detail === 'ok' ? '已完成' : p.detail === 'error' ? '执行失败' : (p.detail || '状态未知'));
             if(line) el.textContent += (el.textContent ? '\n' : '') + line;
           }
         } else if(m.type === 'event' && m.source === 'task.progress' && m.payload){
@@ -3114,7 +3117,7 @@ function chatRedraw(toBottom = false){
   const box = $('chat-box'); if(!box) return;
   const follow = toBottom || chatNearBottom();
   box.innerHTML = '';
-  CHAT_MSGS.forEach(m => { m.el = chatAddBubble(m.role, m.text, false); renderChatEntry(m); });
+  CHAT_MSGS.forEach(m => { m.el = chatAddBubble(m.role, m.text, false); if(m.images) chatRenderImages(m.el,m.images); renderChatEntry(m); });
   updateChatHero();
   chatScroll(follow);
 }
@@ -3489,7 +3492,15 @@ async function chatLoadHistory(){
      Keep a monotonically increasing per-load token so only the newest fetch
      * for this session can replace its local view. */
   if(session !== CHAT_SESSION || seq !== chatLoadHistory._seq) return;
+  const old = CHAT_MSGS;
   CHAT_MSGS = chatHistoryEntries(r.obj.turns, r.obj.runs);
+  // Preserve attachment identities for repeated questions in their original order.
+  const imageMessages = old.filter(m=>m.role==='user' && m.images?.length);
+  for(const m of CHAT_MSGS){
+    if(m.role !== 'user') continue;
+    const i=imageMessages.findIndex(x=>x.text===m.text);
+    if(i>=0) m.images=imageMessages.splice(i,1)[0].images;
+  }
   chatRedraw();
 }
 
@@ -3614,6 +3625,44 @@ async function chatDeleteSession(id){
   toast(label + '已删除');
 }
 
+function chatImageSource(value){
+  if(/^data:image\/(png|jpeg|webp|gif);base64,[a-z0-9+/=\s]+$/i.test(value || '')) return value;
+  try { const url=new URL(value,location.href); return /^https?:$/.test(url.protocol) ? url.href : ''; } catch(e){ return ''; }
+}
+function chatImageButton(src,name){
+  const button=document.createElement('button'); button.type='button'; button.className='chat-image-button';
+  const image=document.createElement('img'); image.className='chat-image'; image.alt=name || '聊天图片'; image.width=260; image.height=180; image.src=src; image.referrerPolicy='no-referrer';
+  button.append(image); button.title='点击放大图片';
+  button.onclick=()=>{
+    const dialog=document.createElement('dialog'); dialog.style.maxWidth='95vw';
+    const close=document.createElement('button'); close.textContent='关闭'; close.onclick=()=>dialog.close();
+    const full=document.createElement('img'); full.src=src; full.alt=image.alt; full.style.cssText='display:block;max-width:85vw;max-height:80vh;object-fit:contain';
+    dialog.append(close,full); document.body.append(dialog); dialog.addEventListener('close',()=>dialog.remove(),{once:true}); dialog.showModal();
+  };
+  return button;
+}
+function chatRenderText(el,text){
+  const pattern=/!\[([^\]\n]*)\]\(([^\s)]+)\)/g;
+  let start=0, match;
+  while((match=pattern.exec(text || ''))){
+    const src=chatImageSource(match[2]); if(!src) continue;
+    el.append(document.createTextNode(text.slice(start,match.index)),chatImageButton(src,match[1])); start=pattern.lastIndex;
+  }
+  el.append(document.createTextNode((text || '').slice(start)));
+}
+function chatRenderImages(wrap,images){
+  if(!wrap || !images?.length) return;
+  wrap.querySelector('.chat-images')?.remove();
+  const box=document.createElement('div'); box.className='chat-images'; wrap.prepend(box);
+  for(const item of images){
+    const label=document.createElement('span'); label.textContent='图片加载中：'+item.name; box.append(label);
+    call('GET','/v1/uploads/preview?id='+encodeURIComponent(item.id)+'&session='+encodeURIComponent(item.session)).then(r=>{
+      if(!box.isConnected) return;
+      const src=r.status===200 && chatImageSource(r.obj?.data_url);
+      if(src) label.replaceWith(chatImageButton(src,item.name)); else label.textContent='图片暂不可预览：'+item.name;
+    }).catch(()=>{ label.textContent='图片加载失败：'+item.name; });
+  }
+}
 function chatAddBubble(role, text, push = true){
   const box = $('chat-box'); if(!box) return null;
   const follow = CHAT_FOLLOW || chatNearBottom();
@@ -3622,10 +3671,10 @@ function chatAddBubble(role, text, push = true){
   if(role === 'bot'){
     const pre = document.createElement('pre');
     pre.className = 'chat-answer';
-    pre.textContent = text;
+    chatRenderText(pre,text);
     wrap.appendChild(pre);
   } else {
-    wrap.textContent = text;
+    chatRenderText(wrap,text);
   }
   const copy = document.createElement('button');
   copy.className = 'chat-copy'; copy.type = 'button'; copy.textContent = '复制';
@@ -3815,6 +3864,8 @@ function chatAttachRender(){
   el.style.display = CHAT_ATTACH.length ? 'flex' : 'none';
   el.innerHTML = CHAT_ATTACH.map((a, i) =>
     '<span class="tag" style="cursor:pointer" onclick="chatAttachRemove(' + i + ')" title="点击移除">📎 ' + esc(a.name) + ' · ' + esc(attachmentSummary(a)) + ' ×</span>').join('');
+  const images=CHAT_ATTACH.filter(a=>a.kind==='image' && a.id).map(a=>({id:a.id,name:a.name,session:CHAT_SESSION}));
+  if(images.length) chatRenderImages(el,images);
 }
 
 function chatAttachRemove(i){
@@ -4111,6 +4162,7 @@ function flowStatusBadge(s){
   return '<span class="flow-task-status" role="status" style="color:#fff;background:' + c + ';border-radius:8px;padding:1px 8px;font-size:11px">' + esc(label) + '</span>';
 }
 
+const FLOW_TASK_TRACKED = new Set();
 async function loadFlowTasks(){
   const el = $('flow-tasks'); if(!el) return;
   const r = await call('GET', '/v1/flows/list');
@@ -4124,25 +4176,79 @@ async function loadFlowTasks(){
     const resume = (!live && s !== 'DONE') ? '<button class="sec sm" onclick="flowTaskResume(' + id + ')">继续</button>' : '';
     const cancel = live ? '<button class="sec sm" onclick="flowTaskCancel(' + id + ')">取消</button>' : '';
     const edit = editable ? '<button class="sec sm" onclick="flowTaskEdit(' + id + ')">修改</button>' : '';
-    return '<div id="flow-task-' + id + '" style="border:1px solid var(--bd,#ddd);border-radius:8px;padding:8px 10px;margin:6px 0">' +
-      '<div class="flow-task-heading">' + flowStatusBadge(s) +
+    const key = id + ':' + x.task_id;
+    if(live) FLOW_TASK_TRACKED.add(key);
+    const tid = x.task_id != null && x.task_id >= 0 && FLOW_TASK_TRACKED.has(key) ? x.task_id : null;
+    return '<div id="flow-task-' + id + '" data-flow-record-id="' + id + '"' + (tid != null ? ' data-flow-task-id="' + tid + '"' : '') + ' data-flow-status="' + esc(s) + '" style="border:1px solid var(--bd,#ddd);border-radius:8px;padding:8px 10px;margin:6px 0">' +
+      '<div class="flow-task-heading"><span class="flow-record-status">' + flowStatusBadge(s) + '</span>' +
       '<b>#' + id + '</b>' +
       '<span class="flow-task-title" title="' + esc(x.name || x.input || '') + '">' + esc(x.name || (x.input || '').slice(0, 60) || '(无名称)') + '</span>' +
-      resume + cancel + edit +
+      '<span class="flow-record-actions">' + resume + cancel + edit + '</span>' +
       '</div>' +
       (x.input ? '<div class="muted" style="font-size:11.5px;margin-top:4px;white-space:pre-wrap">' + esc(x.input).slice(0, 200) + '</div>' : '') +
       '<div class="muted" style="font-size:11px;margin-top:2px">创建: ' + new Date(x.created_ms).toLocaleString() + ' · 更新: ' + new Date(x.updated_ms).toLocaleString() + '</div>' +
+      '<div class="flow-record-progress" role="status" aria-live="polite" style="white-space:pre-wrap;overflow-wrap:anywhere;margin-top:6px">' + (tid != null ? '正在读取执行进度…' : '历史执行记录；可点击继续开始新任务。') + '</div>' +
       '<div id="flow-task-edit-' + id + '"></div>' +
       '</div>';
   });
   el.innerHTML = rows.join('');
+  await refreshFlowTaskProgress();
+}
+
+let FLOW_TASK_PROGRESS_BUSY = false;
+async function refreshFlowTaskProgress(){
+  const list = $('flow-tasks');
+  if(!list || FLOW_TASK_PROGRESS_BUSY) return;
+  FLOW_TASK_PROGRESS_BUSY = true;
+  try {
+    await Promise.all(Array.from(list.querySelectorAll('[data-flow-task-id]')).map(async row => {
+      if(row.dataset.progressLoaded && row.dataset.flowStatus !== 'RUNNING' && row.dataset.flowStatus !== 'QUEUED') return;
+      const tid = row.dataset.flowTaskId;
+      const r = await call('GET', '/v1/tasks/' + tid);
+      if(!row.isConnected || $('flow-tasks') !== list) return;
+      const progress = row.querySelector('.flow-record-progress');
+      if(r.status !== 200 || !r.obj || !r.obj.status){
+        delete progress.dataset.rendered;
+        progress.textContent = r.status === 404
+          ? '执行任务 #' + tid + ' 的实时记录已不可用（服务可能重启）；持久化记录仍保留。'
+          : '执行进度暂时获取失败，将自动重试。';
+        return;
+      }
+      const t = r.obj, id = row.dataset.flowRecordId;
+      row.dataset.flowStatus = t.status;
+      row.dataset.progressLoaded = 'true';
+      row.querySelector('.flow-record-status').innerHTML = flowStatusBadge(t.status);
+      const live = t.status === 'RUNNING' || t.status === 'QUEUED';
+      row.querySelector('.flow-record-actions').innerHTML = live
+        ? '<button class="sec sm" onclick="flowTaskCancel(' + id + ')">取消</button>'
+        : (t.status !== 'DONE' ? '<button class="sec sm" onclick="flowTaskResume(' + id + ')">继续</button>' : '') + '<button class="sec sm" onclick="flowTaskEdit(' + id + ')">修改</button>';
+      const nodes = Array.isArray(t.flow_nodes) ? t.flow_nodes : [];
+      const counters = nodes.map(n => (n.id || '?') + (n.agent ? ' (' + n.agent + ')' : '') +
+        ' · 模型请求 ' + (n.llm_calls ?? '未知') + ' · 工具 ' + (n.tool_calls ?? '未知') +
+        ' · token ' + (n.tokens_in != null && n.tokens_out != null ? n.tokens_in + n.tokens_out : '未知')).join('\n');
+      const recent = nodes.flatMap(n => (n.steps || []).slice(-2).flatMap(s => ['[' + (n.id || '?') + '] ' + stepLines(s).join('\n')])).slice(-6).join('\n');
+      const text = '执行任务 #' + tid + '\n' + flowTaskStatus(t) + (counters ? '\n' + counters : '') + (recent ? '\n最近动作：\n' + recent : '');
+      // Keep existing result disclosure and scroll position during unchanged polls.
+      const html = '<div>' + esc(text) + '</div>' + (!live && t.output ? '<details><summary>执行结果</summary><pre style="white-space:pre-wrap;overflow-wrap:anywhere">' + esc(t.output) + '</pre></details>' : '');
+      if(progress.dataset.rendered !== html){ progress.innerHTML = html; progress.dataset.rendered = html; }
+    }));
+  } finally {
+    FLOW_TASK_PROGRESS_BUSY = false;
+    // A panel replacement during an in-flight request needs its own first poll.
+    if($('flow-tasks') && $('flow-tasks') !== list) refreshFlowTaskProgress();
+  }
 }
 
 async function flowTaskResume(id){
   const r = await call('POST', '/v1/flows/' + id + '/resume', {});
-  if(r.status === 200) toast('已继续: 新任务 #' + ((r.obj && r.obj.id) || '?'));
+  const tid = r.obj && r.obj.id;
+  if(r.status === 200 && tid != null) toast('已继续: 新任务 #' + tid);
   else toast('继续失败: ' + (r.text || ('HTTP ' + r.status)));
-  loadFlowTasks();
+  await loadFlowTasks();
+  if(r.status === 200 && tid != null){
+    const row = $('flow-tasks')?.querySelector('[data-flow-task-id="' + tid + '"]');
+    if(row) row.scrollIntoView({block:'nearest',behavior:'smooth'});
+  }
 }
 
 async function flowTaskCancel(id){
@@ -4903,7 +5009,7 @@ function chatProgressClock(entry){
 function chatPersist(){
   try {
     const records = Object.entries(CHAT_CACHE).slice(-12).map(([session, msgs]) => [session,
-      msgs.slice(-40).map(({role,text,pending,progress,progressEvents,taskId,detailsOpen,timelineOpen,actionsOpen,expandedSteps,stageSince}) => ({role,text,pending,progress,progressEvents,taskId,detailsOpen,timelineOpen,actionsOpen,expandedSteps,stageSince}))]);
+      msgs.slice(-40).map(({role,text,images,pending,progress,progressEvents,taskId,detailsOpen,timelineOpen,actionsOpen,expandedSteps,stageSince}) => ({role,text,images,pending,progress,progressEvents,taskId,detailsOpen,timelineOpen,actionsOpen,expandedSteps,stageSince}))]);
     sessionStorage.setItem('cognitive-progress-v1', JSON.stringify({records,tasks:CHAT_TASKS}));
   } catch(e) { /* storage quota/private mode: in-memory state remains usable */ }
 }
@@ -5080,7 +5186,7 @@ function renderChatEntry(entry){
   }
   if(entry.text && !entry.pending){
     const answer = document.createElement('pre'); answer.className = 'chat-answer';
-    answer.textContent = entry.text; el.append(answer);
+    chatRenderText(answer,entry.text); el.append(answer);
   }
   if(follow) chatScroll(true);
 }
@@ -5196,6 +5302,9 @@ async function chatSubmit(resume = false){
   if(input && !resume) input.value = '';
   CHAT_FOLLOW=true;
   chatAddBubble('user',full);
+  const userEntry=CHAT_MSGS[CHAT_MSGS.length-1];
+  userEntry.images=attachments.filter(a=>a.kind==='image').map(a=>({id:a.id,name:a.name,session}));
+  chatRenderImages(userEntry.el,userEntry.images);
   chatAddBubble('bot','');
   const entry = CHAT_MSGS[CHAT_MSGS.length-1];
   entry.pending = true; entry.progress = {stage:'submitting'};
@@ -5266,6 +5375,7 @@ async function pingServer(){
 setInterval(pingServer, 8000);
 setInterval(() => { for(const {entry} of CHAT_ENTRIES.values()) if(entry.pending) chatProgressClock(entry); }, 1000);
 setInterval(() => { if(current === 'trace' && !document.hidden) loadTrace(); }, 3000);
+setInterval(() => { if((current === 'agents' || current === 'flow') && !document.hidden) refreshFlowTaskProgress(); }, 2000);
 
 /* ================= 初始化 ================= */
 /* ChatGPT 风格：对话是默认首页 */

@@ -2415,6 +2415,23 @@ static void test_planner_dsml(void) {
         }
         planner_actions_free(actions,n); free(raw); free(err);
     }
+    /* A real coder response mixes object-wrapped glob arguments with git's
+     * scalar args. The scalar is a tool parameter, not a JSON envelope. */
+    const char *mixed="I'll locate the source.\n<｜｜DSML｜｜ calls>"
+        "<｜｜DSML｜｜ invoke name='glob'><｜｜DSML｜｜ parameter name='args' string='false'>{\"pattern\":\"**/memory/*.c\"}</｜｜DSML｜｜ parameter></｜｜DSML｜｜ invoke>"
+        "<｜｜DSML｜｜ invoke name='git'><｜｜DSML｜｜ parameter name='args' string='true'>status</｜｜DSML｜｜ parameter><｜｜DSML｜｜ parameter name='dir' string='true'>D:\\AI\\code\\cognitive-os\\backend</｜｜DSML｜｜ parameter></｜｜DSML｜｜ invoke></｜｜DSML｜｜ calls>";
+    llm provider={.vt=&vt,.impl=(void *)mixed};
+    planned_action *actions=NULL; int n=0; char *raw=NULL,*err=NULL;
+    CHECK(planner_plan(&provider,"coder continuation",&actions,&n,&raw,&err)==0);
+    CHECK(n==2 && !err);
+    if(n==2){
+        CHECK_STR(actions[0].tool,"glob"); CHECK_STR(actions[1].tool,"git");
+        cJSON *args=cJSON_Parse(actions[1].args_json);
+        CHECK_STR(cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(args,"args")),"status");
+        CHECK_STR(cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(args,"dir")),"D:\\AI\\code\\cognitive-os\\backend");
+        cJSON_Delete(args);
+    }
+    planner_actions_free(actions,n); free(raw); free(err);
 }
 
 typedef struct recovery_fixture_state {

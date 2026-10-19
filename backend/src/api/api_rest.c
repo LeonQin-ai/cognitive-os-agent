@@ -1293,6 +1293,19 @@ static int h_upload(const http_request *req, http_response *resp, void *ud) {
 }
 
 /* GET /v1/uploads — uploaded files with sizes. */
+static int h_upload_preview(const http_request *req, http_response *resp, void *ud) {
+    runtime_ctx *ctx=(runtime_ctx *)ud;
+    if (!authz_ok(ctx,req,resp)) return 0;
+    char id[64]="", session[512]="default";
+    query_param(req,"id",id,sizeof id);
+    const char *sp=strstr(req->query,"session=");
+    if(sp) sanitize_upload_name(sp+8,session,sizeof session);
+    cJSON *o=attachment_image_preview(ctx->state_root,session,id);
+    if(!o) { resp->status=404; http_resp_json(resp,"{\"error\":\"image preview unavailable\"}"); return 0; }
+    char *text=cJSON_PrintUnformatted(o);
+    http_resp_json(resp,text ? text : "{}"); free(text); cJSON_Delete(o); return 0;
+}
+
 static int h_uploads(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
     if (!authz_ok(ctx, req, resp)) return 0;
@@ -5357,6 +5370,7 @@ int api_attach(runtime_ctx *ctx) {
     http_server_route(ctx->http, "DELETE", "/v1/hooks/", h_hook_delete, ctx);
     http_server_route_concurrent(ctx->http, "POST", "/v1/upload", h_upload, ctx);
     http_server_route(ctx->http, "GET", "/v1/uploads", h_uploads, ctx);
+    http_server_route(ctx->http, "GET", "/v1/uploads/preview", h_upload_preview, ctx);
     http_server_route(ctx->http, "DELETE", "/v1/uploads/", h_upload_delete, ctx);
     http_server_route(ctx->http, "GET", "/v1/usage", h_usage, ctx);
     http_server_route(ctx->http, "GET", "/v1/state", h_state_all, ctx);

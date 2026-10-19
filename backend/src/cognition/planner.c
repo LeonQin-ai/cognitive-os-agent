@@ -512,7 +512,7 @@ static int parse_dsml_tool_calls(const char *plan, planned_action **actions, int
          * JSON/code reply. A real preamble is plain explanatory text. */
         for (const char *q=p;q<open;q++)
             if (*q=='<' || *q=='{' || *q=='}' || *q=='[' || *q==']' ||
-                *q=='"' || *q=='\'' || *q=='`') return 0;
+                *q=='"' || (*q=='\'' && !(q>p && isalpha((unsigned char)q[-1]) && isalpha((unsigned char)q[1]))) || *q=='`') return 0;
         size_t preamble_len=(size_t)(open-p);
         char *preamble=malloc(preamble_len+1);
         if (!preamble) return -1;
@@ -562,8 +562,8 @@ static int parse_dsml_tool_calls(const char *plan, planned_action **actions, int
                 p=end;
             }
             if (!value || !dsml_tag_read(&p,&tag) || !tag.closing || strcmp(tag.kind,"parameter")) goto invalid;
-            if (!strcmp(key,"args") || !strcmp(key,"arguments")) {
-                if (params || !cJSON_IsObject(value)) goto invalid;
+            if ((!strcmp(key,"args") || !strcmp(key,"arguments")) && cJSON_IsObject(value)) {
+                if (params) goto invalid;
                 cJSON_Delete(args); args=value; value=NULL; envelope=1;
             } else {
                 if (!cJSON_AddItemToObject(args,key,value)) goto invalid;
