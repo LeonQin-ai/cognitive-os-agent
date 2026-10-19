@@ -174,8 +174,9 @@ static int cached_line_relevant(const char *line, size_t len, const char *query)
 
 static int excerpt_already_present(const char *text, const char *line, size_t n) {
     if(!text || !n) return 0;
-    for(const char *p=text; (p=strchr(p,*line))!=NULL; ++p)
-        if(strlen(p)>=n && !memcmp(p,line,n)) return 1;
+    const char *end=text+strlen(text);
+    for(const char *p=text; p<end && (p=memchr(p,*line,(size_t)(end-p)))!=NULL; ++p)
+        if((size_t)(end-p)>=n && !memcmp(p,line,n)) return 1;
     return 0;
 }
 
