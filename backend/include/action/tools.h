@@ -47,6 +47,8 @@ typedef struct tool_ctx {
     const char *state_root;        /* runtime state dir (SSH environment profiles) */
     const char *session_id;        /* current chat session; scopes auto SSH credentials */
     const char *task_input;        /* local task text after credential redaction */
+    int (*should_abort)(void *ud); /* optional cooperative cancellation */
+    void *abort_ud;
     metrics *metrics;              /* metrics sink (may be NULL) */
     struct skill_registry *skills; /* for the skill tool (may be NULL) */
     struct mcp_manager *mcp;       /* for MCP tools (may be NULL) */

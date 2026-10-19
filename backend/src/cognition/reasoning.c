@@ -516,6 +516,8 @@ static int run_aborted(reasoning *r) {
 }
 
 /* Find-or-create the session with this id. Caller holds sess_mtx. */
+static int tool_abort_requested(void *ud) { return run_aborted((reasoning *)ud); }
+
 static struct session *session_get_locked(reasoning *r, const char *id) {
     const char *want = (id && *id) ? id : "default";
     struct session *s = NULL;
@@ -1979,6 +1981,8 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
     tctx.state_root = r->state_root;
     tctx.session_id = r->cur ? r->cur->id : "default";
     tctx.task_input = r->last_prompt;
+    tctx.should_abort = tool_abort_requested;
+    tctx.abort_ud = r;
     tctx.metrics = r->metrics;
     tctx.skills = r->skills;
     tctx.mcp = r->mcp;

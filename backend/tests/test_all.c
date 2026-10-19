@@ -3821,6 +3821,50 @@ static void test_existing_path_redaction(void) {
     fs_remove(file); fs_remove(relative); free(absolute);
 }
 
+struct search_abort_state { int checks, stop_after; };
+static int search_abort_fixture(void *ud) {
+    struct search_abort_state *state=ud;return ++state->checks>=state->stop_after;
+}
+static void test_search_work_bounds(void) {
+    section("streaming grep work bounds and cancellation");
+    const char *root="state-test/search-bounds";
+    CHECK(fs_mkdirs("state-test/search-bounds/build")==0);
+    CHECK(fs_write_file("state-test/search-bounds/build/secret.txt","GENERATED_NEEDLE",16)==0);
+    const char binary[]="BINARY_NEEDLE\0ignored";
+    CHECK(fs_write_file("state-test/search-bounds/binary.bin",binary,sizeof(binary)-1)==0);
+    char *large=malloc(20001);CHECK(large!=NULL);if(!large) return;
+    memset(large,'x',20000);memcpy(large,"MATCH\n",6);large[20000]=0;
+    CHECK(fs_write_file("state-test/search-bounds/large.txt",large,20000)==0);
+    memset(large,'x',20000);memcpy(large+8190,"NeEdLe\nneedle",13);large[8203]=0;
+    CHECK(fs_write_file("state-test/search-bounds/chunks.txt",large,8203)==0);free(large);
+    CHECK(fs_write_file("state-test/search-bounds/budget.txt","prefix xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx TAIL",42)==0);
+    tool_registry *reg=tool_registry_new();CHECK(reg!=NULL);if(!reg) return;
+    CHECK(tool_register(reg,tool_grep())==0);tool_ctx ctx={0};ctx.workspace=root;
+    tool_result *r=tool_execute(reg,"grep","{\"pattern\":\"GENERATED_NEEDLE\",\"output_mode\":\"content\"}",&ctx);
+    CHECK(r && r->ok && !strstr(r->output,"build/secret.txt") && strstr(r->output,"Generated directories skipped"));tool_result_free(r);
+    r=tool_execute(reg,"grep","{\"pattern\":\"GENERATED_NEEDLE\",\"path\":\"build\",\"output_mode\":\"content\"}",&ctx);
+    CHECK(r && r->ok && strstr(r->output,"GENERATED_NEEDLE"));tool_result_free(r);
+    r=tool_execute(reg,"grep","{\"pattern\":\"GENERATED_NEEDLE\",\"include_generated\":true,\"output_mode\":\"content\"}",&ctx);
+    CHECK(r && r->ok && strstr(r->output,"build/secret.txt"));tool_result_free(r);
+    r=tool_execute(reg,"grep","{\"pattern\":\"BINARY_NEEDLE\",\"path\":\"binary.bin\"}",&ctx);
+    CHECK(r && r->ok && strstr(r->output,"Binary files skipped") && !strstr(r->output,"binary.bin"));tool_result_free(r);
+    r=tool_execute(reg,"grep","{\"pattern\":\"needle\",\"path\":\"chunks.txt\",\"ignore_case\":true,\"output_mode\":\"count\"}",&ctx);
+    CHECK(r && r->ok && strstr(r->output,"chunks.txt:2"));tool_result_free(r);
+    r=tool_execute(reg,"grep","{\"pattern\":\"TAIL\",\"path\":\"budget.txt\",\"max_scan_bytes\":8}",&ctx);
+    CHECK(r && !r->ok && strstr(r->output,"byte budget") && !strstr(r->output,"No matches found"));tool_result_free(r);
+    r=tool_execute(reg,"grep","{\"pattern\":\"not-there\",\"max_files\":1}",&ctx);
+    CHECK(r && !r->ok && strstr(r->output,"file budget"));tool_result_free(r);
+    struct search_abort_state abort={.stop_after=4};ctx.should_abort=search_abort_fixture;ctx.abort_ud=&abort;
+    r=tool_execute(reg,"grep","{\"pattern\":\"MATCH\",\"path\":\"large.txt\",\"output_mode\":\"content\",\"head_limit\":1}",&ctx);
+    CHECK(r && r->ok && strstr(r->output,"head_limit reached") && abort.checks>0 && abort.checks<4);tool_result_free(r);
+    abort.checks=0;abort.stop_after=1;
+    r=tool_execute(reg,"grep","{\"pattern\":\"MATCH\",\"path\":\"large.txt\"}",&ctx);
+    CHECK(r && !r->ok && strstr(r->output,"cancelled") && abort.checks==1);tool_result_free(r);
+    tool_registry_free(reg);
+    fs_remove("state-test/search-bounds/build/secret.txt");fs_remove("state-test/search-bounds/binary.bin");
+    fs_remove("state-test/search-bounds/large.txt");fs_remove("state-test/search-bounds/chunks.txt");fs_remove("state-test/search-bounds/budget.txt");
+}
+
 static void test_edit_search(void) {
     section("file_edit + glob + grep");
     /* hermetic start: a killed earlier run may have left files behind */
@@ -9177,7 +9221,7 @@ int main(int argc, char **argv) {
     if (askpass_rc >= 0) return askpass_rc;
     setvbuf(stdout, NULL, _IONBF, 0); /* unbuffered: survive crashes mid-run */
     if (argc==2 && !strcmp(argv[1],"--search-tools")) {
-        test_edit_search();
+        test_edit_search();test_search_work_bounds();
         printf("%d passed, %d failed\n",g_pass,g_fail); return g_fail?1:0;
     }
     if (argc==2 && !strcmp(argv[1],"--file-tools")) {
@@ -9316,7 +9360,7 @@ int main(int argc, char **argv) {
     test_caps_gate();
     test_generated_tool();
     test_memory_graph();
-    test_edit_search();
+    test_edit_search();test_search_work_bounds();
     test_snapshot_bigfile();
     test_mcp(); test_complete_tool_result();
     test_tool_schema();

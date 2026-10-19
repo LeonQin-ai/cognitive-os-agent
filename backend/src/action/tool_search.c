@@ -7,6 +7,7 @@
  * case-insensitive) instead of full ripgrep regex. */
 #include "action/tools.h"
 #include "os/os_fs.h"
+#include "os/os_time.h"
 #include "infra/util.h"
 
 #include <stdlib.h>
@@ -58,13 +59,6 @@ static long long file_mtime(const char *path) {
 
 static int ci_char(int c) {
     return (c >= 'A' && c <= 'Z') ? c + 32 : c;
-}
-
-static int ci_strncmp(const char *a, const char *b, size_t n) {
-    for (size_t i = 0; i < n; i++)
-        if (ci_char((unsigned char)a[i]) != ci_char((unsigned char)b[i]))
-            return 1;
-    return 0;
 }
 
 /* ---------- glob matching (subset of GlobTool / utils/glob) ----------
@@ -277,77 +271,83 @@ typedef struct {
     strbuf sb; /* output */
     size_t out_n;  /* entries emitted */
     int truncated;
+    size_t *prefix;
+    const tool_ctx *ctx;
+    const char *stop_reason;
+    uint64_t deadline;
+    size_t scanned_bytes, max_scan_bytes, scanned_files, max_files;
+    int include_generated, skipped_generated, skipped_binary, cancelled, depth;
 } grep_state;
 
-static int line_has_needle(const char *line, size_t len, const grep_state *g) {
-    if (g->needle_len == 0 || len < g->needle_len)
-        return 0;
-    for (size_t i = 0; i + g->needle_len <= len; i++) {
-        if (g->ignore_case) {
-            if (ci_char((unsigned char)line[i]) == ci_char((unsigned char)g->needle[0]) &&
-                ci_strncmp(line + i, g->needle, g->needle_len) == 0)
-                return 1;
-        } else if (line[i] == g->needle[0] && memcmp(line + i, g->needle, g->needle_len) == 0)
-            return 1;
+static int grep_stop(grep_state *g) {
+    if(g->stop_reason) return 1;
+    if(g->ctx && g->ctx->should_abort && g->ctx->should_abort(g->ctx->abort_ud)) {
+        g->cancelled=1;g->stop_reason="search cancelled";return 1;
     }
+    if((uint64_t)time_now_ms()>=g->deadline) { g->stop_reason="search timeout; narrow the path or raise timeout_ms";return 1; }
+    return 0;
+}
 
+/* Only an excerpt of an unusually long line is retained. Matching uses a
+ * streaming prefix automaton, so matches across chunks/long lines are not lost. */
+static int grep_line(const char *rel, size_t lineno, strbuf *line, size_t total,
+                     int matched, size_t *hits, grep_state *g) {
+    if(!matched) return 0;
+    (*hits)++;
+    if(g->mode==0) return 1;
+    if(g->mode==1) {
+        size_t n=line->len;
+        while(n && ((unsigned char)line->buf[n]&0xc0)==0x80) --n;
+        strbuf_appendf(&g->sb,"%s:%zu:",rel,lineno);
+        strbuf_append_n(&g->sb,line->buf ? line->buf : "",n);
+        if(total>line->len) strbuf_append(&g->sb," [line preview truncated; inspect file]");
+        strbuf_append(&g->sb,"\n");g->out_n++;
+        if(g->out_n>=g->head_limit) { g->stop_reason="head_limit reached; results may be truncated";return 1; }
+    }
     return 0;
 }
 
 static void grep_file(const char *rel, const char *full, grep_state *g) {
-    char *text = fs_read_file(full);
-    char *p;
-
-    if (!text)
-        return;
-    /* skip binary-looking files */
-    if (memchr(text, '\0', strlen(text) < 8192 ? strlen(text) : 8192)) {
-        free(text);
-        return;
-    }
-
-    size_t hits = 0, lineno = 0;
-    p = text;
-    while (*p) {
-        char *line = p;
-        char *nl = strchr(p, '\n');
-        if (nl) {
-            *nl = '\0';
-            p = nl + 1;
-        } else
-            p += strlen(p);
-        lineno++;
-        if (line_has_needle(line, strlen(line), g)) {
-            hits++;
-            if (g->mode == 1) {
-                if (g->out_n < g->head_limit) {
-                    strbuf_appendf(&g->sb, "%s:%zu:%s\n", rel, lineno, line);
-                    g->out_n++;
-                } else
-                    g->truncated = 1;
+    if(grep_stop(g)) return;
+    if(g->scanned_files>=g->max_files) { g->stop_reason="file budget exhausted; narrow the path or raise max_files";return; }
+    g->scanned_files++;
+    uint64_t offset=0;size_t hits=0,lineno=1,total=0,matched_len=0;
+    int matched=0,done=0;strbuf line;strbuf_init(&line);
+    while(!done && !grep_stop(g)) {
+        if(g->scanned_bytes>=g->max_scan_bytes) { g->stop_reason="byte budget exhausted; narrow the path or raise max_scan_bytes";break; }
+        size_t want=g->max_scan_bytes-g->scanned_bytes;if(want>8192) want=8192;
+        size_t count=0;int more=0;
+        char *chunk=fs_read_file_slice(full,offset,want,&count,&more);
+        if(!chunk) break;
+        g->scanned_bytes+=count;offset+=count;
+        if(memchr(chunk,0,count)) { g->skipped_binary++;free(chunk);strbuf_free(&line);return; }
+        for(size_t i=0;i<count;i++) {
+            unsigned char c=(unsigned char)chunk[i];
+            if(c=='\n') {
+                if(grep_line(rel,lineno,&line,total,matched,&hits,g)) { done=1;break; }
+                lineno++;total=matched_len=0;matched=0;line.len=0;if(line.buf) line.buf[0]=0;
+                continue;
             }
+            total++;
+            if(line.len<8192) strbuf_append_n(&line,chunk+i,1);
+            if(g->ignore_case) c=(unsigned char)ci_char(c);
+            while(matched_len && c!=(unsigned char)(g->ignore_case ? ci_char((unsigned char)g->needle[matched_len]) : g->needle[matched_len]))
+                matched_len=g->prefix[matched_len-1];
+            if(c==(unsigned char)(g->ignore_case ? ci_char((unsigned char)g->needle[matched_len]) : g->needle[matched_len])) matched_len++;
+            if(matched_len==g->needle_len) { matched=1;matched_len=g->prefix[matched_len-1]; }
         }
-        if (!nl)
+        free(chunk);
+        if(!more || !count) {
+            if(!done && total) (void)grep_line(rel,lineno,&line,total,matched,&hits,g);
             break;
-    }
-
-    if (hits > 0) {
-        if (g->mode == 0) {
-            if (g->out_n < g->head_limit) {
-                strbuf_appendf(&g->sb, "%s\n", rel);
-                g->out_n++;
-            } else
-                g->truncated = 1;
-        } else if (g->mode == 2) {
-            if (g->out_n < g->head_limit) {
-                strbuf_appendf(&g->sb, "%s:%zu\n", rel, hits);
-                g->out_n++;
-            } else
-                g->truncated = 1;
         }
     }
-
-    free(text);
+    if(hits && g->mode!=1 && (!g->stop_reason || g->mode==0)) {
+        if(g->mode==0) strbuf_appendf(&g->sb,"%s\n",rel);
+        else strbuf_appendf(&g->sb,"%s:%zu\n",rel,hits);
+        if(++g->out_n>=g->head_limit) g->stop_reason="head_limit reached; results may be truncated";
+    }
+    strbuf_free(&line);
 }
 
 static int name_glob_ok(const char *name, const char *glob_pat) {
@@ -360,6 +360,8 @@ static int name_glob_ok(const char *name, const char *glob_pat) {
 }
 
 static void grep_walk(const char *root, const char *rel, grep_state *g) {
+    if(grep_stop(g)) return;
+    if(g->depth>=64) { g->truncated=1;return; }
     char full[2048];
     if(rel && *rel) path_join(full,sizeof full,root,rel);
     else snprintf(full,sizeof full,"%s",root);
@@ -368,18 +370,23 @@ static void grep_walk(const char *root, const char *rel, grep_state *g) {
         memset(&dl, 0, sizeof dl);
         if (fs_list_dir(full, &dl) != 0)
             return;
-        for (size_t i = 0; i < dl.count; i++) {
+        for (size_t i = 0; i < dl.count && !grep_stop(g); i++) {
             const char *name = dl.items[i].name;
             if (!name || !*name || strcmp(name, ".") == 0 || strcmp(name, "..") == 0)
                 continue;
             if (strcmp(name, ".git") == 0 || strcmp(name, "node_modules") == 0)
                 continue;
+            if(dl.items[i].is_dir && !g->include_generated &&
+               (!strcmp(name,"build") || !strcmp(name,"dist") || !strcmp(name,".tool-results") ||
+                !strcmp(name,".zig-cache") || !strcmp(name,".venv") || !strcmp(name,"__pycache__"))) {
+                g->skipped_generated++;continue;
+            }
             char child[1024];
             if (rel && *rel)
                 snprintf(child, sizeof child, "%s/%s", rel, name);
             else
                 snprintf(child, sizeof child, "%s", name);
-            grep_walk(root, child, g);
+            g->depth++;grep_walk(root, child, g);g->depth--;
         }
         fs_list_free(&dl);
     } else {
@@ -398,6 +405,12 @@ static void grep_walk(const char *root, const char *rel, grep_state *g) {
             return;
         grep_file(disp, full, g);
     }
+}
+
+static size_t grep_budget(cJSON *args,const char *name,size_t fallback,size_t maximum) {
+    cJSON *v=cJSON_GetObjectItemCaseSensitive(args,name);
+    if(!cJSON_IsNumber(v) || v->valuedouble<=0) return fallback;
+    return v->valuedouble>(double)maximum ? maximum : (size_t)v->valuedouble;
 }
 
 static tool_result *grep_exec(const tool *self, const tool_ctx *ctx, const char *args_json) {
@@ -433,8 +446,24 @@ static tool_result *grep_exec(const tool *self, const tool_ctx *ctx, const char 
     /* copy strings out before cJSON_Delete(args) frees the tree */
     g.needle = xstrdup(pat_j->valuestring);
     g.needle_len = strlen(g.needle);
+    if(!g.needle_len || g.needle_len>65536) {
+        free((void *)g.needle);cJSON_Delete(args);return tool_result_new(0,"grep: use a non-empty literal pattern of at most 65536 bytes");
+    }
+    g.prefix=calloc(g.needle_len,sizeof(*g.prefix));
+    if(!g.prefix) { free((void *)g.needle);cJSON_Delete(args);return tool_result_new(0,"grep: allocation failed"); }
+    g.ctx=ctx;
+    g.max_scan_bytes=grep_budget(args,"max_scan_bytes",64*1024*1024,1024*1024*1024);
+    g.max_files=grep_budget(args,"max_files",10000,1000000);
+    g.deadline=(uint64_t)time_now_ms()+grep_budget(args,"timeout_ms",5000,30000);
+    g.include_generated=cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(args,"include_generated"));
     g.file_glob = (glob_j && cJSON_IsString(glob_j) && *glob_j->valuestring) ? xstrdup(glob_j->valuestring) : NULL;
     g.ignore_case = (ic_j && cJSON_IsTrue(ic_j)) ? 1 : 0;
+    for(size_t i=1,k=0;i<g.needle_len;i++) {
+        unsigned char c=(unsigned char)(g.ignore_case ? ci_char((unsigned char)g.needle[i]) : g.needle[i]);
+        while(k && c!=(unsigned char)(g.ignore_case ? ci_char((unsigned char)g.needle[k]) : g.needle[k])) k=g.prefix[k-1];
+        if(c==(unsigned char)(g.ignore_case ? ci_char((unsigned char)g.needle[k]) : g.needle[k])) ++k;
+        g.prefix[i]=k;
+    }
     g.mode = 0;
     if (mode_j && cJSON_IsString(mode_j)) {
         if (strcmp(mode_j->valuestring, "content") == 0)
@@ -450,17 +479,19 @@ static tool_result *grep_exec(const tool *self, const tool_ctx *ctx, const char 
 
     strbuf_init(&g.sb);
     grep_walk(root, NULL, &g);
-    if (g.out_n == 0)
+    if (g.out_n == 0 && !g.stop_reason && !g.truncated)
         strbuf_append(&g.sb, "No matches found (literal text matching, not regular expressions). "
             "If pattern uses alternatives such as a|b, issue separate literal searches for a and b; "
             "do not infer that those individual symbols are absent. Use a specific symbol instead of reading the whole file.\n");
-    if (g.truncated)
-        strbuf_appendf(&g.sb,
-                           "(Results are truncated. Consider using a more specific path, pattern or head_limit.)\n");
-    free((void *)g.needle);
+    if(g.stop_reason) strbuf_appendf(&g.sb,"[Search stopped: %s]\n",g.stop_reason);
+    if(g.skipped_generated) strbuf_append(&g.sb,"[Generated directories skipped; use their explicit path or include_generated=true to search them.]\n");
+    if(g.skipped_binary) strbuf_append(&g.sb,"[Binary files skipped.]\n");
+    if(g.truncated) strbuf_append(&g.sb,"[Search incomplete: directory nesting exceeded 64.]\n");
+    free(g.prefix);free((void *)g.needle);
     free((void *)g.file_glob);
     out = strbuf_detach(&g.sb);
-    r = tool_result_new(1, out ? out : "");
+    int ok=!g.cancelled && !g.truncated && (!g.stop_reason || !strncmp(g.stop_reason,"head_limit",10));
+    r = tool_result_new(ok, out ? out : "");
     free(out);
     return r;
 }
@@ -491,11 +522,16 @@ const tool *tool_grep(void) {
         "Batch separate literal keyword searches for alternatives. Filter files with the glob parameter (e.g. \"*.js\", \"**/*.tsx\"). "
         "Output modes: \"content\" shows matching lines as path:line:text, "
         "\"files_with_matches\" shows only file paths (default), \"count\" shows match counts. "
-        "Skips .git and node_modules. head_limit caps output entries (default 250).",
+        "Stops scanning at head_limit (default 250). Skips binary and generated directories "
+        "(build/dist/.tool-results/.zig-cache/.venv/__pycache__); explicit root paths remain searchable "
+        "or set include_generated=true. Per-search budgets default to 5 seconds, 10000 files and 64 MiB; "
+        "incomplete searches report a failure so narrow the path or adjust timeout_ms/max_files/max_scan_bytes.",
         "{\"type\":\"object\",\"properties\":{\"pattern\":{\"type\":\"string\"},"
         "\"path\":{\"type\":\"string\"},\"glob\":{\"type\":\"string\"},"
         "\"output_mode\":{\"type\":\"string\"},\"ignore_case\":{\"type\":\"boolean\"},"
-        "\"head_limit\":{\"type\":\"integer\"}},\"required\":[\"pattern\"]}",
+        "\"head_limit\":{\"type\":\"integer\"},\"include_generated\":{\"type\":\"boolean\"},"
+        "\"timeout_ms\":{\"type\":\"integer\"},\"max_files\":{\"type\":\"integer\"},"
+        "\"max_scan_bytes\":{\"type\":\"integer\"}},\"required\":[\"pattern\"]}",
         0,
         grep_exec,
         NULL,
