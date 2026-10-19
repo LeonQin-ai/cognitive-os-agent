@@ -71,6 +71,8 @@ The agent-quality results below use full-agent-loop tasks. Clean scorecard: [`ba
 
 Token/completion regression: a real-model targeted case now finishes naturally in **5 requests / 14,534 input tokens** (previously 8 / 24,463 and failed). Long-task artifacts were independently verified after a recovery fix; interrupted/failed attempts and all API costs are included in the [regression report](backend/docs/token-regression-report.md). This is not a universal token-savings claim.
 
+Latest real-API suite: source overview, 16-slide PPT, tool-generated PNG, text-image OCR and diagram recognition **5/5 passed**, totaling **590,674 tokens**. The report also records failed diagnostic costs and fixes. Native model image generation was not exercised.
+
 | Benchmark | Score | Model |
 |---|---|---|
 | GAIA 2023 validation (official 165 tasks) | **78.79%** (L1 84.91 / L2 81.40 / L3 57.69) | GLM-5.3-flash |
