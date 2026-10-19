@@ -18,6 +18,10 @@ struct policy_engine;  /* runtime/policy_engine.h */
  * protocol headroom are reserved from the selected model's context window. */
 size_t planner_input_budget_bytes(llm *llm, const struct tool_registry *tools,
     struct skill_registry *skills, struct policy_engine *policy);
+/* Same budget calculation with a requested output allowance. Values are
+ * clamped to the selected model context and the runtime's safe upper bound. */
+size_t planner_input_budget_bytes_with_output(llm *llm, const struct tool_registry *tools,
+    struct skill_registry *skills, struct policy_engine *policy, int output_tokens);
 
 typedef struct planned_action {
     char *tool;      /* tool name, e.g. "file_write" */
@@ -50,6 +54,12 @@ int planner_plan_ex(llm *llm, const struct tool_registry *tools, struct skill_re
 int planner_plan_attachments_ex(llm *llm, const struct tool_registry *tools, struct skill_registry *skills,
     struct policy_engine *policy, const char *prompt, planned_action **actions,
     int *n_actions, char **raw_out, char **err_out, const char *attachments, int *truncated_out);
+/* Explicit output allowance variant, used for a bounded escalation after a
+ * provider reports that a response hit its output-token ceiling. */
+int planner_plan_attachments_ex_with_output(llm *llm, const struct tool_registry *tools,
+    struct skill_registry *skills, struct policy_engine *policy, const char *prompt,
+    planned_action **actions, int *n_actions, char **raw_out, char **err_out,
+    const char *attachments, int *truncated_out, int output_tokens);
 
 void planner_actions_free(planned_action *a, int n);
 

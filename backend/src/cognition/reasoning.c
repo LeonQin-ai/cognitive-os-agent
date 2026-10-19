@@ -264,6 +264,7 @@ struct reasoning {
     int prog_model_failures; /* consecutive/total request failures this run */
     int visual_request_failed; /* avoid silently repeating expensive image requests */
     int planner_response_truncated;
+    int planner_output_escalated; /* one bounded 32K -> 64K retry after truncation */
     char last_model_error[1024];
 
     /* per-model token ledger (borrowed; may be NULL). Deltas are computed
@@ -1319,7 +1320,8 @@ static char *str_head(const char *s, size_t cap) {
  * Caller frees the returned string. */
 static char *build_context(reasoning *r, const char *prompt) {
     strbuf b;
-    size_t input_budget = planner_input_budget_bytes(r->llm, r->tools, r->skills, r->policy);
+    size_t input_budget = planner_input_budget_bytes_with_output(r->llm, r->tools, r->skills,
+        r->policy, r->planner_output_escalated ? 65536 : 0);
     size_t warm_used = 0;
     size_t hot_mark;
     size_t cold_mark;
@@ -1620,9 +1622,15 @@ static int h_reason(state_machine *sm, void *ud, const char *input, char **out) 
     progress_emit(r, "planning");
     int64_t llm_span = trace_begin_task(r->trace, r->run_task ? r->run_task->id : r->trace_task_id, "llm.plan");
     r->planner_response_truncated=0;
-    int rc = planner_plan_attachments_ex(r->llm, r->tools, r->skills, r->policy, aug ? aug : input, &r->actions, &r->n_actions,
+    int output_override = r->planner_output_escalated ? 65536 : 0;
+    int rc = planner_plan_attachments_ex_with_output(r->llm, r->tools, r->skills, r->policy,
+                                 aug ? aug : input, &r->actions, &r->n_actions,
                                  &raw, &plan_err, r->run_task ? r->run_task->attachments_json : NULL,
-                                 &r->planner_response_truncated);
+                                 &r->planner_response_truncated, output_override);
+    if (r->planner_response_truncated && !r->planner_output_escalated) {
+        r->planner_output_escalated = 1;
+        log_info("planner: response hit output limit; escalating subsequent requests to a bounded 64K ceiling");
+    }
     r->visual_request_failed = rc == -2;
     trace_end(r->trace, llm_span, rc == 0 && raw ? 1 : -1);
     r->prog_llm_ms += time_now_ms() - t_llm0;
@@ -3170,6 +3178,7 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     r->prog_tool_calls = r->prog_llm_calls = r->round_idx = r->prog_model_failures = 0;
     r->prog_llm_ms = r->prog_tool_ms = 0;
     r->last_model_error[0]=0;
+    r->planner_output_escalated = 0;
     /* Shared memory is a live runtime-wide policy, checked at each read/write. */
 
     /* Ingestion guard: a prompt with invalid UTF-8 (e.g. a non-UTF-8 API

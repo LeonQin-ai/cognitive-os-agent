@@ -1354,12 +1354,16 @@ static void test_llm_caps_cancel(void) {
         CHECK(c && c->stream == 1 && c->tools == 1 && c->max_ctx == 128000);
         size_t fallback = planner_input_budget_bytes(oai, NULL, NULL, NULL);
         CHECK(llm_context_window_tokens(oai) == 262144);
+        size_t escalated_budget = planner_input_budget_bytes_with_output(oai, NULL, NULL, NULL, 65536);
+        CHECK(escalated_budget < fallback);
         oai->context_window_tokens = 8192;
         size_t small = planner_input_budget_bytes(oai, NULL, NULL, NULL);
+        size_t small_escalated = planner_input_budget_bytes_with_output(oai, NULL, NULL, NULL, 65536);
         oai->context_window_tokens = 524288;
         size_t large = planner_input_budget_bytes(oai, NULL, NULL, NULL);
         CHECK(llm_context_window_tokens(oai) == 524288);
         CHECK(small < fallback && fallback < large);
+        CHECK(small_escalated < small);
         CHECK(large > small * 10);
         llm_destroy(oai);
     }
@@ -2656,9 +2660,12 @@ static void test_git_empty_args_checks_status(void) {
 
 typedef struct progress_fixture {
     int mode, calls, saw_fold, saw_recovery, recovered;
+    int max_tokens[8];
 } progress_fixture;
 static int progress_fixture_chat(llm *self,const llm_request *req,llm_response *resp) {
     progress_fixture *f=self->impl; f->calls++;
+    if (f->calls <= (int)(sizeof(f->max_tokens)/sizeof(f->max_tokens[0])))
+        f->max_tokens[f->calls-1] = req->max_tokens;
     for (size_t i=0;i<req->num_messages;i++) {
         const char *s=req->messages[i].content;
         if (s && strstr(s,"earlier action results were folded")) f->saw_fold=1;
@@ -2837,6 +2844,8 @@ static void test_cross_round_progress(void) {
                 CHECK(rc==0 && answer && strstr(answer,"前半段：架构由三层构成"));
                 CHECK(answer && strstr(answer,"后半段，下面说明验证方式。任务完成"));
                 CHECK(f.calls==2);
+                CHECK(f.max_tokens[0] == 32768);
+                CHECK(f.max_tokens[1] == 65536);
             } else if (mode==0 || mode==4) {
                 CHECK(rc!=0 && answer);
                 CHECK(f.calls<=12);

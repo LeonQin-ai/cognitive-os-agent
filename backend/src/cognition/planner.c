@@ -586,27 +586,38 @@ invalid:
 }
 
 /* Shared planning core. Takes ownership of nothing; frees sys_prompt. */
-static int planner_output_tokens(llm *l) {
+static int planner_output_tokens(llm *l, int requested) {
     long long window = llm_context_window_tokens(l);
-    long long output = window / 4;
-    if (output > 32768) output = 32768;
+    long long output = requested > 0 ? requested : window / 4;
+    long long upper = requested > 0 ? 65536 : 32768;
+    /* Output capacity is separate from the model's input context window. Use
+     * the context only as a hard combined-request safety bound; the runtime
+     * output ceiling follows Claude Code's default/one-time escalation shape. */
+    if (window > 0 && output > window / 2) output = window / 2;
+    if (output > upper) output = upper;
     if (output < 1024) output = 1024;
     return (int)output;
 }
 
-size_t planner_input_budget_bytes(llm *l, const tool_registry *tools,
-    struct skill_registry *skills, struct policy_engine *policy) {
+size_t planner_input_budget_bytes_with_output(llm *l, const tool_registry *tools,
+    struct skill_registry *skills, struct policy_engine *policy, int output_tokens) {
     char *sys = build_catalog_prompt(tools, skills, policy);
     size_t sys_bytes = strlen(sys ? sys : SYS_PROMPT);
     free(sys);
-    long long available = llm_context_window_tokens(l) - planner_output_tokens(l) - 1024;
+    long long available = llm_context_window_tokens(l) - planner_output_tokens(l, output_tokens) - 1024;
     /* Two UTF-8 bytes per token leaves room for Chinese, code and JSON. */
     available -= (long long)(sys_bytes + 1) / 2;
     return available > 0 ? (size_t)available * 2 : 0;
 }
 
+size_t planner_input_budget_bytes(llm *l, const tool_registry *tools,
+    struct skill_registry *skills, struct policy_engine *policy) {
+    return planner_input_budget_bytes_with_output(l, tools, skills, policy, 0);
+}
+
 static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_action **actions, int *n_actions,
-                     char **raw_out, char **err_out, const char *attachments, int *truncated_out) {
+                     char **raw_out, char **err_out, const char *attachments, int *truncated_out,
+                     int output_tokens) {
     llm_request req = {0};
     llm_response resp = {0};
     int rc;
@@ -700,7 +711,7 @@ static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_act
         req.timeout_ms=limit<global ? limit:global;
         log_info("planner: visual request model=%s timeout_ms=%ld max_tokens=8192",llm->model ? llm->model:"unknown",req.timeout_ms);
     }
-    req.max_tokens = planner_output_tokens(llm); /* tool plans carrying file_write content (whole
+    req.max_tokens = planner_output_tokens(llm, output_tokens); /* tool plans carrying file_write content (whole
                              * scripts) need real headroom; 2048 truncated the
                              * JSON mid-string and the plan was lost. Thinking
                              * models spend reasoning tokens from the SAME
@@ -817,7 +828,7 @@ static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_act
              * limit cannot fit in a smaller repair budget either */
             char *fixed = user ? llm_chat_simple_ex(
                                      llm, "You repair broken JSON. Output ONLY the corrected JSON array.", user,
-                                     32768)
+                                     req.max_tokens)
                                : NULL;
             if (fixed) {
                 if (parse_plan_actions(fixed, actions, n_actions)) {
@@ -862,19 +873,27 @@ void planner_actions_free(planned_action *a, int n) {
 
 int planner_plan(llm *llm, const char *prompt, planned_action **actions, int *n_actions, char **raw_out,
                      char **err_out) {
-    return plan_with(llm, NULL, prompt, actions, n_actions, raw_out, err_out, NULL, NULL);
+    return plan_with(llm, NULL, prompt, actions, n_actions, raw_out, err_out, NULL, NULL, 0);
 }
 
 int planner_plan_ex(llm *llm, const struct tool_registry *tools, struct skill_registry *skills,
                         struct policy_engine *policy, const char *prompt, planned_action **actions,
                         int *n_actions, char **raw_out, char **err_out) {
     char *sys = build_catalog_prompt(tools, skills, policy);
-    return plan_with(llm, sys, prompt, actions, n_actions, raw_out, err_out, NULL, NULL);
+    return plan_with(llm, sys, prompt, actions, n_actions, raw_out, err_out, NULL, NULL, 0);
 }
 
 int planner_plan_attachments_ex(llm *llm, const struct tool_registry *tools, struct skill_registry *skills,
     struct policy_engine *policy, const char *prompt, planned_action **actions,
     int *n_actions, char **raw_out, char **err_out, const char *attachments, int *truncated_out) {
     return plan_with(llm, build_catalog_prompt(tools,skills,policy), prompt, actions,
-        n_actions, raw_out, err_out, attachments, truncated_out);
+        n_actions, raw_out, err_out, attachments, truncated_out, 0);
+}
+
+int planner_plan_attachments_ex_with_output(llm *llm, const struct tool_registry *tools,
+    struct skill_registry *skills, struct policy_engine *policy, const char *prompt,
+    planned_action **actions, int *n_actions, char **raw_out, char **err_out,
+    const char *attachments, int *truncated_out, int output_tokens) {
+    return plan_with(llm, build_catalog_prompt(tools,skills,policy), prompt, actions,
+        n_actions, raw_out, err_out, attachments, truncated_out, output_tokens);
 }
