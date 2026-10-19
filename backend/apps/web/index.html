@@ -3101,7 +3101,7 @@ function wsConnect(){
 
 /* ================= 对话（连续多轮聊天 + 多会话标签页） ================= */
 
-let CHAT_SESSION = 'default';   // 当前激活会话 id（"default" = 共享默认会话）
+let CHAT_SESSION = 'default';   // 旧版共享默认会话；打开聊天时切换到独立新会话
 let CHAT_NEW_SESSION = false;   // 新会话尚未发出首条消息（后端还没有该 id）
 let CHAT_MSGS = [];             // 当前会话气泡的本地镜像 [{role,text,pending,el}]
 // switchPanel 用 innerHTML 重绘面板，气泡若只活在 DOM 里，切页即丢；
@@ -3110,6 +3110,7 @@ let CHAT_MSGS = [];             // 当前会话气泡的本地镜像 [{role,text
 // CHAT_CACHE: 每会话消息缓存（sessionId → msgs），切会话/切页时先回放缓存
 // 再等服务端历史，避免闪烁与清空。
 const CHAT_CACHE = {};
+const CHAT_RECENT_RECONCILED = new Set();
 function chatCacheStore(){ CHAT_CACHE[CHAT_SESSION] = CHAT_MSGS; }
 
 function chatRedraw(toBottom = false){
@@ -3123,6 +3124,7 @@ function chatRedraw(toBottom = false){
 
 async function loadChat(){
   const box = $('chat-box'); if(!box) return;
+  if(CHAT_SESSION === 'default' && !CHAT_NEW_SESSION) await chatNewSession({ensure:true});
   renderChatTabs(CHAT_TABS_CACHE);
   if(CHAT_CACHE[CHAT_SESSION]?.length){ CHAT_MSGS = CHAT_CACHE[CHAT_SESSION]; chatRedraw(true); }
   void loadChatSessions();
@@ -3193,7 +3195,45 @@ function chatSessionList(r){
 
 async function loadChatSessions(){
   const r = await call('GET', '/v1/chat/sessions');
-  renderChatTabs(chatSessionList(r));
+  const list = chatSessionList(r);
+  renderChatTabs(list);
+  void chatReconcileRecentFailures(list);
+}
+
+/* sessionStorage can outlive an app update. If an older UI cached a false
+ * failure, check that task's durable journal record before showing it in
+ * Recent. This is a local history request and does not invoke the model. */
+async function chatReconcileRecentFailures(list){
+  const checks = [];
+  for(const info of (Array.isArray(list) ? list : []).slice(-12)){
+    const session = info.id || 'default';
+    const messages = CHAT_CACHE[session] || (session === CHAT_SESSION ? CHAT_MSGS : null);
+    const entry = messages && [...messages].reverse().find(m => m.role === 'bot' && m.progress);
+    if(!entry || entry.pending || entry.progress.stage !== 'failed' || entry.taskId == null || chatIsBusy(session)) continue;
+    const key = session + ':' + entry.taskId;
+    if(CHAT_RECENT_RECONCILED.has(key)) continue;
+    CHAT_RECENT_RECONCILED.add(key); /* coalesce concurrent list refreshes */
+    checks.push((async()=>{
+      const r = await call('GET','/v1/chat/history?session=' + encodeURIComponent(session));
+      if(r.status !== 200 || !Array.isArray(r.obj?.runs)) { CHAT_RECENT_RECONCILED.delete(key); return; }
+      const currentMessages = CHAT_CACHE[session] || (session === CHAT_SESSION ? CHAT_MSGS : null);
+      const currentEntry = currentMessages && [...currentMessages].reverse().find(m =>
+        m.role === 'bot' && String(m.taskId) === String(entry.taskId));
+      if(!currentEntry || currentEntry.pending) return;
+      const run = chatLatestRuns(r.obj.runs).find(item => String(item.id) === String(entry.taskId));
+      if(!run) { CHAT_RECENT_RECONCILED.delete(key); return; }
+      const stage = ({DONE:'completed',FAILED:'failed',CANCELLED:'cancelled',TIMEOUT:'timed_out',
+        INTERRUPTED:'interrupted',RUNNING:'interrupted',QUEUED:'interrupted'})[run.status];
+      if(!stage) { CHAT_RECENT_RECONCILED.delete(key); return; }
+      currentEntry.progress = {...currentEntry.progress,stage};
+      if(run.output && run.output !== '(no output)') currentEntry.text = run.output;
+      CHAT_CACHE[session] = currentMessages;
+      if(session === CHAT_SESSION){ CHAT_MSGS = currentMessages; chatRedraw(); }
+      else sideRecent(list);
+      chatPersist();
+    })());
+  }
+  await Promise.all(checks);
 }
 
 /* 会话时长格式化（total_ms → 「1分23秒」） */
@@ -3218,7 +3258,7 @@ function renderChatTabs(list){
   /* 当前会话的标签必须无条件可见：新建会话在后端注册前、发送首条消息后
    * 的刷新空档，服务端列表都还不含它——缺失即补上，否则标签会被列表
    * 重绘"覆盖"掉（新会话闪现后消失，或旧标签全被清空只剩新的）。 */
-  if(!ids.includes(CHAT_SESSION)) ids.push(CHAT_SESSION);
+  if(CHAT_SESSION !== 'default' && !ids.includes(CHAT_SESSION)) ids.push(CHAT_SESSION);
   if(bar) ids.forEach(id => {
     const info = list.find(s => (s.id || 'default') === id);
     const tab = document.createElement('span');
@@ -3235,10 +3275,12 @@ function renderChatTabs(list){
       n.textContent = info.turns;
       tab.appendChild(n);
     }
-    const del = document.createElement('button');
-    del.className = 'del'; del.title = '清空该会话（保留会话）'; del.textContent = '×';
-    del.onclick = async (e) => { e.stopPropagation(); await chatClearSession(id); };
-    tab.appendChild(del);
+    if(id !== 'default'){
+      const del = document.createElement('button');
+      del.className = 'del'; del.title = '清空该会话（保留会话）'; del.textContent = '×';
+      del.onclick = async (e) => { e.stopPropagation(); await chatClearSession(id); };
+      tab.appendChild(del);
+    }
     /* issue #24: 彻底删除会话（含聊天记录文件），与「×清空」区分 */
     const rm = document.createElement('button');
     rm.className = 'del'; rm.title = '删除该会话（含聊天记录，不可恢复）'; rm.textContent = '🗑';
@@ -3300,7 +3342,8 @@ function sideRecent(list){
     taskStatus.setAttribute('role','status');
     taskStatus.dataset.state = active ? 'running' : (stage || 'idle');
     taskStatus.textContent = active ? '执行中' : stage === 'completed' ? '已完成' :
-      stage === 'failed' ? '失败' : stage === 'timed_out' ? '超时' : stage === 'cancelled' ? '已取消' : '空闲';
+      stage === 'failed' ? '失败' : stage === 'timed_out' ? '超时' : stage === 'cancelled' ? '已取消' :
+      stage === 'interrupted' ? '已中断' : '空闲';
     taskStatus.style.color = active ? 'var(--accent)' : stage === 'failed' ? 'var(--danger)' : 'var(--muted)';
     taskStatus.style.marginLeft = '0';
     b.append(taskStatus, title);
@@ -3509,11 +3552,26 @@ async function chatLoadHistory(){
   chatRedraw();
 }
 
+/* The durable journal appends one record for each task transition (RUNNING,
+ * then DONE/FAILED, etc.). Keep only the latest record per task before
+ * matching journal rows to turns; otherwise the first RUNNING row can mask a
+ * later successful completion and make an old chat look failed. */
+function chatLatestRuns(runs){
+  const latest = new Map(), unkeyed = [];
+  for(const run of Array.isArray(runs) ? runs : []){
+    if(!run) continue;
+    if(run.id == null){ unkeyed.push(run); continue; }
+    const key = String(run.id), previous = latest.get(key);
+    if(!previous || (Number(run.ts) || 0) >= (Number(previous.ts) || 0)) latest.set(key, run);
+  }
+  return [...latest.values(), ...unkeyed].sort((a,b)=>(Number(a.ts)||0)-(Number(b.ts)||0));
+}
+
 function chatHistoryEntries(turns, runs){
   const rows = turns.filter(t => t.q).map(t => ({q:t.q, a:t.a || '', run:null}));
   const failures = [];
   let next = 0;
-  for(const run of Array.isArray(runs) ? runs : []){
+  for(const run of chatLatestRuns(runs)){
     if(!run || !run.input) continue;
     let match = -1;
     for(let i = next; i < rows.length; i++){
@@ -3524,7 +3582,13 @@ function chatHistoryEntries(turns, runs){
     }
     if(match >= 0){ rows[match].run = run; next = match + 1; }
     else if(run.status && run.status !== 'DONE'){
-      failures.push({q:run.input, a:run.output || '任务' + run.status + '，可点击“恢复”重试。', run});
+      const fallback = ({RUNNING:'任务运行状态已丢失（服务可能重启），会话记录已保留，可点击“恢复”继续。',
+        QUEUED:'任务尚未开始且执行状态已丢失，会话记录已保留，可点击“恢复”继续。',
+        INTERRUPTED:'任务已中断，会话记录已保留，可点击“恢复”继续。',
+        FAILED:'任务未能完成，会话记录已保留，可点击“恢复”重试。',
+        CANCELLED:'任务已取消，会话记录已保留。',
+        TIMEOUT:'任务执行超时，会话记录已保留，可点击“恢复”重试。'})[run.status] || '任务状态异常，会话记录已保留，可点击“恢复”重试。';
+      failures.push({q:run.input, a:run.output || fallback, run});
     }
   }
   for(const failed of failures){
@@ -3538,7 +3602,8 @@ function chatHistoryEntries(turns, runs){
     const run = row.run;
     const trace = Array.isArray(run?.trace) ? run.trace : [];
     const last = trace[trace.length - 1] || {};
-    const stage = run?.status === 'DONE' ? 'completed' : run?.status === 'CANCELLED' ? 'cancelled' : 'failed';
+    const stage = ({DONE:'completed',FAILED:'failed',CANCELLED:'cancelled',TIMEOUT:'timed_out',
+      INTERRUPTED:'interrupted',RUNNING:'interrupted',QUEUED:'interrupted'})[run?.status] || 'failed';
     messages.push({role:'bot',text:row.a,pending:false,el:null,
       ...(run ? {taskId:run.id,progress:{...last,stage},progressEvents:trace} : {})});
   }
@@ -3574,25 +3639,57 @@ function chatFocusComposer(session){
   });
 }
 
-async function chatNewSession(){
-  chatCacheStore(); // 保存当前会话消息（切回时即时回放）；旧会话自动归档到「最近」
-  /* 生成随机 UUID 会话 id（后端创建并持久化），失败则回退到本地临时 id */
+let CHAT_NEW_SESSION_REQUEST = null;
+async function chatNewSession(options={}){
+  /* Panel initialization may join an in-flight creation. An explicit New Chat
+     click must create its own session, even while the previous creation is
+     still loading configuration; queue it instead of selecting that session. */
+  if(CHAT_NEW_SESSION_REQUEST){
+    if(options?.ensure === true) return CHAT_NEW_SESSION_REQUEST;
+    await CHAT_NEW_SESSION_REQUEST;
+    return chatNewSession(options);
+  }
+  const request = (async()=>{
+  if(options?.discardCurrent !== true)
+    chatCacheStore(); // 保存当前会话消息（切回时即时回放）；旧会话自动归档到「最近」
+  /* Create a durable session before switching the visible conversation. */
   const r = await call('POST', '/v1/chat/sessions');
   const id = r.obj && r.obj.id;
-  CHAT_SESSION = id || ('s-' + Date.now());
+  if(r.status < 200 || r.status >= 300 || typeof id !== 'string' || !id){
+    const reason = r.obj && r.obj.error || (r.status === 0 ? '连接失败' : 'HTTP ' + r.status);
+    const status = $('chat-status');
+    if(status) status.textContent = '新建聊天失败：' + reason;
+    toast('新建聊天失败：' + reason);
+    return false;
+  }
+  CHAT_SESSION = id;
   chatAttachActivate(CHAT_SESSION);
   if($('ssh-session-details')?.open) void sshSessionLoad();
-  CHAT_NEW_SESSION = !id; /* 后端已注册时无需等首条消息 */
+  CHAT_NEW_SESSION = false; /* 后端已注册时无需等首条消息 */
+  CHAT_TABS_CACHE = [...CHAT_TABS_CACHE.filter(s => (s.id || 'default') !== id), {id, turns:0}];
   CHAT_MSGS = [];
   renderChatTabs([]);
   const box = $('chat-box'); if(box) box.innerHTML = '';
   updateChatHero();
-  const ok = await chatGateCheck();
   const st = $('chat-status');
-  if(st) st.textContent = ok ? ('新会话 ' + (id ? '' : '（临时）')) + '：已就绪' : '尚未配置模型，请在上方设置里先配置对话模型';
-  fillChatModelSelect();
+  if(st) st.textContent = '新会话已创建，正在检查模型配置…';
   syncChatTaskId(); /* 新会话无任务，隐藏「取消」按钮 */
   chatFocusComposer(CHAT_SESSION);
+  /* Model configuration is separate from session creation. A slow provider
+     must not keep New Chat locked to an already-created conversation. */
+  void chatGateCheck().then(ok=>{
+    if(CHAT_SESSION !== id || current !== 'chat') return;
+    const status = $('chat-status');
+    if(status) status.textContent = ok ? '新会话：已就绪' : '尚未配置模型，请在上方设置里先配置对话模型';
+    void fillChatModelSelect();
+    chatFocusComposer(id);
+  });
+  void loadChatSessions();
+  return true;
+  })();
+  CHAT_NEW_SESSION_REQUEST = request;
+  try { return await request; }
+  finally { if(CHAT_NEW_SESSION_REQUEST === request) CHAT_NEW_SESSION_REQUEST = null; }
 }
 
 async function chatClearSession(id){
@@ -3612,18 +3709,22 @@ async function chatClearSession(id){
 /* issue #24: 彻底删除会话（注册表 + 元数据索引 + 聊天记录文件），与「清空」不同 */
 async function chatDeleteSession(id){
   const label = id === 'default' ? '默认会话' : ('会话 ' + id);
-  if(!confirm('删除' + label + '及其全部聊天记录？此操作不可恢复（「×」仅清空记录，会话保留）。')) return;
+  if(!confirm('删除' + label + '及其全部聊天记录？此操作不可恢复。')) return;
   if(chatIsBusy(id)){ toast('该会话任务执行中，请先取消或等待完成'); return; }
   const r = await call('POST', '/v1/chat/sessions/' + encodeURIComponent(id) + '/delete', {});
   if(r.status >= 300){ toast('删除失败：' + ((r.obj && r.obj.error) || r.status)); return; }
   delete CHAT_CACHE[id];
+  CHAT_ATTACH_DRAFTS.delete(id);
+  CHAT_TABS_CACHE = CHAT_TABS_CACHE.filter(s => (s.id || 'default') !== id);
   if(id === CHAT_SESSION){
-    CHAT_TABS_CACHE = CHAT_TABS_CACHE.filter(s => (s.id || 'default') !== id);
+    CHAT_MSGS = [];
     const rest = CHAT_TABS_CACHE;
-    const nid = rest.length ? (rest[rest.length - 1].id || 'default') : 'default';
-    await chatSwitchSession(nid);
+    if(rest.length){
+      await chatSwitchSession(rest[rest.length - 1].id || 'default');
+    } else {
+      await chatNewSession({discardCurrent:true});
+    }
   } else {
-    CHAT_TABS_CACHE = CHAT_TABS_CACHE.filter(s => (s.id || 'default') !== id);
     renderChatTabs([]);
   }
   loadChatSessions();
@@ -4855,7 +4956,13 @@ function switchPanel(p){
 
 document.querySelectorAll('#nav button').forEach(b => {
   b.addEventListener('click', () => {
-    if(b.id === 'nav-newchat') chatNewSession();
+    if(b.id === 'nav-newchat'){
+      /* Start first so loadChat's automatic ensure joins this exact creation. */
+      const creation = chatNewSession();
+      if(current !== 'chat') switchPanel('chat');
+      void creation;
+      return;
+    }
     if(b.classList.contains('navgroup')){
       /* 分组头：再点一次收起（issue #11 折叠） */
       const sub = $(b.dataset.g);
@@ -4905,7 +5012,7 @@ const STAGE_LABELS = {
   preparing_context:'正在准备会话上下文', planning:'正在等待模型回复', plan_ready:'已收到执行计划',
   response_ready:'已收到模型答复', executing:'正在执行',
   summarizing:'正在整理结果', completed:'执行完成', failed:'执行失败',
-  cancelled:'已取消', timed_out:'执行超时', reconnecting:'连接中断，正在重试', recovering:'正在调整执行计划', rolled_back:'本轮文件修改已回滚',
+  cancelled:'已取消', timed_out:'执行超时', interrupted:'执行中断，可恢复', reconnecting:'连接中断，正在重试', recovering:'正在调整执行计划', rolled_back:'本轮文件修改已回滚',
   cancelling:'正在取消，等待当前操作结束'
 };
 const STAGE_NOTES = {
@@ -4921,7 +5028,7 @@ const STAGE_NOTES = {
   steering:'已收到补充，当前操作结束后会重新规划。',
   cancelling:'正在安全停止当前任务。', reconnecting:'连接暂时中断，正在恢复任务状态。', recovering:'工具执行失败，正在分析错误并调整下一步。',
   completed:'任务已完成，结果已整理。', failed:'任务未能完成，已保留执行记录。',
-  cancelled:'任务已取消。', timed_out:'任务执行超时。',
+  cancelled:'任务已取消。', timed_out:'任务执行超时。', interrupted:'任务已离开当前执行器，运行状态无法确认；会话记录已保留，可点击“恢复”继续。',
   rolled_back:'本轮操作失败，事务内的文件修改已回滚；正在检查后续处理方式。'
 };
 const TOOL_LABELS = {file_read:'读取文件', file_write:'写入文件', file_edit:'修改文件',
@@ -4935,7 +5042,7 @@ function durationLabel(ms){
   return sec >= 60 ? Math.floor(sec / 60) + ' 分 ' + sec % 60 + ' 秒' : sec + ' 秒';
 }
 function progressLabel(p){
-  if(['completed','failed','cancelled','timed_out'].includes(p.stage)) return STAGE_LABELS[p.stage];
+  if(['completed','failed','cancelled','timed_out','interrupted'].includes(p.stage)) return STAGE_LABELS[p.stage];
   if(p.stage === 'planning') return '正在规划下一步';
   if(p.stage === 'executing' && p.cur_tool) return '正在' + toolLabel(p.cur_tool);
   if(p.activity) return p.activity;
@@ -4953,7 +5060,7 @@ function progressNarrative(p){
     if(files.size) return '任务已完成，修改了 ' + files.size + ' 个文件；结果和执行记录已整理。';
     if(steps.length) return '任务已完成，执行了 ' + steps.length + ' 个工具动作；结果已整理。';
   }
-  if(['completed','failed','cancelled','timed_out'].includes(p.stage)) return STAGE_NOTES[p.stage];
+  if(['completed','failed','cancelled','timed_out','interrupted'].includes(p.stage)) return STAGE_NOTES[p.stage];
   if(p.activity) return p.activity;
   let note = STAGE_NOTES[p.stage] || '正在推进任务。';
   if(p.stage === 'executing' && p.cur_tool) note = '正在' + toolLabel(p.cur_tool) + '（' + p.cur_tool + '），完成后会继续下一步。';
@@ -4968,8 +5075,8 @@ function progressPhase(stage){
 function progressOutline(entry,p){
   const steps = Array.isArray(p.steps) ? p.steps : [];
   const events = entry.progressEvents || [];
-  const terminal = ['completed','failed','cancelled','timed_out'].includes(p.stage);
-  const last = terminal ? [...events].reverse().find(e => !['completed','failed','cancelled','timed_out'].includes(e.stage)) : p;
+  const terminal = ['completed','failed','cancelled','timed_out','interrupted'].includes(p.stage);
+  const last = terminal ? [...events].reverse().find(e => !['completed','failed','cancelled','timed_out','interrupted'].includes(e.stage)) : p;
   const phase = progressPhase(last?.stage || p.stage);
   const reads = steps.filter(s => ['file_read','list_dir','glob','grep','search','web_search'].includes(s.tool));
   const operations = steps.filter(s => !reads.includes(s));
@@ -5243,16 +5350,20 @@ async function chatPollTask(session,id,entry){
         const question = at > 0 ? messages.slice(0, at).reverse().find(m => m.role === 'user')?.text : null;
         const turns = history.obj?.turns;
         const last = Array.isArray(turns) ? turns[turns.length - 1] : null;
-        const archived = Array.isArray(history.obj?.runs) ? history.obj.runs.find(run =>
-          run.id === id && question && run.input === question) : null;
+        const archived = chatLatestRuns(history.obj?.runs).find(run =>
+          run.id === id && question && run.input === question);
         if(archived){
-          const stage = {DONE:'completed',FAILED:'failed',CANCELLED:'cancelled',TIMEOUT:'timed_out'}[archived.status] || 'failed';
-          chatFinish(session,id,entry,archived.output || STAGE_LABELS[stage],stage);
+          const stage = {DONE:'completed',FAILED:'failed',CANCELLED:'cancelled',TIMEOUT:'timed_out',
+            INTERRUPTED:'interrupted',RUNNING:'interrupted',QUEUED:'interrupted'}[archived.status] || 'interrupted';
+          const output = archived.output || (stage === 'interrupted'
+            ? '任务已离开当前执行器，运行状态无法确认。会话记录已保留，可点击“恢复”继续。'
+            : STAGE_LABELS[stage]);
+          chatFinish(session,id,entry,output,stage);
           if(CHAT_SESSION === session) void chatLoadHistory();
         } else if(last?.a && question && last.q === question)
           chatFinish(session,id,entry,last.a,'completed');
         else
-          chatFinish(session,id,entry,'任务运行状态已丢失（服务可能重启）。会话记录已保留，可点击“恢复”继续。','failed');
+          chatFinish(session,id,entry,'任务运行状态已丢失（服务可能重启）。会话记录已保留，可点击“恢复”继续。','interrupted');
         return;
       }
       if(r.status === 401 || r.status === 403){
