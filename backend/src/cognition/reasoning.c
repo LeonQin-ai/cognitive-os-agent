@@ -3894,9 +3894,10 @@ restart_planning:
         search_only_rounds = search_only ? search_only_rounds + 1 : 0;
         if (!search_only || run_has_mutating_action(r)) artifact_read_nudged = 0;
         if (r->n_actions > 0 && r->round_search_skips == r->n_actions) {
-            round_log_append(r, "[system] 本轮读取或搜索与已有动作重复，但这不代表任务完成。"
-                                "请用目录清单选择未读源码，或按 next_offset_bytes 继续文件分页；"
-                                "只有原任务范围已完成才可以给出最终答案。");
+            round_log_append(r, "[system] 本轮全部动作已经成功执行过，没有新增事实。"
+                                "先核对已有结果是否已满足原始请求：满足则立即用纯文本交付答案，不要再次执行原请求中的第一步。"
+                                "仅在仍缺少明确必需事实时才查询新的目标；不得为了继续执行而列目录、扩大范围或无条件翻页。"
+                                "复用结果不能代替用户要求但尚未完成的写入或验证。");
             /* Use the evidence-based recovery window above. A separate
              * two-round cutoff used to abort before its recovery prompt. */
             free(r->prev_plan); r->prev_plan = NULL;
