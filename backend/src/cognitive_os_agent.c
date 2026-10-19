@@ -985,7 +985,9 @@ int init(runtime_ctx *ctx, const config *cfg) {
         const char *pol = config_get_str(ctx->config, "llm.route_policy", "");
         if (pol && *pol)
             router_set_policy(ctx->router, pol);
-        for (int i = 0; i < router_count(ctx->router); i++) {
+        /* A newly configured route for the same endpoint supersedes the
+         * initial default route, including its model metadata. */
+        for (int i = router_count(ctx->router) - 1; i >= 0; i--) {
             const route *rt = router_get(ctx->router, (size_t)i);
             if (rt && rt->provider && strcmp(rt->provider, provider) == 0 &&
                 strcmp(rt->model ? rt->model : "", model ? model : "") == 0 &&
@@ -1349,7 +1351,7 @@ int set_llm(runtime_ctx *ctx, const char *provider, const char *base_url, const 
     /* The UI activates a saved route through set_llm. Carry its model-specific
      * window into the live instance before any lane can plan with it. */
     if (ctx->router) {
-        for (int i = 0; i < router_count(ctx->router); i++) {
+        for (int i = router_count(ctx->router) - 1; i >= 0; i--) {
             const route *rt = router_get(ctx->router, (size_t)i);
             if (rt && rt->provider && strcmp(rt->provider, provider) == 0 &&
                 strcmp(rt->model ? rt->model : "", model ? model : "") == 0 &&
