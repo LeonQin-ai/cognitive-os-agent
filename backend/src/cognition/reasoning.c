@@ -2466,6 +2466,25 @@ static const char *information_prefix(const char *text, const char *prefix) {
     return text;
 }
 
+/* A successful directory listing or read is only an observation. It cannot
+ * turn a short announcement of the next action into a delivered analysis.
+ * A developed answer may contain future suggestions, so only classify an
+ * opening, single-paragraph announcement here. */
+static int answer_only_announces_work(const char *text) {
+    static const char *const prefixes[] = {
+        "I need to", "Let me", "I will", "I'll", "First,", "I'm going to",
+        "我需要", "让我", "我将", "我先", "我来", "我还需要", "接下来", "继续读取"
+    };
+    if (!text) return 0;
+    while (*text == ' ' || *text == '\t' || *text == '\r' || *text == '\n') ++text;
+    if (strlen(text) > 1200 || strstr(text, "\n\n")) return 0;
+    if (strstr(text, "结果：") || strstr(text, "结论：") || strstr(text, "发现：") ||
+        strstr(text, "结果:") || strstr(text, "结论:")) return 0;
+    for (size_t i = 0; i < sizeof(prefixes) / sizeof(prefixes[0]); ++i)
+        if (information_prefix(text, prefixes[i])) return 1;
+    return 0;
+}
+
 /* #139: only a standalone explanation is exempt from narration recovery.
  * Matching the whole request avoids accepting an appended work instruction,
  * including verbs the read/write guards do not know (e.g. connect/download). */
@@ -3482,7 +3501,7 @@ restart_planning:
                                     r->run_successful_tools == 0;
             int needs_intent_recovery = !prompt_is_direct_information_request(completion_instruction(r,prompt)) &&
                                         (r->run_successful_tools == 0 || r->last_failed_action_sig != 0 ||
-                                         r->run_had_action_failure) &&
+                                         r->run_had_action_failure || answer_only_announces_work(txt)) &&
                                         looks_like_intent(txt);
             if (needs_action || needs_read || needs_observation || needs_intent_recovery) {
                 /* A plain-text answer closes the loop once its explicit action,
