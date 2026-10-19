@@ -3924,9 +3924,13 @@ static void test_edit_search(void) {
     CHECK(r && r->output && strstr(r->output, "truncated") != NULL);
     tool_result_free(r);
     /* no match */
+    r = tool_execute(reg,"grep","{\"pattern\":\"bar|missing\"}",&tctx);
+    CHECK(r && r->ok && strstr(r->output,"not regular expressions"));
+    tool_result_free(r);
     r = tool_execute(reg, "grep", "{\"pattern\":\"zzznothing\"}", &tctx);
     CHECK(r != NULL && r->ok == 1);
     CHECK(r && r->output && strstr(r->output, "No matches found") != NULL);
+    CHECK(r && r->output && strstr(r->output,"literal text matching") && strstr(r->output,"separate literal searches"));
     tool_result_free(r);
 
     /* schema validation: required args enforced */
@@ -9112,6 +9116,10 @@ int main(int argc, char **argv) {
     int askpass_rc = ssh_askpass_run_if_requested();
     if (askpass_rc >= 0) return askpass_rc;
     setvbuf(stdout, NULL, _IONBF, 0); /* unbuffered: survive crashes mid-run */
+    if (argc==2 && !strcmp(argv[1],"--search-tools")) {
+        test_edit_search();
+        printf("%d passed, %d failed\n",g_pass,g_fail); return g_fail?1:0;
+    }
     if (argc==2 && !strcmp(argv[1],"--file-tools")) {
         test_snapshot_tx();
         test_discovery_read_paths();

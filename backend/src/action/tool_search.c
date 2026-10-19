@@ -448,7 +448,9 @@ static tool_result *grep_exec(const tool *self, const tool_ctx *ctx, const char 
     strbuf_init(&g.sb);
     grep_walk(root, NULL, &g);
     if (g.out_n == 0)
-        strbuf_append(&g.sb, "No matches found");
+        strbuf_append(&g.sb, "No matches found (literal text matching, not regular expressions). "
+            "If pattern uses alternatives such as a|b, issue separate literal searches for a and b; "
+            "do not infer that those individual symbols are absent. Use a specific symbol instead of reading the whole file.\n");
     if (g.truncated)
         strbuf_appendf(&g.sb,
                            "(Results are truncated. Consider using a more specific path, pattern or head_limit.)\n");
@@ -482,7 +484,8 @@ const tool *tool_grep(void) {
         "grep",
         "A powerful search tool for file contents. ALWAYS use this for search tasks instead of "
         "grep/rg shell commands. Supports literal text patterns (case-insensitive with "
-        "ignore_case). Filter files with the glob parameter (e.g. \"*.js\", \"**/*.tsx\"). "
+        "ignore_case); regex operators such as |, .* and (...) are not interpreted. "
+        "Batch separate literal keyword searches for alternatives. Filter files with the glob parameter (e.g. \"*.js\", \"**/*.tsx\"). "
         "Output modes: \"content\" shows matching lines as path:line:text, "
         "\"files_with_matches\" shows only file paths (default), \"count\" shows match counts. "
         "Skips .git and node_modules. head_limit caps output entries (default 250).",
