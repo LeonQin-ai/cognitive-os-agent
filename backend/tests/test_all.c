@@ -2681,7 +2681,24 @@ static int progress_fixture_chat(llm *self,const llm_request *req,llm_response *
         }
     }
     char plan[1024];
-    if (f->mode >= 36 && f->mode <= 45) {
+    if (f->mode == 46 || f->mode == 47) {
+        if(f->calls==1) resp->content=xstrdup("[{\"tool\":\"file_read\",\"args\":{\"path\":\"paged.txt\"}}]");
+        else if(f->calls<=3) {
+            char *path=fs_absolute_path("state-test/progress-loop/paged.txt");
+#ifdef _WIN32
+            if(path && f->calls==2) for(char *p=path;*p;p++) {
+                if(f->mode==46 && *p=='/') *p='\\';
+                if(f->mode==47 && *p>='a' && *p<='z') *p-='a'-'A';
+            }
+#endif
+            cJSON *array=cJSON_CreateArray(), *action=cJSON_CreateObject(), *args=cJSON_CreateObject();
+            cJSON_AddStringToObject(action,"tool","file_read");
+            cJSON_AddStringToObject(args,"path",path ? path : "paged.txt");
+            cJSON_AddNumberToObject(args,"offset_bytes",(f->calls-1)*4000);
+            cJSON_AddItemToObject(action,"args",args);cJSON_AddItemToArray(array,action);
+            resp->content=cJSON_PrintUnformatted(array);cJSON_Delete(array);free(path);
+        } else resp->content=xstrdup("路径别名分页分析完成，完整内容已核对。");
+    } else if (f->mode >= 36 && f->mode <= 45) {
         if(f->calls==1) resp->content=xstrdup("[{\"tool\":\"file_read\",\"args\":{\"path\":\"paged.txt\"}},{\"tool\":\"file_read\",\"args\":{\"path\":\"long.txt\"}}]");
         else if(f->mode!=37 && f->mode!=45 && f->calls<=3) {
             snprintf(plan,sizeof(plan),"[{\"tool\":\"file_read\",\"args\":{\"path\":\"paged.txt\",\"offset_bytes\":%d}}]",(f->calls-1)*4000);
@@ -2873,7 +2890,7 @@ static void test_cross_round_progress(void) {
     CHECK(fs_mkdirs("state-test/progress-loop/backend/src/storage") == 0);
     CHECK(fs_write_file("state-test/progress-loop/backend/src/memory/new.txt", "expected source", 15) == 0);
     CHECK(fs_write_file("state-test/progress-loop/backend/src/storage/new.txt", "unrelated source", 16) == 0);
-    for (int mode=0;mode<46;mode++) {
+    for (int mode=0;mode<48;mode++) {
         progress_fixture f={.mode=mode};
         static const llm_vtable vt={.chat=progress_fixture_chat};
         llm provider={.vt=&vt,.provider="fixture",.model="fixture",.impl=&f};
@@ -2893,7 +2910,8 @@ static void test_cross_round_progress(void) {
         reasoning *r=reasoning_new(&cfg); CHECK(r!=NULL);
         if (r) {
             char *answer=NULL;
-            const char *prompt = mode>=44 ? "完整阅读全部源码，long.txt只需相关片段，不要求全文，再分析代码。" :
+            const char *prompt = mode>=46 ? "完整阅读文件paged.txt全文并分析" :
+                mode>=44 ? "完整阅读全部源码，long.txt只需相关片段，不要求全文，再分析代码。" :
                 mode==39 ? "Read full source file paged.txt; long.txt: only relevant sections, not full source. Analyze code." :
                 mode==40 ? "完整阅读文件paged.txt，long.txt只需相关片段，不要求全文，再分析源码。" :
                 mode==41 ? "完整阅读所有源码并总结" : mode==43 ? "完整阅读源码并分析 llm.model 的上下文能力" :
@@ -2907,7 +2925,9 @@ static void test_cross_round_progress(void) {
                 (mode==7 || mode==9 || mode==10) ? "查看系统状态" : mode==8 ? "查看一下windows机器的状态" :
                 mode>=5 ? "根据源码生成一份深度PPT文件" : "分析资料并提供结论";
             int rc=reasoning_run(r,prompt,&answer);
-            if (mode >= 36) {
+            if (mode >= 46) {
+                CHECK(rc==0 && f.calls==4 && answer && strstr(answer,"路径别名分页分析完成"));
+            } else if (mode >= 36) {
                 if(mode==37 || mode==41 || mode==43 || mode==45) {
                     CHECK(rc!=0 && f.calls==((mode==37 || mode==45) ? 3:5) && answer && strstr(answer,"offset_bytes="));
                     if(mode==37 || mode==45) CHECK(answer && !strstr(answer,"long.txt：offset_bytes="));

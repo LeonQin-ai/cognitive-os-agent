@@ -1217,7 +1217,7 @@ static void record_read_page(reasoning *r, const char *args_json, const char *ou
     cJSON *args = cJSON_Parse(args_json);
     const char *path = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(args, "path"));
     if (!path) { cJSON_Delete(args); return; }
-    char full[2048]; path_resolve(full, sizeof(full), r->workspace, path);
+    char full[2048]; normalized_evidence_path(r, path, full, sizeof(full));
     if (fs_is_dir(full)) { cJSON_Delete(args); return; }
     r->run_file_reads++;
     uint64_t version=fs_file_version(full);

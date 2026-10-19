@@ -25,6 +25,11 @@ class Provider(BaseHTTPRequestHandler):
         current=text.split('## Current request\n', 1)[-1].split('\n## ', 1)[0]
         if '已执行动作的观察记录' in text:
             answer='仅完成部分源码读取。'
+        elif '路径别名分页回归测试' in current:
+            count=counts.get('path-alias',0);counts['path-alias']=count+1
+            if count==0: answer=json.dumps([{'tool':'file_read','args':{'path':'source.c'}}])
+            elif count==1: answer=json.dumps([{'tool':'file_read','args':{'path':str(state/'source.c'),'offset_bytes':4000}}])
+            else: answer='完整分页已核对，路径别名不产生重复待办。'
         elif '限定全文范围回归测试' in current or '必读未完成范围回归测试' in current:
             key='scoped' if '限定全文范围回归测试' in current else 'required-incomplete'
             count=counts.get(key,0);counts[key]=count+1
@@ -164,6 +169,7 @@ with tempfile.TemporaryDirectory(prefix='coa-source-read-') as directory:
                 ('只有路径发现回归测试：阅读代码', 'FAILED', 'file_read'),
                 ('限定全文范围回归测试：完整阅读文件source.c；fragment.c只需相关片段，不要求全文；生成脚本并检查相关片段即可。', 'DONE', '分析完成'),
                 ('必读未完成范围回归测试：完整阅读文件source.c；fragment.c只需相关片段，不要求全文。', 'FAILED', 'source.c'),
+                ('路径别名分页回归测试：完整阅读文件source.c。', 'DONE', '路径别名'),
             ]
             for index, (message, expected, marker) in enumerate(cases):
                 started = request('/v1/chat', {'message': message, 'session': f'read-test-{index}'})
@@ -195,6 +201,8 @@ with tempfile.TemporaryDirectory(prefix='coa-source-read-') as directory:
                     assert sum(step['tool']=='file_read' and json.loads(step['args']).get('path')=='generated.py' for step in task['steps'])==1
                 if index == 12:
                     assert 'fragment.c：offset_bytes=' not in task['output'], task
+                if index == 13:
+                    assert task['tool_calls']==2 and task['llm_calls']==3, task
                 print('PASS:', expected, message, flush=True)
             history=request('/v1/chat/history?session=read-test-4')
             assert history['turns'][-1]['a']==long_output, 'Chat history truncated the answer'
