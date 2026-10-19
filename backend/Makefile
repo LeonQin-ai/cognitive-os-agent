@@ -39,6 +39,10 @@ build/cognitive-os-agent-test: $(SRCS) tests/test_all.c
 	@mkdir -p build
 	$(CC) $(CFLAGS) -o $@ $(SRCS) tests/test_all.c $(LDLIBS)
 
+build/cognitive-os-agent-test-plan-cycle: $(SRCS) tests/test_plan_cycle.c
+	@mkdir -p build
+	$(CC) $(CFLAGS) -o $@ $(SRCS) tests/test_plan_cycle.c $(LDLIBS)
+
 build/mock-llm-server: $(SRCS) tools/mock_llm_server.c
 	@mkdir -p build
 	$(CC) $(CFLAGS) -o $@ $(SRCS) tools/mock_llm_server.c $(LDLIBS)
