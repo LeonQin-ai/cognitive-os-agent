@@ -3276,10 +3276,16 @@ function sideRecent(list){
   const box = $('side-recent'); if(!box) return;
   const nav = $('nav'), scrollTop = nav?.scrollTop || 0;
   box.innerHTML = '';
-  const ids = list.map(s => s.id || 'default');
-  if(!ids.includes(CHAT_SESSION)) ids.push(CHAT_SESSION);
-  ids.slice(-12).reverse().forEach(id => {
-    const info = list.find(s => (s.id || 'default') === id);
+  /* The API list preserves session creation order. Recent must reflect
+   * activity, including conversations revisited after a newer one was made. */
+  const ordered = [...list].sort((a,b) => {
+    const activity = s => Number(s.last_active_ms) || Number(s.created_ms) || 0;
+    return activity(b) - activity(a);
+  });
+  const ids = ordered.map(s => s.id || 'default');
+  if(CHAT_SESSION !== 'default' && !ids.includes(CHAT_SESSION)) ids.push(CHAT_SESSION);
+  ids.slice(0,12).forEach(id => {
+    const info = ordered.find(s => (s.id || 'default') === id);
     const row = document.createElement('div');
     row.className = 'side-recent-row';
     const b = document.createElement('button');

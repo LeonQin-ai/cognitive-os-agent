@@ -79,5 +79,16 @@ const assert = require('node:assert/strict');
     assert.match(history,/INTERRUPTED/); assert.match(history,/DONE/); assert.doesNotMatch(history,/RUNNING|still active/);
     assert.equal(await page.locator('#journal-list > div').count(),2);
     console.log('PASS #130: history uses latest terminal/interrupted transition, not stale RUNNING entries');
+    await page.evaluate(()=>{
+      CHAT_SESSION='active-newest';
+      sideRecent([
+        {id:'created-first',title:'创建较早',created_ms:1,last_active_ms:100},
+        {id:'created-last',title:'创建较晚但不活跃',created_ms:300,last_active_ms:300},
+        {id:'active-newest',title:'最近访问',created_ms:2,last_active_ms:900}
+      ]);
+    });
+    const recentTitles=await page.locator('#side-recent .recent-session-title').allInnerTexts();
+    assert.deepEqual(recentTitles,['最近访问','创建较晚但不活跃','创建较早']);
+    console.log('PASS #155: recent chats sort by last activity, not creation order');
   } finally {await browser.close();}
 })().catch(error=>{console.error(error);process.exitCode=1;});
