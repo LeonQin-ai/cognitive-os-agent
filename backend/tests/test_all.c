@@ -4289,6 +4289,11 @@ static void test_agent_loop(void) {
         runtime_ctx ctx;
         if(init(&ctx,&cfg)!=0) { CHECK(0); return; }
         char *answer=NULL;
+        CHECK(reasoning_run(ctx.reasoning,"否定短语回归测试：用 grep 检索 evidence，不修改文件",&answer)==0);
+        free(answer);answer=NULL;
+        CHECK(reasoning_run(ctx.reasoning,"否定短语回归测试：不修改旧文件，创建新文件 result.txt",&answer)!=0);
+        CHECK(!fs_exists("state-test/loop-w/result.txt"));
+        free(answer);answer=NULL;
         CHECK(reasoning_run(ctx.reasoning,"交替无效参数回归测试：查询 evidence",&answer)==0);
         char *steps=reasoning_steps_json(ctx.reasoning);
         CHECK(steps && strstr(steps,"repeated invalid arguments suppressed"));

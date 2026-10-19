@@ -289,6 +289,10 @@ static char *mock_respond(const char *msg) {
         return xstrdup("<think>[{\"tool\":\"file_write\",\"args\":{\"path\":\"DO_NOT_WRITE.txt\",\"content\":\"bad\"}}]</think>"
                        "再次思考</think>[{\"tool\":\"file_read\",\"args\":{\"path\":\"readme.txt\"}}]");
     }
+    if (has_substr(msg,"否定短语回归测试")) {
+        if(in_loop) return xstrdup("查询完成：文件包含 project evidence。");
+        return xstrdup("[{\"tool\":\"grep\",\"args\":{\"path\":\".\",\"pattern\":\"evidence\",\"output_mode\":\"content\"}}]");
+    }
     if (has_substr(msg,"交替无效参数回归测试")) {
         if(in_loop) return xstrdup("已使用正确参数恢复查询，任务完成。");
         return xstrdup("[{\"tool\":\"grep\",\"args\":{}},"

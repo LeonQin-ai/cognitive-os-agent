@@ -2738,6 +2738,10 @@ static int prompt_requires_observation(const char *prompt) {
  * answer can close the run. In particular, reading source files is not proof
  * that a requested PPT or copy was created (issue #68). */
 static int mutation_verb_negated(const char *prompt, const char *verb) {
+    /* Common Chinese prohibitions use the bare prefix: 不修改/不写入.
+     * Match only immediately before this verb, never a distant 不 elsewhere. */
+    size_t no_len=strlen("不");
+    if((size_t)(verb-prompt)>=no_len && !memcmp(verb-no_len,"不",no_len)) return 1;
     const char *clause=prompt;
     for (const char *p=prompt;p<verb;p++) {
         if (*p=='\n' || *p==',' || *p==';' || *p=='.' ||
