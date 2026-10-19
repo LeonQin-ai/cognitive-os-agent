@@ -41,6 +41,24 @@ typedef struct recovery_fixture {
     int failed_actions;
 } recovery_fixture;
 
+typedef struct repeated_read_fixture {
+    int calls;
+} repeated_read_fixture;
+
+static int repeated_read_chat(llm *self, const llm_request *req, llm_response *resp) {
+    (void)req;
+    repeated_read_fixture *fixture = self ? self->impl : NULL;
+    if (!fixture) return -1;
+    fixture->calls++;
+    const char *answer = fixture->calls <= 6
+        ? "[{\"tool\":\"file_read\",\"args\":{\"path\":\"same.txt\"}}]"
+        : fixture->calls == 7
+            ? "[{\"tool\":\"file_read\",\"args\":{\"path\":\"new.txt\"}}]"
+            : "复核完成：已继续读取另一份证据。";
+    resp->content = copy_text(answer);
+    return resp->content ? 0 : -1;
+}
+
 static int recovery_chat(llm *self, const llm_request *req, llm_response *resp) {
     (void)req;
     recovery_fixture *fixture = self ? self->impl : NULL;
@@ -51,7 +69,7 @@ static int recovery_chat(llm *self, const llm_request *req, llm_response *resp) 
     case 1: answer = "[{\"tool\":\"file_read\",\"args\":{\"path\":\"same.txt\"}}]"; break;
     case 2: answer = "[{\"tool\":\"fixture_failure\",\"args\":{}}]"; break;
     case 3: answer = "I'll investigate the failed check now."; break;
-    case 4: answer = "[{\"tool\":\"file_read\",\"args\":{\"path\":\"new.txt\"}}]"; break;
+    case 4: answer = "[{\"tool\":\"fixture_failure\",\"args\":{}}]"; break;
     default: answer = "失败原因已核对并继续执行成功"; break;
     }
     resp->content = copy_text(answer);
@@ -62,7 +80,8 @@ static tool_result *fixture_failure(const tool *self, const tool_ctx *ctx, const
     (void)ctx;
     (void)args;
     recovery_fixture *fixture = self ? self->ud : NULL;
-    if (fixture) fixture->failed_actions++;
+    if (fixture && fixture->failed_actions++ > 0)
+        return tool_result_new(1, "fixture command succeeded on retry");
     return tool_result_new(0, "fixture failure: command exited with status 1");
 }
 
@@ -121,6 +140,49 @@ int main(void) {
     fs_remove(file_path);
     fs_remove(workspace);
 
+    /* Re-reading the same source may be a legitimate recovery step in a
+     * multi-step review. Allow the planner's duplicate-read recovery window
+     * to run instead of aborting after only two skipped read rounds. */
+    const char *read_workspace = "build/test-plan-repeat-read";
+    char same_read_path[256], new_read_path[256];
+    snprintf(same_read_path, sizeof(same_read_path), "%s/same.txt", read_workspace);
+    snprintf(new_read_path, sizeof(new_read_path), "%s/new.txt", read_workspace);
+    fs_mkdirs(read_workspace);
+    fs_write_file(same_read_path, "same evidence", 13);
+    fs_write_file(new_read_path, "additional evidence", 19);
+    repeated_read_fixture repeated = {0};
+    llm repeated_provider = {
+        .vt = &(const llm_vtable){.chat = repeated_read_chat},
+        .provider = "fixture", .model = "fixture", .impl = &repeated
+    };
+    tool_registry *read_registry = tool_registry_new();
+    if (!read_registry || tool_register(read_registry, tool_file_read()) != 0) {
+        tool_registry_free(read_registry);
+        fs_remove(same_read_path); fs_remove(new_read_path); fs_remove(read_workspace);
+        return 2;
+    }
+    reasoning_config read_cfg = {0};
+    read_cfg.llm = &repeated_provider;
+    read_cfg.tools = read_registry;
+    read_cfg.workspace = read_workspace;
+    read_cfg.max_rounds = -1;
+    reasoning *read_engine = reasoning_new(&read_cfg);
+    if (!read_engine) {
+        tool_registry_free(read_registry);
+        fs_remove(same_read_path); fs_remove(new_read_path); fs_remove(read_workspace);
+        return 2;
+    }
+    char *read_answer = NULL;
+    int read_rc = reasoning_run(read_engine, "复核源码并根据证据汇报", &read_answer);
+    failures += check(read_rc == 0 && read_answer && strstr(read_answer, "复核完成"),
+                      "duplicate-read recovery can continue to a later valid evidence step");
+    failures += check(repeated.calls == 8,
+                      "planner does not abort after two repeated-read rounds");
+    free(read_answer);
+    reasoning_free(read_engine);
+    tool_registry_free(read_registry);
+    fs_remove(same_read_path); fs_remove(new_read_path); fs_remove(read_workspace);
+
     /* A prior successful read must not make a later failed action's
      * work-in-progress narration look like a completed answer. */
     const char *recovery_workspace = "build/test-plan-recovery";
@@ -162,8 +224,8 @@ int main(void) {
     failures += check(recovery_rc == 0 && recovery_answer &&
                       strstr(recovery_answer, "失败原因已核对并继续执行成功"),
                       "planner resumes after narration following a failed action");
-    failures += check(recovery.failed_actions == 1 && recovery.calls == 5,
-                      "recovery uses one failed action and proceeds to new evidence");
+    failures += check(recovery.failed_actions == 2 && recovery.calls == 5,
+                      "recovery retries the failed action and continues after it succeeds");
     free(recovery_answer);
     reasoning_free(recovery_engine);
     tool_registry_free(recovery_registry);

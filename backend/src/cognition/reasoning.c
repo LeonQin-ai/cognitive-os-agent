@@ -3238,7 +3238,6 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     int search_only_rounds = 0;
     int artifact_read_nudged = 0;
     int synthesized = 0; /* fallback answer may describe an incomplete run */
-    int duplicate_rounds = 0;
     int no_progress_rounds = 0, cycle_reads = 0, cycle_nudged = 0, cycle_aborted = 0;
 restart_planning:
     for (r->round_idx = 1; r->round_idx <= r->max_rounds; r->round_idx++) {
@@ -3467,14 +3466,11 @@ restart_planning:
             round_log_append(r, "[system] 本轮读取或搜索与已有动作重复，但这不代表任务完成。"
                                 "请用目录清单选择未读源码，或按 next_offset_bytes 继续文件分页；"
                                 "只有原任务范围已完成才可以给出最终答案。");
-            if (++duplicate_rounds < 2 && r->round_idx < r->max_rounds) {
-                free(r->prev_plan); r->prev_plan = NULL;
-                continue;
-            }
-            stalled = 1;
-            break;
+            /* Use the evidence-based recovery window above. A separate
+             * two-round cutoff used to abort before its recovery prompt. */
+            free(r->prev_plan); r->prev_plan = NULL;
+            continue;
         }
-        duplicate_rounds = 0;
         /* A deliverable request cannot make unlimited progress by reading
          * ever more source pages. Once the model has had ample discovery
          * rounds, require an actual artifact action; research may continue
