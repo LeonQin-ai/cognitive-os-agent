@@ -67,11 +67,10 @@ esac
 SRCS="$(find src third_party/cJSON -name '*.c' | grep -v -E '^src/os/(linux|macos|windows|posix)/' | sort) $(find $POSIX "$PLAT" -name '*.c' 2>/dev/null) third_party/wasm3/wasm3_all.c"
 mkdir -p build
 
-# Regenerate the embedded web UI (include/api/web_ui.h) from
-# apps/web/index.html whenever the page or the generator script is newer.
-if [ -f apps/web/index.html ] && { [ apps/web/index.html -nt include/api/web_ui.h ] || [ tools/gen_web_ui.py -nt include/api/web_ui.h ]; }; then
-  python3 tools/gen_web_ui.py
-fi
+# Always regenerate the embedded web UI before compiling. Timestamp checks can
+# leave a stale page embedded in a freshly built executable (for example after
+# archive extraction or when source/header mtimes are preserved).
+python3 tools/gen_web_ui.py
 
 python3 tools/gen_attachment_extractor.py
 
