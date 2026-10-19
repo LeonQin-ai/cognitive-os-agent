@@ -2675,7 +2675,17 @@ static int progress_fixture_chat(llm *self,const llm_request *req,llm_response *
         if (s && strstr(s,"检测到跨轮次循环")) f->saw_recovery=1;
     }
     char plan[1024];
-    if (f->mode >= 24 && f->mode <= 31) {
+    if (f->mode >= 32 && f->mode <= 35) {
+        if (f->calls == 1)
+            resp->content = xstrdup("[{\"tool\":\"file_read\",\"args\":{\"path\":\"src/memory/new.txt\"}}]");
+        else if (f->calls == 2 && f->mode != 33)
+            resp->content = xstrdup("[{\"tool\":\"glob\",\"args\":{\"path\":\"backend\",\"pattern\":\"**/new.txt\"}}]");
+        else if ((f->calls == 3 && f->mode != 33 && f->mode != 35) || (f->calls == 2 && f->mode == 33))
+            resp->content = xstrdup(f->mode == 34 ?
+                "[{\"tool\":\"file_read\",\"args\":{\"path\":\"backend/src/storage/new.txt\"}}]" :
+                "[{\"tool\":\"file_read\",\"args\":{\"path\":\"backend/src/memory/new.txt\"}}]");
+        else resp->content = xstrdup("嵌套源码分析完成，已核对实际源文件。");
+    } else if (f->mode >= 24 && f->mode <= 31) {
         if (f->calls == 1) {
             const char *failed = f->mode == 26 ? "[{\"tool\":\"file_read\",\"args\":{\"path\":\"missing.txt\"}}]" :
                 f->mode == 30 ? "[{\"tool\":\"glob\",\"args\":{}}]" :
@@ -2840,7 +2850,11 @@ static void test_cross_round_progress(void) {
     free(source);
     CHECK(fs_write_file("state-test/progress-loop/new.txt","new evidence",12)==0);
     CHECK(fs_write_file("state-test/progress-loop/same.txt", "status: ready", 13)==0);
-    for (int mode=0;mode<32;mode++) {
+    CHECK(fs_mkdirs("state-test/progress-loop/backend/src/memory") == 0);
+    CHECK(fs_mkdirs("state-test/progress-loop/backend/src/storage") == 0);
+    CHECK(fs_write_file("state-test/progress-loop/backend/src/memory/new.txt", "expected source", 15) == 0);
+    CHECK(fs_write_file("state-test/progress-loop/backend/src/storage/new.txt", "unrelated source", 16) == 0);
+    for (int mode=0;mode<36;mode++) {
         progress_fixture f={.mode=mode};
         static const llm_vtable vt={.chat=progress_fixture_chat};
         llm provider={.vt=&vt,.provider="fixture",.model="fixture",.impl=&f};
@@ -2869,7 +2883,10 @@ static void test_cross_round_progress(void) {
                 (mode==7 || mode==9 || mode==10) ? "查看系统状态" : mode==8 ? "查看一下windows机器的状态" :
                 mode>=5 ? "根据源码生成一份深度PPT文件" : "分析资料并提供结论";
             int rc=reasoning_run(r,prompt,&answer);
-            if (mode >= 24) {
+            if (mode >= 32) {
+                if (mode == 32) CHECK(rc == 0 && f.calls == 4 && answer && strstr(answer,"嵌套源码分析完成"));
+                else CHECK(rc != 0 && f.calls == (mode == 34 ? 5 : 4) && answer && strstr(answer,"file_read"));
+            } else if (mode >= 24) {
                 if (mode == 25 || mode == 26 || mode == 27 || mode == 28)
                     CHECK(rc != 0 && f.calls == 4 && answer && strstr(answer,"任务未完成"));
                 else CHECK(rc == 0 && f.calls == 3 && answer && strstr(answer,"上下文工程分析完成"));
@@ -2945,6 +2962,12 @@ static void test_cross_round_progress(void) {
     for (size_t i=0;i<sizeof(cleanup)/sizeof(cleanup[0]);i++) {
         char name[128]; snprintf(name,sizeof(name),"state-test/progress-loop/%s",cleanup[i]); fs_remove(name);
     }
+    fs_remove("state-test/progress-loop/backend/src/memory/new.txt");
+    fs_remove("state-test/progress-loop/backend/src/storage/new.txt");
+    fs_remove("state-test/progress-loop/backend/src/memory");
+    fs_remove("state-test/progress-loop/backend/src/storage");
+    fs_remove("state-test/progress-loop/backend/src");
+    fs_remove("state-test/progress-loop/backend");
     fs_remove("state-test/progress-loop");
 }
 

@@ -63,6 +63,18 @@ class Provider(BaseHTTPRequestHandler):
             else:
                 assert 'END_SOURCE' in text and 'end of file' in text
                 answer='连续分页完成，已读到 END_SOURCE。'
+        elif any(case in current for case in ('缺少发现证据回归测试','同名无关文件回归测试','只有路径发现回归测试')):
+            key = next(case for case in ('缺少发现证据回归测试','同名无关文件回归测试','只有路径发现回归测试') if case in current)
+            count=counts.get(key,0); counts[key]=count+1
+            if count==0:
+                answer=json.dumps([{'tool':'file_read','args':{'path':'src/memory/kv.c'}}])
+            elif count==1 and key!='缺少发现证据回归测试':
+                answer=json.dumps([{'tool':'glob','args':{'path':'backend','pattern':'**/kv.c'}}])
+            elif key=='缺少发现证据回归测试' and count==1:
+                answer=json.dumps([{'tool':'file_read','args':{'path':(state/'backend/src/memory/kv.c').as_posix()}}])
+            elif key=='同名无关文件回归测试' and count==2:
+                answer=json.dumps([{'tool':'file_read','args':{'path':(state/'backend/src/storage/kv.c').as_posix()}}])
+            else: answer='整理已完成。'
         elif '嵌套根目录发现回归测试' in current:
             count=counts.get('discovery',0); counts['discovery']=count+1
             discovered=(state/'backend/src/memory/kv.c').as_posix()
@@ -92,6 +104,8 @@ with tempfile.TemporaryDirectory(prefix='coa-source-read-') as directory:
     (state / 'readme.txt').write_text('source evidence', encoding='utf-8')
     (state/'backend/src/memory').mkdir(parents=True)
     (state/'backend/src/memory/kv.c').write_text('NESTED_SOURCE_EVIDENCE',encoding='utf-8')
+    (state/'backend/src/storage').mkdir(parents=True)
+    (state/'backend/src/storage/kv.c').write_text('UNRELATED_SAME_BASENAME',encoding='utf-8')
     (state/'unredacted.c').write_bytes(NON_SSH_TEXT.encode('utf-8'))
     for i in range(3):
         (state / f'batch-{i}.c').write_text('x' * 1900 +
@@ -132,6 +146,9 @@ with tempfile.TemporaryDirectory(prefix='coa-source-read-') as directory:
                 ('嵌套根目录发现回归测试：阅读代码整理面试题', 'DONE', '实际发现'),
                 ('超大分页参数回归测试：完整阅读源码', 'DONE', '连续分页完成'),
                 ('非SSH文本保留回归测试：读取源码并原样输出', 'DONE', 'CodeOnly_98+!'),
+                ('缺少发现证据回归测试：阅读代码', 'FAILED', 'file_read'),
+                ('同名无关文件回归测试：阅读代码', 'FAILED', 'file_read'),
+                ('只有路径发现回归测试：阅读代码', 'FAILED', 'file_read'),
             ]
             for index, (message, expected, marker) in enumerate(cases):
                 started = request('/v1/chat', {'message': message, 'session': f'read-test-{index}'})

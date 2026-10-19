@@ -232,6 +232,7 @@ struct reasoning {
     int run_had_action_failure;
     char unresolved_failed_tools[32][48];
     char unresolved_failed_scopes[32][2048];
+    char unresolved_discovered_reads[32][2048];
     int unresolved_failed_tool_count;
     int unresolved_failed_tools_overflow;
     int tool_fail_aborted;
@@ -280,13 +281,8 @@ static int is_exploratory_tool(const char *name) {
     return !strcmp(name, "grep") || !strcmp(name, "glob") || !strcmp(name, "list_dir");
 }
 
-static void failure_scope(reasoning *r, const char *name, const char *args_json, char *out, size_t cap) {
-    out[0] = '\0';
-    if (!is_exploratory_tool(name) && strcmp(name, "file_read")) return;
-    cJSON *args = cJSON_Parse(args_json ? args_json : "{}");
-    const char *path = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(args, "path"));
+static void normalized_evidence_path(reasoning *r, const char *path, char *out, size_t cap) {
     char full[2048]; path_resolve(full, sizeof(full), r->workspace, path && *path ? path : ".");
-    cJSON_Delete(args);
     char *absolute = fs_absolute_path(full);
     snprintf(out, cap, "%s", absolute ? absolute : full);
     free(absolute);
@@ -298,6 +294,52 @@ static void failure_scope(reasoning *r, const char *name, const char *args_json,
     }
     size_t n = strlen(out);
     while (n > 1 && out[n - 1] == '/') out[--n] = '\0';
+}
+
+static void failure_scope(reasoning *r, const char *name, const char *args_json, char *out, size_t cap) {
+    out[0] = '\0';
+    if (!is_exploratory_tool(name) && strcmp(name, "file_read")) return;
+    cJSON *args = cJSON_Parse(args_json ? args_json : "{}");
+    const char *path = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(args, "path"));
+    normalized_evidence_path(r, path, out, cap);
+    cJSON_Delete(args);
+}
+
+/* A guessed repository root can be wrong. Keep the discovery evidence that
+ * relates a missing workspace-relative path to a real nested source path.
+ * The entire relative suffix must match, not merely a shared basename, and
+ * discovery alone never resolves the failed read: that file must be read. */
+static void record_discovered_read_paths(reasoning *r, const char *tool_name, const char *output) {
+    if (strcmp(tool_name, "glob") || !output || !r->unresolved_failed_tool_count) return;
+    char root[2048]; normalized_evidence_path(r, ".", root, sizeof(root));
+    size_t root_len = strlen(root);
+    const char *line = output;
+    while (*line) {
+        const char *end = strchr(line, '\n');
+        if (!end) end = line + strlen(line);
+        const char *begin = line;
+        if (!strncmp(begin, "[glob] ", 7)) begin += 7;
+        size_t length = (size_t)(end - begin);
+        while (length && (begin[length - 1] == '\r' || begin[length - 1] == ' ')) --length;
+        if (length && length < 2048 && (begin[0] == '/' || (length > 2 && begin[1] == ':'))) {
+            char path[2048], candidate[2048];
+            memcpy(path, begin, length); path[length] = '\0';
+            normalized_evidence_path(r, path, candidate, sizeof(candidate));
+            size_t candidate_len = strlen(candidate);
+            for (int i = 0; i < r->unresolved_failed_tool_count; ++i) {
+                const char *failed = r->unresolved_failed_scopes[i];
+                if (strcmp(r->unresolved_failed_tools[i], "file_read") ||
+                    strncmp(failed, root, root_len) || failed[root_len] != '/') continue;
+                const char *relative = failed + root_len + 1;
+                size_t suffix_len = strlen(relative);
+                if (suffix_len && candidate_len > suffix_len &&
+                    candidate[candidate_len - suffix_len - 1] == '/' &&
+                    !strcmp(candidate + candidate_len - suffix_len, relative))
+                    snprintf(r->unresolved_discovered_reads[i], sizeof(r->unresolved_discovered_reads[i]), "%s", candidate);
+            }
+        }
+        line = *end ? end + 1 : end;
+    }
 }
 
 /* Track the affected path as well as the tool. A verified replacement read
@@ -314,6 +356,7 @@ static void note_failed_tool(reasoning *r, const char *tool_name, const char *ar
         return;
     }
     snprintf(r->unresolved_failed_scopes[r->unresolved_failed_tool_count], sizeof(r->unresolved_failed_scopes[0]), "%s", scope);
+    r->unresolved_discovered_reads[r->unresolved_failed_tool_count][0] = '\0';
     snprintf(r->unresolved_failed_tools[r->unresolved_failed_tool_count++],
              sizeof(r->unresolved_failed_tools[0]), "%s", tool_name);
 }
@@ -327,13 +370,17 @@ static void resolve_failed_tool(reasoning *r, const char *tool_name, const char 
         int retry = !strcmp(r->unresolved_failed_tools[i], tool_name) && !strcmp(failed_scope, scope);
         int replacement = !strcmp(tool_name, "file_read") && is_exploratory_tool(r->unresolved_failed_tools[i]) &&
             n > 0 && !strncmp(scope, failed_scope, n) && (!scope[n] || scope[n] == '/' || failed_scope[n-1] == '/');
-        if (retry || replacement) {
+        int relocated_read = !strcmp(tool_name, "file_read") && !strcmp(r->unresolved_failed_tools[i], "file_read") &&
+            r->unresolved_discovered_reads[i][0] && !strcmp(r->unresolved_discovered_reads[i], scope);
+        if (retry || replacement || relocated_read) {
             --r->unresolved_failed_tool_count;
             if (i < r->unresolved_failed_tool_count) {
                 memmove(r->unresolved_failed_tools[i], r->unresolved_failed_tools[i + 1],
                         (size_t)(r->unresolved_failed_tool_count - i) * sizeof(r->unresolved_failed_tools[0]));
                 memmove(r->unresolved_failed_scopes[i], r->unresolved_failed_scopes[i + 1],
                         (size_t)(r->unresolved_failed_tool_count - i) * sizeof(r->unresolved_failed_scopes[0]));
+                memmove(r->unresolved_discovered_reads[i], r->unresolved_discovered_reads[i + 1],
+                        (size_t)(r->unresolved_failed_tool_count - i) * sizeof(r->unresolved_discovered_reads[0]));
             }
             memset(r->unresolved_failed_tools[r->unresolved_failed_tool_count], 0,
                    sizeof(r->unresolved_failed_tools[0]));
@@ -2087,6 +2134,7 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
         r->prog_tool_ms += time_now_ms() - t_tool0;
         run_step_add(r, r->actions[i].tool, r->actions[i].args_json, full_step_out ? full_step_out : step_out, rc == 0 ? 1 : 0,
                      (int)(time_now_ms() - t_tool0));
+        if (rc == 0) record_discovered_read_paths(r, r->actions[i].tool, full_step_out ? full_step_out : step_out);
         free(full_step_out);
         if (rc != 0) {
             r->all_actions_ok = 0;
@@ -3325,6 +3373,7 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     r->run_had_action_failure = 0;
     memset(r->unresolved_failed_tools, 0, sizeof(r->unresolved_failed_tools));
     memset(r->unresolved_failed_scopes, 0, sizeof(r->unresolved_failed_scopes));
+    memset(r->unresolved_discovered_reads, 0, sizeof(r->unresolved_discovered_reads));
     r->unresolved_failed_tool_count = 0;
     r->unresolved_failed_tools_overflow = 0;
     r->tool_fail_aborted = 0;
