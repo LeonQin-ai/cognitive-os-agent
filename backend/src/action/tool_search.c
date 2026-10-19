@@ -361,7 +361,8 @@ static int name_glob_ok(const char *name, const char *glob_pat) {
 
 static void grep_walk(const char *root, const char *rel, grep_state *g) {
     char full[2048];
-    path_join(full, sizeof full, root, rel && *rel ? rel : "");
+    if(rel && *rel) path_join(full,sizeof full,root,rel);
+    else snprintf(full,sizeof full,"%s",root);
     if (fs_is_dir(full)) {
         dir_list dl;
         memset(&dl, 0, sizeof dl);
@@ -390,6 +391,8 @@ static void grep_walk(const char *root, const char *rel, grep_state *g) {
          * libc). Guard it and display the resolved path instead. */
         const char *disp = rel ? rel : full;
         const char *base = strrchr(disp, '/');
+        const char *backslash = strrchr(disp, '\\');
+        if(backslash && (!base || backslash>base)) base=backslash;
         base = base ? base + 1 : disp;
         if (!name_glob_ok(base, g->file_glob))
             return;

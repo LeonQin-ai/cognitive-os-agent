@@ -3963,6 +3963,11 @@ static void test_edit_search(void) {
     CHECK(r && r->output && strstr(r->output, "b.txt:1") != NULL &&
           (!r->output || strstr(r->output, "sub/c.txt") == NULL));
     tool_result_free(r);
+    /* Explicit file roots must not gain a trailing directory separator;
+     * basename glob matching also works with Windows absolute paths. */
+    r=tool_execute(reg,"grep","{\"pattern\":\"bar\",\"path\":\"b.txt\",\"glob\":\"b.txt\",\"output_mode\":\"content\"}",&tctx);
+    CHECK(r && r->ok && strstr(r->output,"b.txt:1:bar"));
+    tool_result_free(r);
     /* head_limit truncates */
     r = tool_execute(reg, "grep",
                         "{\"pattern\":\"bar\",\"output_mode\":\"content\",\"head_limit\":1}",
