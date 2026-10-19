@@ -169,6 +169,8 @@ static int anthropic_chat(llm *llm, const llm_request *req, llm_response *resp) 
     }
 
     strbuf_init(&sb);
+    cJSON *stop_reason=cJSON_GetObjectItemCaseSensitive(root,"stop_reason");
+    resp->truncated=cJSON_IsString(stop_reason) && !strcmp(stop_reason->valuestring,"max_tokens");
     accumulate_usage_obj(llm, cJSON_GetObjectItemCaseSensitive(root, "usage"), NULL);
     content = cJSON_GetObjectItemCaseSensitive(root, "content");
     if (content && cJSON_IsArray(content)) {

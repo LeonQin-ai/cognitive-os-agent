@@ -2468,6 +2468,14 @@ static tool_result *fixture_python_failure(const tool *self, const tool_ctx *ctx
     return tool_result_new(0,"Traceback: SyntaxError: invalid syntax at line 17");
 }
 
+static int fixture_retryable_failures;
+static tool_result *fixture_retryable_failure(const tool *self, const tool_ctx *ctx, const char *args) {
+    (void)self; (void)ctx; (void)args;
+    if (fixture_retryable_failures++ == 0)
+        return tool_result_new(0,"fixture: first attempt failed; retry with corrected target");
+    return tool_result_new(1,"fixture: corrected target verified");
+}
+
 static void test_failed_script_recovery_guidance(void) {
     section("failed script recovery guidance");
     recovery_fixture_state state={0};
@@ -2657,7 +2665,15 @@ static int progress_fixture_chat(llm *self,const llm_request *req,llm_response *
         if (s && strstr(s,"检测到跨轮次循环")) f->saw_recovery=1;
     }
     char plan[1024];
-    if(f->mode==17) {
+    if(f->mode==19) {
+        resp->content=xstrdup(f->calls==1 ? "前半段：架构由三层构成" : "后半段，下面说明验证方式。任务完成。");
+        resp->truncated=f->calls==1;
+    } else if(f->mode==18) {
+        if(f->calls==1) resp->content=xstrdup("[{\"tool\":\"fixture_retryable\",\"args\":{}}]");
+        else if(f->calls==2) resp->content=xstrdup("总结：目前部分分析已完成。");
+        else if(f->calls==3) resp->content=xstrdup("[{\"tool\":\"fixture_retryable\",\"args\":{}}]");
+        else resp->content=xstrdup("分析与验证均已完成。");
+    } else if(f->mode==17) {
         if(f->calls<=4) {
             if(f->calls==4) {
                 char changed[9001]; memset(changed,'v',sizeof(changed));
@@ -2788,7 +2804,7 @@ static void test_cross_round_progress(void) {
     free(source);
     CHECK(fs_write_file("state-test/progress-loop/new.txt","new evidence",12)==0);
     CHECK(fs_write_file("state-test/progress-loop/same.txt", "status: ready", 13)==0);
-    for (int mode=0;mode<18;mode++) {
+    for (int mode=0;mode<20;mode++) {
         progress_fixture f={.mode=mode};
         static const llm_vtable vt={.chat=progress_fixture_chat};
         llm provider={.vt=&vt,.provider="fixture",.model="fixture",.impl=&f};
@@ -2797,12 +2813,16 @@ static void test_cross_round_progress(void) {
         CHECK(tool_register(reg,tool_file_write())==0);
         tool failure={"fixture_loop_error","fixture failure",NULL,0,fixture_python_failure,NULL};
         CHECK(tool_register(reg,&failure)==0);
+        tool retryable={"fixture_retryable","retryable fixture failure",NULL,0,fixture_retryable_failure,NULL};
+        CHECK(tool_register(reg,&retryable)==0);
+        if(mode==18) fixture_retryable_failures=0;
         reasoning_config cfg={0}; cfg.llm=&provider; cfg.tools=reg;
         cfg.workspace="state-test/progress-loop"; cfg.max_rounds=-1;
         reasoning *r=reasoning_new(&cfg); CHECK(r!=NULL);
         if (r) {
             char *answer=NULL;
-            const char *prompt = mode==17 ? "完整读取文件paged.txt全文并分析" :
+            const char *prompt = mode==19 ? "解释系统架构并完成验证" : mode==18 ? "分析并验证目标" :
+                mode==17 ? "完整读取文件paged.txt全文并分析" :
                 mode==16 ? "完整读取文件paged.txt全文并分析，再复核一个片段" :
                 mode==14 ? "读取same.txt分析代码并给出清单，不要修改文件或运行修改源码的命令。" :
                 mode==15 ? "不要删除same.txt，但请修改代码解决问题" :
@@ -2810,7 +2830,14 @@ static void test_cross_round_progress(void) {
                 (mode==7 || mode==9 || mode==10) ? "查看系统状态" : mode==8 ? "查看一下windows机器的状态" :
                 mode>=5 ? "根据源码生成一份深度PPT文件" : "分析资料并提供结论";
             int rc=reasoning_run(r,prompt,&answer);
-            if (mode==0 || mode==4) {
+            if (mode==18) {
+                CHECK(rc==0 && answer && strstr(answer,"分析与验证均已完成"));
+                CHECK(f.calls==4 && fixture_retryable_failures==2);
+            } else if (mode==19) {
+                CHECK(rc==0 && answer && strstr(answer,"前半段：架构由三层构成"));
+                CHECK(answer && strstr(answer,"后半段，下面说明验证方式。任务完成"));
+                CHECK(f.calls==2);
+            } else if (mode==0 || mode==4) {
                 CHECK(rc!=0 && answer);
                 CHECK(f.calls<=12);
             } else if (mode==5) {
@@ -2837,13 +2864,13 @@ static void test_cross_round_progress(void) {
                 CHECK(f.calls==5 && calls==3);
             } else if (mode==10) {
                 CHECK(rc!=0 && answer && strstr(answer,"任务未完成"));
-                CHECK(f.calls==4);
+                CHECK(f.calls==5);
             } else if (mode==11) {
                 CHECK(rc!=0 && answer && strstr(answer,"fixture_loop_error"));
                 CHECK(f.calls==6);
             } else if (mode==12) {
                 CHECK(rc!=0 && answer && strstr(answer,"任务未完成"));
-                CHECK(f.calls==5);
+                CHECK(f.calls==6);
             } else if (mode==3) {
                 CHECK(rc==0 && f.saw_recovery && f.recovered && f.calls<12 && answer);
             } else if (mode==13) {
@@ -7104,12 +7131,12 @@ static void th_serve_ctx(void *arg)  { serve((runtime_ctx *)arg); }
 
 static int fake_openai_json(const http_request *req, http_response *resp, void *ud) {
     (void)req; (void)ud;
-    http_resp_json(resp, "{\"usage\":{\"input_tokens\":11,\"output_tokens\":7,\"output_tokens_details\":{\"reasoning_tokens\":2}},\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"hello from openai-fake\"}}]}");
+    http_resp_json(resp, "{\"usage\":{\"input_tokens\":11,\"output_tokens\":7,\"output_tokens_details\":{\"reasoning_tokens\":2}},\"choices\":[{\"finish_reason\":\"length\",\"message\":{\"role\":\"assistant\",\"content\":\"hello from openai-fake\"}}]}");
     return 0;
 }
 static int fake_anthropic_json(const http_request *req, http_response *resp, void *ud) {
     (void)req; (void)ud;
-    http_resp_json(resp, "{\"content\":[{\"type\":\"text\",\"text\":\"hello from anthropic-fake\"}]}");
+    http_resp_json(resp, "{\"stop_reason\":\"max_tokens\",\"content\":[{\"type\":\"text\",\"text\":\"hello from anthropic-fake\"}]}");
     return 0;
 }
 static int fake_openai_sse(const http_request *req, http_response *resp, void *ud) {
@@ -7220,6 +7247,7 @@ static void test_llm_adapters_http(void) {
         llm_response out; memset(&out, 0, sizeof out);
         CHECK(llm_chat(oai, &q, &out) == 0);
         CHECK_STR(out.content, "hello from openai-fake");
+        CHECK(out.truncated == 1);
         long long ti=0,to=0; llm_usage_totals(oai,&ti,&to);
         CHECK(ti==11 && to==7 && llm_usage_reason_total(oai)==2);
         free(out.content); free(out.error);
@@ -7244,6 +7272,7 @@ static void test_llm_adapters_http(void) {
         llm_response out; memset(&out, 0, sizeof out);
         CHECK(llm_chat(ant, &q, &out) == 0);
         CHECK_STR(out.content, "hello from anthropic-fake");
+        CHECK(out.truncated == 1);
         free(out.content); free(out.error);
         llm_destroy(ant);
     }

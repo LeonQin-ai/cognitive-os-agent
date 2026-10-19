@@ -209,6 +209,8 @@ static int openai_chat(llm *llm, const llm_request *req, llm_response *resp) {
 
     choices = cJSON_GetObjectItemCaseSensitive(root, "choices");
     msg = choices && choices->child ? cJSON_GetObjectItemCaseSensitive(choices->child, "message") : NULL;
+    cJSON *finish = choices && choices->child ? cJSON_GetObjectItemCaseSensitive(choices->child, "finish_reason") : NULL;
+    resp->truncated = cJSON_IsString(finish) && !strcmp(finish->valuestring, "length");
     content = msg ? cJSON_GetObjectItemCaseSensitive(msg, "content") : NULL;
     if (content && cJSON_IsString(content) && content->valuestring[0]) {
         resp->content = xstrdup(content->valuestring);

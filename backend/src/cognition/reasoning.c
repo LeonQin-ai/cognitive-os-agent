@@ -263,6 +263,7 @@ struct reasoning {
     long long prog_tool_ms;  /* cumulative tool execution latency */
     int prog_model_failures; /* consecutive/total request failures this run */
     int visual_request_failed; /* avoid silently repeating expensive image requests */
+    int planner_response_truncated;
     char last_model_error[1024];
 
     /* per-model token ledger (borrowed; may be NULL). Deltas are computed
@@ -1618,8 +1619,10 @@ static int h_reason(state_machine *sm, void *ud, const char *input, char **out) 
     long long t_llm0 = time_now_ms();
     progress_emit(r, "planning");
     int64_t llm_span = trace_begin_task(r->trace, r->run_task ? r->run_task->id : r->trace_task_id, "llm.plan");
+    r->planner_response_truncated=0;
     int rc = planner_plan_attachments_ex(r->llm, r->tools, r->skills, r->policy, aug ? aug : input, &r->actions, &r->n_actions,
-                                 &raw, &plan_err, r->run_task ? r->run_task->attachments_json : NULL);
+                                 &raw, &plan_err, r->run_task ? r->run_task->attachments_json : NULL,
+                                 &r->planner_response_truncated);
     r->visual_request_failed = rc == -2;
     trace_end(r->trace, llm_span, rc == 0 && raw ? 1 : -1);
     r->prog_llm_ms += time_now_ms() - t_llm0;
@@ -3280,6 +3283,9 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     int unfinished = 0; /* text described future work, or requested write never ran */
     int search_only_rounds = 0;
     int artifact_read_nudged = 0;
+    int failure_recovery_nudges = 0, truncated_response_nudges = 0;
+    int output_truncated_unresolved = 0;
+    char *truncated_prefix = NULL;
     int synthesized = 0; /* fallback answer may describe an incomplete run */
     int no_progress_rounds = 0, cycle_reads = 0, cycle_nudged = 0, cycle_aborted = 0;
 restart_planning:
@@ -3426,6 +3432,39 @@ restart_planning:
              * aloud, while the model stuck narrating 4 rounds in a row will
              * not recover. Exhaustion must report an incomplete task. */
             const char *txt = strip_nudge_echo(result);
+            if ((r->unresolved_failed_tool_count > 0 || r->unresolved_failed_tools_overflow) &&
+                failure_recovery_nudges < 1 && r->round_idx < r->max_rounds) {
+                failure_recovery_nudges++;
+                round_log_append(r, txt ? txt : "");
+                round_log_append(r, "[system] 任务尚未完成：前面有工具调用失败且没有成功核实。不要输出最终总结或停止；先根据失败工具的真实错误调整参数、路径或方法，重试该工具或用可验证的替代方式完成受影响步骤，再继续原任务。修复后的内容必须经过成功工具结果验证。失败工具：");
+                for (int i=0;i<r->unresolved_failed_tool_count;i++)
+                    round_log_append(r, r->unresolved_failed_tools[i]);
+                continue;
+            }
+            if (r->planner_response_truncated) {
+                strbuf partial; strbuf_init(&partial);
+                if (truncated_prefix) strbuf_append(&partial, truncated_prefix);
+                strbuf_append(&partial, txt ? txt : "");
+                free(truncated_prefix); truncated_prefix=strbuf_detach(&partial);
+                if (truncated_response_nudges >= 2 || r->round_idx >= r->max_rounds) {
+                    unfinished=1;
+                    output_truncated_unresolved=1;
+                    final_text=xstrdup(truncated_prefix ? truncated_prefix : "");
+                    break;
+                }
+                truncated_response_nudges++;
+                round_log_append(r, txt ? txt : "");
+                round_log_append(r, "[system] 上一条答复因达到模型输出 token 上限而被截断。请从刚才最后一个完整句子之后继续，只补充缺失部分，不要重复开头；完成全部内容后再结束。最多继续两次。");
+                continue;
+            }
+            if (truncated_prefix) {
+                strbuf complete; strbuf_init(&complete);
+                strbuf_append(&complete, truncated_prefix);
+                if (txt && *txt) { strbuf_append(&complete, "\n"); strbuf_append(&complete, txt); }
+                final_text=strbuf_detach(&complete);
+                free(truncated_prefix); truncated_prefix=NULL;
+                break;
+            }
             int needs_action = prompt_requires_mutation(completion_instruction(r,prompt)) && !run_has_mutating_action(r);
             int needs_read = (prompt_requires_full_read(completion_instruction(r,prompt)) &&
                 (r->pending_reads_n || r->read_tracking_overflow || answer_reports_unread(txt))) ||
@@ -3640,6 +3679,10 @@ restart_planning:
             strbuf_appendf(&out,"\n模型 %s 请求失败：%s",r->llm && r->llm->model ? r->llm->model : "unknown",r->last_model_error);
             explained=1;
         }
+        if (output_truncated_unresolved) {
+            strbuf_append(&out,"\n原因：模型连续达到输出 token 上限，已尝试续写但答复仍不完整；保留部分内容，请恢复任务继续生成。");
+            explained=1;
+        }
         const char *instruction=completion_instruction(r,prompt);
         if (prompt_requires_mutation(instruction) && !run_has_mutating_action(r)) {
             strbuf_append(&out,"\n原因：尚无成功执行所请求操作的工具记录；读取文件或加载技能指令不能代替实际操作。");
@@ -3717,6 +3760,7 @@ restart_planning:
                        REASONING_CONSEC_FAIL_ABORT_STR);
 
     free(final_text);
+    free(truncated_prefix);
     free(result);
     free(last_narration);
     free(r->last_plan_raw);

@@ -37,6 +37,7 @@ typedef struct llm_request {
 typedef struct llm_response {
     char *content; /* full accumulated text (caller frees) */
     char *error;   /* NULL if ok (caller frees) */
+    int truncated; /* provider stopped at its output-token limit */
 } llm_response;
 
 typedef void (*llm_stream_cb)(const char *delta, void *ud);

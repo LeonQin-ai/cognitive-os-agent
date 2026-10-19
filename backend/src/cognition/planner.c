@@ -606,7 +606,7 @@ size_t planner_input_budget_bytes(llm *l, const tool_registry *tools,
 }
 
 static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_action **actions, int *n_actions,
-                     char **raw_out, char **err_out, const char *attachments) {
+                     char **raw_out, char **err_out, const char *attachments, int *truncated_out) {
     llm_request req = {0};
     llm_response resp = {0};
     int rc;
@@ -709,6 +709,7 @@ static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_act
                              * (finish_reason=length) */
     if(visual && req.max_tokens>8192) req.max_tokens=8192;
     rc = llm_chat(llm, &req, &resp);
+    if(truncated_out) *truncated_out=resp.truncated;
     for (int i=0;i<28;i++) free(owned[i]);
     cJSON_Delete(files);
     free(sys_prompt);
@@ -861,19 +862,19 @@ void planner_actions_free(planned_action *a, int n) {
 
 int planner_plan(llm *llm, const char *prompt, planned_action **actions, int *n_actions, char **raw_out,
                      char **err_out) {
-    return plan_with(llm, NULL, prompt, actions, n_actions, raw_out, err_out, NULL);
+    return plan_with(llm, NULL, prompt, actions, n_actions, raw_out, err_out, NULL, NULL);
 }
 
 int planner_plan_ex(llm *llm, const struct tool_registry *tools, struct skill_registry *skills,
                         struct policy_engine *policy, const char *prompt, planned_action **actions,
                         int *n_actions, char **raw_out, char **err_out) {
     char *sys = build_catalog_prompt(tools, skills, policy);
-    return plan_with(llm, sys, prompt, actions, n_actions, raw_out, err_out, NULL);
+    return plan_with(llm, sys, prompt, actions, n_actions, raw_out, err_out, NULL, NULL);
 }
 
 int planner_plan_attachments_ex(llm *llm, const struct tool_registry *tools, struct skill_registry *skills,
     struct policy_engine *policy, const char *prompt, planned_action **actions,
-    int *n_actions, char **raw_out, char **err_out, const char *attachments) {
+    int *n_actions, char **raw_out, char **err_out, const char *attachments, int *truncated_out) {
     return plan_with(llm, build_catalog_prompt(tools,skills,policy), prompt, actions,
-        n_actions, raw_out, err_out, attachments);
+        n_actions, raw_out, err_out, attachments, truncated_out);
 }
