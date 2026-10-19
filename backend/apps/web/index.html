@@ -2376,15 +2376,36 @@ async function githubSearchOnline(){
   box.innerHTML = list.map((x, i) =>
     '<div class="item"><b><a href="' + esc(x.url) + '" target="_blank" rel="noopener">' + esc(x.repo) + '</a></b> ' +
     '<span class="muted">⭐ ' + (x.stars || 0) + '</span>' +
-    '<button class="sec sm" onclick="ghInstall(' + i + ')">安装</button>' +
+    '<button class="sec sm" onclick="ghSearchInstall(' + i + ')">安装</button>' +
     '<div class="hint">' + esc(x.description || '') + '</div></div>').join('');
 }
 
 /* 安装 GitHub 全网搜索结果：后端拉取仓库的 SKILL.md（退回 README.md）注册为 prompt 技能 */
-async function ghInstall(i){
+const SKILL_INSTALL_PENDING = new Map();
+async function installRemoteSkill(path, body){
+  const key = path + JSON.stringify(body);
+  if(SKILL_INSTALL_PENDING.has(key)) return SKILL_INSTALL_PENDING.get(key);
+  const operation = (async () => {
+    let result = await call('POST', path, body);
+    const id = result.obj && result.obj.job_id;
+    if(!result.obj?.pending || !id) return result;
+    for(let i = 0; i < 180; i++){
+      await new Promise(resolve => setTimeout(resolve, 500));
+      result = await call('GET', path + '?job_id=' + encodeURIComponent(id));
+      // A transient poll failure must not submit another download.
+      if(result.status === 0) continue;
+      if(!result.obj?.pending) return result;
+    }
+    return {status:408,obj:{error:'下载仍未确认完成，请稍后重试或检查网络'}};
+  })();
+  SKILL_INSTALL_PENDING.set(key, operation);
+  try { return await operation; }
+  finally { SKILL_INSTALL_PENDING.delete(key); }
+}
+async function ghSearchInstall(i){
   const x = (Array.isArray(GH_SEARCH_LAST) ? GH_SEARCH_LAST : [])[i]; if(!x) return;
   toast('从 GitHub 拉取 ' + x.repo + ' …（首次需下载，稍候）');
-  const r = await call('POST', '/v1/skills/install-github', {repo: x.repo});
+  const r = await installRemoteSkill('/v1/skills/install-github', {repo: x.repo});
   if(r.obj && r.obj.ok) toast('✔ 已安装 ' + r.obj.name + '（仓库原文）');
   else toast('安装失败: ' + ((r.obj && r.obj.error) || ('HTTP ' + r.status)));
   loadSkillsMarket();
@@ -2427,7 +2448,7 @@ function renderGhSkills(){
 async function ghSkillInstall(i){
   const x = GH_SKILLS[i]; if(!x) return;
   toast('从 GitHub 拉取 ' + x.id + ' …（首次需下载，稍候）');
-  const r = await call('POST', '/v1/skills/install-remote', {repo: x.repo, id: x.id});
+  const r = await installRemoteSkill('/v1/skills/install-remote', {repo: x.repo, id: x.id});
   if(r.obj && r.obj.ok) toast('✔ 已安装 ' + x.id + '（内容来自仓库原文）');
   else toast('安装失败: ' + ((r.obj && r.obj.error) || ('HTTP ' + r.status)));
   loadSkillsMarket();
@@ -2480,7 +2501,7 @@ function renderSkhSkills(){
 async function skillhubInstall(i){
   const x = SKH_SKILLS[i]; if(!x) return;
   toast('从 skillhub.cn 拉取 ' + x.id + ' 的 SKILL.md …');
-  const r = await call('POST', '/v1/skills/install-skillhub', {slug: x.id});
+  const r = await installRemoteSkill('/v1/skills/install-skillhub', {slug: x.id});
   if(r.obj && r.obj.ok) toast('✔ 已安装 ' + r.obj.name + '（SKILL.md 原文）');
   else toast('安装失败: ' + ((r.obj && r.obj.error) || ('HTTP ' + r.status)));
   loadSkillsMarket();

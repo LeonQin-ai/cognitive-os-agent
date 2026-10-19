@@ -64,6 +64,9 @@
 #include "plugin_runtime/wasm_runner.h"
 #include "cognitive-os-agent.h"
 #include "os/os_time.h"
+#define http_response client_http_response
+#include "os/platform.h"
+#undef http_response
 #include "os/os_socket.h"
 #include "os/os_thread.h"
 #include "os/os_proc.h"
@@ -7948,6 +7951,79 @@ static void test_http_install_auth(void) {
     auth_free(ctx.auth);
 }
 
+static atomic_int install_fixture_release, install_fixture_entered, install_fixture_ok;
+static client_http_response *install_fixture_get(const char *base, const char *path, strmap *headers, int timeout) {
+    (void)base; (void)path; (void)headers; (void)timeout;
+    atomic_fetch_add(&install_fixture_entered, 1);
+    for (int i = 0; i < 500 && !atomic_load(&install_fixture_release); ++i) time_sleep_ms(10);
+    if (!atomic_load(&install_fixture_ok)) return NULL;
+    client_http_response *response = calloc(1, sizeof(*response));
+    if (!response) return NULL;
+    response->status = 200;
+    response->body = xstrdup("# Verified fixture skill\nUse scoped evidence to answer.\n");
+    response->body_len = response->body ? strlen(response->body) : 0;
+    return response;
+}
+
+static void test_http_skill_install_async(void) {
+    section("remote skill installs keep unrelated APIs responsive and isolate failures");
+    runtime_ctx ctx; memset(&ctx, 0, sizeof(ctx));
+    ctx.http_port = 18224; ctx.http_bind = "127.0.0.1";
+    ctx.config = config_new(); ctx.skills = skill_registry_new();
+    CHECK(api_attach(&ctx) == 0);
+    thread_t *server = ctx.http ? thread_create(th_serve_http, ctx.http) : NULL;
+    CHECK(server != NULL);
+    const os_http_hooks *original = os_http_active();
+    os_http_hooks fixture = *original; fixture.get = install_fixture_get;
+    if (server) {
+        os_http_register(&fixture);
+        const char *routes[] = {"/v1/skills/install-remote", "/v1/skills/install-github", "/v1/skills/install-skillhub"};
+        const char *bodies[] = {"{\"repo\":\"fabric\",\"id\":\"fab_summarize\"}", "{\"repo\":\"fixture/skill\"}", "{\"slug\":\"fixture-skill\"}"};
+        for (int source = 0; source < 3; ++source) for (int ok = 0; ok < 2; ++ok) {
+            atomic_store(&install_fixture_release, 0); atomic_store(&install_fixture_entered, 0); atomic_store(&install_fixture_ok, ok);
+            raw_http reply;
+            long long start = time_now_ms();
+            CHECK(raw_http_request(18224, "POST", routes[source], bodies[source], &reply) == 0 && reply.status == 202);
+            CHECK(time_now_ms() - start < 1000);
+            cJSON *json = cJSON_Parse(reply.body);
+            unsigned long long id = (unsigned long long)cJSON_GetNumberValue(cJSON_GetObjectItemCaseSensitive(json, "job_id"));
+            cJSON_Delete(json); CHECK(id != 0);
+            for (int i = 0; i < 100 && !atomic_load(&install_fixture_entered); ++i) time_sleep_ms(5);
+            CHECK(atomic_load(&install_fixture_entered) == 1);
+            CHECK(raw_http_request(18224, "POST", routes[source], bodies[source], &reply) == 0 && reply.status == 202);
+            json = cJSON_Parse(reply.body);
+            CHECK((unsigned long long)cJSON_GetNumberValue(cJSON_GetObjectItemCaseSensitive(json, "job_id")) == id);
+            cJSON_Delete(json);
+            const char *independent[] = {"/v1/plugins", "/v1/skills", "/v1/config/llm"};
+            for (int p = 0; p < 3; ++p) {
+                start = time_now_ms();
+                CHECK(raw_http_request(18224, "GET", independent[p], NULL, &reply) == 0 && reply.status == 200);
+                CHECK(time_now_ms() - start < 1000);
+                CHECK(!atomic_load(&install_fixture_release));
+            }
+            char poll[160]; snprintf(poll, sizeof(poll), "%s?job_id=%llu", routes[source], id);
+            CHECK(raw_http_request(18224, "GET", poll, NULL, &reply) == 0 && strstr(reply.body, "\"pending\":true"));
+            atomic_store(&install_fixture_release, 1);
+            for (int i = 0; i < 100; ++i) {
+                CHECK(raw_http_request(18224, "GET", poll, NULL, &reply) == 0);
+                if (!strstr(reply.body, "\"pending\":true")) break;
+                time_sleep_ms(10);
+            }
+            CHECK(reply.status == (ok ? 200 : 502));
+            CHECK(strstr(reply.body, ok ? "\"ok\":true" : "fetch failed") != NULL);
+            char result[2048]; snprintf(result, sizeof(result), "%s", reply.body);
+            CHECK(raw_http_request(18224, "GET", poll, NULL, &reply) == 0 && !strcmp(reply.body, result));
+            CHECK(raw_http_request(18224, "GET", "/v1/config/llm", NULL, &reply) == 0 && reply.status == 200);
+        }
+        CHECK(skill_find(ctx.skills, "fab_summarize") != NULL);
+        CHECK(skill_find(ctx.skills, "gh_fixture_skill") != NULL);
+        CHECK(skill_find(ctx.skills, "skh_fixture-skill") != NULL);
+        http_server_stop(ctx.http); thread_join(server);
+        os_http_register(original);
+    }
+    http_server_free(ctx.http); config_free(ctx.config); skill_registry_free(ctx.skills);
+}
+
 static void test_http_capacity(void) {
     section("http admission backpressure");
     runtime_ctx ctx;
@@ -8094,24 +8170,14 @@ static void test_http_api(void) {
     CHECK(strstr(r.body, "\"ok\":true") != NULL &&
           strstr(r.body, "\"output\"") != NULL);
 
-    /* GitHub remote skills: catalog + validation paths (real fetch is
-     * network-dependent: assert 200 or 502, log which, no hard CHECK) */
+    /* Remote download success/failure and responsiveness are tested with a
+     * deterministic blocked transport in test_http_skill_install_async. */
     CHECK(raw_http_request(18211, "GET", "/v1/catalog/github-skills", NULL, &r) == 0 && r.status == 200);
     CHECK(strstr(r.body, "fab_summarize") != NULL);
     CHECK(raw_http_request(18211, "POST", "/v1/skills/install-remote", "{}", &r) == 0 && r.status == 400);
     CHECK(raw_http_request(18211, "POST", "/v1/skills/install-remote",
                            "{\"repo\":\"fabric\",\"id\":\"nope\"}", &r) == 0 && r.status == 404);
-    int fetched = 0;
-    if (raw_http_request(18211, "POST", "/v1/skills/install-remote",
-                         "{\"repo\":\"fabric\",\"id\":\"fab_summarize\"}", &r) == 0 &&
-        (r.status == 200 || r.status == 502)) {
-        if (r.status == 200 && strstr(r.body, "\"ok\":true") != NULL) fetched = 1;
-        /* fetch failed (offline/blocked): 502, acceptable in this suite */
-    } else {
-        CHECK(0); /* unexpected status/transport error */
-    }
-    printf("  remote skill fetch: %s\n", fetched ? "ok (installed from GitHub)"
-                                               : "skipped (network unavailable)");
+    CHECK(raw_http_request(18211, "GET", "/v1/skills/install-remote", NULL, &r) == 0 && r.status == 400);
 
     CHECK(raw_http_request(18211, "GET", "/v1/skills/market", NULL, &r) == 0 && r.status == 200);
     CHECK(strstr(r.body, "templates") != NULL);
@@ -8812,6 +8878,10 @@ static void test_crash_journal(void) {
 }
 
 int main(int argc, char **argv) {
+    if (argc==2 && !strcmp(argv[1],"--skill-install-async")) {
+        test_http_skill_install_async();
+        printf("%d passed, %d failed\n",g_pass,g_fail); return g_fail?1:0;
+    }
     if (argc==2 && !strcmp(argv[1],"--model-probe")) {
         test_model_probe_lifecycle();
         printf("%d passed, %d failed\n",g_pass,g_fail); return g_fail?1:0;
@@ -9064,6 +9134,7 @@ int main(int argc, char **argv) {
     test_model_probe_lifecycle();
     test_http_capacity();
     test_http_install_auth();
+    test_http_skill_install_async();
     test_http_api();
     test_ws_roundtrip();
     test_market_remote();

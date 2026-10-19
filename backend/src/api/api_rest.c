@@ -4156,80 +4156,257 @@ static int h_catalog_github_skills(const http_request *req, http_response *resp,
     return 0;
 }
 
-/* Install a GitHub remote skill: fetch the real file from the upstream repo
- * (direct URL, then ghproxy mirror) and register it as a prompt-kind skill
- * with the fetched content as body. Blocking network I/O (up to ~20s) — same
- * tradeoff as /v1/mcp/test on the single-threaded server. */
-static int h_skill_install_remote(const http_request *req, http_response *resp, void *ud) {
-    runtime_ctx *ctx = (runtime_ctx *)ud;
-    char *b;
-    cJSON *root;
+/* Remote skill downloads can take several seconds. HTTP handlers are
+ * serialized, so doing the download inline made every unrelated panel wait
+ * and caused the UI health check to report a false offline state. Fetch in a
+ * detached worker; the serialized poll handler alone mutates the registry. */
+enum { SKILL_INSTALL_REMOTE = 1, SKILL_INSTALL_GITHUB, SKILL_INSTALL_SKILLHUB };
+#define SKILL_INSTALL_JOB_COUNT 8
+typedef struct {
+    atomic_int phase; /* 0 free, 1 fetching, 2 fetched, 3 registered/result cached */
+    unsigned long long id;
+    int kind;
+    runtime_ctx *owner; /* only accessed by serialized request handlers */
+    long long finished_ms;
+    char repo[256], item[128];
     char *content;
-    skill sk;
-    int rc;
-    cJSON *o;
-    char *s;
+    char *result_json;
+    int result_status;
+} skill_install_job;
+static skill_install_job g_skill_install_jobs[SKILL_INSTALL_JOB_COUNT];
+static unsigned long long g_skill_install_next_id;
 
+static void skill_install_fetch_thread(void *arg) {
+    skill_install_job *job = (skill_install_job *)arg;
+    if (job->kind == SKILL_INSTALL_REMOTE) {
+        const catalog_remote_skill *e = catalog_remote_skill_find(job->repo, job->item);
+        job->content = e ? catalog_remote_skill_fetch(e) : NULL;
+    } else if (job->kind == SKILL_INSTALL_GITHUB) {
+        job->content = catalog_github_fetch_skill(job->repo);
+    } else {
+        job->content = catalog_skillhub_fetch_skill(job->item);
+    }
+    job->finished_ms = time_now_ms();
+    atomic_store_explicit(&job->phase, 2, memory_order_release);
+}
+
+static void skill_install_result(skill_install_job *job, http_response *resp, int status, const char *json) {
+    free(job->result_json);
+    job->result_json = xstrdup(json);
+    job->result_status = status;
+    atomic_store_explicit(&job->phase, 3, memory_order_release);
+    resp->status = status;
+    http_resp_json(resp, json);
+}
+
+static int skill_install_async(const http_request *req, http_response *resp, void *ud, int kind) {
+    runtime_ctx *ctx = (runtime_ctx *)ud;
+    skill_install_job *job = NULL;
+    char query[64] = "";
     if (!authz_ok(ctx, req, resp))
         return 0;
-    b = body_str(req);
-    root = b ? cJSON_Parse(b) : NULL;
-    free(b);
-    const char *repo = json_str(root, "repo");
-    const char *id = json_str(root, "id");
-    char repo_buf[64] = "", id_buf[128] = "";
-    if (repo && *repo)
-        snprintf(repo_buf, sizeof(repo_buf), "%s", repo);
-    if (id && *id)
-        snprintf(id_buf, sizeof(id_buf), "%s", id);
-    cJSON_Delete(root);
-    if (!repo_buf[0] || !id_buf[0]) {
-        resp->status = 400;
-        http_resp_json(resp, "{\"error\":\"need 'repo' and 'id' strings\"}");
+
+    if (strcmp(req->method, "POST") == 0) {
+        char *b = body_str(req);
+        cJSON *root = b ? cJSON_Parse(b) : NULL;
+        free(b);
+        char repo[256] = "", item[128] = "";
+        const char *value;
+        if (kind == SKILL_INSTALL_REMOTE) {
+            value = json_str(root, "repo");
+            if (value)
+                snprintf(repo, sizeof(repo), "%s", value);
+            value = json_str(root, "id");
+            if (value)
+                snprintf(item, sizeof(item), "%s", value);
+            if (!repo[0] || !item[0] || !catalog_remote_skill_find(repo, item)) {
+                if (root)
+                    cJSON_Delete(root);
+                resp->status = repo[0] && item[0] ? 404 : 400;
+                http_resp_json(resp, repo[0] && item[0] ? "{\"error\":\"unknown remote skill (repo/id)\"}"
+                                                        : "{\"error\":\"need 'repo' and 'id' strings\"}");
+                return 0;
+            }
+        } else if (kind == SKILL_INSTALL_GITHUB) {
+            value = json_str(root, "repo");
+            if (value)
+                snprintf(repo, sizeof(repo), "%s", value);
+            if (!repo[0]) {
+                if (root)
+                    cJSON_Delete(root);
+                resp->status = 400;
+                http_resp_json(resp, "{\"error\":\"need 'repo' string\"}");
+                return 0;
+            }
+        } else {
+            value = json_str(root, "slug");
+            if (value)
+                snprintf(item, sizeof(item), "%s", value);
+            if (!item[0]) {
+                if (root)
+                    cJSON_Delete(root);
+                resp->status = 400;
+                http_resp_json(resp, "{\"error\":\"need 'slug' string\"}");
+                return 0;
+            }
+        }
+        if (root)
+            cJSON_Delete(root);
+        skill_install_job *reusable = NULL;
+        for (int i = 0; i < SKILL_INSTALL_JOB_COUNT; ++i) {
+            skill_install_job *candidate = &g_skill_install_jobs[i];
+            int phase = atomic_load_explicit(&candidate->phase, memory_order_acquire);
+            if ((phase == 1 || phase == 2) && candidate->owner == ctx && candidate->kind == kind &&
+                !strcmp(candidate->repo, repo) && !strcmp(candidate->item, item)) {
+                resp->status = 202;
+                http_resp_appendf(resp, "{\"pending\":true,\"job_id\":%llu}", candidate->id);
+                return 0;
+            }
+            if (phase == 0 && !job)
+                job = candidate;
+            if ((phase == 3 || (phase == 2 && time_now_ms() - candidate->finished_ms > 300000)) &&
+                (!reusable || candidate->finished_ms < reusable->finished_ms))
+                reusable = candidate;
+        }
+        if (!job)
+            job = reusable;
+        if (!job) {
+            resp->status = 503;
+            http_resp_json(resp, "{\"error\":\"too many skill downloads in progress; retry shortly\"}");
+            return 0;
+        }
+        free(job->content);
+        job->content = NULL;
+        free(job->result_json);
+        job->result_json = NULL;
+        job->owner = ctx;
+        job->id = ++g_skill_install_next_id;
+        if (!job->id)
+            job->id = ++g_skill_install_next_id;
+        job->kind = kind;
+        snprintf(job->repo, sizeof(job->repo), "%s", repo);
+        snprintf(job->item, sizeof(job->item), "%s", item);
+        atomic_store_explicit(&job->phase, 1, memory_order_release);
+        thread_t *thread = thread_create(skill_install_fetch_thread, job);
+        if (!thread) {
+            atomic_store_explicit(&job->phase, 0, memory_order_release);
+            resp->status = 500;
+            http_resp_json(resp, "{\"error\":\"failed to start skill download\"}");
+            return 0;
+        }
+        thread_detach(thread);
+        resp->status = 202;
+        http_resp_appendf(resp, "{\"pending\":true,\"job_id\":%llu}", job->id);
         return 0;
     }
 
-    const catalog_remote_skill *e = catalog_remote_skill_find(repo_buf, id_buf);
-    if (!e || strcmp(e->id, id_buf) != 0) {
+    query_param(req, "job_id", query, sizeof(query));
+    char *end = NULL;
+    unsigned long long id = strtoull(query, &end, 10);
+    if (!query[0] || !end || *end || !id) {
+        resp->status = 400;
+        http_resp_json(resp, "{\"error\":\"need valid job_id\"}");
+        return 0;
+    }
+    for (int i = 0; i < SKILL_INSTALL_JOB_COUNT; ++i)
+        if (g_skill_install_jobs[i].id == id && g_skill_install_jobs[i].owner == ctx &&
+            g_skill_install_jobs[i].kind == kind &&
+            atomic_load_explicit(&g_skill_install_jobs[i].phase, memory_order_acquire) != 0) {
+            job = &g_skill_install_jobs[i];
+            break;
+        }
+    if (!job) {
         resp->status = 404;
-        http_resp_json(resp, "{\"error\":\"unknown remote skill (repo/id)\"}");
+        http_resp_json(resp, "{\"error\":\"skill install job not found or expired\"}");
+        return 0;
+    }
+    if (atomic_load_explicit(&job->phase, memory_order_acquire) == 1) {
+        http_resp_json(resp, "{\"pending\":true}");
+        return 0;
+    }
+    if (atomic_load_explicit(&job->phase, memory_order_acquire) == 3) {
+        resp->status = job->result_status;
+        http_resp_json(resp, job->result_json ? job->result_json : "{\"error\":\"result unavailable\"}");
+        return 0;
+    }
+    if (!job->content) {
+        skill_install_result(job, resp, 502,
+                             kind == SKILL_INSTALL_SKILLHUB
+                                 ? "{\"error\":\"fetch failed: cannot download SKILL.md from api.skillhub.cn\"}"
+                             : kind == SKILL_INSTALL_GITHUB
+                                 ? "{\"error\":\"fetch failed: no SKILL.md/README.md in repo (check network)\"}"
+                                 : "{\"error\":\"fetch failed: cannot download from raw.githubusercontent.com or "
+                                   "mirror (check network)\"}");
         return 0;
     }
 
-    content = catalog_remote_skill_fetch(e);
-    if (!content) {
-        resp->status = 502;
-        http_resp_json(resp, "{\"error\":\"fetch failed: cannot download from raw.githubusercontent.com "
-                                 "or mirror (check network)\"}");
-        return 0;
+    char name[192], description[384];
+    if (kind == SKILL_INSTALL_REMOTE) {
+        const catalog_remote_skill *e = catalog_remote_skill_find(job->repo, job->item);
+        if (!e) {
+            free(job->content);
+            job->content = NULL;
+            atomic_store(&job->phase, 0);
+            resp->status = 404;
+            http_resp_json(resp, "{\"error\":\"remote skill no longer exists\"}");
+            return 0;
+        }
+        snprintf(name, sizeof(name), "%s", e->id);
+        snprintf(description, sizeof(description), "%s", e->description);
+    } else if (kind == SKILL_INSTALL_SKILLHUB) {
+        snprintf(name, sizeof(name), "skh_%s", job->item);
+        snprintf(description, sizeof(description), "SkillHub 技能（skillhub.cn/skills/%s）", job->item);
+    } else {
+        size_t w = 0;
+        snprintf(name, sizeof(name), "gh_%s", job->repo);
+        for (char *p = name; *p && w < sizeof(name) - 1; p++, w++)
+            if (!((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') || (*p >= '0' && *p <= '9') || *p == '_' ||
+                  *p == '-' || *p == '.'))
+                *p = '_';
+        name[w] = '\0';
+        snprintf(description, sizeof(description), "GitHub 技能（github.com/%s）", job->repo);
     }
-
+    skill sk;
     memset(&sk, 0, sizeof(sk));
-    sk.name = e->id;
-    sk.description = e->description;
+    sk.name = name;
+    sk.description = description;
     sk.kind = "prompt";
-    sk.body = content;
+    sk.body = job->content;
     sk.caps = "";
-    rc = skill_register_ex(ctx->skills, &sk, 1);
-    free(content);
+    int rc = skill_register_ex(ctx->skills, &sk, 1);
+    free(job->content);
+    job->content = NULL;
     if (rc != 0) {
-        resp->status = 400;
-        http_resp_json(resp, "{\"error\":\"register failed\"}");
+        skill_install_result(job, resp, 400, "{\"error\":\"register failed\"}");
         return 0;
     }
-
     if (ctx->state_root)
         skill_registry_persist(ctx->skills, ctx->state_root);
-    o = cJSON_CreateObject();
-    cJSON_AddBoolToObject(o, "ok", 1);
-    cJSON_AddStringToObject(o, "name", e->id);
-    cJSON_AddStringToObject(o, "kind", "prompt");
-    cJSON_AddStringToObject(o, "repo", e->repo);
-    s = cJSON_PrintUnformatted(o);
-    cJSON_Delete(o);
-    http_resp_json(resp, s ? s : "{\"ok\":true}");
-    free(s);
+    cJSON *out = cJSON_CreateObject();
+    cJSON_AddBoolToObject(out, "ok", 1);
+    cJSON_AddStringToObject(out, "name", name);
+    cJSON_AddStringToObject(out, "kind", "prompt");
+    if (kind == SKILL_INSTALL_REMOTE)
+        cJSON_AddStringToObject(out, "repo", job->repo);
+    else if (kind == SKILL_INSTALL_GITHUB)
+        cJSON_AddStringToObject(out, "repo", job->repo);
+    else
+        cJSON_AddStringToObject(out, "slug", job->item);
+    char *json = cJSON_PrintUnformatted(out);
+    cJSON_Delete(out);
+    skill_install_result(job, resp, 200, json ? json : "{\"ok\":true}");
+    free(json);
     return 0;
+}
+
+static int h_skill_install_remote(const http_request *r, http_response *p, void *u) {
+    return skill_install_async(r, p, u, SKILL_INSTALL_REMOTE);
+}
+static int h_skill_install_github(const http_request *r, http_response *p, void *u) {
+    return skill_install_async(r, p, u, SKILL_INSTALL_GITHUB);
+}
+static int h_skill_install_skillhub(const http_request *r, http_response *p, void *u) {
+    return skill_install_async(r, p, u, SKILL_INSTALL_SKILLHUB);
 }
 
 /* ================= skillhub.cn / github live search (async, issue #20) =================
@@ -4316,148 +4493,6 @@ static int h_catalog_github_search(const http_request *req, http_response *resp,
     (void)ud;
     return catalog_async_reply(&g_gh_search, req, resp,
                                "{\"error\":\"github search failed (check network / rate limit)\"}");
-}
-
-/* Install a skillhub.cn skill: download SKILL.md for the given slug and
- * register it as a prompt-kind skill (same persistence flow as install-remote). */
-static int h_skill_install_skillhub(const http_request *req, http_response *resp, void *ud) {
-    runtime_ctx *ctx = (runtime_ctx *)ud;
-    char *b;
-    cJSON *root;
-    char slug_buf[128] = "";
-    char *content;
-    skill sk;
-    int rc;
-    cJSON *o;
-    char *s;
-
-    if (!authz_ok(ctx, req, resp))
-        return 0;
-    b = body_str(req);
-    root = b ? cJSON_Parse(b) : NULL;
-    free(b);
-    const char *slug = json_str(root, "slug");
-    if (slug && *slug)
-        snprintf(slug_buf, sizeof(slug_buf), "%s", slug);
-    cJSON_Delete(root);
-    if (!slug_buf[0]) {
-        resp->status = 400;
-        http_resp_json(resp, "{\"error\":\"need 'slug' string\"}");
-        return 0;
-    }
-
-    content = catalog_skillhub_fetch_skill(slug_buf);
-    if (!content) {
-        resp->status = 502;
-        http_resp_json(resp, "{\"error\":\"fetch failed: cannot download SKILL.md from api.skillhub.cn\"}");
-        return 0;
-    }
-
-    char name[160], desc[256];
-    snprintf(name, sizeof(name), "skh_%s", slug_buf);
-    snprintf(desc, sizeof(desc), "SkillHub 技能（skillhub.cn/skills/%s）", slug_buf);
-    memset(&sk, 0, sizeof(sk));
-    sk.name = name;
-    sk.description = desc;
-    sk.kind = "prompt";
-    sk.body = content;
-    sk.caps = "";
-    rc = skill_register_ex(ctx->skills, &sk, 1);
-    free(content);
-    if (rc != 0) {
-        resp->status = 400;
-        http_resp_json(resp, "{\"error\":\"register failed\"}");
-        return 0;
-    }
-
-    if (ctx->state_root)
-        skill_registry_persist(ctx->skills, ctx->state_root);
-    o = cJSON_CreateObject();
-    cJSON_AddBoolToObject(o, "ok", 1);
-    cJSON_AddStringToObject(o, "name", name);
-    cJSON_AddStringToObject(o, "kind", "prompt");
-    cJSON_AddStringToObject(o, "slug", slug_buf);
-    s = cJSON_PrintUnformatted(o);
-    cJSON_Delete(o);
-    http_resp_json(resp, s ? s : "{\"ok\":true}");
-    free(s);
-    return 0;
-}
-
-/* Install a skill from an ARBITRARY GitHub repository (online-search result):
- * download SKILL.md (fallback README.md) from raw.githubusercontent.com and
- * register it as a prompt-kind skill (same persistence flow as install-skillhub). */
-static int h_skill_install_github(const http_request *req, http_response *resp, void *ud) {
-    runtime_ctx *ctx = (runtime_ctx *)ud;
-    char *b;
-    cJSON *root;
-    char repo_buf[256] = "";
-    char *content;
-    skill sk;
-    int rc;
-    cJSON *o;
-    char *s;
-    char desc[384];
-    char nm[160];
-    size_t w = 0;
-
-    if (!authz_ok(ctx, req, resp))
-        return 0;
-    b = body_str(req);
-    root = b ? cJSON_Parse(b) : NULL;
-    free(b);
-    const char *repo = json_str(root, "repo");
-    if (repo && *repo)
-        snprintf(repo_buf, sizeof(repo_buf), "%s", repo);
-    cJSON_Delete(root);
-    if (!repo_buf[0]) {
-        resp->status = 400;
-        http_resp_json(resp, "{\"error\":\"need 'repo' string\"}");
-        return 0;
-    }
-
-    content = catalog_github_fetch_skill(repo_buf);
-    if (!content) {
-        resp->status = 502;
-        http_resp_json(resp, "{\"error\":\"fetch failed: no SKILL.md/README.md in repo (check network)\"}");
-        return 0;
-    }
-
-    /* runtime skill name = gh_<owner>_<repo> with unsafe chars folded to '_' */
-    snprintf(nm, sizeof(nm), "gh_%s", repo_buf);
-    for (char *p = nm; *p && w < sizeof(nm) - 1; p++, w++) {
-        if (!((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') || (*p >= '0' && *p <= '9') || *p == '_' ||
-              *p == '-' || *p == '.'))
-            *p = '_';
-    }
-    nm[w] = '\0';
-    snprintf(desc, sizeof(desc), "GitHub 技能（github.com/%s）", repo_buf);
-    memset(&sk, 0, sizeof(sk));
-    sk.name = nm;
-    sk.description = desc;
-    sk.kind = "prompt";
-    sk.body = content;
-    sk.caps = "";
-    rc = skill_register_ex(ctx->skills, &sk, 1);
-    free(content);
-    if (rc != 0) {
-        resp->status = 400;
-        http_resp_json(resp, "{\"error\":\"register failed\"}");
-        return 0;
-    }
-
-    if (ctx->state_root)
-        skill_registry_persist(ctx->skills, ctx->state_root);
-    o = cJSON_CreateObject();
-    cJSON_AddBoolToObject(o, "ok", 1);
-    cJSON_AddStringToObject(o, "name", nm);
-    cJSON_AddStringToObject(o, "kind", "prompt");
-    cJSON_AddStringToObject(o, "repo", repo_buf);
-    s = cJSON_PrintUnformatted(o);
-    cJSON_Delete(o);
-    http_resp_json(resp, s ? s : "{\"ok\":true}");
-    free(s);
-    return 0;
 }
 
 /* ================= IM (instant messaging) ================= */
@@ -5394,6 +5429,7 @@ int api_attach(runtime_ctx *ctx) {
     http_server_route(ctx->http, "POST", "/v1/skills/run", h_skill_run, ctx);
     http_server_route(ctx->http, "POST", "/v1/skills/install", h_skill_install, ctx);
     http_server_route(ctx->http, "POST", "/v1/skills/install-remote", h_skill_install_remote, ctx);
+    http_server_route(ctx->http, "GET", "/v1/skills/install-remote", h_skill_install_remote, ctx);
     http_server_route(ctx->http, "GET", "/v1/skills/market", h_skills_market, ctx);
     http_server_route(ctx->http, "POST", "/v1/skills/publish", h_skills_publish, ctx);
     http_server_route(ctx->http, "POST", "/v1/tools/gh-install", h_gh_install, ctx);
@@ -5428,7 +5464,9 @@ int api_attach(runtime_ctx *ctx) {
     http_server_route(ctx->http, "GET", "/v1/catalog/skillhub", h_catalog_skillhub, ctx);
     http_server_route(ctx->http, "GET", "/v1/catalog/github-search", h_catalog_github_search, ctx);
     http_server_route(ctx->http, "POST", "/v1/skills/install-skillhub", h_skill_install_skillhub, ctx);
+    http_server_route(ctx->http, "GET", "/v1/skills/install-skillhub", h_skill_install_skillhub, ctx);
     http_server_route(ctx->http, "POST", "/v1/skills/install-github", h_skill_install_github, ctx);
+    http_server_route(ctx->http, "GET", "/v1/skills/install-github", h_skill_install_github, ctx);
     http_server_route(ctx->http, "GET", "/", h_index, ctx);
     http_server_route(ctx->http, "GET", "/favicon.ico", h_favicon, ctx);
     return 0;
