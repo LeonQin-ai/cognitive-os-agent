@@ -81,7 +81,7 @@ int router_add_ex(router *r, const char *name, const char *provider, const char 
             e->weight = weight;
             e->cost_rank = cost_rank;
             e->latency_ms = latency_ms;
-            e->context_window_tokens = 0;
+            e->context_window_tokens = 262144;
             mutex_unlock(&r->mtx);
             return 0;
         }
@@ -109,6 +109,7 @@ int router_add_ex(router *r, const char *name, const char *provider, const char 
     e->weight = weight;
     e->cost_rank = cost_rank;
     e->latency_ms = latency_ms;
+    e->context_window_tokens = 262144;
     mutex_unlock(&r->mtx);
     return 0;
 }
@@ -316,8 +317,9 @@ char *router_json(router *r) {
         cJSON_AddNumberToObject(o, "calls", (double)e->calls);
         cJSON_AddNumberToObject(o, "cost_rank", e->cost_rank);
         cJSON_AddNumberToObject(o, "latency_ms", e->latency_ms);
-        if (e->context_window_tokens > 0)
-            cJSON_AddNumberToObject(o, "context_window_tokens", (double)e->context_window_tokens);
+        cJSON_AddNumberToObject(o, "context_window", (double)e->context_window_tokens);
+        /* Keep the old response field during API migration. */
+        cJSON_AddNumberToObject(o, "context_window_tokens", (double)e->context_window_tokens);
         if (e->caps)
             cJSON_AddStringToObject(o, "caps", e->caps);
         cJSON_AddItemToArray(arr, o);
@@ -421,7 +423,9 @@ int router_load_file(router *r, const char *path) {
         c = cJSON_GetObjectItemCaseSensitive(it, "cost_rank");
         l = cJSON_GetObjectItemCaseSensitive(it, "latency_ms");
         cp = cJSON_GetObjectItemCaseSensitive(it, "caps");
-        cw = cJSON_GetObjectItemCaseSensitive(it, "context_window_tokens");
+        cw = cJSON_GetObjectItemCaseSensitive(it, "context_window");
+        if (!cJSON_IsNumber(cw))
+            cw = cJSON_GetObjectItemCaseSensitive(it, "context_window_tokens");
         weight = (w && cJSON_IsNumber(w)) ? w->valuedouble : 1.0;
         cost = (c && cJSON_IsNumber(c)) ? (int)c->valuedouble : 0;
         lat = (l && cJSON_IsNumber(l)) ? (int)l->valuedouble : 0;

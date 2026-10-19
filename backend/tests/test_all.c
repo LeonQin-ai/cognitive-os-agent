@@ -6995,6 +6995,50 @@ static int fake_anthropic_sse(const http_request *req, http_response *resp, void
         "data: [DONE]\n\n");
     return 0;
 }
+static int fake_provider_models(const http_request *req, http_response *resp, void *ud) {
+    (void)req; (void)ud;
+    http_resp_json(resp,
+        "{\"data\":["
+        "{\"id\":\"fixture-direct\",\"context_window\":65536},"
+        "{\"id\":\"fixture-alias\",\"context_length\":131072},"
+        "{\"id\":\"fixture-nested\",\"top_provider\":{\"context_length\":262144}},"
+        "{\"id\":\"fixture-unknown\"}]} ");
+    return 0;
+}
+static void test_provider_model_context_metadata(void) {
+    section("provider_model_context_metadata");
+    http_server *server = http_server_new_bind("127.0.0.1", 18217);
+    CHECK(server != NULL);
+    if (!server) return;
+    http_server_route(server, "GET", "/models", fake_provider_models, NULL);
+    thread_t *thread = thread_create(th_serve_http, server);
+    time_sleep_ms(100);
+    char err[256] = {0};
+    char *json = catalog_provider_models_json("openai", "http://127.0.0.1:18217", "fixture-key", err, sizeof(err));
+    cJSON *models = json ? cJSON_Parse(json) : NULL;
+    CHECK(cJSON_IsArray(models) && cJSON_GetArraySize(models) == 4);
+    cJSON *direct = cJSON_GetArrayItem(models, 0);
+    cJSON *alias = cJSON_GetArrayItem(models, 1);
+    cJSON *nested = cJSON_GetArrayItem(models, 2);
+    cJSON *unknown = cJSON_GetArrayItem(models, 3);
+    cJSON *window = cJSON_GetObjectItemCaseSensitive(direct, "context_window");
+    CHECK(cJSON_IsNumber(window) && (long long)window->valuedouble == 65536);
+    window = cJSON_GetObjectItemCaseSensitive(alias, "context_window");
+    CHECK(cJSON_IsNumber(window) && (long long)window->valuedouble == 131072);
+    window = cJSON_GetObjectItemCaseSensitive(nested, "context_window");
+    CHECK(cJSON_IsNumber(window) && (long long)window->valuedouble == 262144);
+    CHECK(cJSON_IsObject(unknown) && !cJSON_GetObjectItemCaseSensitive(unknown, "context_window"));
+    cJSON_Delete(models); free(json);
+    const char *legacy_routes = "[{\"name\":\"legacy-context\",\"provider\":\"openai\","
+                                "\"context_window_tokens\":8192}]";
+    const char *legacy_path = "state-test/routes-legacy-context.json";
+    CHECK(fs_write_file(legacy_path, legacy_routes, strlen(legacy_routes)) == 0);
+    router *legacy = router_new();
+    CHECK(legacy != NULL && router_load_file(legacy, legacy_path) == 0);
+    CHECK(legacy && router_get(legacy, 0)->context_window_tokens == 8192);
+    router_free(legacy); fs_remove(legacy_path);
+    http_server_stop(server); thread_join(thread); http_server_free(server);
+}
 static void stream_accum(const char *delta, void *ud) {
     strbuf *sb = (strbuf *)ud;
     strbuf_append(sb, delta);
@@ -8800,6 +8844,7 @@ int main(int argc, char **argv) {
     test_task();
     test_tasklog();
     test_catalog();
+    test_provider_model_context_metadata();
     test_catalog_skills_run();
     test_audit();
     test_llm_adapters_http();

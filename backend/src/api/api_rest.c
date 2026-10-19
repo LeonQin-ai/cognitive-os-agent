@@ -1925,7 +1925,9 @@ static int h_route_add(const http_request *req, http_response *resp, void *ud) {
         router_add_ex(ctx->router, name, provider, json_str(root, "base_url"), json_str(root, "api_key"),
                           json_str(root, "model"), json_dbl(root, "weight", 1.0), (int)json_dbl(root, "cost_rank", 0),
                           (int)json_dbl(root, "latency_ms", 0), json_str(root, "caps"));
-        cJSON *window = cJSON_GetObjectItemCaseSensitive(root, "context_window_tokens");
+        cJSON *window = cJSON_GetObjectItemCaseSensitive(root, "context_window");
+        if (!cJSON_IsNumber(window))
+            window = cJSON_GetObjectItemCaseSensitive(root, "context_window_tokens");
         if (window && cJSON_IsNumber(window))
             router_set_context_window(ctx->router, name, (long long)window->valuedouble);
     }
@@ -2644,7 +2646,7 @@ static int h_config_llm_test(const http_request *req, http_response *resp, void 
 static struct {
     volatile int phase; /* 0 = idle, 1 = running, 2 = result ready */
     int ok;
-    char models_json[12288]; /* JSON array of model-id strings */
+    char models_json[131072]; /* model ids and optional provider context metadata */
     char error[256];
 } g_models_fetch;
 

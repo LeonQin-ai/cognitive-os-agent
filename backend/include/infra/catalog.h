@@ -95,8 +95,8 @@ char *catalog_github_fetch_skill(const char *repo);
 
 /* issue #18 — provider model catalog. Asks an OpenAI-/Anthropic-compatible
  * provider (GET <base>/models, Bearer / x-api-key auth) which models the
- * api_key can use. Returns a malloc'd JSON array of model-id strings
- * (["id",...]) or NULL on failure (err filled with a short reason).
+ * api_key can use. Returns [{"id":"...","context_window":...}] entries
+ * (context_window omitted when absent upstream), or NULL on failure.
  * Blocking network I/O — call from a worker, not the HTTP thread. */
 char *catalog_provider_models_json(const char *provider, const char *base_url, const char *api_key, char *err,
                                    size_t errcap);

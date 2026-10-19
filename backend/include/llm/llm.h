@@ -53,7 +53,7 @@ struct llm {
     char *base_url;
     char *api_key;
     char *model;
-    long long context_window_tokens; /* route-specific override; 0 = unknown */
+    long long context_window_tokens; /* selected model metadata; 256K when unknown */
     void *impl;
     volatile int cancel; /* set by llm_cancel(); checked between stream deltas */
     /* cumulative token usage from provider "usage" objects (polled without a

@@ -1567,7 +1567,6 @@ panels.models = `
     <div class="row">
       <input id="r-key" type="password" autocomplete="new-password" placeholder="api_key" style="flex:2;min-width:180px">
       <input id="r-weight" type="text" placeholder="weight (默认 1)" value="1" style="flex:1;min-width:80px">
-      <input id="r-context" type="number" min="1024" max="4000000" placeholder="上下文 tokens（未知留空）" style="flex:1;min-width:170px">
     </div>
     <div class="row">
       <button onclick="addRoute()">Add route</button>
@@ -4599,11 +4598,10 @@ async function loadModels(){
       + '<td>' + esc(x.provider || '') + '</td>'
       + '<td>' + esc(x.model || '') + '</td>'
       + '<td class="muted">' + esc(x.base_url || '') + '</td>'
-      + '<td>' + (x.context_window_tokens || '未知（按 32K）') + '</td>'
+      + '<td>' + (x.context_window || x.context_window_tokens || '未提供（默认 256K）') + '</td>'
       + '<td>' + (x.weight != null ? x.weight : 1) + '</td>'
       + '<td>' + (x.calls != null ? x.calls : 0) + '</td>'
       + '<td><button onclick="testRoute(' + i + ')" class="sec sm">Test</button> '
-      + '<button onclick="editRouteContext(' + i + ')" class="sec sm">改窗口</button> '
       + '<button onclick="editRouteKey(' + i + ')" class="sec sm">改Key</button> '
       + '<button onclick="setActive(' + i + ')" class="sec sm"' + (isActive ? ' disabled' : '') + '>Set active</button> '
       + '<button onclick="deleteRoute(' + i + ')" class="sec sm danger">Delete</button></td></tr>';
@@ -4637,33 +4635,22 @@ async function editRouteKey(i){
   const r = await call('POST', '/v1/routes', {
     name: x.name, provider: x.provider, base_url: x.base_url || '', model: x.model || '',
     api_key: k.trim(), weight: x.weight != null ? x.weight : 1,
-    context_window_tokens: x.context_window_tokens || 0
+    context_window: x.context_window || x.context_window_tokens || 262144
   });
   if(st) st.textContent = (r.status < 300) ? 'API Key 已更新' : 'error ' + r.status;
   loadModels();
 }
 
-async function editRouteContext(i){
-  const x = ROUTES[i]; if(!x) return;
-  const raw = prompt('模型上下文窗口（tokens，按供应商公布值填写）：', x.context_window_tokens || '');
-  if(raw === null) return;
-  const tokens = Number(raw.trim());
-  if(!Number.isInteger(tokens) || tokens < 1024 || tokens > 4000000){
-    toast('请输入 1024 到 4000000 之间的整数'); return;
-  }
-  const r = await call('POST', '/v1/routes', {
-    name:x.name, provider:x.provider, base_url:x.base_url || '', model:x.model || '',
-    api_key:x.api_key || '', weight:x.weight != null ? x.weight : 1,
-    context_window_tokens:tokens
-  });
-  if(r.status < 300 && (x.provider || '') === (ACTIVE.provider || '') &&
-     (x.model || '') === (ACTIVE.model || '') && (x.base_url || '') === (ACTIVE.base_url || ''))
-    await setActive(i);
-  else loadModels();
-}
-
 /* ===== 拉取供应商可用模型列表（issue #18）===== */
 let FETCHED_MODELS = [];
+
+function fetchedModelId(model){
+  return typeof model === 'string' ? model : String(model && model.id || '');
+}
+function fetchedModelContext(model){
+  const value = Number(model && (model.context_window || model.context_window_tokens));
+  return Number.isInteger(value) && value >= 1024 && value <= 4000000 ? value : 262144;
+}
 
 async function fetchModels(){
   const st = $('models-fetch-stat');
@@ -4708,23 +4695,29 @@ function renderFetchedModels(){
     if(btn) btn.style.display = 'none';
     return;
   }
-  box.innerHTML = FETCHED_MODELS.map(m =>
-    '<button class="sec sm" onclick="pickFetchedModel(\'' + esc(String(m).replace(/'/g, "\\'")) + '\')" ' +
-    'title="点击创建该模型的路由并激活；也可用「全部创建」批量建路由">' + esc(String(m)) + '</button>').join(' ');
+  box.innerHTML = FETCHED_MODELS.map((m, i) => {
+    const id = fetchedModelId(m);
+    const context = Number(m && (m.context_window || m.context_window_tokens)) || 0;
+    const title = context ? '上下文窗口：' + context.toLocaleString() + ' tokens' : '模型未提供上下文元数据，使用默认 256K';
+    return '<button class="sec sm" onclick="pickFetchedModel(' + i + ')" title="' + esc(title) + '">' + esc(id) + '</button>';
+  }).join(' ');
   if(btn) btn.style.display = '';
 }
 
 /* 点模型 chip = 直接创建该模型的路由（不存在才建）并立即激活 */
-async function pickFetchedModel(m){
+async function pickFetchedModel(index){
+  const modelInfo = typeof index === 'number' ? FETCHED_MODELS[index] : index;
+  const m = fetchedModelId(modelInfo);
+  if(!m) return;
   const provider = presetProvider();
   const base = $('r-base') ? $('r-base').value.trim() : '';
   const key = $('r-key') ? $('r-key').value.trim() : '';
   const name = (provider + '-' + String(m).replace(/[^A-Za-z0-9._-]/g, '-')).slice(0, 60);
-  const have = new Set(ROUTES.map(x => x.name));
-  if(!have.has(name)){
-    const r = await call('POST', '/v1/routes', {name, provider, base_url: base, model: m, api_key: key, weight: 1});
-    if(!(r.status < 300)){ toast('创建路由失败：HTTP ' + r.status); return; }
-  }
+  const existing = ROUTES.find(x => x.name === name);
+  const r = await call('POST', '/v1/routes', {name, provider, base_url: base, model: m,
+    api_key: key || (existing && existing.api_key) || '', weight: existing && existing.weight != null ? existing.weight : 1,
+    context_window: fetchedModelContext(modelInfo)});
+  if(!(r.status < 300)){ toast('创建路由失败：HTTP ' + r.status); return; }
   const inp = $('r-model'); if(inp) inp.value = m;
   const st = $('models-stat'); if(st) st.textContent = 'switching…';
   const a = await call('POST', '/v1/config/llm', {provider, base_url: base, model: m, api_key: key});
@@ -4742,11 +4735,13 @@ async function addFetchedModels(){
   const key = $('r-key').value.trim();
   const have = new Set(ROUTES.map(x => x.name));
   let created = 0, skipped = 0;
-  for(const m of FETCHED_MODELS){
-    const name = (provider + '-' + String(m).replace(/[^A-Za-z0-9._-]/g, '-')).slice(0, 60);
+  for(const modelInfo of FETCHED_MODELS){
+    const m = fetchedModelId(modelInfo);
+    if(!m) continue;
+    const name = (provider + '-' + m.replace(/[^A-Za-z0-9._-]/g, '-')).slice(0, 60);
     if(have.has(name)){ skipped++; continue; }
     have.add(name);
-    const r = await call('POST', '/v1/routes', {name, provider, base_url: base, model: m, api_key: key, weight: 1});
+    const r = await call('POST', '/v1/routes', {name, provider, base_url: base, model: m, api_key: key, weight: 1, context_window: fetchedModelContext(modelInfo)});
     if(r.status < 300) created++; else skipped++;
   }
   if(st) st.textContent = '✔ 已创建 ' + created + ' 条路由' + (skipped ? '（跳过 ' + skipped + ' 条已存在）' : '');
@@ -4767,14 +4762,11 @@ async function addRoute(){
   };
   const w = parseFloat($('r-weight').value);
   if(!isNaN(w)) body.weight = w;
-  const context = Number($('r-context').value);
-  if($('r-context').value.trim() && Number.isInteger(context) && context >= 1024)
-    body.context_window_tokens = context;
   const r = await call('POST', '/v1/routes', body);
   if(msg) msg.textContent = (r.status < 300) ? 'route saved'
       : (r.obj && r.obj.error) ? 'error: ' + r.obj.error : 'error ' + r.status;
   if(r.status < 300){
-    $('r-name').value = ''; $('r-base').value = ''; $('r-key').value = ''; $('r-model').value = ''; $('r-context').value = '';
+    $('r-name').value = ''; $('r-base').value = ''; $('r-key').value = ''; $('r-model').value = '';
   }
   loadModels();
 }

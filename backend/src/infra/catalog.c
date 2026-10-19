@@ -898,16 +898,32 @@ char *catalog_provider_models_json(const char *provider, const char *base_url, c
         cJSON *id = cJSON_GetObjectItemCaseSensitive(it, idkey);
         cJSON *status = cJSON_GetObjectItemCaseSensitive(it, "status");
         char esc[300];
-        char buf[340];
+        char buf[520];
         size_t blen;
         char *no;
+        long long context_window = 0;
         if (!cJSON_IsString(id) || !id->valuestring[0])
             continue;
         /* skip models the provider has already retired (e.g. ark "Shutdown") */
         if (cJSON_IsString(status) && ci_contains(status->valuestring, "shutdown"))
             continue;
+        cJSON *window = cJSON_GetObjectItemCaseSensitive(it, "context_window");
+        if (!cJSON_IsNumber(window))
+            window = cJSON_GetObjectItemCaseSensitive(it, "context_length");
+        if (cJSON_IsNumber(window) && window->valuedouble >= 1024 && window->valuedouble <= 4000000)
+            context_window = (long long)window->valuedouble;
+        if (!context_window) {
+            cJSON *top = cJSON_GetObjectItemCaseSensitive(it, "top_provider");
+            window = cJSON_GetObjectItemCaseSensitive(top, "context_length");
+            if (cJSON_IsNumber(window) && window->valuedouble >= 1024 && window->valuedouble <= 4000000)
+                context_window = (long long)window->valuedouble;
+        }
         json_esc(esc, sizeof(esc), id->valuestring);
-        blen = (size_t)snprintf(buf, sizeof(buf), "%s\"%s\"", n ? "," : "", esc);
+        if (context_window)
+            blen = (size_t)snprintf(buf, sizeof(buf), "%s{\"id\":\"%s\",\"context_window\":%lld}",
+                                    n ? "," : "", esc, context_window);
+        else
+            blen = (size_t)snprintf(buf, sizeof(buf), "%s{\"id\":\"%s\"}", n ? "," : "", esc);
         no = realloc(out, off + blen + 2);
         if (!no)
             break;

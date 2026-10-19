@@ -6,9 +6,19 @@ const assert = require('node:assert/strict');
   const browser=await chromium.launch({headless:true,channel:process.env.UI_TEST_BROWSER || 'msedge'});
   try {
     const page=await browser.newPage();
-    await page.route('http://ui.test/**',route=>route.fulfill({status:200,
-      contentType:route.request().url()==='http://ui.test/'?'text/html':'application/json',
-      body:route.request().url()==='http://ui.test/'?fs.readFileSync(path.join(__dirname,'../apps/web/index.html'),'utf8'):'[]'}));
+    let savedRoute=null;
+    const routeFixture=[{name:'fixture-large',provider:'openai',model:'fixture/large',base_url:'https://provider.invalid/v1',context_window:1074176}];
+    await page.route('http://ui.test/**',route=>{
+      const url=new URL(route.request().url());
+      let body='[]',contentType='application/json';
+      if(url.pathname==='/') { body=fs.readFileSync(path.join(__dirname,'../apps/web/index.html'),'utf8'); contentType='text/html'; }
+      else if(url.pathname==='/v1/routes' && route.request().method()==='GET') body=JSON.stringify(routeFixture);
+      else if(url.pathname==='/v1/routes' && route.request().method()==='POST') {
+        savedRoute=route.request().postDataJSON(); body=JSON.stringify({ok:true});
+      }
+      else if(url.pathname==='/v1/config/llm') body=JSON.stringify({ok:true,provider:'openai',model:'fixture/large',base_url:'https://provider.invalid/v1'});
+      return route.fulfill({status:200,contentType,body});
+    });
     await page.goto('http://ui.test/');
     await page.evaluate(()=>{
       chatAddBubble('bot','');
@@ -90,5 +100,20 @@ const assert = require('node:assert/strict');
     const recentTitles=await page.locator('#side-recent .recent-session-title').allInnerTexts();
     assert.deepEqual(recentTitles,['最近访问','创建较晚但不活跃','创建较早']);
     console.log('PASS #155: recent chats sort by last activity, not creation order');
+    await page.evaluate(()=>switchPanel('models'));
+    await page.waitForFunction(()=>document.querySelector('#routes-body')?.innerText.includes('1074176'));
+    assert.equal(await page.locator('#r-context').count(),0,'model context is not manually editable');
+    assert.equal(await page.locator('#routes-body button').filter({hasText:'改窗口'}).count(),0,
+      'model routes do not expose a manual context-window override');
+    assert.match(await page.locator('#routes-body').innerText(),/1074176/,
+      'route list displays the provider model context metadata');
+    await page.evaluate(async()=>{
+      $('r-base').value='https://provider.invalid/v1'; $('r-key').value='fixture-key';
+      FETCHED_MODELS=[{id:'fixture/large',context_window:524288}];
+      await pickFetchedModel(0);
+    });
+    assert.equal(savedRoute.context_window,524288);
+    assert.equal(savedRoute.model,'fixture/large');
+    console.log('PASS #157: model context is read from metadata, shown read-only, and saved when creating a route');
   } finally {await browser.close();}
 })().catch(error=>{console.error(error);process.exitCode=1;});
