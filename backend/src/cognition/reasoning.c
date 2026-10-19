@@ -243,8 +243,10 @@ struct reasoning {
     uint64_t observation_seen[2048];
     int observation_seen_n, round_new_observations, round_repeat_reads;
     int progress_cycle_warning_active;
-    struct { char *path; unsigned long long next; } pending_reads[128];
+    struct { char *path; unsigned long long next; uint64_t version; } pending_reads[128];
     int pending_reads_n;
+    struct { char *path; uint64_t version; } completed_reads[128];
+    int completed_reads_n;
     int read_tracking_overflow;
     int run_file_reads;
     int run_successful_tools;
@@ -1122,6 +1124,8 @@ static int log_append_entries(reasoning *r, char **buf, size_t *len, size_t *cap
 
 static void pending_reads_clear(reasoning *r) {
     for (int i=0; i<r->pending_reads_n; ++i) free(r->pending_reads[i].path);
+    for (int i=0; i<r->completed_reads_n; ++i) free(r->completed_reads[i].path);
+    r->completed_reads_n = 0;
     r->pending_reads_n = r->read_tracking_overflow = r->run_file_reads = 0;
 }
 
@@ -1132,6 +1136,15 @@ static void record_read_page(reasoning *r, const char *args_json, const char *ou
     char full[2048]; path_resolve(full, sizeof(full), r->workspace, path);
     if (fs_is_dir(full)) { cJSON_Delete(args); return; }
     r->run_file_reads++;
+    uint64_t version=fs_file_version(full);
+    for(int done=0;done<r->completed_reads_n;done++) {
+        if(strcmp(r->completed_reads[done].path,full)) continue;
+        /* Reinspection of an already-covered version cannot reopen a hole. */
+        if(version && r->completed_reads[done].version==version) { cJSON_Delete(args); return; }
+        free(r->completed_reads[done].path);
+        r->completed_reads[done]=r->completed_reads[--r->completed_reads_n];
+        break;
+    }
     int i=0;
     while (i<r->pending_reads_n && strcmp(r->pending_reads[i].path, full)) ++i;
     const char *header = output ? strstr(output, "[bytes ") : NULL;
@@ -1145,10 +1158,23 @@ static void record_read_page(reasoning *r, const char *args_json, const char *ou
         if (i == 128 || !(r->pending_reads[i].path = xstrdup(full))) {
             r->read_tracking_overflow = 1; cJSON_Delete(args); return;
         }
-        r->pending_reads[i].next = 0; r->pending_reads_n++;
+        r->pending_reads[i].next = 0;
+        r->pending_reads[i].version = version; r->pending_reads_n++;
+    }
+    if(r->pending_reads[i].version!=version) {
+        r->pending_reads[i].version=version;
+        r->pending_reads[i].next=0;
     }
     if (!paged || first <= r->pending_reads[i].next) {
         if (!more) {
+            if(r->completed_reads_n<128) {
+                char *saved=xstrdup(full);
+                if(saved) {
+                    int done=r->completed_reads_n++;
+                    r->completed_reads[done].path=saved;
+                    r->completed_reads[done].version=version;
+                }
+            }
             free(r->pending_reads[i].path);
             memmove(r->pending_reads+i, r->pending_reads+i+1,
                     (size_t)(--r->pending_reads_n-i)*sizeof(r->pending_reads[0]));
@@ -1514,10 +1540,10 @@ static char *build_context(reasoning *r, const char *prompt) {
     /* anti-pollution caution: history/notes/retrieved context are reference
      * only — the current request must always be planned and executed fresh */
     if (r->pending_reads_n) {
-        strbuf_append(&b, "## 尚未连续读取到文件末尾\n");
+        strbuf_append(&b, "## 尚未连续读取到文件末尾 / unread page coverage\n");
         for (int i=0; i<r->pending_reads_n && i<16; ++i)
-            strbuf_appendf(&b, "- %s: next_offset_bytes=%llu\n", r->pending_reads[i].path,
-                           r->pending_reads[i].next);
+            strbuf_appendf(&b, "- %s: offset_bytes=%llu; next_offset_bytes=%llu\n", r->pending_reads[i].path,
+                           r->pending_reads[i].next, r->pending_reads[i].next);
         if (r->pending_reads_n > 16)
             strbuf_appendf(&b, "另有 %d 个分页文件待续读，先完成以上文件。\n", r->pending_reads_n-16);
         strbuf_append(&b, "完整阅读任务必须用 file_read 的 offset_bytes 继续读取，直到 end of file；目录清单不等于源码内容。\n");
@@ -2528,6 +2554,22 @@ static int prompt_requires_observation(const char *prompt) {
 /* A requested file/code change needs evidence of an action before a text-only
  * answer can close the run. In particular, reading source files is not proof
  * that a requested PPT or copy was created (issue #68). */
+static int mutation_verb_negated(const char *prompt, const char *verb) {
+    const char *clause=prompt;
+    for (const char *p=prompt;p<verb;p++) {
+        if (*p=='\n' || *p==',' || *p==';' || *p=='.' ||
+            !strncmp(p,"，",strlen("，")) || !strncmp(p,"。",strlen("。")) ||
+            !strncmp(p,"；",strlen("；"))) clause=p+1;
+    }
+    const char *negations[]={"不要","不得","禁止","无需","不需要","不允许","不必","勿",
+                             "do not ","don't ","never ","without "};
+    for(size_t i=0;i<sizeof(negations)/sizeof(negations[0]);i++) {
+        const char *n=strstr(clause,negations[i]);
+        if(n && n<verb) return 1;
+    }
+    return 0;
+}
+
 static int prompt_requires_mutation(const char *prompt) {
     static const char *const verbs[] = {
         "生成", "制作", "创建", "复制", "写入", "修改", "修复", "保存", "导出",
@@ -2559,7 +2601,8 @@ static int prompt_requires_mutation(const char *prompt) {
     for (const char *p=strstr(prompt,"注册"); p; p=strstr(p+strlen("注册"),"注册"))
         if (strncmp(p+strlen("注册"),"表",strlen("表"))) return 1;
     for (size_t i = 0; i < sizeof(verbs) / sizeof(verbs[0]); i++)
-        if (strstr(prompt, verbs[i])) return 1;
+        for(const char *v=strstr(prompt,verbs[i]);v;v=strstr(v+strlen(verbs[i]),verbs[i]))
+            if(!mutation_verb_negated(prompt,v)) return 1;
     return 0;
 }
 
@@ -3524,7 +3567,7 @@ restart_planning:
      * transcript. Without this, a stage failure on the LAST round skipped
      * synthesis entirely (the old `st == ST_DONE` guard) and the caller
      * received the raw round log with no answer at all. */
-    if (!run_aborted(r) && !cycle_aborted && !(fail_aborted && r->last_model_error[0]) &&
+    if (!run_aborted(r) && !(fail_aborted && r->last_model_error[0]) &&
         !final_text && r->round_log_len > 0 && r->llm) {
         r->prog_tool[0] = 0;
         progress_emit(r, "summarizing");

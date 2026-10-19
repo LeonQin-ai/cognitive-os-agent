@@ -1353,11 +1353,12 @@ static void test_llm_caps_cancel(void) {
         const llm_caps *c = llm_capabilities(oai);
         CHECK(c && c->stream == 1 && c->tools == 1 && c->max_ctx == 128000);
         size_t fallback = planner_input_budget_bytes(oai, NULL, NULL, NULL);
+        CHECK(llm_context_window_tokens(oai) == 262144);
         oai->context_window_tokens = 8192;
         size_t small = planner_input_budget_bytes(oai, NULL, NULL, NULL);
-        oai->context_window_tokens = 131072;
+        oai->context_window_tokens = 524288;
         size_t large = planner_input_budget_bytes(oai, NULL, NULL, NULL);
-        CHECK(llm_context_window_tokens(oai) == 131072);
+        CHECK(llm_context_window_tokens(oai) == 524288);
         CHECK(small < fallback && fallback < large);
         CHECK(large > small * 10);
         llm_destroy(oai);
@@ -2656,7 +2657,42 @@ static int progress_fixture_chat(llm *self,const llm_request *req,llm_response *
         if (s && strstr(s,"检测到跨轮次循环")) f->saw_recovery=1;
     }
     char plan[1024];
-    if (f->mode==6) { /* A long deliverable may resume research after writing. */
+    if(f->mode==17) {
+        if(f->calls<=4) {
+            if(f->calls==4) {
+                char changed[9001]; memset(changed,'v',sizeof(changed));
+                fs_write_file("state-test/progress-loop/paged.txt",changed,sizeof(changed));
+            }
+            snprintf(plan,sizeof(plan),"[{\"tool\":\"file_read\",\"args\":{\"path\":\"paged.txt\",\"offset_bytes\":%d}}]",f->calls==4 ? 0:(f->calls-1)*4000);
+            resp->content=xstrdup(plan);
+        } else resp->content=xstrdup("全文审核完成");
+    } else if(f->mode==16) {
+        if(f->calls<=4) {
+            int offset=f->calls==4 ? 4000:(f->calls-1)*4000;
+            snprintf(plan,sizeof(plan),"[{\"tool\":\"file_read\",\"args\":{\"path\":\"paged.txt\",\"offset_bytes\":%d,\"max_bytes\":%d}}]",offset,f->calls==4 ? 2000:4000);
+            resp->content=xstrdup(plan);
+        } else resp->content=xstrdup("全文审核及片段复核已完成");
+    } else if (f->mode==14 || f->mode==15) {
+        resp->content=xstrdup(f->calls==1 ?
+            "[{\"tool\":\"file_read\",\"args\":{\"path\":\"same.txt\"}}]" : "只读分析完成，已有源码证据");
+    } else if (f->mode==13) { /* Recover paged review using the persistent cursor. */
+        if (f->calls==1)
+            resp->content=xstrdup("[{\"tool\":\"file_read\",\"args\":{\"path\":\"paged.txt\"}}]");
+        else {
+            int offset=-1;
+            for(size_t i=0;i<req->num_messages;i++) {
+                const char *s=req->messages[i].content;
+                if(s && strstr(s,"unread page coverage")) {
+                    if(strstr(s,"paged.txt: offset_bytes=8000")) offset=8000;
+                    else if(strstr(s,"paged.txt: offset_bytes=4000")) offset=4000;
+                }
+            }
+            if(offset>=0) {
+                snprintf(plan,sizeof(plan),"[{\"tool\":\"file_read\",\"args\":{\"path\":\"paged.txt\",\"offset_bytes\":%d}}]",offset);
+                resp->content=xstrdup(plan);
+            } else resp->content=xstrdup("完整分页审核完成");
+        }
+    } else if (f->mode==6) { /* A long deliverable may resume research after writing. */
         if (f->calls==13)
             resp->content=xstrdup("[{\"tool\":\"file_write\",\"args\":{\"path\":\"draft.ppt\",\"content\":\"draft\"}}]");
         else if (f->calls>82) resp->content=xstrdup("已生成并核对文件");
@@ -2700,6 +2736,32 @@ static int progress_fixture_chat(llm *self,const llm_request *req,llm_response *
         resp->content=xstrdup("[{\"tool\":\"file_read\",\"args\":{\"path\":\"same.txt\"}}]");
     } else if (f->mode==8) {
         resp->content=xstrdup("我先根据刚才读取到的状态整理结果：系统运行正常。");
+    } else if ((f->mode==9 || f->mode==10) && f->calls==1) {
+        resp->content=xstrdup("[{\"tool\":\"file_read\",\"args\":{\"path\":\"same.txt\"}}]");
+    } else if ((f->mode==9 || f->mode==10) && f->calls==2) {
+        resp->content=xstrdup("[{\"tool\":\"fixture_loop_error\",\"args\":{}}]");
+    } else if ((f->mode==9 || f->mode==10) && f->calls==3) {
+        resp->content=xstrdup("I'll investigate the failed check now.");
+    } else if (f->mode==9 && f->calls==4) {
+        resp->content=xstrdup("[{\"tool\":\"file_read\",\"args\":{\"path\":\"new.txt\"}}]");
+    } else if (f->mode==9) {
+        resp->content=xstrdup("系统状态已核对，服务正常。");
+    } else if (f->mode==10) {
+        resp->content=xstrdup("I'll investigate the failed check now.");
+    } else if ((f->mode==11 || f->mode==12) && f->calls==1) {
+        resp->content=xstrdup("[{\"tool\":\"file_read\",\"args\":{\"path\":\"same.txt\"}}]");
+    } else if ((f->mode==11 || f->mode==12) && f->calls==2) {
+        resp->content=xstrdup("[{\"tool\":\"fixture_loop_error\",\"args\":{}}]");
+    } else if ((f->mode==11 || f->mode==12) && f->calls==3) {
+        resp->content=xstrdup("[{\"tool\":\"file_read\",\"args\":{\"path\":\"new.txt\"}}]");
+    } else if ((f->mode==11 || f->mode==12) && f->calls==4) {
+        resp->content=xstrdup("I'll investigate the build failure now.");
+    } else if (f->mode==11 && f->calls==5) {
+        resp->content=xstrdup("[{\"tool\":\"file_read\",\"args\":{\"path\":\"new.txt\"}}]");
+    } else if (f->mode==11) {
+        resp->content=xstrdup("失败原因已核对并继续执行成功");
+    } else if (f->mode==12) {
+        resp->content=xstrdup("I'll investigate the build failure now.");
     } else {
         /* Alternate order and JSON key order; prompt folds after enough reads. */
         snprintf(plan,sizeof(plan),
@@ -2717,6 +2779,7 @@ static void test_cross_round_progress(void) {
     char *source=malloc(320001); CHECK(source!=NULL); if (!source) return;
     memset(source,'x',320000); source[320000]=0;
     CHECK(fs_write_file("state-test/progress-loop/long.txt",source,320000)==0);
+    CHECK(fs_write_file("state-test/progress-loop/paged.txt",source,8001)==0);
     const char *files[]={"a.txt","b.txt","c.txt"};
     for (int i=0;i<3;i++) {
         char name[128]; snprintf(name,sizeof(name),"state-test/progress-loop/%s",files[i]);
@@ -2725,7 +2788,7 @@ static void test_cross_round_progress(void) {
     free(source);
     CHECK(fs_write_file("state-test/progress-loop/new.txt","new evidence",12)==0);
     CHECK(fs_write_file("state-test/progress-loop/same.txt", "status: ready", 13)==0);
-    for (int mode=0;mode<9;mode++) {
+    for (int mode=0;mode<18;mode++) {
         progress_fixture f={.mode=mode};
         static const llm_vtable vt={.chat=progress_fixture_chat};
         llm provider={.vt=&vt,.provider="fixture",.model="fixture",.impl=&f};
@@ -2739,7 +2802,12 @@ static void test_cross_round_progress(void) {
         reasoning *r=reasoning_new(&cfg); CHECK(r!=NULL);
         if (r) {
             char *answer=NULL;
-            const char *prompt = mode==7 ? "查看系统状态" : mode==8 ? "查看一下windows机器的状态" :
+            const char *prompt = mode==17 ? "完整读取文件paged.txt全文并分析" :
+                mode==16 ? "完整读取文件paged.txt全文并分析，再复核一个片段" :
+                mode==14 ? "读取same.txt分析代码并给出清单，不要修改文件或运行修改源码的命令。" :
+                mode==15 ? "不要删除same.txt，但请修改代码解决问题" :
+                mode==13 ? "完整阅读文件paged.txt并总结" : (mode==11 || mode==12) ? "继续执行" :
+                (mode==7 || mode==9 || mode==10) ? "查看系统状态" : mode==8 ? "查看一下windows机器的状态" :
                 mode>=5 ? "根据源码生成一份深度PPT文件" : "分析资料并提供结论";
             int rc=reasoning_run(r,prompt,&answer);
             if (mode==0 || mode==4) {
@@ -2761,8 +2829,33 @@ static void test_cross_round_progress(void) {
                 reasoning_progress(r,&elapsed,&round,&calls,&last_tool,&in,&out);
                 CHECK(rc==0 && answer && strstr(answer,"系统运行正常"));
                 CHECK(f.calls==2 && round==2 && calls==1);
+            } else if (mode==9) {
+                long long elapsed=0, in=0, out=0; int round=0, calls=0; const char *last_tool=NULL;
+                reasoning_progress(r,&elapsed,&round,&calls,&last_tool,&in,&out);
+                /* An unrelated successful read does not verify the failed tool. */
+                CHECK(rc!=0 && answer && strstr(answer,"fixture_loop_error"));
+                CHECK(f.calls==5 && calls==3);
+            } else if (mode==10) {
+                CHECK(rc!=0 && answer && strstr(answer,"任务未完成"));
+                CHECK(f.calls==4);
+            } else if (mode==11) {
+                CHECK(rc!=0 && answer && strstr(answer,"fixture_loop_error"));
+                CHECK(f.calls==6);
+            } else if (mode==12) {
+                CHECK(rc!=0 && answer && strstr(answer,"任务未完成"));
+                CHECK(f.calls==5);
             } else if (mode==3) {
                 CHECK(rc==0 && f.saw_recovery && f.recovered && f.calls<12 && answer);
+            } else if (mode==13) {
+                CHECK(rc==0 && f.calls==4 && answer && strstr(answer,"完整分页审核完成"));
+            } else if (mode==14) {
+                CHECK(rc==0 && f.calls==2 && answer && strstr(answer,"只读分析完成"));
+            } else if (mode==15) {
+                CHECK(rc!=0 && answer && strstr(answer,"任务未完成"));
+            } else if (mode==16) {
+                CHECK(rc==0 && f.calls==5 && answer && strstr(answer,"全文审核及片段复核已完成"));
+            } else if (mode==17) {
+                CHECK(rc!=0 && f.calls==6 && answer && strstr(answer,"offset_bytes=4000"));
             } else {
                 CHECK(rc==0 && answer);
                 if (mode==1) CHECK(f.calls==81 && strstr(answer,"正常长任务已完成"));
@@ -2772,7 +2865,7 @@ static void test_cross_round_progress(void) {
         }
         tool_registry_free(reg);
     }
-    const char *cleanup[]={"a.txt","b.txt","c.txt","new.txt","long.txt","changed.txt","draft.ppt","same.txt"};
+    const char *cleanup[]={"a.txt","b.txt","c.txt","new.txt","long.txt","changed.txt","draft.ppt","same.txt","paged.txt"};
     for (size_t i=0;i<sizeof(cleanup)/sizeof(cleanup[0]);i++) {
         char name[128]; snprintf(name,sizeof(name),"state-test/progress-loop/%s",cleanup[i]); fs_remove(name);
     }
@@ -7258,7 +7351,7 @@ static int selected_model_http(const http_request *req,http_response *resp,void 
            tokens->valueint==256 && cJSON_IsNumber(temperature) && temperature->valuedouble==1.0)
             atomic_store(&f->deepseek_probe_config,1);
         if(cJSON_IsString(effort) && !strcmp(effort->valuestring,"low") && cJSON_IsNumber(tokens) &&
-           tokens->valueint==8192 && cJSON_IsNumber(temperature) && temperature->valuedouble==1.0)
+           tokens->valueint==32768 && cJSON_IsNumber(temperature) && temperature->valuedouble==1.0)
             atomic_store(&f->deepseek_plan_config,1);
     }
     else atomic_fetch_add(&f->stale,1);
