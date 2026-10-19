@@ -8479,9 +8479,35 @@ static void test_http_api(void) {
 
 /* ---------- WebSocket server round-trip (ws_server hub) ---------- */
 static char g_ws_recv[256];
+static mutex_t g_ws_recv_mutex;
+static cond g_ws_recv_cond;
+static int g_ws_recv_count;
 static void ws_on_msg(const char *text, void *ud) {
     (void)ud;
+    mutex_lock(&g_ws_recv_mutex);
+    /* Simulate preemption after the first byte. A byte becoming nonzero is
+     * not a message-completion signal, even if the later failure log happens
+     * to print the now-complete value. */
+    g_ws_recv[0] = text[0];
+    time_sleep_ms(10);
     snprintf(g_ws_recv, sizeof g_ws_recv, "%s", text);
+    g_ws_recv_count++;
+    cond_signal(&g_ws_recv_cond);
+    mutex_unlock(&g_ws_recv_mutex);
+}
+
+static int ws_wait_message(int count, char *snapshot, size_t cap) {
+    long long deadline = time_now_ms() + 2000;
+    mutex_lock(&g_ws_recv_mutex);
+    while (g_ws_recv_count < count) {
+        long long remaining = deadline - time_now_ms();
+        if (remaining <= 0) break;
+        cond_timedwait_ms(&g_ws_recv_cond, &g_ws_recv_mutex, (int)remaining);
+    }
+    int ready = g_ws_recv_count >= count;
+    snprintf(snapshot, cap, "%s", g_ws_recv);
+    mutex_unlock(&g_ws_recv_mutex);
+    return ready;
 }
 
 static void test_ws_roundtrip(void) {
@@ -8489,11 +8515,14 @@ static void test_ws_roundtrip(void) {
     http_server *s = http_server_new_bind("127.0.0.1", 18214);
     CHECK(s != NULL);
     if (!s) return;
+    mutex_init(&g_ws_recv_mutex);
+    cond_init(&g_ws_recv_cond);
+    g_ws_recv_count = 0;
+    g_ws_recv[0] = '\0';
     http_server_ws_route(s, "/ws", ws_on_msg, NULL);
     thread_t *ts = thread_create(th_serve_http, s);
     time_sleep_ms(300);
 
-    g_ws_recv[0] = '\0';
     sock *c = sock_connect("127.0.0.1", 18214, 3000);
     CHECK(c != NULL);
     if (c) {
@@ -8526,11 +8555,11 @@ static void test_ws_roundtrip(void) {
             CHECK(sock_send(c, f, flen) == (int)flen);
             free(f);
         }
-        for (int i = 0; i < 20 && g_ws_recv[0] == '\0'; i++) time_sleep_ms(100);
-        CHECK_STR(g_ws_recv, "hello");
+        char received[256];
+        CHECK(ws_wait_message(1, received, sizeof(received)));
+        CHECK_STR(received, "hello");
 
         /* fragmented text: first frame FIN=0, second is a continuation */
-        g_ws_recv[0] = '\0';
         size_t f1len = 0, f2len = 0;
         char *f1 = ws_build_frame(WS_OP_TEXT, (const unsigned char *)"frag-", 5, 1, &f1len);
         char *f2 = ws_build_frame(WS_OP_TEXT, (const unsigned char *)"ok", 2, 1, &f2len);
@@ -8542,8 +8571,8 @@ static void test_ws_roundtrip(void) {
             CHECK(sock_send(c, f2, f2len) == (int)f2len);
         }
         free(f1); free(f2);
-        for (int i = 0; i < 20 && g_ws_recv[0] == '\0'; i++) time_sleep_ms(100);
-        CHECK_STR(g_ws_recv, "frag-ok");
+        CHECK(ws_wait_message(2, received, sizeof(received)));
+        CHECK_STR(received, "frag-ok");
 
         /* server broadcast -> client receives a text frame */
         http_server_ws_broadcast(s, "{\"x\":1}");
@@ -8566,6 +8595,8 @@ static void test_ws_roundtrip(void) {
     http_server_stop(s);
     thread_join(ts);
     http_server_free(s);
+    cond_destroy(&g_ws_recv_cond);
+    mutex_destroy(&g_ws_recv_mutex);
 }
 
 /* ---------- networked marketplace (merge remote catalog + best-effort publish) ---------- */
@@ -8951,6 +8982,10 @@ static void test_crash_journal(void) {
 }
 
 int main(int argc, char **argv) {
+    if (argc==2 && !strcmp(argv[1],"--ws-roundtrip")) {
+        for (int i=0;i<20;i++) test_ws_roundtrip();
+        printf("%d passed, %d failed\n",g_pass,g_fail); return g_fail?1:0;
+    }
     if (argc==2 && !strcmp(argv[1],"--skill-install-async")) {
         test_http_skill_install_async();
         printf("%d passed, %d failed\n",g_pass,g_fail); return g_fail?1:0;
