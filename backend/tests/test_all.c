@@ -2672,7 +2672,21 @@ static int progress_fixture_chat(llm *self,const llm_request *req,llm_response *
         if (s && strstr(s,"检测到跨轮次循环")) f->saw_recovery=1;
     }
     char plan[1024];
-    if (f->mode >= 20 && f->mode <= 23) {
+    if (f->mode >= 24 && f->mode <= 31) {
+        if (f->calls == 1) {
+            const char *failed = f->mode == 26 ? "[{\"tool\":\"file_read\",\"args\":{\"path\":\"missing.txt\"}}]" :
+                f->mode == 30 ? "[{\"tool\":\"glob\",\"args\":{}}]" :
+                f->mode == 31 ? "[{\"tool\":\"list_dir\",\"args\":{\"path\":\"same.txt\"}}]" :
+                (f->mode == 25 || f->mode == 27) ? "[{\"tool\":\"grep\",\"args\":{\"path\":\"required\"}}]" :
+                "[{\"tool\":\"grep\",\"args\":{\"path\":\".\"}}]";
+            resp->content = xstrdup(failed);
+        } else if (f->calls == 2) {
+            resp->content = xstrdup((f->mode == 27 || f->mode == 29) ?
+                "[{\"tool\":\"grep\",\"args\":{\"path\":\".\",\"pattern\":\"status\"}}]" :
+                f->mode == 28 ? "[{\"tool\":\"file_read\",\"args\":{\"path\":\"same.txt\"}},{\"tool\":\"fixture_loop_error\",\"args\":{}}]" :
+                "[{\"tool\":\"file_read\",\"args\":{\"path\":\"same.txt\"}}]");
+        } else resp->content = xstrdup("上下文工程分析完成：源码证据表明缓存复用已读取内容，持久化保存版本。\n\n下一步建议：第一步增加缓存命中指标，第二步对比持久化成本。");
+    } else if (f->mode >= 20 && f->mode <= 23) {
         if (f->calls == 1)
             resp->content = xstrdup(f->mode == 21 ?
                 "[{\"tool\":\"file_read\",\"args\":{\"path\":\"same.txt\"}}]" :
@@ -2823,7 +2837,7 @@ static void test_cross_round_progress(void) {
     free(source);
     CHECK(fs_write_file("state-test/progress-loop/new.txt","new evidence",12)==0);
     CHECK(fs_write_file("state-test/progress-loop/same.txt", "status: ready", 13)==0);
-    for (int mode=0;mode<24;mode++) {
+    for (int mode=0;mode<32;mode++) {
         progress_fixture f={.mode=mode};
         static const llm_vtable vt={.chat=progress_fixture_chat};
         llm provider={.vt=&vt,.provider="fixture",.model="fixture",.impl=&f};
@@ -2831,6 +2845,8 @@ static void test_cross_round_progress(void) {
         CHECK(tool_register(reg,tool_file_read())==0);
         CHECK(tool_register(reg,tool_file_write())==0);
         CHECK(tool_register(reg,tool_list_dir())==0);
+        CHECK(tool_register(reg,tool_grep())==0);
+        CHECK(tool_register(reg,tool_glob())==0);
         tool failure={"fixture_loop_error","fixture failure",NULL,0,fixture_python_failure,NULL};
         CHECK(tool_register(reg,&failure)==0);
         tool retryable={"fixture_retryable","retryable fixture failure",NULL,0,fixture_retryable_failure,NULL};
@@ -2850,7 +2866,11 @@ static void test_cross_round_progress(void) {
                 (mode==7 || mode==9 || mode==10) ? "查看系统状态" : mode==8 ? "查看一下windows机器的状态" :
                 mode>=5 ? "根据源码生成一份深度PPT文件" : "分析资料并提供结论";
             int rc=reasoning_run(r,prompt,&answer);
-            if (mode >= 20) {
+            if (mode >= 24) {
+                if (mode == 25 || mode == 26 || mode == 27 || mode == 28)
+                    CHECK(rc != 0 && f.calls == 4 && answer && strstr(answer,"任务未完成"));
+                else CHECK(rc == 0 && f.calls == 3 && answer && strstr(answer,"上下文工程分析完成"));
+            } else if (mode >= 20) {
                 if (mode == 22) CHECK(rc != 0 && f.calls == 3 && answer && strstr(answer,"任务未完成"));
                 else if (mode == 23) CHECK(rc == 0 && f.calls == 2 && answer && strstr(answer,"当前结构已核对"));
                 else CHECK(rc == 0 && f.calls == 4 && answer && strstr(answer,"记忆模型分析完成"));

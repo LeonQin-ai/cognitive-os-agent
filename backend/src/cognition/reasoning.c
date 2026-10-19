@@ -231,6 +231,7 @@ struct reasoning {
     int same_action_failures;
     int run_had_action_failure;
     char unresolved_failed_tools[32][48];
+    char unresolved_failed_scopes[32][2048];
     int unresolved_failed_tool_count;
     int unresolved_failed_tools_overflow;
     int tool_fail_aborted;
@@ -275,31 +276,65 @@ struct reasoning {
     long long run_usage_in, run_usage_out, run_usage_reports;
 };
 
-/* A failed action is not resolved just because the model later writes a
- * confident summary. Require a successful retry through that tool before
- * allowing the run to be reported as complete. Keep one entry per tool so a
- * later successful call can close earlier failures of the same kind. */
-static void note_failed_tool(reasoning *r, const char *tool_name) {
+static int is_exploratory_tool(const char *name) {
+    return !strcmp(name, "grep") || !strcmp(name, "glob") || !strcmp(name, "list_dir");
+}
+
+static void failure_scope(reasoning *r, const char *name, const char *args_json, char *out, size_t cap) {
+    out[0] = '\0';
+    if (!is_exploratory_tool(name) && strcmp(name, "file_read")) return;
+    cJSON *args = cJSON_Parse(args_json ? args_json : "{}");
+    const char *path = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(args, "path"));
+    char full[2048]; path_resolve(full, sizeof(full), r->workspace, path && *path ? path : ".");
+    cJSON_Delete(args);
+    char *absolute = fs_absolute_path(full);
+    snprintf(out, cap, "%s", absolute ? absolute : full);
+    free(absolute);
+    for (char *p = out; *p; ++p) {
+        if (*p == '\\') *p = '/';
+#ifdef _WIN32
+        if (*p >= 'A' && *p <= 'Z') *p += 'a' - 'A';
+#endif
+    }
+    size_t n = strlen(out);
+    while (n > 1 && out[n - 1] == '/') out[--n] = '\0';
+}
+
+/* Track the affected path as well as the tool. A verified replacement read
+ * can supersede a failed exploratory lookup in that scope (#161), while a
+ * read of another directory cannot verify a failure or a failed command. */
+static void note_failed_tool(reasoning *r, const char *tool_name, const char *args_json) {
     if (!r || !tool_name || !*tool_name) return;
+    char scope[2048]; failure_scope(r, tool_name, args_json, scope, sizeof(scope));
     for (int i = 0; i < r->unresolved_failed_tool_count; ++i)
-        if (!strcmp(r->unresolved_failed_tools[i], tool_name)) return;
+        if (!strcmp(r->unresolved_failed_tools[i], tool_name) && !strcmp(r->unresolved_failed_scopes[i], scope)) return;
     if (r->unresolved_failed_tool_count >=
         (int)(sizeof(r->unresolved_failed_tools) / sizeof(r->unresolved_failed_tools[0]))) {
         r->unresolved_failed_tools_overflow = 1;
         return;
     }
+    snprintf(r->unresolved_failed_scopes[r->unresolved_failed_tool_count], sizeof(r->unresolved_failed_scopes[0]), "%s", scope);
     snprintf(r->unresolved_failed_tools[r->unresolved_failed_tool_count++],
              sizeof(r->unresolved_failed_tools[0]), "%s", tool_name);
 }
 
-static void resolve_failed_tool(reasoning *r, const char *tool_name) {
+static void resolve_failed_tool(reasoning *r, const char *tool_name, const char *args_json) {
     if (!r || !tool_name || !*tool_name) return;
+    char scope[2048]; failure_scope(r, tool_name, args_json, scope, sizeof(scope));
     for (int i = 0; i < r->unresolved_failed_tool_count;) {
-        if (!strcmp(r->unresolved_failed_tools[i], tool_name)) {
+        const char *failed_scope = r->unresolved_failed_scopes[i];
+        size_t n = strlen(failed_scope);
+        int retry = !strcmp(r->unresolved_failed_tools[i], tool_name) && !strcmp(failed_scope, scope);
+        int replacement = !strcmp(tool_name, "file_read") && is_exploratory_tool(r->unresolved_failed_tools[i]) &&
+            n > 0 && !strncmp(scope, failed_scope, n) && (!scope[n] || scope[n] == '/' || failed_scope[n-1] == '/');
+        if (retry || replacement) {
             --r->unresolved_failed_tool_count;
-            if (i < r->unresolved_failed_tool_count)
+            if (i < r->unresolved_failed_tool_count) {
                 memmove(r->unresolved_failed_tools[i], r->unresolved_failed_tools[i + 1],
                         (size_t)(r->unresolved_failed_tool_count - i) * sizeof(r->unresolved_failed_tools[0]));
+                memmove(r->unresolved_failed_scopes[i], r->unresolved_failed_scopes[i + 1],
+                        (size_t)(r->unresolved_failed_tool_count - i) * sizeof(r->unresolved_failed_scopes[0]));
+            }
             memset(r->unresolved_failed_tools[r->unresolved_failed_tool_count], 0,
                    sizeof(r->unresolved_failed_tools[0]));
         } else {
@@ -2056,7 +2091,7 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
         if (rc != 0) {
             r->all_actions_ok = 0;
             r->run_had_action_failure = 1;
-            note_failed_tool(r, r->actions[i].tool);
+            note_failed_tool(r, r->actions[i].tool, r->actions[i].args_json);
             strbuf_appendf(&b, "[%s] FAILED\n", r->actions[i].tool);
             log_warn("reasoning: action '%s' failed", r->actions[i].tool);
             if (r->last_failed_action_sig == action_sig)
@@ -2074,7 +2109,7 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
             if (r->hooks)
                 hook_dispatch(r->hooks, "exec.on_failure", r->actions[i].tool);
         } else {
-            resolve_failed_tool(r, r->actions[i].tool);
+            resolve_failed_tool(r, r->actions[i].tool, r->actions[i].args_json);
             r->last_failed_action_sig = 0;
             observe_action_progress(r,&r->actions[i],output_hash,is_search);
             if (strcmp(r->actions[i].tool, "file_read") == 0)
@@ -3289,6 +3324,7 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     r->same_action_failures = 0;
     r->run_had_action_failure = 0;
     memset(r->unresolved_failed_tools, 0, sizeof(r->unresolved_failed_tools));
+    memset(r->unresolved_failed_scopes, 0, sizeof(r->unresolved_failed_scopes));
     r->unresolved_failed_tool_count = 0;
     r->unresolved_failed_tools_overflow = 0;
     r->tool_fail_aborted = 0;
@@ -3500,8 +3536,7 @@ restart_planning:
             int needs_observation = prompt_requires_observation(completion_instruction(r,prompt)) &&
                                     r->run_successful_tools == 0;
             int needs_intent_recovery = !prompt_is_direct_information_request(completion_instruction(r,prompt)) &&
-                                        (r->run_successful_tools == 0 || r->last_failed_action_sig != 0 ||
-                                         r->run_had_action_failure || answer_only_announces_work(txt)) &&
+                                        (r->run_successful_tools == 0 || answer_only_announces_work(txt)) &&
                                         looks_like_intent(txt);
             if (needs_action || needs_read || needs_observation || needs_intent_recovery) {
                 /* A plain-text answer closes the loop once its explicit action,
