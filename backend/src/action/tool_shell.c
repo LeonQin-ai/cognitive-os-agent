@@ -198,14 +198,17 @@ static tool_result *shell_exec_impl(const tool *self, const tool_ctx *ctx, const
             out_text = converted;
     }
 
-    if (pr->timed_out) {
-        char msg[2048];
-        snprintf(msg, sizeof(msg), "[timeout] %s\n%s", out_text, "command exceeded time limit");
-        r = tool_result_new(0, msg);
-    } else if (pr->exit_code != 0) {
-        char msg[2048];
-        snprintf(msg, sizeof(msg), "exit code %d\n%s", pr->exit_code, out_text);
-        r = tool_result_new(0, msg);
+    if (pr->timed_out || pr->exit_code != 0) {
+        /* Preserve complete UTF-8 diagnostics. The tool dispatcher already
+         * spills large results to disk; a byte-limited stack buffer here
+         * cuts multibyte characters and corrupts transactional step JSON. */
+        strbuf msg; strbuf_init(&msg);
+        if(pr->timed_out) strbuf_append(&msg,"[timeout] ");
+        else strbuf_appendf(&msg,"exit code %d\n",pr->exit_code);
+        strbuf_append(&msg,out_text);
+        if(pr->timed_out) strbuf_append(&msg,"\ncommand exceeded time limit");
+        r=tool_result_new(0,msg.buf ? msg.buf : "shell: command failed");
+        strbuf_free(&msg);
     } else {
         r = tool_result_new(1, out_text);
     }

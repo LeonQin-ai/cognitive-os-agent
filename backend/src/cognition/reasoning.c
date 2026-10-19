@@ -1844,8 +1844,14 @@ static void run_step_add(reasoning *r, const char *tool, const char *args, const
     memset(st, 0, sizeof(*st));
     st->id = ++r->step_sequence;
     utf8_head_copy(st->tool, sizeof(st->tool), tool ? tool : "?");
-    st->args = str_head(args ? args : "",65536);
-    st->out = str_head(out ? out : "",65536);
+    /* Transactions bypass the executor's output sanitizer. Keep persisted
+     * observations safe for strict UTF-8 JSON consumers even when a plugin
+     * returns malformed bytes. Preserve valid text before applying the cap. */
+    char *safe_args=str_utf8_sanitize(args ? args : "");
+    char *safe_out=str_utf8_sanitize(out ? out : "");
+    st->args = str_head(safe_args ? safe_args : "",65536);
+    st->out = str_head(safe_out ? safe_out : "",65536);
+    free(safe_args); free(safe_out);
     if (tool && strncmp(tool, "file_", 5) == 0 && args) {
         cJSON *parsed = cJSON_Parse(args);
         cJSON *path = parsed ? cJSON_GetObjectItemCaseSensitive(parsed, "path") : NULL;

@@ -2489,6 +2489,53 @@ static tool_result *fixture_retryable_failure(const tool *self, const tool_ctx *
     return tool_result_new(1,"fixture: corrected target verified");
 }
 
+static int utf8_step_fixture_chat(llm *self, const llm_request *req, llm_response *resp) {
+    (void)req; int *calls=self->impl;
+    resp->content=xstrdup((*calls)++==0 ? "[{\"tool\":\"fixture_utf8_output\",\"args\":{}}]" : "工具采样完成，诊断已汇总。");
+    return resp->content ? 0 : -1;
+}
+static tool_result *utf8_step_fixture_exec(const tool *self, const tool_ctx *ctx, const char *args) {
+    (void)ctx;(void)args;size_t n=*(int *)self->ud ? 70000 : 64;
+    char *text=malloc(n+1);if(!text) return tool_result_new(0,"allocation failed");
+    memset(text,'x',n);text[n]=0;memcpy(text,"正常中文",strlen("正常中文"));
+    text[30]=(char)0xe4;text[31]=(char)0xb8;text[32]='!';
+    if(n>65538) memcpy(text+65535,"中",3);
+    tool_result *result=tool_result_new(1,text);free(text);return result;
+}
+struct utf8_snapshot_counts { int callbacks, invalid; };
+static void utf8_step_observer(const char *json, void *ud) {
+    struct utf8_snapshot_counts *c=ud;c->callbacks++;if(!str_utf8_valid_n(json,-1)) c->invalid++;
+}
+static void test_utf8_step_json(void) {
+    section("transactional and executor step UTF-8 JSON");fs_mkdirs("state-test/utf8-step");
+    snapshot *snap=snapshot_open("state-test/utf8-step/snapshot");CHECK(snap!=NULL);if(!snap) return;
+    for(int tx=0;tx<2;tx++) for(int large=0;large<2;large++) {
+        int calls=0;struct utf8_snapshot_counts observed={0};
+        static const llm_vtable vt={.chat=utf8_step_fixture_chat};
+        llm provider={.vt=&vt,.provider="fixture",.model="fixture",.impl=&calls};
+        tool_registry *reg=tool_registry_new();CHECK(reg!=NULL);if(!reg) continue;
+        tool output={"fixture_utf8_output","diagnostic fixture",NULL,0,utf8_step_fixture_exec,&large};
+        CHECK(tool_register(reg,&output)==0);
+        reasoning_config cfg={0};cfg.llm=&provider;cfg.tools=reg;cfg.max_rounds=3;
+        cfg.workspace="state-test/utf8-step";cfg.snapshot=tx ? snap : NULL;cfg.use_transaction=tx;
+        reasoning *r=reasoning_new(&cfg);CHECK(r!=NULL);
+        if(r) {
+            reasoning_set_observer(r,utf8_step_observer,&observed);char *answer=NULL;
+            CHECK(reasoning_run(r,"获取工具诊断并汇总",&answer)==0);
+            char *steps=reasoning_steps_json(r);
+            CHECK(steps && str_utf8_valid_n(steps,-1));
+            CHECK(steps && strstr(steps,"正常中文") && strstr(steps,"?" "?!"));
+            CHECK(observed.callbacks>0 && observed.invalid==0);
+            if(large) CHECK(steps && strstr(steps,"full tool result saved"));
+            cJSON *arr=steps ? cJSON_Parse(steps) : NULL;
+            CHECK(arr && cJSON_IsArray(arr) && cJSON_GetArraySize(arr)==1);
+            cJSON_Delete(arr);free(steps);free(answer);reasoning_free(r);
+        }
+        tool_registry_free(reg);
+    }
+    snapshot_close(snap);
+}
+
 static void test_failed_script_recovery_guidance(void) {
     section("failed script recovery guidance");
     recovery_fixture_state state={0};
@@ -9041,6 +9088,9 @@ static void test_crash_journal(void) {
 }
 
 int main(int argc, char **argv) {
+    if (argc==2 && !strcmp(argv[1],"--step-utf8")) {
+        test_utf8_step_json();printf("%d passed, %d failed\n",g_pass,g_fail);return g_fail?1:0;
+    }
     if (argc==2 && !strcmp(argv[1],"--ws-roundtrip")) {
         for (int i=0;i<20;i++) test_ws_roundtrip();
         printf("%d passed, %d failed\n",g_pass,g_fail); return g_fail?1:0;
@@ -9281,6 +9331,7 @@ int main(int argc, char **argv) {
     test_context_budget();
     test_attention();
     test_sandbox_wasm();
+    test_utf8_step_json();
     test_agent_loop(); /* full-runtime init: keep after the sandbox seam test */
     test_information_answers();
     test_chat_upload_evolve();

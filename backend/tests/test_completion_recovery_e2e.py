@@ -9,7 +9,12 @@ class Provider(BaseHTTPRequestHandler):
         body=json.loads(self.rfile.read(int(self.headers['Content-Length'])))
         text=body['messages'][-1]['content']
         current=text.split('## Current request\n',1)[-1].split('\n## ',1)[0]
-        if 'REGISTER_DIAGNOSTIC' in current: answer='技能已经注册。'
+        if 'UTF8_DIAGNOSTIC' in current:
+            n=counts.get('utf8',0); counts['utf8']=n+1
+            answer=(json.dumps([{'tool':'shell','args':{'command':'python emit_invalid.py'}}]) if n==0 else
+                    json.dumps([{'tool':'shell','args':{'command':'python emit_valid.py'}}]) if n==1 else
+                    '编码记录已核对，采样完成。')
+        elif 'REGISTER_DIAGNOSTIC' in current: answer='技能已经注册。'
         else:
             n=counts.get('read',0); counts['read']=n+1
             if n==0: answer=json.dumps([{'tool':'file_read','args':{'path':'partial.txt'}}])
@@ -62,6 +67,14 @@ with tempfile.TemporaryDirectory(prefix='coa-completion-recovery-') as folder:
             counts['recover']=True; counts['read']=0
             resumed=finished(request('/v1/tasks/'+str(started['id'])+'/resume',{})['id'])
             assert resumed['status']=='DONE' and 'EOF_DIAGNOSTIC' in resumed['output'],resumed
+            (state/'emit_invalid.py').write_text('import sys\nsys.stdout.buffer.write(("NORMAL_UNICODE_正常中文"+"中"*1000+"EOF_UTF8_DIAGNOSTIC").encode("utf-8"))\nsys.exit(1)\n',encoding='utf-8')
+            (state/'emit_valid.py').write_text('import sys\nsys.stdout.buffer.write("NORMAL_UNICODE_正常中文".encode("utf-8"))\n',encoding='utf-8')
+            encoded=finished(request('/v1/tasks',{'prompt':'检查工具输出编码 UTF8_DIAGNOSTIC'})['id'])
+            assert encoded['status']=='DONE',encoded
+            steps=encoded.get('steps',[])
+            assert steps and 'NORMAL_UNICODE_正常中文' in steps[0].get('out','') and 'EOF_UTF8_DIAGNOSTIC' in steps[0].get('out',''),steps
+            assert counts.get('utf8')==3,counts
+            print('PASS: invalid UTF-8 tool output remains valid task/progress JSON; valid Chinese survives')
             print('PASS: missing registration operation and unread file have actionable causes; resumed read reaches EOF and DONE')
         finally:
             process.terminate()
