@@ -23,6 +23,8 @@ jobs:
         run: cmake -S . -B build-macos && cmake --build build-macos -j 3
       - name: Unit, scenario and benchmark tests
         run: ctest --test-dir build-macos --output-on-failure
+      - name: Independent todo-cli acceptance verifier regression
+        run: python3 tests/test_todo_cli_contract.py
       - name: Adapter and end-to-end tests
         run: |
           ./build-macos/mock-llm-server 9000 &
@@ -62,6 +64,8 @@ jobs:
           sleep 1
       - name: Unit tests
         run: ./build/cognitive-os-agent-test
+      - name: Independent todo-cli acceptance verifier regression
+        run: python3 tests/test_todo_cli_contract.py
       - name: Actual process crash recovery
         run: python3 tests/test_crash_recovery_e2e.py
       - name: Visual provider timeout and recovery regression
@@ -113,6 +117,8 @@ jobs:
         run: ./build.sh
       - name: Unit tests
         run: ./build/cognitive-os-agent-test.exe
+      - name: Independent todo-cli acceptance verifier regression
+        run: python tests/test_todo_cli_contract.py
       - name: Scenario tests
         run: ./build/cognitive-os-agent-scenario.exe
       - name: Benchmark sanity (mock)
