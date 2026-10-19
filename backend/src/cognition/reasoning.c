@@ -229,7 +229,7 @@ struct reasoning {
     size_t obs_log_len, obs_log_cap;
     uint64_t last_failed_action_sig;
     int same_action_failures;
-    struct { uint64_t sig; int attempts; } invalid_args[32];
+    struct { uint64_t sig; int attempts; char tool[48]; } invalid_args[32];
     int invalid_args_n;
     int run_had_action_failure;
     char unresolved_failed_tools[32][48];
@@ -2095,6 +2095,7 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
                 if(k==32) { memmove(r->invalid_args,r->invalid_args+1,31*sizeof(r->invalid_args[0])); k=31; }
                 else r->invalid_args_n++;
                 r->invalid_args[k].sig=action_sig; r->invalid_args[k].attempts=0;
+                snprintf(r->invalid_args[k].tool,sizeof(r->invalid_args[k].tool),"%s",r->actions[i].tool);
             }
             int attempts=++r->invalid_args[k].attempts;
             strbuf_appendf(&b,"[system] %s 参数无效：%s。先修正参数再调用；所需 schema: %s\n",
@@ -2130,6 +2131,9 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
                 r->round_search_skips++;
                 r->round_repeat_reads++;
                 r->ok_actions++; /* cached observation satisfies verification */
+                resolve_failed_tool(r,r->actions[i].tool,r->actions[i].args_json);
+                for(int k=0;k<r->invalid_args_n;k++)
+                    if(!strcmp(r->invalid_args[k].tool,r->actions[i].tool)) r->invalid_args[k].attempts=0;
                 strbuf_appendf(&b, "[%s] identical read/search already completed; use its earlier observation, "
                                  "continue with unread files or the next offset_bytes; this is not task completion\n", r->actions[i].tool);
                 run_step_add(r, r->actions[i].tool, r->actions[i].args_json,
@@ -2229,6 +2233,8 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
                 hook_dispatch(r->hooks, "exec.on_failure", r->actions[i].tool);
         } else {
             resolve_failed_tool(r, r->actions[i].tool, r->actions[i].args_json);
+            for(int k=0;k<r->invalid_args_n;k++)
+                if(!strcmp(r->invalid_args[k].tool,r->actions[i].tool)) r->invalid_args[k].attempts=0;
             r->last_failed_action_sig = 0;
             observe_action_progress(r,&r->actions[i],output_hash,is_search);
             if (strcmp(r->actions[i].tool, "file_read") == 0)

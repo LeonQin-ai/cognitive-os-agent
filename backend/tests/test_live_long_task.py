@@ -49,7 +49,7 @@ mmu.c、context_builder.c、tool_file.c、planner.c 要完成相关完整分页�
 避免重复读取未变化且已获取的同一页；每一步应基于现有结果推进。'''
 if args.reuse_output:
     prompt=('继续完成上一次真实 Agent 任务的最终核验。当前工作目录已有 Agent 自主生成的 PPT、问答和验证记录，'
-            '原任务最终失败仅因系统误把只需片段的 reasoning.c 和生成脚本强制列为全文阅读待办。'
+            '上一轮任务的实际状态、失败原因和执行证据见 baseline-final-task.json；不要自行假设原因。'
             '上次真实执行的统计保存在 baseline-run-summary.json。请复用已有产物及已完成的源码研究，'
             '先实际打开并独立核对 PPT 页数、正文、备注、引用和问答字数；合格的 PPT 不要重做，不要再次逐页读取已经研究完成的源码。'
             '只在需要时阅读相关片段，不要求全文。更新 verification.json，交付实际文件及核验结果。'

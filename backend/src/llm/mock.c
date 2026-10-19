@@ -299,6 +299,8 @@ static char *mock_respond(const char *msg) {
             "{\"tool\":\"list_dir\",\"args\":{\"path\":\".\"}},"
             "{\"tool\":\"grep\",\"args\":{}},"
             "{\"tool\":\"file_read\",\"args\":{\"path\":\"readme.txt\"}},"
+            "{\"tool\":\"grep\",\"args\":{\"path\":\".\",\"pattern\":\"evidence\"}},"
+            "{\"tool\":\"grep\",\"args\":{}},"
             "{\"tool\":\"grep\",\"args\":{\"path\":\".\",\"pattern\":\"evidence\"}}]");
     }
     if (has_substr(msg,"交替无效熔断回归测试"))
