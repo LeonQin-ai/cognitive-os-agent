@@ -4879,6 +4879,12 @@ static void test_flow(void) {
             prog = flow_progress_json(777);
             CHECK(prog && strstr(prog, "\"id\":\"a\"") && strstr(prog, "\"id\":\"b\"") &&
                   strstr(prog, "\"status\":\"ok\"") && !strstr(prog, "queued"));
+            cJSON *saved=prog ? cJSON_Parse(prog):NULL;
+            cJSON *first=cJSON_GetArrayItem(saved,0);
+            CHECK(cJSON_GetNumberValue(cJSON_GetObjectItemCaseSensitive(first,"tool_calls"))>0);
+            CHECK(cJSON_IsNumber(cJSON_GetObjectItemCaseSensitive(first,"tokens_in")));
+            CHECK(cJSON_GetArraySize(cJSON_GetObjectItemCaseSensitive(first,"steps"))>0);
+            cJSON_Delete(saved);
             free(prog);
         }
         free(ans); free(trace);
@@ -4913,6 +4919,11 @@ static void test_flow(void) {
             CHECK(fs_exists("state-test/loop-w/flow-independent.txt"));
             char *progress=flow_progress_json(779);
             CHECK(progress && strstr(progress,"\"status\":\"blocked\"") && !strstr(progress,"\"status\":\"queued\""));
+            cJSON *failed_snapshot=progress ? cJSON_Parse(progress):NULL;
+            cJSON *failed_node=cJSON_GetArrayItem(failed_snapshot,0);
+            CHECK(cJSON_GetArraySize(cJSON_GetObjectItemCaseSensitive(failed_node,"steps"))>0);
+            CHECK(cJSON_IsNumber(cJSON_GetObjectItemCaseSensitive(failed_node,"tokens_in")));
+            cJSON_Delete(failed_snapshot);
             free(progress); free(ans); free(trace);
         }
         {

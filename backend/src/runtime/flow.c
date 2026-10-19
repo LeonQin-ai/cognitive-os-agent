@@ -269,6 +269,7 @@ typedef struct flow_prog_node {
      * Display-grade accuracy: the pointer is only ever dereferenced by the
      * lock-free progress pollers, never by the run itself. */
     reasoning *rn;
+    cJSON *diagnostics; /* final snapshot, owned by this registry slot */
 } flow_prog_node;
 
 typedef struct flow_prog {
@@ -321,6 +322,7 @@ static void flow_prog_begin(int64_t task_id, const flow_dag *d) {
         if (!p)
             p = &flow_progs[0]; /* table full: overwrite — display-grade data */
     }
+    for (int i=0;i<p->n;i++) cJSON_Delete(p->nodes[i].diagnostics);
     memset(p, 0, sizeof(*p));
     p->task_id = task_id;
     p->n = d->n;
@@ -355,6 +357,27 @@ static void flow_prog_node_mark(int64_t task_id, const char *id, int state) {
     mutex_unlock(&flow_prog_mtx);
 }
 
+static cJSON *flow_node_diagnostics(reasoning *rn) {
+    cJSON *o=cJSON_CreateObject();
+    if (!o) return NULL;
+    long long elapsed=0,tin=0,tout=0,llm_ms=0,tool_ms=0;
+    int round=0,tools=0,calls=0; const char *cur=NULL;
+    reasoning_progress_ex(rn,&elapsed,&round,&tools,&cur,&tin,&tout,&llm_ms,&tool_ms,&calls);
+    cJSON_AddNumberToObject(o,"round",round);
+    cJSON_AddNumberToObject(o,"tool_calls",tools);
+    cJSON_AddNumberToObject(o,"llm_calls",calls);
+    cJSON_AddNumberToObject(o,"tokens_in",(double)tin);
+    cJSON_AddNumberToObject(o,"tokens_out",(double)tout);
+    cJSON_AddNumberToObject(o,"llm_ms",(double)llm_ms);
+    cJSON_AddNumberToObject(o,"tool_ms",(double)tool_ms);
+    cJSON_AddNumberToObject(o,"elapsed_ms",(double)elapsed);
+    if(cur && *cur) cJSON_AddStringToObject(o,"cur_tool",cur);
+    char *steps=reasoning_steps_json(rn);
+    cJSON *arr=steps ? cJSON_Parse(steps):NULL; free(steps);
+    if(arr) cJSON_AddItemToObject(o,"steps",arr);
+    return o;
+}
+
 /* Bind/unbind the node's live reasoning instance (rn=NULL when the node's
  * agent loop is not running) so flow_progress_json can poll in-node progress. */
 static void flow_prog_node_attach(int64_t task_id, const char *id, reasoning *rn) {
@@ -365,8 +388,13 @@ static void flow_prog_node_attach(int64_t task_id, const char *id, reasoning *rn
     flow_prog *p = flow_prog_slot(task_id);
     if (p) {
         for (int i = 0; i < p->n; i++)
-            if (strcmp(p->nodes[i].id, id) == 0)
+            if (strcmp(p->nodes[i].id, id) == 0) {
+                if (!rn && p->nodes[i].rn) {
+                    cJSON_Delete(p->nodes[i].diagnostics);
+                    p->nodes[i].diagnostics=flow_node_diagnostics(p->nodes[i].rn);
+                }
                 p->nodes[i].rn = rn;
+            }
     }
     mutex_unlock(&flow_prog_mtx);
 }
@@ -419,28 +447,14 @@ char *flow_progress_json(int64_t task_id) {
                 cJSON_AddNumberToObject(o, "end_ms", (double)p->nodes[i].end_ms);
                 /* In-node live progress: poll the node's own reasoning engine
                  * (lock-free display-grade pollers) while its agent loop runs. */
-                if (p->nodes[i].state == FP_RUNNING && p->nodes[i].rn) {
-                    long long elapsed_ms = 0, tin = 0, tout = 0, llm_ms = 0, tool_ms = 0;
-                    int round = 0, tool_calls = 0, llm_calls = 0;
-                    const char *cur_tool = NULL;
-                    reasoning_progress_ex(p->nodes[i].rn, &elapsed_ms, &round, &tool_calls,
-                                          &cur_tool, &tin, &tout, &llm_ms, &tool_ms, &llm_calls);
-                    if (round > 0)
-                        cJSON_AddNumberToObject(o, "round", round);
-                    cJSON_AddNumberToObject(o, "tool_calls", tool_calls);
-                    if (cur_tool && *cur_tool)
-                        cJSON_AddStringToObject(o, "cur_tool", cur_tool);
-                    if (llm_calls > 0)
-                        cJSON_AddNumberToObject(o, "llm_calls", llm_calls);
-                    if (llm_ms > 0)
-                        cJSON_AddNumberToObject(o, "llm_ms", llm_ms);
-                    char *steps = reasoning_steps_json(p->nodes[i].rn);
-                    if (steps) {
-                        cJSON *sarr = cJSON_Parse(steps);
-                        if (sarr)
-                            cJSON_AddItemToObject(o, "steps", sarr);
-                        free(steps);
+                if (p->nodes[i].rn || p->nodes[i].diagnostics) {
+                    cJSON *snapshot=p->nodes[i].rn ? flow_node_diagnostics(p->nodes[i].rn) :
+                        cJSON_Duplicate(p->nodes[i].diagnostics,1);
+                    cJSON *field;
+                    cJSON_ArrayForEach(field,snapshot) {
+                        if(field->string) cJSON_AddItemToObject(o,field->string,cJSON_Duplicate(field,1));
                     }
+                    cJSON_Delete(snapshot);
                 }
                 cJSON_AddItemToArray(arr, o);
             }
