@@ -81,8 +81,11 @@
 #ifdef _WIN32
 #include <windows.h>
 #include <io.h>
+#include <direct.h>
+#define TEST_RMDIR _rmdir
 #else
 #include <unistd.h>
+#define TEST_RMDIR rmdir
 #endif
 #include "cJSON.h"
 
@@ -2609,6 +2612,36 @@ static void test_git_empty_args_checks_status(void) {
     CHECK(r && r->ok);
     CHECK(r && r->output && !strstr(r->output,"usage: git"));
     tool_result_free(r);
+
+    /* Installed desktop launches the backend with the install directory as
+     * cwd. With the default workspace=".", Git must explain that this is a
+     * workspace selection issue and tell the model how to target a checkout. */
+    const char *tmp_root = getenv("TEMP");
+    if (!tmp_root || !*tmp_root) tmp_root = getenv("TMPDIR");
+#ifdef _WIN32
+    if (!tmp_root || !*tmp_root) tmp_root = ".";
+#else
+    if (!tmp_root || !*tmp_root) tmp_root = "/tmp";
+#endif
+    char temp_path[1024];
+#ifdef _WIN32
+    long process_id = (long)GetCurrentProcessId();
+#else
+    long process_id = (long)getpid();
+#endif
+    snprintf(temp_path, sizeof(temp_path), "%s/cognitive-os-git-not-repo-%ld", tmp_root, process_id);
+    char *absolute_temp_path = fs_absolute_path(temp_path);
+    CHECK(absolute_temp_path != NULL);
+    if (absolute_temp_path && fs_mkdirs(absolute_temp_path) == 0) {
+        ctx.workspace = absolute_temp_path;
+        r = tool_execute(reg, "git", "{\"args\":\"status --short\"}", &ctx);
+        CHECK(r && !r->ok);
+        CHECK(r && r->output && strstr(r->output, "not inside a Git repository"));
+        CHECK(r && r->output && strstr(r->output, absolute_temp_path));
+        tool_result_free(r);
+        TEST_RMDIR(absolute_temp_path);
+    }
+    free(absolute_temp_path);
     tool_registry_free(reg);
 }
 
