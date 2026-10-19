@@ -2673,9 +2673,28 @@ static int progress_fixture_chat(llm *self,const llm_request *req,llm_response *
         const char *s=req->messages[i].content;
         if (s && strstr(s,"earlier action results were folded")) f->saw_fold=1;
         if (s && strstr(s,"检测到跨轮次循环")) f->saw_recovery=1;
+        if (f->mode>=36 && s) {
+            const char *header=strstr(s,"## 尚未连续读取到文件末尾 / unread page coverage");
+            const char *end=header ? strstr(header+3,"\n## ") : NULL;
+            const char *optional=header ? strstr(header,"long.txt: offset_bytes=") : NULL;
+            if(optional && (!end || optional<end)) f->saw_fold=1;
+        }
     }
     char plan[1024];
-    if (f->mode >= 32 && f->mode <= 35) {
+    if (f->mode >= 36 && f->mode <= 45) {
+        if(f->calls==1) resp->content=xstrdup("[{\"tool\":\"file_read\",\"args\":{\"path\":\"paged.txt\"}},{\"tool\":\"file_read\",\"args\":{\"path\":\"long.txt\"}}]");
+        else if(f->mode!=37 && f->mode!=45 && f->calls<=3) {
+            snprintf(plan,sizeof(plan),"[{\"tool\":\"file_read\",\"args\":{\"path\":\"paged.txt\",\"offset_bytes\":%d}}]",(f->calls-1)*4000);
+            resp->content=xstrdup(plan);
+        } else if(f->mode==42 && f->calls==4) {
+            char content[5001]; memset(content,'g',5000);content[5000]=0;
+            strbuf b;strbuf_init(&b);
+            strbuf_appendf(&b,"[{\"tool\":\"file_write\",\"args\":{\"path\":\"generated.py\",\"content\":\"%s\"}}]",content);
+            resp->content=strbuf_detach(&b);
+        } else if(f->mode==42 && f->calls==5)
+            resp->content=xstrdup("[{\"tool\":\"file_read\",\"args\":{\"path\":\"generated.py\"}}]");
+        else resp->content=xstrdup(f->mode==38 ? "只读取了long.txt的相关片段；paged.txt全文已核对。分析完成。" : "分页分析完成，必读源码已核对。");
+    } else if (f->mode >= 32 && f->mode <= 35) {
         if (f->calls == 1)
             resp->content = xstrdup("[{\"tool\":\"file_read\",\"args\":{\"path\":\"src/memory/new.txt\"}}]");
         else if (f->calls == 2 && f->mode != 33)
@@ -2854,7 +2873,7 @@ static void test_cross_round_progress(void) {
     CHECK(fs_mkdirs("state-test/progress-loop/backend/src/storage") == 0);
     CHECK(fs_write_file("state-test/progress-loop/backend/src/memory/new.txt", "expected source", 15) == 0);
     CHECK(fs_write_file("state-test/progress-loop/backend/src/storage/new.txt", "unrelated source", 16) == 0);
-    for (int mode=0;mode<36;mode++) {
+    for (int mode=0;mode<46;mode++) {
         progress_fixture f={.mode=mode};
         static const llm_vtable vt={.chat=progress_fixture_chat};
         llm provider={.vt=&vt,.provider="fixture",.model="fixture",.impl=&f};
@@ -2874,7 +2893,12 @@ static void test_cross_round_progress(void) {
         reasoning *r=reasoning_new(&cfg); CHECK(r!=NULL);
         if (r) {
             char *answer=NULL;
-            const char *prompt = mode>=20 ? "分析代码中的记忆模型" : mode==19 ? "解释系统架构并完成验证" : mode==18 ? "分析并验证目标" :
+            const char *prompt = mode>=44 ? "完整阅读全部源码，long.txt只需相关片段，不要求全文，再分析代码。" :
+                mode==39 ? "Read full source file paged.txt; long.txt: only relevant sections, not full source. Analyze code." :
+                mode==40 ? "完整阅读文件paged.txt，long.txt只需相关片段，不要求全文，再分析源码。" :
+                mode==41 ? "完整阅读所有源码并总结" : mode==43 ? "完整阅读源码并分析 llm.model 的上下文能力" :
+                mode>=36 ? "完整阅读文件paged.txt；long.txt只需相关片段，不要求全文。分析代码并给出结论。" :
+                mode>=20 ? "分析代码中的记忆模型" : mode==19 ? "解释系统架构并完成验证" : mode==18 ? "分析并验证目标" :
                 mode==17 ? "完整读取文件paged.txt全文并分析" :
                 mode==16 ? "完整读取文件paged.txt全文并分析，再复核一个片段" :
                 mode==14 ? "读取same.txt分析代码并给出清单，不要修改文件或运行修改源码的命令。" :
@@ -2883,7 +2907,13 @@ static void test_cross_round_progress(void) {
                 (mode==7 || mode==9 || mode==10) ? "查看系统状态" : mode==8 ? "查看一下windows机器的状态" :
                 mode>=5 ? "根据源码生成一份深度PPT文件" : "分析资料并提供结论";
             int rc=reasoning_run(r,prompt,&answer);
-            if (mode >= 32) {
+            if (mode >= 36) {
+                if(mode==37 || mode==41 || mode==43 || mode==45) {
+                    CHECK(rc!=0 && f.calls==((mode==37 || mode==45) ? 3:5) && answer && strstr(answer,"offset_bytes="));
+                    if(mode==37 || mode==45) CHECK(answer && !strstr(answer,"long.txt：offset_bytes="));
+                } else CHECK(rc==0 && f.calls==(mode==42 ? 6:4) && answer && strstr(answer,"完成"));
+                if(mode!=41 && mode!=43) CHECK(!f.saw_fold);
+            } else if (mode >= 32) {
                 if (mode == 32) CHECK(rc == 0 && f.calls == 4 && answer && strstr(answer,"嵌套源码分析完成"));
                 else CHECK(rc != 0 && f.calls == (mode == 34 ? 5 : 4) && answer && strstr(answer,"file_read"));
             } else if (mode >= 24) {
@@ -2958,7 +2988,7 @@ static void test_cross_round_progress(void) {
         }
         tool_registry_free(reg);
     }
-    const char *cleanup[]={"a.txt","b.txt","c.txt","new.txt","long.txt","changed.txt","draft.ppt","same.txt","paged.txt"};
+    const char *cleanup[]={"a.txt","b.txt","c.txt","new.txt","long.txt","changed.txt","draft.ppt","same.txt","paged.txt","generated.py"};
     for (size_t i=0;i<sizeof(cleanup)/sizeof(cleanup[0]);i++) {
         char name[128]; snprintf(name,sizeof(name),"state-test/progress-loop/%s",cleanup[i]); fs_remove(name);
     }

@@ -25,6 +25,18 @@ class Provider(BaseHTTPRequestHandler):
         current=text.split('## Current request\n', 1)[-1].split('\n## ', 1)[0]
         if '已执行动作的观察记录' in text:
             answer='仅完成部分源码读取。'
+        elif '限定全文范围回归测试' in current or '必读未完成范围回归测试' in current:
+            key='scoped' if '限定全文范围回归测试' in current else 'required-incomplete'
+            count=counts.get(key,0);counts[key]=count+1
+            if count==0:
+                answer=json.dumps([{'tool':'file_read','args':{'path':'source.c'}},
+                    {'tool':'file_read','args':{'path':'fragment.c'}}])
+            elif key=='scoped' and count==1:
+                answer=json.dumps([{'tool':'file_read','args':{'path':'source.c','offset_bytes':4000}}])
+            elif key=='scoped' and count==2:
+                answer=json.dumps([{'tool':'file_write','args':{'path':'generated.py','content':'g'*7000}},
+                    {'tool':'file_read','args':{'path':'generated.py'}}])
+            else: answer='只读取了fragment.c的相关片段。source.c全文已核对，分析完成。'
         elif '源码阅读恢复回归测试' in current:
             count=counts.get('recovery', 0); counts['recovery']=count+1
             replies=[
@@ -102,6 +114,7 @@ with tempfile.TemporaryDirectory(prefix='coa-source-read-') as directory:
     state = Path(directory)
     (state / 'source.c').write_text('x' * 7970 + 'END_SOURCE' + 'x' * 20, encoding='utf-8')
     (state / 'readme.txt').write_text('source evidence', encoding='utf-8')
+    (state/'fragment.c').write_text('partial evidence\n'*2000,encoding='utf-8')
     (state/'backend/src/memory').mkdir(parents=True)
     (state/'backend/src/memory/kv.c').write_text('NESTED_SOURCE_EVIDENCE',encoding='utf-8')
     (state/'backend/src/storage').mkdir(parents=True)
@@ -149,6 +162,8 @@ with tempfile.TemporaryDirectory(prefix='coa-source-read-') as directory:
                 ('缺少发现证据回归测试：阅读代码', 'FAILED', 'file_read'),
                 ('同名无关文件回归测试：阅读代码', 'FAILED', 'file_read'),
                 ('只有路径发现回归测试：阅读代码', 'FAILED', 'file_read'),
+                ('限定全文范围回归测试：完整阅读文件source.c；fragment.c只需相关片段，不要求全文；生成脚本并检查相关片段即可。', 'DONE', '分析完成'),
+                ('必读未完成范围回归测试：完整阅读文件source.c；fragment.c只需相关片段，不要求全文。', 'FAILED', 'source.c'),
             ]
             for index, (message, expected, marker) in enumerate(cases):
                 started = request('/v1/chat', {'message': message, 'session': f'read-test-{index}'})
@@ -174,6 +189,12 @@ with tempfile.TemporaryDirectory(prefix='coa-source-read-') as directory:
                     assert NON_SSH_TEXT in task['steps'][0]['out'], task
                     saved=request('/v1/chat/history?session=read-test-7')
                     assert saved['turns'][-1]['a']==NON_SSH_TEXT
+                if index == 11:
+                    assert task['tool_calls']==5 and task['llm_calls']==4, task
+                    assert sum(json.loads(step['args']).get('path')=='fragment.c' for step in task['steps'])==1
+                    assert sum(step['tool']=='file_read' and json.loads(step['args']).get('path')=='generated.py' for step in task['steps'])==1
+                if index == 12:
+                    assert 'fragment.c：offset_bytes=' not in task['output'], task
                 print('PASS:', expected, message, flush=True)
             history=request('/v1/chat/history?session=read-test-4')
             assert history['turns'][-1]['a']==long_output, 'Chat history truncated the answer'

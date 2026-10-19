@@ -1400,6 +1400,9 @@ static char *str_head(const char *s, size_t cap) {
 /* Build an augmented prompt for the planner: recent multi-turn history, then
  * retrieved RAG context (ranked by attention), then the current request.
  * Caller frees the returned string. */
+static int path_requires_full_read(reasoning *r, const char *prompt, const char *path);
+static int required_pending_reads(reasoning *r, const char *prompt);
+
 static char *build_context(reasoning *r, const char *prompt) {
     strbuf b;
     size_t input_budget = planner_input_budget_bytes_with_output(r->llm, r->tools, r->skills,
@@ -1625,13 +1628,19 @@ static char *build_context(reasoning *r, const char *prompt) {
     /* anti-pollution caution: history/notes/retrieved context are reference
      * only — the current request must always be planned and executed fresh */
     if (r->pending_reads_n) {
-        strbuf_append(&b, "## 尚未连续读取到文件末尾 / unread page coverage\n");
-        for (int i=0; i<r->pending_reads_n && i<16; ++i)
+        int required = required_pending_reads(r, completion_instruction(r, prompt));
+        strbuf_append(&b, required ? "## 尚未连续读取到文件末尾 / unread page coverage\n" :
+                                    "## 可选片段的续读游标（不是待办事项，不要求读到 EOF）\n");
+        int shown = 0;
+        for (int i=0; i<r->pending_reads_n && shown<16; ++i) {
+            if (required && !path_requires_full_read(r, completion_instruction(r,prompt), r->pending_reads[i].path)) continue;
             strbuf_appendf(&b, "- %s: offset_bytes=%llu; next_offset_bytes=%llu\n", r->pending_reads[i].path,
                            r->pending_reads[i].next, r->pending_reads[i].next);
-        if (r->pending_reads_n > 16)
-            strbuf_appendf(&b, "另有 %d 个分页文件待续读，先完成以上文件。\n", r->pending_reads_n-16);
-        strbuf_append(&b, "完整阅读任务必须用 file_read 的 offset_bytes 继续读取，直到 end of file；目录清单不等于源码内容。\n");
+            shown++;
+        }
+        if (required > 16)
+            strbuf_appendf(&b, "另有 %d 个必读分页文件待续读，先完成以上文件。\n", required-16);
+        if (required) strbuf_append(&b, "用户要求全文的文件必须用 file_read 的 offset_bytes 继续到 end of file；只读相关片段的文件和未被要求全文的生成脚本不在此列。\n");
     }
     strbuf_append(&b, "## 重要约束\n"
                           "- 上面的会话摘要、Session notes、Conversation history、Retrieved context 都只是背景参考，"
@@ -2735,11 +2744,171 @@ static int prompt_requires_full_read(const char *prompt) {
          strstr(prompt, "补读") || strstr(prompt, "继续") || strstr(prompt, "entire") || strstr(prompt, "all ") || strstr(prompt, "full"));
 }
 
+/* Completion is scoped to the user's reading request, not every file opened
+ * while researching or debugging generated code. Only the original request
+ * is examined: tool output cannot grant itself a partial-read exemption. */
+static const char *read_clause_end(const char *begin) {
+    const char *p = begin;
+    while (*p && *p != '\n' && *p != '\r' && *p != ';' &&
+           strncmp(p,"；",strlen("；")) && strncmp(p,"。",strlen("。"))) ++p;
+    return p;
+}
+
+static const char *read_next_clause(const char *end) {
+    if (!*end) return end;
+    if (!strncmp(end,"；",strlen("；"))) return end+strlen("；");
+    if (!strncmp(end,"。",strlen("。"))) return end+strlen("。");
+    return end+1;
+}
+
+static int read_span_has(const char *begin, const char *end, const char *needle) {
+    const char *p = strstr(begin, needle);
+    return p && p + strlen(needle) <= end;
+}
+
+static int file_token_char(unsigned char c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+           c == '_' || c == '-' || c == '.' || c == '/' || c == '\\' || c == ':';
+}
+
+/* Enumerate explicit file references in a clause without treating a shared
+ * basename substring (e.g. foo.c in otherfoo.c) as the same subject. */
+static int read_span_files(const char *begin, const char *end, const char *wanted, char *last, size_t cap) {
+    int found = 0;
+    if (last && cap) last[0] = '\0';
+    for (const char *p = begin; p < end;) {
+        if (!file_token_char((unsigned char)*p)) { ++p; continue; }
+        const char *base = p, *dot = NULL;
+        while (p < end && file_token_char((unsigned char)*p)) {
+            if (*p == '/' || *p == '\\') { base = p + 1; dot = NULL; }
+            else if (*p == '.') dot = p;
+            ++p;
+        }
+        const char *finish=p;
+        while(finish>base && (finish[-1]=='.' || finish[-1]==':')) --finish;
+        dot=NULL;
+        for(const char *q=base;q<finish;q++) if(*q=='.') dot=q;
+        if (!dot || dot == base || dot + 1 >= finish || finish - dot > 13) continue;
+        char name[256]; size_t n = (size_t)(finish - base);
+        if (n >= sizeof(name)) continue;
+        memcpy(name,base,n); name[n] = '\0';
+        /* Dotted config keys such as llm.model are not file declarations. */
+        static const char *const extensions[] = {"c","h","cc","cpp","hpp","rs","go","py","js","ts","tsx","jsx",
+            "java","kt","swift","m","mm","cs","sh","ps1","bat","txt","md","json","yaml","yml","toml",
+            "xml","html","css","scss","sql","log","ini","conf","cfg","vue","svelte","rb","php","pptx","docx","pdf"};
+        const char *extension=strrchr(name,'.')+1;
+        int recognized=0;
+        for(size_t i=0;i<sizeof(extensions)/sizeof(extensions[0]);i++) {
+            const char *rest=information_prefix(extension,extensions[i]);
+            if(rest && !*rest) { recognized=1;break; }
+        }
+        if(!recognized) continue;
+        if (last && cap) snprintf(last,cap,"%s",name);
+        if (!wanted || (information_prefix(name,wanted) && !*information_prefix(name,wanted))) found = 1;
+    }
+    return found;
+}
+
+static int read_span_full(const char *begin, const char *end) {
+    static const char *const full[] = {"完整","全文","全部","所有","补读","entire","all ","full"};
+    static const char *const no[] = {"不要求全文","无需全文","不需要全文","不必全文","不用全文",
+        "不要求完整","不需要完整","无需完整","不要完整","不必完整","not the entire","not the whole","not full"};
+    for (size_t i=0;i<sizeof(full)/sizeof(full[0]);++i) {
+        const char *p=begin;
+        while ((p=strstr(p,full[i])) && p+strlen(full[i])<=end) {
+            int negated=0;
+            for(size_t j=0;j<sizeof(no)/sizeof(no[0]);++j) {
+                const char *n=begin;
+                while((n=strstr(n,no[j])) && n+strlen(no[j])<=end) {
+                    if(n<=p && p<n+strlen(no[j])) negated=1;
+                    ++n;
+                }
+            }
+            if(!negated) return 1;
+            ++p;
+        }
+    }
+    return 0;
+}
+
+static int path_requires_full_read(reasoning *r, const char *prompt, const char *path) {
+    (void)r;
+    if (!prompt_requires_full_read(prompt)) return 0;
+    const char *task=strstr(prompt,"## 用户任务\n"); if(task) prompt=task+strlen("## 用户任务\n");
+    const char *base=path;
+    for(const char *p=path;*p;++p) if(*p=='/' || *p=='\\') base=p+1;
+    static const char *const partial[] = {"不要求全文","无需全文","不需要全文","不必全文","不用全文",
+        "不要求完整","不需要完整","无需完整","只看相关","只读相关","只读取相关","仅阅读相关",
+        "only relevant","relevant sections only","not the entire","not the whole","not full"};
+    int scoped=0, target=0, global=0, exempt=0;
+    for(const char *begin=prompt;*begin;) {
+        const char *end=read_clause_end(begin);
+        for(size_t i=0;i<sizeof(partial)/sizeof(partial[0]);++i) {
+            const char *p=begin;
+            while((p=strstr(p,partial[i])) && p+strlen(partial[i])<=end) {
+                char subject[256];
+                read_span_files(begin,p,NULL,subject,sizeof(subject));
+                if (subject[0] && information_prefix(subject,base) && !*information_prefix(subject,base)) exempt=1;
+                ++p;
+            }
+        }
+        if ((read_span_has(begin,end,"读") || read_span_has(begin,end,"read") || read_span_has(begin,end,"review")) && read_span_full(begin,end)) {
+            static const char *const groups[] = {"全部源码","所有源码","全部文件","所有文件","整个项目","整个代码库",
+                "all source","all files","entire project","entire repository"};
+            for(size_t i=0;i<sizeof(groups)/sizeof(groups[0]);i++)
+                if(read_span_has(begin,end,groups[i])) global=1;
+            if(read_span_files(begin,end,NULL,NULL,0)) {
+                scoped=1;
+                if(read_span_files(begin,end,base,NULL,0)) target=1;
+            } else global=1;
+        }
+        begin=read_next_clause(end);
+    }
+    if(exempt) return 0;
+    return global || !scoped || target;
+}
+
+static int required_pending_reads(reasoning *r, const char *prompt) {
+    int count=0;
+    for(int i=0;i<r->pending_reads_n;i++)
+        count+=path_requires_full_read(r,prompt,r->pending_reads[i].path);
+    return count;
+}
+
 static int answer_reports_unread(const char *text) {
     const char *marks[] = {"未读取", "未读到", "尚未读", "需要补读", "只读了", "只读取了",
                           "还需要读取", "not yet read", "have not read", "files remain unread"};
     for (size_t i=0; text && i<sizeof(marks)/sizeof(marks[0]); ++i)
         if (strstr(text, marks[i])) return 1;
+    return 0;
+}
+
+static int answer_reports_required_unread(reasoning *r, const char *prompt, const char *text) {
+    if (!answer_reports_unread(text)) return 0;
+    for (const char *begin=text;*begin;) {
+        const char *end=read_clause_end(begin);
+        size_t length=(size_t)(end-begin);
+        char *clause=malloc(length+1);
+        if(!clause) return 1;
+        memcpy(clause,begin,length); clause[length]='\0';
+        int unread=answer_reports_unread(clause); free(clause);
+        if(unread) {
+            int optional=0;
+            for(int pass=0;pass<2;pass++) {
+                int count=pass ? r->completed_reads_n : r->pending_reads_n;
+                for(int i=0;i<count;i++) {
+                    const char *path=pass ? r->completed_reads[i].path : r->pending_reads[i].path;
+                    const char *base=path;
+                    for(const char *p=path;*p;p++) if(*p=='/' || *p=='\\') base=p+1;
+                    if(!read_span_files(begin,end,base,NULL,0)) continue;
+                    if(path_requires_full_read(r,prompt,path)) return 1;
+                    optional=1;
+                }
+            }
+            if(!optional) return 1;
+        }
+        begin=read_next_clause(end);
+    }
     return 0;
 }
 
@@ -3580,7 +3749,8 @@ restart_planning:
             }
             int needs_action = prompt_requires_mutation(completion_instruction(r,prompt)) && !run_has_mutating_action(r);
             int needs_read = (prompt_requires_full_read(completion_instruction(r,prompt)) &&
-                (r->pending_reads_n || r->read_tracking_overflow || answer_reports_unread(txt))) ||
+                (required_pending_reads(r,completion_instruction(r,prompt)) || r->read_tracking_overflow ||
+                 answer_reports_required_unread(r,completion_instruction(r,prompt),txt))) ||
                 (prompt_requests_read(completion_instruction(r,prompt)) && !r->run_file_reads && !run_has_mutating_action(r));
             int needs_observation = prompt_requires_observation(completion_instruction(r,prompt)) &&
                                     r->run_successful_tools == 0;
@@ -3771,7 +3941,9 @@ restart_planning:
         unfinished = 1;
     if (stalled || synthesized || fail_aborted || r->tool_fail_aborted ||
         r->unresolved_failed_tool_count > 0 || r->unresolved_failed_tools_overflow ||
-        (prompt_requires_full_read(completion_instruction(r,prompt)) && (r->pending_reads_n || r->read_tracking_overflow || answer_reports_unread(final_text))))
+        (prompt_requires_full_read(completion_instruction(r,prompt)) &&
+         (required_pending_reads(r,completion_instruction(r,prompt)) || r->read_tracking_overflow ||
+          answer_reports_required_unread(r,completion_instruction(r,prompt),final_text))))
         unfinished = 1;
     if (unfinished)
         st = ST_FAILED;
@@ -3803,10 +3975,13 @@ restart_planning:
                 strbuf_append(&out," 请使用 skill_manage 注册技能并核对结果。");
             explained=1;
         }
-        if (prompt_requires_full_read(instruction) && r->pending_reads_n) {
+        if (required_pending_reads(r,instruction)) {
             strbuf_append(&out,"\n原因：以下文件尚未连续读取到 EOF；继续使用 file_read 和所列 offset_bytes：");
-            for(int i=0;i<r->pending_reads_n && i<8;i++)
+            for(int i=0,shown=0;i<r->pending_reads_n && shown<8;i++) {
+                if(!path_requires_full_read(r,instruction,r->pending_reads[i].path)) continue;
                 strbuf_appendf(&out,"\n- %s：offset_bytes=%llu",r->pending_reads[i].path,r->pending_reads[i].next);
+                shown++;
+            }
             explained=1;
         }
         if (r->tool_fail_aborted) { strbuf_append(&out,"\n原因：相同工具连续失败3次；请查看最后一次失败的工具结果，修正参数或环境后恢复任务。"); explained=1; }

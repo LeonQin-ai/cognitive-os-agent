@@ -19,10 +19,16 @@ import zipfile
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--config', type=Path, required=True)
 parser.add_argument('--timeout', type=int, default=1200)
+parser.add_argument('--reuse-output', type=Path, help='Continue verification of artifacts from a previous real run; never regenerate them in the harness')
 args = parser.parse_args()
 backend = Path(__file__).resolve().parents[1]
-output = backend/'build'/time.strftime('live-long-task-%Y%m%d-%H%M%S')
-output.mkdir(parents=True)
+output = args.reuse_output.resolve() if args.reuse_output else backend/'build'/time.strftime('live-long-task-%Y%m%d-%H%M%S')
+output.mkdir(parents=True,exist_ok=bool(args.reuse_output))
+if args.reuse_output:
+    for name in ('cognitive-os-context-runtime.pptx','technical-qa.md','verification.json'):
+        if not (output/name).is_file(): raise SystemExit('Missing prior agent artifact: '+name)
+    for name in ('final-task.json','run-summary.json','samples.jsonl','server.log','task.txt','monitor.json','independent-verification.json'):
+        if (output/name).exists(): (output/name).rename(output/('baseline-'+name))
 original = json.loads(args.config.read_text(encoding='utf-8'))
 config = {key:value for key,value in original.items() if key.startswith('llm.')}
 if config.get('llm.provider') in (None,'mock') or not config.get('llm.api_key'):
@@ -41,6 +47,13 @@ mmu.c、context_builder.c、tool_file.c、planner.c 要完成相关完整分页�
 可以使用已安装的 python-pptx。自行编写生成脚本，实际执行；脚本失败应根据真实错误修复后重跑。不要只写脚本或只描述计划。
 完成前自行用 Python 打开 PPTX，检查页数、文字、演讲备注、源码引用，并将检查结果写入 verification.json。最终给出实际文件位置及验证结果，未完成不要宣布完成。
 避免重复读取未变化且已获取的同一页；每一步应基于现有结果推进。'''
+if args.reuse_output:
+    prompt=('继续完成上一次真实 Agent 任务的最终核验。当前工作目录已有 Agent 自主生成的 PPT、问答和验证记录，'
+            '原任务最终失败仅因系统误把只需片段的 reasoning.c 和生成脚本强制列为全文阅读待办。'
+            '上次真实执行的统计保存在 baseline-run-summary.json。请复用已有产物及已完成的源码研究，'
+            '先实际打开并独立核对 PPT 页数、正文、备注、引用和问答字数；合格的 PPT 不要重做，不要再次逐页读取已经研究完成的源码。'
+            '只在需要时阅读相关片段，不要求全文。更新 verification.json，交付实际文件及核验结果。'
+            '原任务的产物和内容要求仍然如下（其中源码阅读已在上一轮完成，直接复用）：\n'+prompt)
 (output/'task.txt').write_text(prompt,encoding='utf-8')
 
 with tempfile.TemporaryDirectory(prefix='coa-live-long-state-') as directory:
