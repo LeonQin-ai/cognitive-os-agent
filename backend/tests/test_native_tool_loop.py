@@ -14,7 +14,7 @@ for provider_name in ('openai','anthropic'):
    catalogs.append(body.get('tools',[]))
    text=body['messages'][-1]['content']
    current=text.split('## Current request\n',1)[-1].split('\n## ',1)[0]
-   case=next(k for k in ('NATIVE_MIXED','NATIVE_FINAL','NATIVE_BAD','NATIVE_EXAMPLE','NATIVE_PENDING','NATIVE_BLOCKED','NATIVE_CHATTER','NATIVE_DISCOVERY') if k in current)
+   case=next(k for k in ('NATIVE_MIXED','NATIVE_FINAL','NATIVE_BAD','NATIVE_EXAMPLE','NATIVE_PENDING','NATIVE_BLOCKED','NATIVE_CHATTER','NATIVE_DISCOVERY','NATIVE_CAPABILITY') if k in current)
    n=counts.get(case,0);counts[case]=n+1
    calls=[];answer='';stop='stop'
    if case=='NATIVE_DISCOVERY':
@@ -27,6 +27,7 @@ for provider_name in ('openai','anthropic'):
     elif n==1:calls=[('file_write',{'path':'pending.txt','content':'actually written'})]
     else:answer='pending.txt verified.'
    elif case=='NATIVE_EXAMPLE':answer=json.dumps([{'tool':'file_write','args':{'path':'example-only.txt','content':'example'}}])
+   elif case=='NATIVE_CAPABILITY':answer='我能够协助创建内容、解释安装流程和分析修复方案；这是能力介绍，无需实际执行操作。'
    elif case=='NATIVE_FINAL':answer='我需要说明：缓存使已读取的内容能够复用，这是最终的原理解释。'
    elif case=='NATIVE_MIXED':
     if n==0:
@@ -74,6 +75,8 @@ for provider_name in ('openai','anthropic'):
     assert [s['tool'] for s in mixed['steps']]==['file_write','file_read'],mixed
     final=run('解释缓存原理 NATIVE_FINAL')
     assert final['status']=='DONE' and counts['NATIVE_FINAL']==1,final
+    capability=run('你有啥特殊的，创建、安装、修复这些能力有哪些特点？ NATIVE_CAPABILITY')
+    assert capability['status']=='DONE' and counts['NATIVE_CAPABILITY']==1 and not capability['steps'],capability
     example=run('解释工具调用格式 NATIVE_EXAMPLE')
     assert example['status']=='DONE' and counts['NATIVE_EXAMPLE']==1 and not (state/'example-only.txt').exists(),example
     bad=run('创建 repaired.txt NATIVE_BAD')

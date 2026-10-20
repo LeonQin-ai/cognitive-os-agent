@@ -3867,7 +3867,7 @@ restart_planning:
                 free(truncated_prefix); truncated_prefix=NULL;
                 break;
             }
-            int needs_action = prompt_requires_mutation(completion_instruction(r,prompt)) && !run_has_mutating_action(r);
+            int needs_action = !r->planner_native_end_turn && prompt_requires_mutation(completion_instruction(r,prompt)) && !run_has_mutating_action(r);
             int needs_read = (prompt_requires_full_read(completion_instruction(r,prompt)) &&
                 (required_pending_reads(r,completion_instruction(r,prompt)) || r->read_tracking_overflow ||
                  answer_reports_required_unread(r,completion_instruction(r,prompt),txt))) ||
@@ -4062,7 +4062,7 @@ restart_planning:
     int timed_out = !cancelled && run_aborted(r);
     /* A read-only final round may exhaust the budget without ever reaching
      * the no-plan guard above. It is still incomplete if a write was asked. */
-    if (prompt_requires_mutation(completion_instruction(r,prompt)) && !run_has_mutating_action(r))
+    if (!r->planner_native_end_turn && prompt_requires_mutation(completion_instruction(r,prompt)) && !run_has_mutating_action(r))
         unfinished = 1;
     if (stalled || synthesized || fail_aborted || r->tool_fail_aborted ||
         r->unresolved_failed_tool_count > 0 || r->unresolved_failed_tools_overflow ||
@@ -4096,7 +4096,7 @@ restart_planning:
             explained=1;
         }
         const char *instruction=completion_instruction(r,prompt);
-        if (prompt_requires_mutation(instruction) && !run_has_mutating_action(r)) {
+        if (!r->planner_native_end_turn && prompt_requires_mutation(instruction) && !run_has_mutating_action(r)) {
             strbuf_append(&out,"\n原因：尚无成功执行所请求操作的工具记录；读取文件或加载技能指令不能代替实际操作。");
             if ((strstr(instruction,"注册") || strstr(instruction,"register ")) &&
                 (strstr(instruction,"skill") || strstr(instruction,"技能")))
