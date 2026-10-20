@@ -11,6 +11,7 @@ password='Fixture@@!#$%^&*()!Z'
 seen=[]
 phases=[]
 phase_lock=threading.Lock()
+connection_done=threading.Event()
 started=time.monotonic()
 def phase(name):
     # Labels only: never log credentials, commands, or exception messages.
@@ -39,12 +40,20 @@ def connection(client):
         if channel and server.ready.wait(10):
             assert server.command==b'nproc | wc -l', server.command
             phase('sending_result')
-            channel.sendall(b'CPU_COUNT=8\n'); channel.send_exit_status(0); time.sleep(.1); channel.close()
+            channel.sendall(b'CPU_COUNT=8\n'); channel.send_exit_status(0)
+            channel.shutdown_write(); channel.close()
+            # Keep the transport alive until OpenSSH has consumed exit-status
+            # and sent its disconnect. A fixed 100ms sleep races Windows SSH:
+            # it can print the result yet exit 255 on a broken pipe.
+            phase('channel_result_closed')
+            transport.join(timeout=5)
+            phase('peer_disconnected' if not transport.is_alive() else 'peer_disconnect_timeout')
     except Exception as error:
         phase('server_error_'+type(error).__name__)
     finally:
         transport.close()
         phase('connection_closed')
+        connection_done.set()
 with socket.socket() as listener:
     listener.bind(('127.0.0.1',0)); listener.listen(); listener.settimeout(.5)
     stop=threading.Event()
@@ -75,4 +84,7 @@ with socket.socket() as listener:
         print(result.stdout.decode('utf-8','replace')); print(result.stderr.decode('utf-8','replace'))
     assert result.returncode==0, 'Local authentication regression failed'
     assert seen==[('testuser',password)], 'Credential bytes changed or authentication was retried'
+    assert connection_done.wait(2), 'SSH server connection must finish teardown'
+    assert any(name=='peer_disconnected' for _,name in phases), 'Client must close the SSH transport after receiving its result'
+    assert not any(name=='peer_disconnect_timeout' or name.startswith('server_error_') for _,name in phases), 'SSH fixture teardown failed'
     print('PASS #70: special-character password is captured privately and authenticates through native askpass')
