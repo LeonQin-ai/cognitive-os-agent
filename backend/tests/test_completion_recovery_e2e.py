@@ -9,7 +9,13 @@ class Provider(BaseHTTPRequestHandler):
         body=json.loads(self.rfile.read(int(self.headers['Content-Length'])))
         text=body['messages'][-1]['content']
         current=text.split('## Current request\n',1)[-1].split('\n## ',1)[0]
-        if 'HEADER_BAD178' in current:
+        if 'MALFORMED180' in current:
+            n=counts.get('bad180',0);counts['bad180']=n+1
+            answer=('<tool_call>file_read\",\"args\":{\"path\":\"index180.html\"}</tool_call>' if n==0 else
+                    json.dumps([{'tool':'file_write','args':{'path':'index180.html','content':'<html>verified</html>'}}]) if n==1 else
+                    json.dumps([{'tool':'file_read','args':{'path':'index180.html'}}]) if n==2 else
+                    '报告已生成并核对：index180.html。')
+        elif 'HEADER_BAD178' in current:
             n=counts.get('headerbad178',0);counts['headerbad178']=n+1
             answer=(json.dumps([{'tool':'file_read','args':{'path':'src/context/example.h'}}]) if n==0 else
                     json.dumps([{'tool':'file_read','args':{'path':'other/include/context/example.h'}}]) if n==1 else
@@ -99,6 +105,10 @@ with tempfile.TemporaryDirectory(prefix='coa-completion-recovery-') as folder:
                     if t['status'] in ('DONE','FAILED','CANCELLED','TIMEOUT'): return t
                     assert time.monotonic()<deadline,t
                     time.sleep(.05)
+            repaired=finished(request('/v1/tasks',{'prompt':'生成HTML文档 MALFORMED180'})['id'])
+            assert repaired['status']=='DONE' and counts['bad180']==4,repaired
+            assert [st['tool'] for st in repaired['steps']]==['file_write','file_read'],repaired
+            print('PASS: malformed tagged identifier never dispatches; corrected write/read completes without phantom failure')
             (state/'include/context').mkdir(parents=True)
             (state/'include/context/example.h').write_text('HEADER178',encoding='utf-8')
             header=finished(request('/v1/tasks',{'prompt':'分析头文件 HEADER178'})['id'])

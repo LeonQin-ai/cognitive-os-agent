@@ -283,6 +283,16 @@ static char *salvage_truncated_array(const char *plan) {
     return out;
 }
 
+/* A tool identifier cannot contain JSON syntax from a broken envelope. */
+static int valid_action_name(const char *name, size_t n) {
+    if(!name || !n || n>255)return 0;
+    for(size_t i=0;i<n;i++) {
+        unsigned char c=(unsigned char)name[i];
+        if(!((c>='a'&&c<='z')||(c>='A'&&c<='Z')||(c>='0'&&c<='9')||c=='_'||c=='-'||c=='.'))return 0;
+    }
+    return 1;
+}
+
 static int parse_plan_actions(const char *plan, planned_action **actions, int *n_actions) {
     cJSON *root;
     planned_action *a = NULL;
@@ -345,6 +355,9 @@ static int parse_plan_actions(const char *plan, planned_action **actions, int *n
 
         if (!tool || !cJSON_IsString(tool))
             continue;
+        if(!valid_action_name(tool->valuestring,strlen(tool->valuestring))) {
+            planner_actions_free(a,n);cJSON_Delete(root);return 0;
+        }
         args_json = args_to_json(args);
         na = (planned_action *)realloc(a, (size_t)(n + 1) * sizeof(planned_action));
         if (!na) {
@@ -376,6 +389,7 @@ static int parse_tagged_tool_calls(const char *plan, planned_action **actions, i
 
     while ((p = strstr(p, "<tool_call>")) != NULL) {
         const char *name = p + strlen("<tool_call>");
+        while(*name==' ' || *name=='\t' || *name=='\r' || *name=='\n')++name;
         const char *json = name;
         while (*json && *json != '{' && *json != '[' && *json != '<')
             json++;
@@ -387,6 +401,9 @@ static int parse_tagged_tool_calls(const char *plan, planned_action **actions, i
             continue;
         }
 
+        if(!valid_action_name(name,(size_t)(name_end-name))) {
+            planner_actions_free(out,count);return -1;
+        }
         char *body = extract_json_span(json);
         if (!body)
             break; /* incomplete trailing call: let the normal repair path handle it */
@@ -792,6 +809,14 @@ static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_act
         cJSON *calls=resp.tool_actions_json?cJSON_Parse(resp.tool_actions_json):NULL;
         cJSON *finish=NULL;
         int finishes=0;
+        cJSON *candidate;
+        cJSON_ArrayForEach(candidate,calls) {
+            const char *name=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(candidate,"tool"));
+            if(!name || !valid_action_name(name,strlen(name))) {
+                if(err_out)*err_out=xstrdup("invalid native tool identifier; no actions executed");
+                free(resp.content);free(resp.tool_actions_json);free(resp.error);cJSON_Delete(calls);return -1;
+            }
+        }
         for(int i=cJSON_GetArraySize(calls)-1;i>=0;--i) {
             cJSON *call=cJSON_GetArrayItem(calls,i);
             const char *name=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(call,"tool"));
@@ -879,6 +904,10 @@ static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_act
         return -1;
     }
     if (!have) have = parse_tagged_tool_calls(plan, actions, n_actions);
+    if(have<0) {
+        if(err_out)*err_out=xstrdup("malformed tagged tool name; no actions executed; use a native tool call or a valid tool identifier");
+        if(raw_out)*raw_out=NULL;free(plan);return -1;
+    }
     if (!have)
         have = parse_plan_actions(plan, actions, n_actions);
     if (!have && looks_like_plan) {

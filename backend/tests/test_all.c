@@ -2391,6 +2391,14 @@ static int dsml_fixture_chat(llm *self, const llm_request *req, llm_response *re
 static void test_planner_dsml(void) {
     section("DSML planner compatibility");
     static const llm_vtable vt={.chat=dsml_fixture_chat};
+    {
+        llm provider={0};provider.provider="mock";provider.model="tagged-bad";provider.vt=&vt;
+        provider.impl=(void*)"<tool_call>file_read\",\"args\":{\"path\":\"index.html\"}</tool_call>";
+        planned_action *actions=NULL;int n=0;char *raw=NULL,*err=NULL;
+        CHECK(planner_plan(&provider,"generate html",&actions,&n,&raw,&err)<0);
+        CHECK(n==0 && actions==NULL && err && strstr(err,"malformed tagged tool name"));
+        planner_actions_free(actions,n);free(raw);free(err);
+    }
     const char *cases[]={
         /* Exact final planner reply from the 90-step PPT incident. The
          * installed 2026-10-14 binary treated this as a completed answer. */
