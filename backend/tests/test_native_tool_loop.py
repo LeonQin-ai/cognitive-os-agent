@@ -41,10 +41,11 @@ for provider_name in ('openai','anthropic'):
    elif case=='NATIVE_FAILED':
     if n==0:calls=[('file_read',{'path':'unresolved-missing.txt'})]
     else:answer='模型声称成功，但实际文件读取仍然失败。'
-   elif case=='NATIVE_RECOVERED':
-    if n==0:calls=[('file_read',{'path':'recover.txt'})]
-    elif n==1:calls=[('file_write',{'path':'recover.txt','content':'recovered-marker'})]
-    elif n==2:calls=[('file_read',{'path':'recover.txt'})]
+   elif case in ('NATIVE_RECOVERED','NATIVE_ALIAS'):
+    path='recover.txt' if case=='NATIVE_RECOVERED' else (state/'alias'/'alias-recover.txt').as_posix()
+    if n==0:calls=[('file_read',{'path':path})]
+    elif n==1:calls=[('file_write',{'path':path,'content':'recovered-marker'})]
+    elif n==2:calls=[('file_read',{'path':path})]
     else:answer='已修复并实际核对 recovered-marker。'
    elif case=='NATIVE_DISCOVERY':
     if n==0:calls=[('grep',{'path':'native.txt','pattern':'native-marker','output_mode':'files_with_matches'})]
@@ -82,6 +83,8 @@ for provider_name in ('openai','anthropic'):
   state=Path(folder);server=ThreadingHTTPServer(('127.0.0.1',0),Provider)
   threading.Thread(target=server.serve_forever,daemon=True).start()
   (state/'cognitive-os-agent.json').write_text(json.dumps({'llm.provider':provider_name,'llm.model':'native-test','llm.api_key':'local-fixture','llm.base_url':f'http://127.0.0.1:{server.server_port}','reasoning.max_rounds':32}),encoding='utf-8')
+  if os.name!='nt':(state/'alias').symlink_to(state,target_is_directory=True)
+  else:(state/'alias').mkdir()
   (state/'explanation.txt').write_text('Example comment: full source reading.\n'+'x'*5000,encoding='utf-8')
   for i in range(17):(state/f'research-{i}.txt').write_text(f'unique-example-{i}',encoding='utf-8')
   with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
@@ -119,6 +122,8 @@ for provider_name in ('openai','anthropic'):
     assert research['status']=='DONE' and counts['NATIVE_RESEARCH']==18 and len(research['steps'])==17,research
     recovered=run('NATIVE_RECOVERED','处理目标文件并核对最终内容。')
     assert recovered['status']=='DONE' and counts['NATIVE_RECOVERED']==4,recovered
+    alias=run('NATIVE_ALIAS','处理目录别名下的目标文件并核对结果。')
+    assert alias['status']=='DONE' and counts['NATIVE_ALIAS']==4,alias
     failed=run('NATIVE_FAILED','读取指定文件并总结。')
     assert failed['status']=='FAILED' and 2<=counts['NATIVE_FAILED']<=3 and any(not st['ok'] for st in failed['steps']),failed
     example=run('NATIVE_EXAMPLE','解释工具调用格式')

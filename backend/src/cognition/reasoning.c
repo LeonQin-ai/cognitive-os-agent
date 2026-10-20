@@ -290,7 +290,9 @@ static int is_exploratory_tool(const char *name) {
 }
 
 static void normalized_evidence_path(reasoning *r, const char *path, char *out, size_t cap) {
-    char full[2048]; path_resolve(full, sizeof(full), r->workspace, path && *path ? path : ".");
+    char *workspace=fs_absolute_path(r->workspace && *r->workspace ? r->workspace : ".");
+    char full[2048]; path_resolve(full, sizeof(full), workspace ? workspace:r->workspace, path && *path ? path : ".");
+    free(workspace);
     char *absolute = fs_absolute_path(full);
     snprintf(out, cap, "%s", absolute ? absolute : full);
     free(absolute);
@@ -385,7 +387,11 @@ static void resolve_failed_tool(reasoning *r, const char *tool_name, const char 
     if (!r || !tool_name || !*tool_name) return;
     char scope[2048]; failure_scope(r, tool_name, args_json, scope, sizeof(scope));
     for (int i = 0; i < r->unresolved_failed_tool_count;) {
+        /* A missing path may gain a canonical symlink target after repair.
+         * Re-resolve that same path; never clear a different file's failure. */
+        char failed_now[2048];
         const char *failed_scope = r->unresolved_failed_scopes[i];
+        if(*failed_scope){normalized_evidence_path(r,failed_scope,failed_now,sizeof(failed_now));failed_scope=failed_now;}
         size_t n = strlen(failed_scope);
         int retry = !strcmp(r->unresolved_failed_tools[i], tool_name) && !strcmp(failed_scope, scope);
         int replacement = !strcmp(tool_name, "file_read") && is_exploratory_tool(r->unresolved_failed_tools[i]) &&
