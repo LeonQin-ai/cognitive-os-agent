@@ -9,7 +9,14 @@ class Provider(BaseHTTPRequestHandler):
         body=json.loads(self.rfile.read(int(self.headers['Content-Length'])))
         text=body['messages'][-1]['content']
         current=text.split('## Current request\n',1)[-1].split('\n## ',1)[0]
-        if 'USE_TOOLS176' in current:
+        if 'HTML177' in current:
+            n=counts.get('html177',0);counts['html177']=n+1
+            answer=(json.dumps([{'tool':'list_dir','args':{'path':'.'}}]) if n==0 else
+                    '根据之前的分析，我现在需要创建一个 HTML 报告文档，整理上下文工程的架构和流程图。我已经有完整的分析内容，直接生成 HTML 文件。' if n==1 else
+                    json.dumps([{'tool':'file_write','args':{'path':'report177.html','content':'<!doctype html><html><body><svg></svg>Context architecture and flow</body></html>'}}]) if n==2 else
+                    '报告已交付：report177.html，包含架构和流程图。')
+        elif 'HTML_FALSE177' in current: answer='报告已经完成。'
+        elif 'USE_TOOLS176' in current:
             n=counts.get('tools176',0);counts['tools176']=n+1
             answer=(json.dumps([{'tool':'list_dir','args':{'path':'.'}}]) if n==0 else
                     '根据已有初步资料，我需要调用工具完成检查，再交付实际分析。' if n==1 else
@@ -80,6 +87,11 @@ with tempfile.TemporaryDirectory(prefix='coa-completion-recovery-') as folder:
                     if t['status'] in ('DONE','FAILED','CANCELLED','TIMEOUT'): return t
                     assert time.monotonic()<deadline,t
                     time.sleep(.05)
+            artifact=finished(request('/v1/tasks',{'prompt':'输出一个html的报告文档，整理对应的架构和流程图 HTML177'})['id'])
+            assert artifact['status']=='DONE' and counts['html177']==4 and (state/'report177.html').exists(),artifact
+            false_report=finished(request('/v1/tasks',{'prompt':'输出一个html的报告文档 HTML_FALSE177'})['id'])
+            assert false_report['status']=='FAILED',false_report
+            print('PASS: issue177 requires an actual HTML artifact; no-write completion is rejected')
             tool_needed=finished(request('/v1/tasks',{'prompt':'分析当前架构 USE_TOOLS176'})['id'])
             assert tool_needed['status']=='DONE' and counts['tools176']==4,tool_needed
             print('PASS: explicit remaining tool need after observations continues tool execution')

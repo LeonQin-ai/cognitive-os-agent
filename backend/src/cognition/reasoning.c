@@ -2798,6 +2798,13 @@ static int prompt_requires_mutation(const char *prompt) {
     if ((strstr(prompt,"修复建议") || strstr(prompt,"修复原因") || strstr(prompt,"修复方案")) &&
         !strstr(prompt,"并修复") && !strstr(prompt,"实际修复") && !strstr(prompt,"保存") &&
         !strstr(prompt,"写入") && !strstr(prompt,".md") && !strstr(prompt,".txt")) return 0;
+    /* #177: "output an HTML report document" is an artifact request even
+     * without the create/write verbs below. Do not exempt it as a chat report. */
+    if ((strstr(prompt,"html") || strstr(prompt,"HTML")) &&
+        (strstr(prompt,"文档") || strstr(prompt,"文件") || strstr(prompt,"报告"))) {
+        const char *output=strstr(prompt,"输出");
+        if (output && !mutation_verb_negated(prompt,output)) return 1;
+    }
     /* A checklist requested in chat is a text answer, even when phrased as
      * "生成一份…". Keep explicit file/PPT requests under the write guard. */
     if ((strstr(prompt, "清单") || strstr(prompt, "面试题") || strstr(prompt,"报告") || strstr(prompt,"资料")) &&
