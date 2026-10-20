@@ -48,7 +48,7 @@ jobs:
       - name: Strict C11 wasm libc portability
         run: python tests/test_wasm_libc_portability.py
       - name: Model capability migration and persistence
-        run: python tests/test_model_capabilities_e2e.py
+        run: COA_BUILD_DIR=build-macos python3 tests/test_model_capabilities_e2e.py
       - name: Native tool block continuation regression
         run: COA_BUILD_DIR=build-macos python3 tests/test_native_tool_loop.py
       - name: Information answer completion regression

@@ -2,6 +2,8 @@
 import json,os,socket,subprocess,tempfile,time,urllib.request
 from pathlib import Path
 backend=Path(__file__).resolve().parents[1]
+build=backend/os.environ.get('COA_BUILD_DIR','build')
+build.mkdir(parents=True,exist_ok=True)
 ark='https://ark.cn-beijing.volces.com/api/plan/v3'
 with tempfile.TemporaryDirectory(prefix='coa-capabilities-') as tmp:
  state=Path(tmp)
@@ -13,7 +15,7 @@ with tempfile.TemporaryDirectory(prefix='coa-capabilities-') as tmp:
   with urllib.request.urlopen(req,timeout=5) as response:return json.load(response)
  def route(name):return next(x for x in api('/v1/routes') if x['name']==name)
  def start(log):
-  p=subprocess.Popen([str(backend/'build'/('cognitive-os-agent.exe' if os.name=='nt' else 'cognitive-os-agent')),'--state',str(state),'--workspace',str(state),'serve',str(port)],cwd=backend,stdout=log,stderr=log,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
+  p=subprocess.Popen([str(build/('cognitive-os-agent.exe' if os.name=='nt' else 'cognitive-os-agent')),'--state',str(state),'--workspace',str(state),'serve',str(port)],cwd=backend,stdout=log,stderr=log,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
   for _ in range(100):
    try:api('/v1/scheduler');return p
    except OSError:assert p.poll() is None;time.sleep(.1)
@@ -22,7 +24,7 @@ with tempfile.TemporaryDirectory(prefix='coa-capabilities-') as tmp:
   p.terminate()
   try:p.wait(timeout=5)
   except subprocess.TimeoutExpired:p.kill();p.wait()
- with (backend/'build/model-capabilities-e2e.log').open('w',encoding='utf-8') as log:
+ with (build/'model-capabilities-e2e.log').open('w',encoding='utf-8') as log:
   p=start(log)
   try:
    x=route('legacy');assert x['context_window']==1048576 and x['context_source']=='catalog' and x['max_output_tokens']==393216,x
