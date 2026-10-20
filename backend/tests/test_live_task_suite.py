@@ -140,8 +140,18 @@ with tempfile.TemporaryDirectory(prefix='coa-live-suite-state-') as folder:
                         result['checks']={'answer_characters':len(text),'core_modules':True}
                     elif case=='html':
                         path=active/'memory-report.html';text=path.read_text(encoding='utf-8')
-                        assert '<html' in text.lower() and '<svg' in text.lower() and len(text)>2000
-                        result['checks']={'html_characters':len(text),'svg':True}
+                        from html.parser import HTMLParser
+                        class Diagrams(HTMLParser):
+                            flows=0;nodes=0
+                            def handle_starttag(self,tag,attrs):
+                                classes=dict(attrs).get('class','').split()
+                                self.flows+=int('flow' in classes)
+                                self.nodes+=int('node' in classes)
+                        diagrams=Diagrams();diagrams.feed(text)
+                        svg='<svg' in text.lower()
+                        assert '<html' in text.lower() and len(text)>2000
+                        assert svg or (diagrams.flows>=2 and diagrams.nodes>=4),'Missing SVG or CSS architecture/flow diagrams'
+                        result['checks']={'html_characters':len(text),'svg':svg,'css_flows':diagrams.flows,'css_nodes':diagrams.nodes}
                         result['artifacts']['html']=str(path)
                     elif case=='ppt':
                         from pptx import Presentation

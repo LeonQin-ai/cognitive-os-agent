@@ -365,6 +365,18 @@ static void note_failed_tool(reasoning *r, const char *tool_name, const char *ar
              sizeof(r->unresolved_failed_tools[0]), "%s", tool_name);
 }
 
+/* A successful read of include/<suffix>.h verifies a mistaken src/<suffix>.h
+ * probe in the same repository. A basename-only match is never evidence. */
+static int same_repository_header(const char *failed, const char *actual) {
+    const char *src = strstr(failed,"/src/");
+    const char *inc = strstr(actual,"/include/");
+    if (!src || !inc || src-failed != inc-actual || strncmp(failed,actual,(size_t)(src-failed))) return 0;
+    const char *tail=src+5;
+    size_t n=strlen(tail);
+    if (!((n>2 && !strcmp(tail+n-2,".h")) || (n>4 && !strcmp(tail+n-4,".hpp")))) return 0;
+    return !strcmp(tail,inc+9);
+}
+
 static void resolve_failed_tool(reasoning *r, const char *tool_name, const char *args_json) {
     if (!r || !tool_name || !*tool_name) return;
     char scope[2048]; failure_scope(r, tool_name, args_json, scope, sizeof(scope));
@@ -376,7 +388,9 @@ static void resolve_failed_tool(reasoning *r, const char *tool_name, const char 
             n > 0 && !strncmp(scope, failed_scope, n) && (!scope[n] || scope[n] == '/' || failed_scope[n-1] == '/');
         int relocated_read = !strcmp(tool_name, "file_read") && !strcmp(r->unresolved_failed_tools[i], "file_read") &&
             r->unresolved_discovered_reads[i][0] && !strcmp(r->unresolved_discovered_reads[i], scope);
-        if (retry || replacement || relocated_read) {
+        int header_relocated = !strcmp(tool_name,"file_read") && !strcmp(r->unresolved_failed_tools[i],"file_read") &&
+            same_repository_header(failed_scope,scope);
+        if (retry || replacement || relocated_read || header_relocated) {
             --r->unresolved_failed_tool_count;
             if (i < r->unresolved_failed_tool_count) {
                 memmove(r->unresolved_failed_tools[i], r->unresolved_failed_tools[i + 1],
@@ -3819,8 +3833,13 @@ restart_planning:
                 failure_recovery_nudges++;
                 round_log_append(r, txt ? txt : "");
                 round_log_append(r, "[system] 任务尚未完成：前面有工具调用失败且没有成功核实。不要输出最终总结或停止；先根据失败工具的真实错误调整参数、路径或方法，重试该工具或用可验证的替代方式完成受影响步骤，再继续原任务。修复后的内容必须经过成功工具结果验证。失败工具：");
-                for (int i=0;i<r->unresolved_failed_tool_count;i++)
-                    round_log_append(r, r->unresolved_failed_tools[i]);
+                for (int i=0;i<r->unresolved_failed_tool_count;i++) {
+                    strbuf failure; strbuf_init(&failure);
+                    strbuf_appendf(&failure,"%s: %s",r->unresolved_failed_tools[i],r->unresolved_failed_scopes[i]);
+                    if (!strcmp(r->unresolved_failed_tools[i],"file_read"))
+                        strbuf_append(&failure," — 核对并读取此文件；头文件可能位于同一仓库 include/ 而不是 src/，请先查找真实路径。");
+                    round_log_append(r,failure.buf);strbuf_free(&failure);
+                }
                 continue;
             }
             if (r->planner_response_truncated) {

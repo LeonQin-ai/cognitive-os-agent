@@ -9,7 +9,19 @@ class Provider(BaseHTTPRequestHandler):
         body=json.loads(self.rfile.read(int(self.headers['Content-Length'])))
         text=body['messages'][-1]['content']
         current=text.split('## Current request\n',1)[-1].split('\n## ',1)[0]
-        if 'HTML177' in current:
+        if 'HEADER_BAD178' in current:
+            n=counts.get('headerbad178',0);counts['headerbad178']=n+1
+            answer=(json.dumps([{'tool':'file_read','args':{'path':'src/context/example.h'}}]) if n==0 else
+                    json.dumps([{'tool':'file_read','args':{'path':'other/include/context/example.h'}}]) if n==1 else
+                    '分析已经完成。')
+        elif 'HEADER178' in current:
+            n=counts.get('header178',0);counts['header178']=n+1
+            answer=(json.dumps([{'tool':'file_read','args':{'path':'src/context/example.h'}}]) if n==0 else
+                    '分析已完成。' if n==1 else
+                    json.dumps([{'tool':'file_read','args':{'path':'include/context/example.h'}}]) if n==2 else
+                    '分析结果：头文件已从 include/context/example.h 读取并核实。')
+            if n==2: assert 'src/context/example.h' in text.replace('\\','/'),text[-1500:]
+        elif 'HTML177' in current:
             n=counts.get('html177',0);counts['html177']=n+1
             answer=(json.dumps([{'tool':'list_dir','args':{'path':'.'}}]) if n==0 else
                     '根据之前的分析，我现在需要创建一个 HTML 报告文档，整理上下文工程的架构和流程图。我已经有完整的分析内容，直接生成 HTML 文件。' if n==1 else
@@ -87,6 +99,16 @@ with tempfile.TemporaryDirectory(prefix='coa-completion-recovery-') as folder:
                     if t['status'] in ('DONE','FAILED','CANCELLED','TIMEOUT'): return t
                     assert time.monotonic()<deadline,t
                     time.sleep(.05)
+            (state/'include/context').mkdir(parents=True)
+            (state/'include/context/example.h').write_text('HEADER178',encoding='utf-8')
+            header=finished(request('/v1/tasks',{'prompt':'分析头文件 HEADER178'})['id'])
+            assert header['status']=='DONE' and counts['header178']==4,header
+            print('PASS: missing src header scope is retained; verified same-repository include read recovers')
+            (state/'other/include/context').mkdir(parents=True)
+            (state/'other/include/context/example.h').write_text('unrelated repository',encoding='utf-8')
+            header_bad=finished(request('/v1/tasks',{'prompt':'分析头文件 HEADER_BAD178'})['id'])
+            assert header_bad['status']=='FAILED',header_bad
+            print('PASS: same header basename in a different repository does not clear failed reads')
             artifact=finished(request('/v1/tasks',{'prompt':'输出一个html的报告文档，整理对应的架构和流程图 HTML177'})['id'])
             assert artifact['status']=='DONE' and counts['html177']==4 and (state/'report177.html').exists(),artifact
             false_report=finished(request('/v1/tasks',{'prompt':'输出一个html的报告文档 HTML_FALSE177'})['id'])
