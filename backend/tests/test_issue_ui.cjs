@@ -7,7 +7,7 @@ const assert = require('node:assert/strict');
   try {
     const page=await browser.newPage();
     let savedRoute=null;
-    const routeFixture=[{name:'fixture-large',provider:'openai',model:'fixture/large',base_url:'https://provider.invalid/v1',context_window:1074176}];
+    const routeFixture=[{name:'fixture-large',provider:'openai',model:'fixture/large',base_url:'https://provider.invalid/v1',context_window:1074176,context_source:'provider_metadata'}];
     await page.route('http://ui.test/**',route=>{
       const url=new URL(route.request().url());
       let body='[]',contentType='application/json';
@@ -101,11 +101,12 @@ const assert = require('node:assert/strict');
     assert.deepEqual(recentTitles,['最近访问','创建较晚但不活跃','创建较早']);
     console.log('PASS #155: recent chats sort by last activity, not creation order');
     await page.evaluate(()=>switchPanel('models'));
-    await page.waitForFunction(()=>document.querySelector('#routes-body')?.innerText.includes('1074176'));
+    await page.waitForFunction(()=>document.querySelector('#routes-body')?.innerText.includes((1074176).toLocaleString()));
+    assert.match(await page.locator('#routes-body').innerText(),/供应商元数据/);
     assert.equal(await page.locator('#r-context').count(),0,'model context is not manually editable');
     assert.equal(await page.locator('#routes-body button').filter({hasText:'改窗口'}).count(),0,
       'model routes do not expose a manual context-window override');
-    assert.match(await page.locator('#routes-body').innerText(),/1074176/,
+    assert.ok((await page.locator('#routes-body').innerText()).includes(await page.evaluate(()=>(1074176).toLocaleString())),
       'route list displays the provider model context metadata');
     await page.evaluate(async()=>{
       $('r-base').value='https://provider.invalid/v1'; $('r-key').value='fixture-key';

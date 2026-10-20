@@ -63,10 +63,11 @@ const fs = require('node:fs');
     });
     await page.goto(process.env.UI_TEST_URL || 'http://127.0.0.1:18771');
     await page.waitForTimeout(250);
-    routeList=[{name:'ark-deepseek-v4.1-flash',provider:'openai',model:'deepseek-v4.1-flash',base_url:'https://ark.invalid/api/v3',context_window:1074176}];
+    routeList=[{name:'ark-deepseek-v4.1-flash',provider:'openai',model:'deepseek-v4.1-flash',base_url:'https://ark.invalid/api/v3',context_window:1074176,context_source:'provider_metadata'}];
     await page.evaluate(()=>switchPanel('models'));
-    await page.waitForFunction(()=>document.querySelector('#routes-body')?.innerText.includes('1074176'));
-    assert.match(await page.locator('#routes-body').innerText(),/1074176/,'route table displays the model metadata context window');
+    await page.waitForFunction(()=>document.querySelector('#routes-body')?.innerText.includes((1074176).toLocaleString()));
+    assert.match(await page.locator('#routes-body').innerText(),/供应商元数据/);
+    assert.ok((await page.locator('#routes-body').innerText()).includes(await page.evaluate(()=>(1074176).toLocaleString())),'route table displays the model metadata context window');
     assert.equal(await page.locator('#routes-body button').filter({hasText:'改窗口'}).count(),0,
       'route context window is read-only and cannot be manually changed');
     routeList=[];
