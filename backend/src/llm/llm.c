@@ -1,4 +1,5 @@
 #include "llm/llm.h"
+#include "infra/catalog.h"
 #include "infra/logging.h"
 #include "infra/util.h"
 #include "security/secret.h"
@@ -183,6 +184,8 @@ const llm_caps *llm_capabilities(llm *llm) {
 long long llm_context_window_tokens(const llm *l) {
     if (!l) return 262144;
     if (l->context_window_tokens > 0) return l->context_window_tokens;
+    catalog_model_capability known;
+    if (catalog_model_capabilities(l->provider,l->base_url,l->model,&known)) return known.context_window;
     /* If provider metadata does not declare a context_window, use the product
      * default. Route metadata from the model catalog takes precedence. */
     return 262144;

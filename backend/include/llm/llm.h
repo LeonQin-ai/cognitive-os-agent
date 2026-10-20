@@ -56,7 +56,8 @@ struct llm {
     char *base_url;
     char *api_key;
     char *model;
-    long long context_window_tokens; /* selected model metadata; 256K when unknown */
+    long long context_window_tokens; /* selected model capacity; 0 resolves via catalog/default */
+    long long max_output_tokens; /* model capacity, not the per-request output budget */
     void *impl;
     volatile int cancel; /* set by llm_cancel(); checked between stream deltas */
     /* cumulative token usage from provider "usage" objects (polled without a

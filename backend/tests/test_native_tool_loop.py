@@ -27,6 +27,7 @@ for provider_name in ('openai','anthropic'):
   def log_message(self,*args):pass
   def do_POST(self):
    body=json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+   assert body['max_tokens']==4096, 'Model output capacity must bound the request budget'
    catalogs.append(body.get('tools',[]))
    system=body['messages'][0]['content']
    if isinstance(system,str):
@@ -107,6 +108,7 @@ for provider_name in ('openai','anthropic'):
   state=Path(folder);server=ThreadingHTTPServer(('127.0.0.1',0),Provider)
   threading.Thread(target=server.serve_forever,daemon=True).start()
   (state/'cognitive-os-agent.json').write_text(json.dumps({'llm.provider':provider_name,'llm.model':'native-test','llm.api_key':'local-fixture','llm.base_url':f'http://127.0.0.1:{server.server_port}','reasoning.max_rounds':32}),encoding='utf-8')
+  (state/'routes.json').write_text(json.dumps([{'name':'fixture-metadata','provider':provider_name,'model':'native-test','base_url':f'http://127.0.0.1:{server.server_port}','api_key':'local-fixture','context_window':1048576,'max_output_tokens':4096,'context_source':'provider_metadata'}]),encoding='utf-8')
   if os.name!='nt':(state/'alias').symlink_to(state,target_is_directory=True)
   else:(state/'alias').mkdir()
   (state/'ipc.h').write_text('enum { IPC_REQUEST=31, IPC_RESPONSE=32 };',encoding='utf-8')

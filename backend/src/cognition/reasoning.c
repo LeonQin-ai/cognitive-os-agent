@@ -3617,6 +3617,7 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
             picked = llm_create(rt->provider, rt->base_url, rt->api_key, rt->model);
             if (picked) {
                 picked->context_window_tokens = rt->context_window_tokens;
+                picked->max_output_tokens = rt->max_output_tokens;
                 saved = r->llm;
                 r->llm = picked;
             }

@@ -1,0 +1,16 @@
+const assert=require('node:assert/strict');
+const fs=require('node:fs');
+const vm=require('node:vm');
+const html=fs.readFileSync(require('node:path').join(__dirname,'../apps/web/index.html'),'utf8');
+const extract=name=>html.match(new RegExp('(?:async )?function '+name+'\\([^]*?\\n}'))[0];
+const posts=[];
+const context={esc:s=>String(s).replaceAll('<','&lt;'),ROUTES:[{name:'ark',provider:'openai',model:'fixture',base_url:'https://fixture',context_window:1048576}],prompt:()=> 'new fixture key',$:()=>({}),call:async(method,path,body)=>{posts.push(body);return{status:200}},loadModels:()=>{}};
+vm.createContext(context);
+vm.runInContext(['routeContextLabel','fetchedModelMetadata','editRouteKey'].map(extract).join('\n'),context);
+assert.match(context.routeContextLabel({context_window:262144,context_source:'fallback'}),/默认回退/);
+assert.match(context.routeContextLabel({context_window:1048576,context_source:'catalog'}),/已核实能力目录/);
+assert.match(context.routeContextLabel({context_window:1048576,context_source:'provider_metadata'}),/供应商元数据/);
+assert.equal(context.fetchedModelMetadata({id:'unknown'}).context_source,'fallback');
+assert.equal(context.fetchedModelMetadata({context_window:1048576}).context_source,'provider_metadata');
+assert.equal(context.fetchedModelMetadata({context_window:-1}).context_source,'fallback');
+(async()=>{await context.editRouteKey(0);assert.equal(posts.length,1);assert.ok(!('context_window' in posts[0]));assert.ok(!('max_output_tokens' in posts[0]));console.log('PASS: context source labels, missing discovery and key update preserve server metadata');})().catch(e=>{console.error(e);process.exitCode=1});

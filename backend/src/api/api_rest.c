@@ -1932,7 +1932,8 @@ static int h_route_add(const http_request *req, http_response *resp, void *ud) {
         if (!cJSON_IsNumber(window))
             window = cJSON_GetObjectItemCaseSensitive(root, "context_window_tokens");
         if (window && cJSON_IsNumber(window))
-            router_set_context_window(ctx->router, name, (long long)window->valuedouble);
+            router_set_model_metadata(ctx->router,name,(long long)window->valuedouble,
+                (long long)json_dbl(root,"max_output_tokens",0),json_str(root,"context_source"));
     }
     cJSON_Delete(root);
     s = ctx->router ? router_json(ctx->router) : xstrdup("[]");

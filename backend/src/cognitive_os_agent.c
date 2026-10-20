@@ -959,6 +959,7 @@ int init(runtime_ctx *ctx, const config *cfg) {
                     llm *nl = llm_create(best->provider, best->base_url, best->api_key, best->model);
                     if (nl) {
                         nl->context_window_tokens = best->context_window_tokens;
+                        nl->max_output_tokens = best->max_output_tokens;
                         char cfgfile[600];
                         llm_destroy(ctx->llm);
                         ctx->llm = nl;
@@ -994,6 +995,7 @@ int init(runtime_ctx *ctx, const config *cfg) {
                 strcmp(rt->base_url ? rt->base_url : "", base_url ? base_url : "") == 0) {
                 if (rt->context_window_tokens > 0) {
                     ctx->llm->context_window_tokens = rt->context_window_tokens;
+                    ctx->llm->max_output_tokens = rt->max_output_tokens;
                     break;
                 }
             }
@@ -1359,6 +1361,7 @@ int set_llm(runtime_ctx *ctx, const char *provider, const char *base_url, const 
                 strcmp(rt->base_url ? rt->base_url : "", base_url ? base_url : "") == 0) {
                 if (rt->context_window_tokens > 0) {
                     nl->context_window_tokens = rt->context_window_tokens;
+                    nl->max_output_tokens = rt->max_output_tokens;
                     break;
                 }
             }

@@ -633,6 +633,7 @@ static int planner_output_tokens(llm *l, int requested) {
     if (window > 0 && output > window / 2) output = window / 2;
     if (output > upper) output = upper;
     if (output < 1024) output = 1024;
+    if (l && l->max_output_tokens > 0 && output > l->max_output_tokens) output=l->max_output_tokens;
     return (int)output;
 }
 

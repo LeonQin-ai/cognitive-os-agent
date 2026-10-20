@@ -98,6 +98,14 @@ char *catalog_github_fetch_skill(const char *repo);
  * api_key can use. Returns [{"id":"...","context_window":...}] entries
  * (context_window omitted when absent upstream), or NULL on failure.
  * Blocking network I/O — call from a worker, not the HTTP thread. */
+typedef struct catalog_model_capability {
+    long long context_window;
+    long long max_output_tokens;
+    const char *source_url;
+} catalog_model_capability;
+/* Verified snapshot, scoped to exact endpoints and model IDs. No network I/O. */
+int catalog_model_capabilities(const char *provider, const char *base_url, const char *model,
+                               catalog_model_capability *out);
 char *catalog_provider_models_json(const char *provider, const char *base_url, const char *api_key, char *err,
                                    size_t errcap);
 

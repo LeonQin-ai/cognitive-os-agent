@@ -808,6 +808,31 @@ char *catalog_skills_json(void) {
 
 /* ================= provider model catalog (issue #18) ================= */
 
+/* Ark model card, verified 2026-10-21. Capacities, not request defaults.
+ * https://ark.volcengine.com/region:cn-beijing/model/detail?name=deepseek-v4-1-flash */
+int catalog_model_capabilities(const char *provider, const char *base_url, const char *model,
+                               catalog_model_capability *out) {
+    if (!out) return 0;
+    memset(out, 0, sizeof(*out));
+    if (!provider || strcmp(provider,"openai") || !base_url || !model) return 0;
+    const char *bases[] = {"https://ark.cn-beijing.volces.com/api/plan/v3",
+                           "https://ark.cn-beijing.volces.com/api/v3"};
+    int endpoint = 0;
+    for (size_t i=0;i<sizeof(bases)/sizeof(bases[0]);i++) {
+        size_t n=strlen(bases[i]);
+        if (!strncmp(base_url,bases[i],n) && (!base_url[n] ||
+            (base_url[n]=='/' && !base_url[n+1]))) endpoint=1;
+    }
+    const char *ids[] = {"deepseek-v4.1-flash", "deepseek-v4-1-flash-261017", "deepseek-v4-1-flash-260910"};
+    int matched=0;
+    for(size_t i=0;i<sizeof(ids)/sizeof(ids[0]);i++) if(!strcmp(model,ids[i])) matched=1;
+    if (!endpoint || !matched) return 0;
+    out->context_window=1048576;
+    out->max_output_tokens=393216;
+    out->source_url="https://ark.volcengine.com/region:cn-beijing/model/detail?name=deepseek-v4-1-flash";
+    return 1;
+}
+
 char *catalog_provider_models_json(const char *provider, const char *base_url, const char *api_key, char *err,
                                    size_t errcap) {
     static const char *OPENAI_PATHS[] = {"/models", "/v1/models"};
@@ -897,8 +922,6 @@ char *catalog_provider_models_json(const char *provider, const char *base_url, c
     cJSON_ArrayForEach(it, arr) {
         cJSON *id = cJSON_GetObjectItemCaseSensitive(it, idkey);
         cJSON *status = cJSON_GetObjectItemCaseSensitive(it, "status");
-        char esc[300];
-        char buf[520];
         size_t blen;
         char *no;
         long long context_window = 0;
@@ -910,6 +933,8 @@ char *catalog_provider_models_json(const char *provider, const char *base_url, c
         cJSON *window = cJSON_GetObjectItemCaseSensitive(it, "context_window");
         if (!cJSON_IsNumber(window))
             window = cJSON_GetObjectItemCaseSensitive(it, "context_length");
+        if (!cJSON_IsNumber(window))
+            window = cJSON_GetObjectItemCaseSensitive(it, "max_input_tokens");
         if (cJSON_IsNumber(window) && window->valuedouble >= 1024 && window->valuedouble <= 4000000)
             context_window = (long long)window->valuedouble;
         if (!context_window) {
@@ -918,30 +943,39 @@ char *catalog_provider_models_json(const char *provider, const char *base_url, c
             if (cJSON_IsNumber(window) && window->valuedouble >= 1024 && window->valuedouble <= 4000000)
                 context_window = (long long)window->valuedouble;
         }
-        json_esc(esc, sizeof(esc), id->valuestring);
-        if (context_window)
-            blen = (size_t)snprintf(buf, sizeof(buf), "%s{\"id\":\"%s\",\"context_window\":%lld}",
-                                    n ? "," : "", esc, context_window);
-        else
-            blen = (size_t)snprintf(buf, sizeof(buf), "%s{\"id\":\"%s\"}", n ? "," : "", esc);
-        no = realloc(out, off + blen + 2);
-        if (!no)
-            break;
-        out = no;
-        memcpy(out + off, buf, blen + 1);
-        off += blen;
+        catalog_model_capability known;
+        int has_known=catalog_model_capabilities(provider,base_url,id->valuestring,&known);
+        const char *source=context_window ? "provider_metadata" : has_known ? "catalog" : "fallback";
+        if (!context_window && has_known) context_window=known.context_window;
+        cJSON *output=cJSON_GetObjectItemCaseSensitive(it,"max_output_tokens");
+        if(!cJSON_IsNumber(output)) output=cJSON_GetObjectItemCaseSensitive(it,"max_tokens");
+        long long max_output=cJSON_IsNumber(output) && output->valuedouble>=1024 && output->valuedouble<=4000000
+            ? (long long)output->valuedouble : has_known ? known.max_output_tokens : 0;
+        cJSON *entry=cJSON_CreateObject();
+        cJSON_AddStringToObject(entry,"id",id->valuestring);
+        if(context_window) cJSON_AddNumberToObject(entry,"context_window",(double)context_window);
+        if(max_output) cJSON_AddNumberToObject(entry,"max_output_tokens",(double)max_output);
+        cJSON_AddStringToObject(entry,"context_source",source);
+        char *encoded=cJSON_PrintUnformatted(entry);cJSON_Delete(entry);
+        if(!encoded) break;
+        blen=strlen(encoded);
+        no=realloc(out,off+blen+3);
+        if(!no) { free(encoded);break; }
+        out=no;
+        if(n)out[off++]=',';
+        memcpy(out+off,encoded,blen);off+=blen;free(encoded);
         n++;
         if (n >= 200)
             break;
     }
-    out[off] = ']';
-    out[off + 1] = '\0';
     cJSON_Delete(root);
     if (n == 0) {
         free(out);
         MODELS_SET_ERR("provider returned an empty model list");
         return NULL;
     }
+    out[off] = ']';
+    out[off + 1] = '\0';
     return out;
 }
 

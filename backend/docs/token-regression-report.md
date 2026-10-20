@@ -260,3 +260,16 @@ Issue 原文在最终答复中说“我已经阅读了大部分核心文件。�
 初版“每个工具进度快照复核”真实付费测试发现递归风险，已废弃：build/live-api-suite-20261020-200441/，120秒测试超时，隔离进程已停止；最后可见13请求/12工具，输入72568、输出8015，共**至少80583 tokens**，进行中的请求usage缺失，不能视为最终精确账单。该失败不能从成本统计中剔除。最终实现收紧为每任务一次复核后另行测试，见下。
 
 最终单次复核版本真实回归：build/live-api-suite-20261020-200713/，配置ark/deepseek-v4.1-flash，全程由Cognitive OS Agent执行，**DONE / 独立校验通过**；9次模型请求、15个实际工具、0模型失败、101.910秒，最终分析3111字，三个源码文件读取和隐藏随机操作码均核对通过。输入48345、输出27600，共**75945 tokens**。输出usage包含模型侧推理成本，不等于最终文本字数。此次两次尝试已知usage合计**至少156528 tokens**，未计入此前44122-token基线。相较此前8请求/44122-token样例，本轮成本更高，模型仍有重复读取，不声称token优化或原30工具任务已原样重放；本次验证的是补齐完成判定漏点且单次复核可以终止。
+
+
+## #189 模型能力来源、持久化与默认回退
+
+对照源码（只读，不安装或运行第三方Agent）：OpenCode 5c3891ec 的 `packages/core/src/models-dev.ts` 由独立能力目录的文件/缓存/随包快照初始化，再异步刷新；字段分别为limit.context/input/output。Codex 6b13dffc 的 `codex-rs/models-manager/src/{manager,cache,model_info}.rs` 管理远端/缓存/随包目录及身份隔离；`protocol/src/openai_models.rs` 区分context_window、max_context_window、effective_context_window_percent与auto_compact_token_limit，未知模型标记used_fallback_model_metadata。都不是从聊天地址盲目追加/models就能获知任意供应商能力。本次借鉴能力来源与缓存保留结构，没有复制整个第三方目录、启用第三方Agent或宣称完整复刻其刷新机制。
+
+真实方舟Coding Plan配置的两个模型发现路径均HTTP404（元数据GET，不产生生成token）。旧代码把262144默认值持久化并作为真实能力展示，同名路由改Key还重置能力。修复把供应商元数据、已核实目录、已有配置、默认回退分开标识；支持max_input_tokens与max_output_tokens/max_tokens字段；精确匹配方舟官方HTTPS端点与明确模型ID的能力快照兜底，不把相似名称或其他代理地址当成同等能力。根据用户提供的方舟规格记录1048576-token上下文、393216-token最大输出，出处 https://ark.volcengine.com/region:cn-beijing/model/detail?name=deepseek-v4-1-flash 。目录快照核对日期2026-10-21，后续模型规格变更需要更新快照；不把目录值伪装成现场接口返回。
+
+已有未标来源的256K记录迁移为fallback，已知方舟模型因此使用目录能力；非256K历史配置兼容保留。相同模型/端点改Key保留已缓存能力，元数据缺失不覆盖有效缓存；改变模型/端点会重新解析，避免能力串用。输出容量独立透传，当前默认单次输出预算保持原策略，不因支持384K就每次预留384K；但供应商声明较小输出容量时实际max_tokens会受其约束。
+
+回归：新增API旧记录迁移、改Key、空元数据、持久化重启与未知模型来源；UI来源标签和改Key请求不提交伪造默认；原生OpenAI/Anthropic全部用例在1M上下文/4096最大输出的fixture上运行，逐请求断言max_tokens=4096；单元覆盖输入/输出元数据别名、缓存优先与端点/模型精确隔离。均为离线fixture，不计入真实模型成绩。
+
+真实API通过Cognitive OS Agent配置ark/deepseek-v4.1-flash普通能力问答回归：DONE，1次模型请求、0工具、0失败、5.010秒，输入4007/输出602，共**4609 tokens**。证据仅保留build/live-api-suite-20261021-074000/。没有额外付费失败尝试，没有代替Agent生成交付物；这只验证配置后的真实调用可正常结束，不代表实际发送了1M-token压力请求。

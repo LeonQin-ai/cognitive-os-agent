@@ -45,6 +45,8 @@ jobs:
         run: |
           ./build-macos/cognitive-os-agent-test --session-scale 300 state-test/session-scale-ci
           COA_BUILD_DIR=build-macos python3 tests/test_session_paging_e2e.py
+      - name: Model capability migration and persistence
+        run: python tests/test_model_capabilities_e2e.py
       - name: Native tool block continuation regression
         run: COA_BUILD_DIR=build-macos python3 tests/test_native_tool_loop.py
       - name: Information answer completion regression
@@ -86,6 +88,8 @@ jobs:
         run: |
           ./build/cognitive-os-agent-test --session-scale 300 state-test/session-scale-ci
           python tests/test_session_paging_e2e.py
+      - name: Model capability migration and persistence
+        run: python tests/test_model_capabilities_e2e.py
       - name: Native tool block continuation regression
         run: python tests/test_native_tool_loop.py
       - name: Information answer completion regression
@@ -166,6 +170,8 @@ jobs:
         run: |
           ./build/cognitive-os-agent-test.exe --session-scale 300 state-test/session-scale-ci
           python tests/test_session_paging_e2e.py
+      - name: Model capability migration and persistence
+        run: python tests/test_model_capabilities_e2e.py
       - name: Native tool block continuation regression
         run: python tests/test_native_tool_loop.py
       - name: Information answer completion regression
@@ -186,6 +192,7 @@ jobs:
       - name: Recent status and file detail browser regressions
         run: |
           npm ci --prefix webarena --ignore-scripts --no-audit --no-fund
+          node tests/test_model_capabilities_ui.cjs
           NODE_PATH="$PWD/webarena/node_modules" node tests/test_issue_ui.cjs
           NODE_PATH="$PWD/webarena/node_modules" node tests/test_im_members_ui.cjs
           NODE_PATH="$PWD/webarena/node_modules" node tests/test_flow_resume_ui.cjs

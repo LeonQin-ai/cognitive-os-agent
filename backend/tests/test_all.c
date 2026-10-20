@@ -3338,6 +3338,31 @@ static void test_router(void) {
     CHECK(router_get(loaded, 0)->context_window_tokens == 16384);
     router_free(loaded);
     fs_remove("state-test/routes-context.json");
+    const char *ark="https://ark.cn-beijing.volces.com/api/plan/v3";
+    CHECK(router_add(r,"ark","openai",ark,"fixture-key","deepseek-v4.1-flash",1)==0);
+    const route *known=router_get(r,2);
+    CHECK(known && known->context_window_tokens==1048576 && known->max_output_tokens==393216);
+    CHECK(!strcmp(known->context_source,"catalog"));
+    CHECK(router_set_model_metadata(r,"ark",1500000,200000,"provider_metadata")==0);
+    CHECK(router_add(r,"ark","openai",ark,"new-fixture-key","deepseek-v4.1-flash",1)==0);
+    CHECK(router_get(r,2)->context_window_tokens==1500000);
+    CHECK(router_get(r,2)->max_output_tokens==200000);
+    CHECK(router_set_model_metadata(r,"ark",262144,0,"fallback")==0);
+    CHECK(router_get(r,2)->context_window_tokens==1500000);
+    CHECK(router_save_file(r,"state-test/routes-context.json")==0);
+    loaded=router_new();CHECK(router_load_file(loaded,"state-test/routes-context.json")==0);
+    CHECK(router_get(loaded,2)->context_window_tokens==1500000);
+    CHECK(!strcmp(router_get(loaded,2)->context_source,"provider_metadata"));
+    CHECK(router_get(loaded,2)->max_output_tokens==200000);
+    router_free(loaded);fs_remove("state-test/routes-context.json");
+    CHECK(router_add(r,"ark","openai",ark,"fixture-key","unknown-model",1)==0);
+    CHECK(router_get(r,2)->context_window_tokens==262144 && !strcmp(router_get(r,2)->context_source,"fallback"));
+    CHECK(router_remove(r,"ark")==1);
+    catalog_model_capability cap;
+    CHECK(catalog_model_capabilities("openai",ark,"deepseek-v4.1-flash",&cap));
+    CHECK(!catalog_model_capabilities("openai","https://ark.cn-beijing.volces.com.evil/api/plan/v3","deepseek-v4.1-flash",&cap));
+    CHECK(!catalog_model_capabilities("openai",ark,"prefix-deepseek-v4.1-flash",&cap));
+    CHECK(!catalog_model_capabilities("anthropic",ark,"deepseek-v4.1-flash",&cap));
     CHECK(router_count(r) == 2);
     CHECK(router_pick(r) != NULL);
     CHECK(router_pick(r) != NULL);
@@ -7543,6 +7568,7 @@ static int fake_provider_models(const http_request *req, http_response *resp, vo
         "{\"id\":\"fixture-direct\",\"context_window\":65536},"
         "{\"id\":\"fixture-alias\",\"context_length\":131072},"
         "{\"id\":\"fixture-nested\",\"top_provider\":{\"context_length\":262144}},"
+        "{\"id\":\"fixture-input-output\",\"max_input_tokens\":1048576,\"max_tokens\":393216},"
         "{\"id\":\"fixture-unknown\"}]} ");
     return 0;
 }
@@ -7557,11 +7583,15 @@ static void test_provider_model_context_metadata(void) {
     char err[256] = {0};
     char *json = catalog_provider_models_json("openai", "http://127.0.0.1:18217", "fixture-key", err, sizeof(err));
     cJSON *models = json ? cJSON_Parse(json) : NULL;
-    CHECK(cJSON_IsArray(models) && cJSON_GetArraySize(models) == 4);
+    CHECK(cJSON_IsArray(models) && cJSON_GetArraySize(models) == 5);
     cJSON *direct = cJSON_GetArrayItem(models, 0);
     cJSON *alias = cJSON_GetArrayItem(models, 1);
     cJSON *nested = cJSON_GetArrayItem(models, 2);
-    cJSON *unknown = cJSON_GetArrayItem(models, 3);
+    cJSON *limits = cJSON_GetArrayItem(models, 3);
+    cJSON *unknown = cJSON_GetArrayItem(models, 4);
+    CHECK(cJSON_GetObjectItemCaseSensitive(limits,"context_window")->valuedouble==1048576);
+    CHECK(cJSON_GetObjectItemCaseSensitive(limits,"max_output_tokens")->valuedouble==393216);
+    CHECK(!strcmp(cJSON_GetObjectItemCaseSensitive(limits,"context_source")->valuestring,"provider_metadata"));
     cJSON *window = cJSON_GetObjectItemCaseSensitive(direct, "context_window");
     CHECK(cJSON_IsNumber(window) && (long long)window->valuedouble == 65536);
     window = cJSON_GetObjectItemCaseSensitive(alias, "context_window");

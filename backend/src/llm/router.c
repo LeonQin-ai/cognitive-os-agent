@@ -1,6 +1,7 @@
 /* router.c — multi-provider model routing with pluggable selection policy
  * (round_robin / cost / latency / capability:<tag>). */
 #include "llm/router.h"
+#include "infra/catalog.h"
 #include "os/os_thread.h"
 #include "infra/util.h"
 
@@ -17,6 +18,15 @@ struct router {
     size_t tie_cursor; /* cursor within a tied best-class */
     char *policy;      /* "round_robin" | "cost" | "latency" | "capability:<tag>" */
 };
+
+static void route_default_capabilities(route *e) {
+    catalog_model_capability known;
+    int found=catalog_model_capabilities(e->provider,e->base_url,e->model,&known);
+    e->context_window_tokens=found ? known.context_window : 262144;
+    e->max_output_tokens=found ? known.max_output_tokens : 0;
+    snprintf(e->context_source,sizeof(e->context_source),"%s",found ? "catalog" : "fallback");
+}
+static int same_string(const char *a,const char *b) { return !strcmp(a?a:"",b?b:""); }
 
 router *router_new(void) {
     router *r = (router *)calloc(1, sizeof(router));
@@ -68,6 +78,7 @@ int router_add_ex(router *r, const char *name, const char *provider, const char 
     for (size_t i = 0; i < r->count; i++) {
         if (strcmp(r->routes[i].name, name) == 0) {
             route *e = &r->routes[i];
+            int same = same_string(e->provider,provider) && same_string(e->base_url,base_url) && same_string(e->model,model);
             free(e->provider);
             free(e->base_url);
             free(e->api_key);
@@ -81,7 +92,7 @@ int router_add_ex(router *r, const char *name, const char *provider, const char 
             e->weight = weight;
             e->cost_rank = cost_rank;
             e->latency_ms = latency_ms;
-            e->context_window_tokens = 262144;
+            if (!same) route_default_capabilities(e);
             mutex_unlock(&r->mtx);
             return 0;
         }
@@ -109,23 +120,32 @@ int router_add_ex(router *r, const char *name, const char *provider, const char 
     e->weight = weight;
     e->cost_rank = cost_rank;
     e->latency_ms = latency_ms;
-    e->context_window_tokens = 262144;
+    route_default_capabilities(e);
     mutex_unlock(&r->mtx);
     return 0;
 }
 
-int router_set_context_window(router *r, const char *name, long long tokens) {
-    if (!r || !name || tokens < 0 || tokens > 4000000) return -1;
+int router_set_model_metadata(router *r,const char *name,long long tokens,long long output,const char *source) {
+    if (!r || !name || tokens<1024 || tokens>4000000 || output<0 || output>4000000) return -1;
+    if (!source || (strcmp(source,"provider_metadata") && strcmp(source,"catalog") &&
+        strcmp(source,"configured") && strcmp(source,"fallback"))) source="configured";
     mutex_lock(&r->mtx);
-    for (size_t i = 0; i < r->count; i++) {
-        if (strcmp(r->routes[i].name, name) == 0) {
-            r->routes[i].context_window_tokens = tokens;
-            mutex_unlock(&r->mtx);
-            return 0;
+    for(size_t i=0;i<r->count;i++) if(!strcmp(r->routes[i].name,name)) {
+        route *e=&r->routes[i];
+        /* Missing discovery metadata must not overwrite a cached known capacity. */
+        int weaker = (!strcmp(source,"fallback") && strcmp(e->context_source,"fallback")) ||
+                     (!strcmp(source,"catalog") && !strcmp(e->context_source,"provider_metadata"));
+        if(!weaker) {
+            e->context_window_tokens=tokens;
+            if(output>0 || !e->max_output_tokens) e->max_output_tokens=output;
+            snprintf(e->context_source,sizeof(e->context_source),"%s",source);
         }
+        mutex_unlock(&r->mtx);return 0;
     }
-    mutex_unlock(&r->mtx);
-    return -1;
+    mutex_unlock(&r->mtx);return -1;
+}
+int router_set_context_window(router *r,const char *name,long long tokens) {
+    return router_set_model_metadata(r,name,tokens,0,"configured");
 }
 
 int router_remove(router *r, const char *name) {
@@ -318,6 +338,11 @@ char *router_json(router *r) {
         cJSON_AddNumberToObject(o, "cost_rank", e->cost_rank);
         cJSON_AddNumberToObject(o, "latency_ms", e->latency_ms);
         cJSON_AddNumberToObject(o, "context_window", (double)e->context_window_tokens);
+        cJSON_AddStringToObject(o,"context_source",e->context_source);
+        cJSON_AddNumberToObject(o,"max_output_tokens",(double)e->max_output_tokens);
+        catalog_model_capability known;
+        if(!strcmp(e->context_source,"catalog") && catalog_model_capabilities(e->provider,e->base_url,e->model,&known))
+            cJSON_AddStringToObject(o,"capability_source_url",known.source_url);
         /* Keep the old response field during API migration. */
         cJSON_AddNumberToObject(o, "context_window_tokens", (double)e->context_window_tokens);
         if (e->caps)
@@ -433,7 +458,13 @@ int router_load_file(router *r, const char *path) {
         router_add_ex(r, name->valuestring, prov->valuestring, (b && cJSON_IsString(b)) ? b->valuestring : NULL,
                           (k && cJSON_IsString(k)) ? k->valuestring : NULL,
                           (m && cJSON_IsString(m)) ? m->valuestring : NULL, weight, cost, lat, caps);
-        if (cw && cJSON_IsNumber(cw)) router_set_context_window(r, name->valuestring, (long long)cw->valuedouble);
+        cJSON *source=cJSON_GetObjectItemCaseSensitive(it,"context_source");
+        cJSON *output=cJSON_GetObjectItemCaseSensitive(it,"max_output_tokens");
+        /* Old clients persisted the default as if it were discovered metadata. */
+        const char *origin=cJSON_IsString(source) ? source->valuestring :
+            cJSON_IsNumber(cw) && cw->valuedouble!=262144 ? "configured" : "fallback";
+        if (cJSON_IsNumber(cw)) router_set_model_metadata(r,name->valuestring,(long long)cw->valuedouble,
+            cJSON_IsNumber(output)?(long long)output->valuedouble:0,origin);
     }
 
     cJSON_Delete(arr);

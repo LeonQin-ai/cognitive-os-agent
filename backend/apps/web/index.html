@@ -4751,7 +4751,7 @@ async function loadModels(){
       + '<td>' + esc(x.provider || '') + '</td>'
       + '<td>' + esc(x.model || '') + '</td>'
       + '<td class="muted">' + esc(x.base_url || '') + '</td>'
-      + '<td>' + (x.context_window || x.context_window_tokens || '未提供（默认 256K）') + '</td>'
+      + '<td>' + routeContextLabel(x) + '</td>'
       + '<td>' + (x.weight != null ? x.weight : 1) + '</td>'
       + '<td>' + (x.calls != null ? x.calls : 0) + '</td>'
       + '<td><button onclick="testRoute(' + i + ')" class="sec sm">Test</button> '
@@ -4787,8 +4787,7 @@ async function editRouteKey(i){
   const st = $('models-stat'); if(st) st.textContent = 'updating key…';
   const r = await call('POST', '/v1/routes', {
     name: x.name, provider: x.provider, base_url: x.base_url || '', model: x.model || '',
-    api_key: k.trim(), weight: x.weight != null ? x.weight : 1,
-    context_window: x.context_window || x.context_window_tokens || 262144
+    api_key: k.trim(), weight: x.weight != null ? x.weight : 1
   });
   if(st) st.textContent = (r.status < 300) ? 'API Key 已更新' : 'error ' + r.status;
   loadModels();
@@ -4797,12 +4796,21 @@ async function editRouteKey(i){
 /* ===== 拉取供应商可用模型列表（issue #18）===== */
 let FETCHED_MODELS = [];
 
+function routeContextLabel(model){
+  const value = Number(model && (model.context_window || model.context_window_tokens)) || 262144;
+  const source = model && model.context_source || 'fallback';
+  const labels = {provider_metadata:'供应商元数据', catalog:'已核实能力目录', configured:'已有配置', fallback:'未获取，默认回退'};
+  return esc(value.toLocaleString() + ' tokens · ' + (labels[source] || labels.fallback));
+}
+function fetchedModelMetadata(model){
+  const value = Number(model && (model.context_window || model.context_window_tokens));
+  const known = Number.isInteger(value) && value >= 1024 && value <= 4000000;
+  return {context_window: known ? value : 262144,
+    context_source: known ? (model.context_source || 'provider_metadata') : 'fallback',
+    max_output_tokens: Number(model && model.max_output_tokens) || 0};
+}
 function fetchedModelId(model){
   return typeof model === 'string' ? model : String(model && model.id || '');
-}
-function fetchedModelContext(model){
-  const value = Number(model && (model.context_window || model.context_window_tokens));
-  return Number.isInteger(value) && value >= 1024 && value <= 4000000 ? value : 262144;
 }
 
 async function fetchModels(){
@@ -4869,7 +4877,7 @@ async function pickFetchedModel(index){
   const existing = ROUTES.find(x => x.name === name);
   const r = await call('POST', '/v1/routes', {name, provider, base_url: base, model: m,
     api_key: key || (existing && existing.api_key) || '', weight: existing && existing.weight != null ? existing.weight : 1,
-    context_window: fetchedModelContext(modelInfo)});
+    ...fetchedModelMetadata(modelInfo)});
   if(!(r.status < 300)){ toast('创建路由失败：HTTP ' + r.status); return; }
   const inp = $('r-model'); if(inp) inp.value = m;
   const st = $('models-stat'); if(st) st.textContent = 'switching…';
@@ -4894,7 +4902,7 @@ async function addFetchedModels(){
     const name = (provider + '-' + m.replace(/[^A-Za-z0-9._-]/g, '-')).slice(0, 60);
     if(have.has(name)){ skipped++; continue; }
     have.add(name);
-    const r = await call('POST', '/v1/routes', {name, provider, base_url: base, model: m, api_key: key, weight: 1, context_window: fetchedModelContext(modelInfo)});
+    const r = await call('POST', '/v1/routes', {name, provider, base_url: base, model: m, api_key: key, weight: 1, ...fetchedModelMetadata(modelInfo)});
     if(r.status < 300) created++; else skipped++;
   }
   if(st) st.textContent = '✔ 已创建 ' + created + ' 条路由' + (skipped ? '（跳过 ' + skipped + ' 条已存在）' : '');
