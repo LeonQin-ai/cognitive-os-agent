@@ -9,7 +9,17 @@ class Provider(BaseHTTPRequestHandler):
         body=json.loads(self.rfile.read(int(self.headers['Content-Length'])))
         text=body['messages'][-1]['content']
         current=text.split('## Current request\n',1)[-1].split('\n## ',1)[0]
-        if 'UTF8_DIAGNOSTIC' in current:
+        if 'HTML_STALL' in current:
+            n=counts.get('stall',0);counts['stall']=n+1
+            answer='我需要先检查报告内容，然后继续生成架构图。阶段 '+str(n)
+        elif 'HTML_RECOVERY' in current:
+            n=counts.get('html',0); counts['html']=n+1
+            answer=(json.dumps([{'tool':'file_write','args':{'path':'report.html','content':'<!doctype html><html><body>Architecture and flow diagram</body></html>'}}]) if n==0 else
+                    '我需要先检查已生成的报告文件是否存在且内容完整。' if n==1 else
+                    '让我读取现有的 HTML 报告文件，确认架构图和流程图。' if n==2 else
+                    json.dumps([{'tool':'file_read','args':{'path':'report.html'}}]) if n==3 else
+                    '报告已生成并读取核对：report.html。')
+        elif 'UTF8_DIAGNOSTIC' in current:
             n=counts.get('utf8',0); counts['utf8']=n+1
             answer=(json.dumps([{'tool':'shell','args':{'command':'python emit_invalid.py'}}]) if n==0 else
                     json.dumps([{'tool':'shell','args':{'command':'python emit_valid.py'}}]) if n==1 else
@@ -58,6 +68,14 @@ with tempfile.TemporaryDirectory(prefix='coa-completion-recovery-') as folder:
                     if t['status'] in ('DONE','FAILED','CANCELLED','TIMEOUT'): return t
                     assert time.monotonic()<deadline,t
                     time.sleep(.05)
+            html=finished(request('/v1/tasks',{'prompt':'输出一个html报告并检查内容 HTML_RECOVERY'})['id'])
+            assert html['status']=='DONE' and counts.get('html')==5,html
+            assert (state/'report.html').exists()
+            assert any(step.get('tool')=='file_read' for step in html.get('steps',[])),html
+            print('PASS: HTML write followed by two narration rounds recovers to actual read and final delivery')
+            stalled=finished(request('/v1/tasks',{'prompt':'输出HTML报告 HTML_STALL'})['id'])
+            assert stalled['status']=='FAILED' and counts['stall']==5,stalled
+            print('PASS: narration without any progress stops after bounded recovery; no false DONE')
             no_action=finished(request('/v1/tasks',{'prompt':'注册这些skills REGISTER_DIAGNOSTIC'})['id'])
             assert no_action['status']=='FAILED' and 'skill_manage' in no_action['output'],no_action
             (state/'partial.txt').write_text('x'*7500+'EOF_DIAGNOSTIC',encoding='utf-8')

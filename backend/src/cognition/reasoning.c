@@ -3843,13 +3843,13 @@ restart_planning:
             if (needs_action || needs_read || needs_observation || needs_intent_recovery) {
                 /* A plain-text answer closes the loop once its explicit action,
                  * read, and observation gates are met. If a gate is still
-                 * unmet, allow one correction request, then fail closed. */
+                 * unmet, allow bounded consecutive correction requests, then fail closed. */
                 if (last_narration && txt && strcmp(txt, last_narration) == 0) {
                     unfinished = 1;
                     final_text = xstrdup(txt);
                     break;
                 }
-                if (r->max_rounds <= 1 || r->intent_nudged >= 1 || r->round_idx >= r->max_rounds) {
+                if (r->max_rounds <= 1 || r->intent_nudged >= 4 || r->round_idx >= r->max_rounds) {
                     unfinished = 1;
                     final_text = xstrdup(txt ? txt : "");
                     break;
