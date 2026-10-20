@@ -42,6 +42,13 @@ for provider_name in ('openai','anthropic'):
    n=counts.get(case,0);counts[case]=n+1
    calls=[];answer='';stop='stop'
    if case.startswith('ANSWER_'):answer=matrix[int(case.split('_')[1])][1]
+   elif case in ('NATIVE_IPC_PROGRESS','NATIVE_IPC_PENDING'):
+    if n==0:calls=[('file_read',{'path':'native.txt'})]
+    elif n==1:
+     answer='基于已收集的大量代码证据，我需要再补充读取几个关键的 IPC 接口定义文件，以完整分析服务端与客户端的通信机制。'
+     if case=='NATIVE_IPC_PENDING':calls=[('complete_task',{'status':'complete','requires_tools':True,'answer':answer})];answer=''
+    elif n==2:calls=[('file_read',{'path':'ipc.h'})]
+    else:answer='服务端接收请求并发送响应，客户端发起调用；ipc.h 定义 IPC_REQUEST 和 IPC_RESPONSE 接口。'
    elif case=='NATIVE_PARTIAL':
     if n==0:calls=[('file_read',{'path':'explanation.txt','max_bytes':32})]
     else:answer='注释中的完整阅读是概念，本次片段足够解释，没有要求读取剩余内容。'
@@ -84,7 +91,7 @@ for provider_name in ('openai','anthropic'):
     if n==0:calls=[('file_write',{'path':'must-not-exist.txt','content':'bad-prefix'}),('file_write','{"path":')]
     elif n==1:calls=[('file_write',{'path':'repaired.txt','content':'recovered'})]
     else:answer='已交付 repaired.txt。'
-   if not calls and case!='NATIVE_CHATTER':calls=[('complete_task',{'status':'complete','requires_tools':False,'answer':answer})];answer=''
+   if not calls and case!='NATIVE_CHATTER' and not (case=='NATIVE_IPC_PROGRESS' and n==1):calls=[('complete_task',{'status':'complete','requires_tools':False,'answer':answer})];answer=''
    if provider_name=='openai':
     message={'content':answer or None}
     if calls:message['tool_calls']=[{'id':'c'+str(i),'type':'function','function':{'name':name,'arguments':json.dumps(args) if isinstance(args,dict) else args}} for i,(name,args) in enumerate(calls)]
@@ -100,6 +107,7 @@ for provider_name in ('openai','anthropic'):
   (state/'cognitive-os-agent.json').write_text(json.dumps({'llm.provider':provider_name,'llm.model':'native-test','llm.api_key':'local-fixture','llm.base_url':f'http://127.0.0.1:{server.server_port}','reasoning.max_rounds':32}),encoding='utf-8')
   if os.name!='nt':(state/'alias').symlink_to(state,target_is_directory=True)
   else:(state/'alias').mkdir()
+  (state/'ipc.h').write_text('enum { IPC_REQUEST=31, IPC_RESPONSE=32 };',encoding='utf-8')
   (state/'explanation.txt').write_text('Example comment: full source reading.\n'+'x'*5000,encoding='utf-8')
   for i in range(17):(state/f'research-{i}.txt').write_text(f'unique-example-{i}',encoding='utf-8')
   with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
@@ -131,6 +139,10 @@ for provider_name in ('openai','anthropic'):
     for i,(prompt,answer) in enumerate(matrix):
      case=f'ANSWER_{i}';task=run(case,prompt)
      assert task['status']=='DONE' and counts[case]==1 and not task['steps'] and task['output']==answer,(prompt,task)
+    for case in ('NATIVE_IPC_PROGRESS','NATIVE_IPC_PENDING'):
+     ipc=run(case,'分析代码中的服务端和客户端。')
+     assert ipc['status']=='DONE' and counts[case]==4,ipc
+     assert [st['tool'] for st in ipc['steps']]==['file_read','file_read'] and 'IPC_REQUEST' in ipc['output'],ipc
     partial=run('NATIVE_PARTIAL','阅读样例文件的相关片段，解释注释中的“完整读取全部源码”是什么意思。')
     assert partial['status']=='DONE' and counts['NATIVE_PARTIAL']==2 and len(partial['steps'])==1,partial
     research=run('NATIVE_RESEARCH','请分析样例中的 create operation，提供技术说明。')

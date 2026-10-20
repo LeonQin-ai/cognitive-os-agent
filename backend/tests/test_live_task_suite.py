@@ -37,7 +37,7 @@ config.update({'reasoning.max_rounds':-1,'llm.routing':'fixed','scheduler.worker
 report_path=output/'report.json'
 report=json.loads(report_path.read_text(encoding='utf-8')) if report_path.exists() else {'model':config.get('llm.model'),'cases':{},'attempts':[]}
 selected=args.cases.split(',')
-assert all(c in ('source','ppt','image','ocr','diagram_ocr','analysis','html','header_recovery','search_discovery','capabilities','quoted_read','translation','howto','missing_recovery') for c in selected)
+assert all(c in ('source','ppt','image','ocr','diagram_ocr','analysis','html','header_recovery','search_discovery','capabilities','quoted_read','translation','howto','missing_recovery','ipc_analysis') for c in selected)
 source_files=[(backend/p).as_posix() for p in ('include/context/mmu.h','src/retrieval/context_builder.c','src/cognition/reasoning.c')]
 active=None
 last_task={}
@@ -111,6 +111,12 @@ with tempfile.TemporaryDirectory(prefix='coa-live-suite-state-') as folder:
                         marker='RECOVER-'+secrets.token_hex(5)
                         fixture=active/'recover.txt'
                         prompt=f'文件容错回归：先仅调用file_read读取 {fixture.as_posix()} 一次，让工具报告尚不存在；不要提前创建。观察失败后再用file_write创建同一文件，内容为 {marker}，然后实际file_read同一文件核对。完成后直接返回标记，不重复最初错误步骤。'
+                    elif case=='ipc_analysis':
+                        opcode=secrets.randbelow(50000)+1000
+                        (active/'ipc.h').write_text(f'enum {{ IPC_REQUEST={opcode}, IPC_RESPONSE={opcode+1} }};\nstruct Message {{ int opcode; int value; }};',encoding='utf-8')
+                        (active/'server.c').write_text('#include "ipc.h"\nint handle(struct Message m){ if(m.opcode!=IPC_REQUEST)return -1; return m.value+1; }',encoding='utf-8')
+                        (active/'client.c').write_text('#include "ipc.h"\nint request(int fd,int value){ struct Message m={IPC_REQUEST,value}; return send_message(fd,&m); }',encoding='utf-8')
+                        prompt=f'分析 {active.as_posix()} 示例代码中的服务端和客户端，补充阅读IPC接口定义，说明请求响应流程、错误处理和局限。给出IPC_REQUEST实际数值并引用实际函数。只返回完整技术分析，不创建文件；不要停在还需要阅读的进度说明。'
                     elif case=='source':
                         prompt=prefix+f'阅读这些源码的相关实现并生成 source-overview.md，不要求全文：{json.dumps(source_files,ensure_ascii=False)}。技术开发者概要不少于1500字，覆盖 MMU、上下文组装、工具执行、循环停止和失败恢复，引用实际函数/路径，说明边界与取舍。实际保存文件，并自行检查内容和字数。最终答复给出文件位置。'
                     elif case=='search_discovery':
@@ -162,6 +168,12 @@ with tempfile.TemporaryDirectory(prefix='coa-live-suite-state-') as folder:
                         assert reads and not reads[0]['ok'] and any(st['ok'] for st in reads[1:]),reads
                         assert fixture.read_text(encoding='utf-8')==marker and marker in (task.get('output') or '')
                         result['checks']={'actual_read_failure':True,'actual_repaired_read':True,'marker_matched':True}
+                    elif case=='ipc_analysis':
+                        text=task.get('output') or ''
+                        reads=[st for st in task.get('steps',[]) if st['tool']=='file_read' and st['ok']]
+                        assert all(any(name in st['args'] for st in reads) for name in ('client.c','server.c','ipc.h')),reads
+                        assert str(opcode) in text and 'handle' in text and 'request' in text and len(text)>200,text
+                        result['checks']={'client_server_and_ipc_read':True,'hidden_opcode_matched':True,'answer_characters':len(text)}
                     elif case=='source':
                         path=active/'source-overview.md';text=path.read_text(encoding='utf-8');result['artifacts']['overview']=str(path)
                         result['checks']={'characters':len(text),'source_references':sum(p in text for p in ('mmu.h','context_builder.c','reasoning.c'))}
