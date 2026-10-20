@@ -618,14 +618,19 @@ static int planner_output_tokens(llm *l, int requested) {
 
 static char *native_tool_catalog(const tool_registry *tools, struct policy_engine *policy);
 
+int planner_uses_native_tools(const llm *l) {
+    const char *protocol=getenv("COA_TOOL_PROTOCOL");
+    return (!protocol || strcmp(protocol,"legacy")) && l && l->provider &&
+           (!strcmp(l->provider,"openai") || !strcmp(l->provider,"anthropic"));
+}
+
+
 size_t planner_input_budget_bytes_with_output(llm *l, const tool_registry *tools,
     struct skill_registry *skills, struct policy_engine *policy, int output_tokens) {
     char *sys = build_catalog_prompt(tools, skills, policy);
     size_t sys_bytes = strlen(sys ? sys : SYS_PROMPT);
     free(sys);
-    const char *protocol=getenv("COA_TOOL_PROTOCOL");
-    if((!protocol || strcmp(protocol,"legacy")) && l && l->provider &&
-       (!strcmp(l->provider,"openai") || !strcmp(l->provider,"anthropic"))) {
+    if(planner_uses_native_tools(l)) {
         char *native=native_tool_catalog(tools,policy);
         if(native)sys_bytes+=strlen(native)+1024; /* protocol instructions + native schemas */
         free(native);
@@ -771,9 +776,7 @@ static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_act
                              * (finish_reason=length) */
     if(visual && req.max_tokens>8192) req.max_tokens=8192;
     char *native_tools=NULL;
-    const char *protocol=getenv("COA_TOOL_PROTOCOL");
-    if ((!protocol || strcmp(protocol,"legacy")) && llm->provider &&
-        (!strcmp(llm->provider,"openai") || !strcmp(llm->provider,"anthropic")))
+    if (planner_uses_native_tools(llm))
         native_tools=native_tool_catalog(tools,policy);
     req.tools_json=native_tools;
     char *native_system=NULL;

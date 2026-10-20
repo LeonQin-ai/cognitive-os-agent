@@ -10,6 +10,8 @@ extern "C" {
 #endif
 
 typedef struct llm llm;
+/* Native protocol decisions must not be overridden by prose heuristics. */
+int planner_uses_native_tools(const llm *l);
 struct tool_registry;  /* action/tools.h */
 struct skill_registry; /* action/skill.h */
 struct policy_engine;  /* runtime/policy_engine.h */

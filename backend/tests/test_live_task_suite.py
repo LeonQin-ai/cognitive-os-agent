@@ -37,7 +37,7 @@ config.update({'reasoning.max_rounds':-1,'llm.routing':'fixed','scheduler.worker
 report_path=output/'report.json'
 report=json.loads(report_path.read_text(encoding='utf-8')) if report_path.exists() else {'model':config.get('llm.model'),'cases':{},'attempts':[]}
 selected=args.cases.split(',')
-assert all(c in ('source','ppt','image','ocr','diagram_ocr','analysis','html','header_recovery','search_discovery','capabilities') for c in selected)
+assert all(c in ('source','ppt','image','ocr','diagram_ocr','analysis','html','header_recovery','search_discovery','capabilities','quoted_read','translation','howto') for c in selected)
 source_files=[(backend/p).as_posix() for p in ('include/context/mmu.h','src/retrieval/context_builder.c','src/cognition/reasoning.c')]
 active=None
 last_task={}
@@ -100,7 +100,13 @@ with tempfile.TemporaryDirectory(prefix='coa-live-suite-state-') as folder:
                     prefix=f'这是实际交付任务，不要只描述计划。项目源码仅供查阅，不要改动项目文件。写入限定在 {active.as_posix()}。已有结果足够后直接交付，不重复未变化的检查；工具失败按真实错误纠正并重新验证。'
                     attached=None
                     if case=='capabilities':
-                        prompt='你有啥特殊的'
+                        prompt='你有什么特殊功能'
+                    elif case=='quoted_read':
+                        prompt='解释“完整阅读全部源代码”这句话的含义。这里只讨论概念，不要调用工具或读取文件。'
+                    elif case=='translation':
+                        prompt='把这句话翻译成英语：创建文件，然后删除文件。这是翻译任务，不要执行这些操作。'
+                    elif case=='howto':
+                        prompt='请解释如何查看Windows机器的CPU和内存状态，只介绍方法，不执行命令。'
                     elif case=='source':
                         prompt=prefix+f'阅读这些源码的相关实现并生成 source-overview.md，不要求全文：{json.dumps(source_files,ensure_ascii=False)}。技术开发者概要不少于1500字，覆盖 MMU、上下文组装、工具执行、循环停止和失败恢复，引用实际函数/路径，说明边界与取舍。实际保存文件，并自行检查内容和字数。最终答复给出文件位置。'
                     elif case=='search_discovery':
@@ -141,10 +147,12 @@ with tempfile.TemporaryDirectory(prefix='coa-live-suite-state-') as folder:
                     task=run_task(prompt,session,attached);result.update(task_summary(task))
                     if case=='ocr':(active/'expected.json').write_text(json.dumps(expected,ensure_ascii=False),encoding='utf-8')
                     assert task.get('status')=='DONE','Agent did not finish: '+str(task.get('output',''))[:500]
-                    if case=='capabilities':
+                    if case in ('capabilities','quoted_read','translation','howto'):
                         text=task.get('output') or ''
-                        assert len(text)>20 and not task.get('model_failures'),text
-                        result['checks']={'answer_characters':len(text),'completed':True}
+                        assert len(text)>10 and not task.get('model_failures'),text
+                        assert task.get('tool_calls')==0 and not task.get('steps'),'informational request executed a tool'
+                        if case=='translation':assert 'creat' in text.lower() and 'delet' in text.lower(),text
+                        result['checks']={'answer_characters':len(text),'completed':True,'no_tools':True}
                     elif case=='source':
                         path=active/'source-overview.md';text=path.read_text(encoding='utf-8');result['artifacts']['overview']=str(path)
                         result['checks']={'characters':len(text),'source_references':sum(p in text for p in ('mmu.h','context_builder.c','reasoning.c'))}

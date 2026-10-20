@@ -3874,18 +3874,18 @@ restart_planning:
                 free(truncated_prefix); truncated_prefix=NULL;
                 break;
             }
-            int needs_action = !r->planner_native_end_turn && prompt_requires_mutation(completion_instruction(r,prompt)) && !run_has_mutating_action(r);
-            int needs_read = (prompt_requires_full_read(completion_instruction(r,prompt)) &&
+            int needs_action = !planner_uses_native_tools(r->llm) && prompt_requires_mutation(completion_instruction(r,prompt)) && !run_has_mutating_action(r);
+            int needs_read = !planner_uses_native_tools(r->llm) && ((prompt_requires_full_read(completion_instruction(r,prompt)) &&
                 (required_pending_reads(r,completion_instruction(r,prompt)) || r->read_tracking_overflow ||
                  answer_reports_required_unread(r,completion_instruction(r,prompt),txt))) ||
                 (!r->planner_native_end_turn && prompt_requests_read(completion_instruction(r,prompt)) &&
-                 !r->run_file_reads && !run_has_mutating_action(r));
-            int needs_observation = !r->planner_native_end_turn && prompt_requires_observation(completion_instruction(r,prompt)) &&
+                 !r->run_file_reads && !run_has_mutating_action(r)));
+            int needs_observation = !planner_uses_native_tools(r->llm) && prompt_requires_observation(completion_instruction(r,prompt)) &&
                                     r->run_successful_tools == 0;
             /* Prose heuristics are confined to the explicitly selected legacy
              * text protocol (and offline mock). Native turns can reach here
              * without actions only via a validated complete_task declaration. */
-            int needs_intent_recovery = !r->planner_native_end_turn && !prompt_is_direct_information_request(completion_instruction(r,prompt)) &&
+            int needs_intent_recovery = !planner_uses_native_tools(r->llm) && !prompt_is_direct_information_request(completion_instruction(r,prompt)) &&
                                         (r->run_successful_tools == 0 || answer_only_announces_work(txt)) &&
                                         looks_like_intent(txt);
             if (needs_action || needs_read || needs_observation || needs_intent_recovery) {
@@ -3971,7 +3971,7 @@ restart_planning:
          * ever more source pages. Once the model has had ample discovery
          * rounds, require an actual artifact action; research may continue
          * after the first write. This bounds the stalled phase, not the task. */
-        if (search_only && prompt_requires_mutation(completion_instruction(r,prompt)) &&
+        if (!planner_uses_native_tools(r->llm) && search_only && prompt_requires_mutation(completion_instruction(r,prompt)) &&
             !run_has_mutating_action(r)) {
             if (search_only_rounds >= 12 && !artifact_read_nudged) {
                 artifact_read_nudged = 1;
@@ -3986,7 +3986,7 @@ restart_planning:
             }
         }
         if ((search_only_rounds == 6 || (search_only_rounds > 6 && search_only_rounds % 12 == 0)) &&
-            !prompt_requires_mutation(completion_instruction(r,prompt)))
+            (planner_uses_native_tools(r->llm) || !prompt_requires_mutation(completion_instruction(r,prompt))))
             round_log_append(r, "[system] 已连续多轮读取或搜索资料。请评估已有证据是否足够回答；"
                                 "足够就直接给出最终答案，仍缺关键事实则继续读取不同的目标。");
         /* stall detection: the LLM proposed the exact same plan twice — no
@@ -4069,11 +4069,11 @@ restart_planning:
     int timed_out = !cancelled && run_aborted(r);
     /* A read-only final round may exhaust the budget without ever reaching
      * the no-plan guard above. It is still incomplete if a write was asked. */
-    if (!r->planner_native_end_turn && prompt_requires_mutation(completion_instruction(r,prompt)) && !run_has_mutating_action(r))
+    if (!planner_uses_native_tools(r->llm) && prompt_requires_mutation(completion_instruction(r,prompt)) && !run_has_mutating_action(r))
         unfinished = 1;
     if (stalled || synthesized || fail_aborted || r->tool_fail_aborted ||
         r->unresolved_failed_tool_count > 0 || r->unresolved_failed_tools_overflow ||
-        (prompt_requires_full_read(completion_instruction(r,prompt)) &&
+        (!planner_uses_native_tools(r->llm) && prompt_requires_full_read(completion_instruction(r,prompt)) &&
          (required_pending_reads(r,completion_instruction(r,prompt)) || r->read_tracking_overflow ||
           answer_reports_required_unread(r,completion_instruction(r,prompt),final_text))))
         unfinished = 1;
@@ -4103,14 +4103,14 @@ restart_planning:
             explained=1;
         }
         const char *instruction=completion_instruction(r,prompt);
-        if (!r->planner_native_end_turn && prompt_requires_mutation(instruction) && !run_has_mutating_action(r)) {
+        if (!planner_uses_native_tools(r->llm) && prompt_requires_mutation(instruction) && !run_has_mutating_action(r)) {
             strbuf_append(&out,"\n原因：尚无成功执行所请求操作的工具记录；读取文件或加载技能指令不能代替实际操作。");
             if ((strstr(instruction,"注册") || strstr(instruction,"register ")) &&
                 (strstr(instruction,"skill") || strstr(instruction,"技能")))
                 strbuf_append(&out," 请使用 skill_manage 注册技能并核对结果。");
             explained=1;
         }
-        if (required_pending_reads(r,instruction)) {
+        if (!planner_uses_native_tools(r->llm) && required_pending_reads(r,instruction)) {
             strbuf_append(&out,"\n原因：以下文件尚未连续读取到 EOF；继续使用 file_read 和所列 offset_bytes：");
             for(int i=0,shown=0;i<r->pending_reads_n && shown<8;i++) {
                 if(!path_requires_full_read(r,instruction,r->pending_reads[i].path)) continue;
