@@ -1761,7 +1761,9 @@ static char *build_context(reasoning *r, const char *prompt) {
         if (r->progress_cycle_warning_active)
             strbuf_append(&b, "[system] 检测到跨轮次循环：多轮交替读取或检查只返回已有结果，没有新增进展。不要重读相同文件页；请读取缺失的新页、修正失败原因并验证产物，或直接根据已有证据回答。\n");
         strbuf_append(&b, r->round_log + log_start);
-        if (r->round_idx >= r->max_rounds)
+        if(planner_uses_native_tools(r->llm))
+            strbuf_append(&b,"\nContinue this SAME request from the observed tool results. Use native functions for remaining work; use complete_task only when complete or blocked. Do not restart completed setup or repeat unchanged failed probes.\n\n");
+        else if (r->round_idx >= r->max_rounds)
             strbuf_append(&b, "\n这是最后一轮。不要再调用任何工具，也不要输出 JSON 动作；"
                                   "直接基于以上动作结果用纯文本给出最终答案（说明完成了什么、"
                                   "或还缺什么信息）。\n\n");
@@ -1775,7 +1777,7 @@ static char *build_context(reasoning *r, const char *prompt) {
     /* anti-pollution caution: history/notes/retrieved context are reference
      * only — the current request must always be planned and executed fresh */
     if (r->pending_reads_n) {
-        int required = required_pending_reads(r, completion_instruction(r, prompt));
+        int required = planner_uses_native_tools(r->llm) ? 0:required_pending_reads(r, completion_instruction(r, prompt));
         strbuf_append(&b, required ? "## 尚未连续读取到文件末尾 / unread page coverage\n" :
                                     "## 可选片段的续读游标（不是待办事项，不要求读到 EOF）\n");
         int shown = 0;
@@ -1814,7 +1816,23 @@ static char *build_context(reasoning *r, const char *prompt) {
     /* Drop the oldest background if other tiers already filled the selected
      * model's input allowance. Keep the latest observations, constraints and
      * current request; the complete log remains on disk and in the UI. */
-    size_t request_bytes = strlen(prompt) + strlen("## Current request\n");
+    char *continuation=NULL;
+    if(planner_uses_native_tools(r->llm) && r->round_idx>1){
+        cJSON *state=cJSON_CreateObject();
+        cJSON_AddNumberToObject(state,"round",r->round_idx);
+        cJSON_AddNumberToObject(state,"attempted_steps",r->n_steps);
+        if(r->n_steps){
+            const struct run_step *last=&r->steps[r->n_steps-1];cJSON *attempt=cJSON_CreateObject();
+            cJSON_AddStringToObject(attempt,"tool",last->tool);cJSON_AddNumberToObject(attempt,"ok",last->ok);
+            cJSON_AddStringToObject(attempt,"target",last->target);cJSON_AddItemToObject(state,"last_attempt",attempt);
+        }
+        char *json=cJSON_PrintUnformatted(state);cJSON_Delete(state);
+        strbuf note;strbuf_init(&note);strbuf_append(&note,"\n## Current execution state\n");
+        strbuf_append(&note,json?json:"{}");free(json);
+        strbuf_append(&note,"\nThis is a CONTINUATION, not a fresh request. The attempts above already happened in this run, including expected or unexpected failures. Choose the NEXT remaining action from the observations; do not repeat the initial step just because the original request is shown again. Retry a failed action only after changing the cause.\n");
+        continuation=strbuf_detach(&note);
+    }
+    size_t request_bytes = strlen(prompt) + strlen("## Current request\n") + (continuation?strlen(continuation):0);
     if (b.len + request_bytes > input_budget) {
         const char *omitted = "[Older context omitted to fit this model's window.]\n";
         size_t allowance = input_budget > request_bytes ? input_budget - request_bytes : 0;
@@ -1830,6 +1848,7 @@ static char *build_context(reasoning *r, const char *prompt) {
     }
     strbuf_append(&b, "## Current request\n");
     strbuf_append(&b, prompt);
+    if(continuation){strbuf_append(&b,continuation);free(continuation);}
     return strbuf_detach(&b);
 }
 

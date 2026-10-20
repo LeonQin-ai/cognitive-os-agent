@@ -33,6 +33,12 @@ for provider_name in ('openai','anthropic'):
     assert 'Respond with ONLY a JSON array' not in system
     assert '-> [{"tool"' not in system
    case=active_case
+   if counts.get(case,0)>0:
+    prompt=body['messages'][-1]['content']
+    cursor=json.loads(prompt.rsplit('## Current execution state\n',1)[1].split('\n',1)[0])
+    assert cursor['round']>=2
+    if case in ('NATIVE_RECOVERED','NATIVE_ALIAS') and counts[case]==1:
+     assert cursor['attempted_steps']==1 and cursor['last_attempt']['ok']==0
    n=counts.get(case,0);counts[case]=n+1
    calls=[];answer='';stop='stop'
    if case.startswith('ANSWER_'):answer=matrix[int(case.split('_')[1])][1]
