@@ -3829,6 +3829,9 @@ restart_planning:
              * aloud, while the model stuck narrating 4 rounds in a row will
              * not recover. Exhaustion must report an incomplete task. */
             const char *txt = strip_nudge_echo(result);
+            if(r->planner_native_end_turn==2) {
+                unfinished=1;final_text=xstrdup(txt?txt:"");break;
+            }
             if ((r->unresolved_failed_tool_count > 0 || r->unresolved_failed_tools_overflow) &&
                 failure_recovery_nudges < 1 && r->round_idx < r->max_rounds) {
                 failure_recovery_nudges++;
@@ -4080,6 +4083,9 @@ restart_planning:
     } else if (unfinished) {
         strbuf_append(&out, "任务未完成：尚未完成请求的阅读、操作或验证，当前结果仅为部分进展。");
         int explained=0;
+        if(r->planner_native_end_turn==2) {
+            strbuf_append(&out,"\n原因：模型通过结构化完成声明报告任务受阻，仍有未完成项。");explained=1;
+        }
         if (r->last_model_error[0]) {
             strbuf_appendf(&out,"\n模型 %s 请求失败：%s",r->llm && r->llm->model ? r->llm->model : "unknown",r->last_model_error);
             explained=1;

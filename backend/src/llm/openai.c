@@ -79,7 +79,7 @@ static char *build_request_body(const llm_request *req, const char *model, int s
         cJSON *tools=cJSON_Parse(req->tools_json);
         if (cJSON_IsArray(tools) && cJSON_GetArraySize(tools)>0) {
             cJSON_AddItemToObject(root,"tools",tools);
-            cJSON_AddStringToObject(root,"tool_choice","auto");
+            cJSON_AddStringToObject(root,"tool_choice","required");
         } else cJSON_Delete(tools);
     }
     cJSON_AddNumberToObject(root, "temperature", req->temperature);
@@ -243,8 +243,6 @@ static int openai_chat(llm *llm, const llm_request *req, llm_response *resp) {
         resp->tool_actions_json=cJSON_PrintUnformatted(actions);
         log_info("openai: native tool blocks=%d",cJSON_GetArraySize(actions));cJSON_Delete(actions);
     }
-    resp->native_end_turn=req->tools_json && !resp->tool_actions_json && !resp->truncated &&
-        cJSON_IsString(finish) && !strcmp(finish->valuestring,"stop");
     if (!resp->tool_actions_json && cJSON_IsString(finish) && !strcmp(finish->valuestring,"tool_calls")) {
         set_error(resp,"openai: tool_calls stop without tool call blocks");cJSON_Delete(root);return -1;
     }

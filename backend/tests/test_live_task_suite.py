@@ -82,7 +82,7 @@ with tempfile.TemporaryDirectory(prefix='coa-live-suite-state-') as folder:
         raise TimeoutError('Test deadline exceeded; isolated process must stop before further paid tasks')
     with (output/'server.log').open('w',encoding='utf-8') as log:
         process=subprocess.Popen([str(backend/'build'/('cognitive-os-agent.exe' if os.name=='nt' else 'cognitive-os-agent')),
-            '--state',str(state),'--workspace',str(output),'serve',str(port)],cwd=backend,stdout=log,stderr=log,
+            '--state',str(state),'--workspace',str(output),'serve',str(port)],cwd=backend,stdout=log,stderr=log,env={**os.environ,'COA_TOOL_PROTOCOL':'native'},
             creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
         try:
             for _ in range(100):

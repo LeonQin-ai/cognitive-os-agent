@@ -599,11 +599,20 @@ static int planner_output_tokens(llm *l, int requested) {
     return (int)output;
 }
 
+static char *native_tool_catalog(const tool_registry *tools, struct policy_engine *policy);
+
 size_t planner_input_budget_bytes_with_output(llm *l, const tool_registry *tools,
     struct skill_registry *skills, struct policy_engine *policy, int output_tokens) {
     char *sys = build_catalog_prompt(tools, skills, policy);
     size_t sys_bytes = strlen(sys ? sys : SYS_PROMPT);
     free(sys);
+    const char *protocol=getenv("COA_TOOL_PROTOCOL");
+    if((!protocol || strcmp(protocol,"legacy")) && l && l->provider &&
+       (!strcmp(l->provider,"openai") || !strcmp(l->provider,"anthropic"))) {
+        char *native=native_tool_catalog(tools,policy);
+        if(native)sys_bytes+=strlen(native)+1024; /* protocol instructions + native schemas */
+        free(native);
+    }
     long long available = llm_context_window_tokens(l) - planner_output_tokens(l, output_tokens) - 1024;
     /* Two UTF-8 bytes per token leaves room for Chinese, code and JSON. */
     available -= (long long)(sys_bytes + 1) / 2;
@@ -634,6 +643,8 @@ static char *native_tool_catalog(const tool_registry *tools, struct policy_engin
         if(!cJSON_IsObject(schema)) {cJSON_Delete(schema);schema=cJSON_CreateObject();cJSON_AddStringToObject(schema,"type","object");}
         cJSON_AddItemToObject(fn,"parameters",schema);cJSON_AddItemToArray(list,entry);
     }
+    cJSON *finish=cJSON_Parse("{\"type\":\"function\",\"function\":{\"name\":\"complete_task\",\"description\":\"End this task only when no further tool operations are required. Report complete or blocked and the final answer. If tools are needed, call those tools instead.\",\"parameters\":{\"type\":\"object\",\"properties\":{\"status\":{\"type\":\"string\",\"enum\":[\"complete\",\"blocked\"]},\"requires_tools\":{\"type\":\"boolean\"},\"answer\":{\"type\":\"string\"}},\"required\":[\"status\",\"requires_tools\",\"answer\"]}}}");
+    if(finish)cJSON_AddItemToArray(list,finish);
     char *result=cJSON_GetArraySize(list)?cJSON_PrintUnformatted(list):NULL;cJSON_Delete(list);return result;
 }
 
@@ -743,18 +754,21 @@ static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_act
                              * (finish_reason=length) */
     if(visual && req.max_tokens>8192) req.max_tokens=8192;
     char *native_tools=NULL;
-    if (llm->provider && (!strcmp(llm->provider,"openai") || !strcmp(llm->provider,"anthropic")))
+    const char *protocol=getenv("COA_TOOL_PROTOCOL");
+    if ((!protocol || strcmp(protocol,"legacy")) && llm->provider &&
+        (!strcmp(llm->provider,"openai") || !strcmp(llm->provider,"anthropic")))
         native_tools=native_tool_catalog(tools,policy);
     req.tools_json=native_tools;
     char *native_system=NULL;
     if(native_tools) {
         strbuf system;strbuf_init(&system);strbuf_append(&system,msgs[0].content);
-        strbuf_append(&system,"\nNATIVE TOOL PROTOCOL OVERRIDES TEXT EXAMPLES: When further operations are needed, emit native tool calls using the supplied function schemas. Any text alongside a tool call is commentary, never completion. After all operations and verification finish, answer directly with final text and no tool calls. Do not announce future work as final text. Tool errors are observations to diagnose and correct.\n");
+        strbuf_append(&system,"\nNATIVE TOOL PROTOCOL OVERRIDES TEXT EXAMPLES: When further operations are needed, emit native tool calls using the supplied function schemas. Any text alongside a tool call is commentary, never completion. After all operations and verification finish, call complete_task with status=complete, requires_tools=false, and the final answer. If blocked with no actionable tool recovery, use status=blocked. Plain text is commentary, never a completion declaration. Never set requires_tools=false when operations remain. Never call complete_task together with other tools. Tool errors are observations to diagnose and correct.\n");
         native_system=strbuf_detach(&system);msgs[0].content=native_system;
     }
     rc = llm_chat(llm, &req, &resp);
+    int using_native=native_tools!=NULL;
     free(native_tools);free(native_system);
-    if(native_end_out)*native_end_out=resp.native_end_turn;
+    if(native_end_out)*native_end_out=0;
     if(truncated_out) *truncated_out=resp.truncated;
     for (int i=0;i<28;i++) free(owned[i]);
     cJSON_Delete(files);
@@ -774,6 +788,39 @@ static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_act
         return visual ? -2 : -1;
     }
 
+    if(using_native) {
+        cJSON *calls=resp.tool_actions_json?cJSON_Parse(resp.tool_actions_json):NULL;
+        cJSON *finish=NULL;
+        int finishes=0;
+        for(int i=cJSON_GetArraySize(calls)-1;i>=0;--i) {
+            cJSON *call=cJSON_GetArrayItem(calls,i);
+            const char *name=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(call,"tool"));
+            if(name && !strcmp(name,"complete_task")) {
+                if(!finish)finish=cJSON_Duplicate(cJSON_GetObjectItemCaseSensitive(call,"args"),1);
+                finishes++;cJSON_DeleteItemFromArray(calls,i);
+            }
+        }
+        if(cJSON_GetArraySize(calls)>0) {
+            /* A finish declaration cannot outrun pending tools in the same response. */
+            free(resp.tool_actions_json);resp.tool_actions_json=cJSON_PrintUnformatted(calls);
+        } else {
+            const char *status=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(finish,"status"));
+            const char *answer=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(finish,"answer"));
+            cJSON *needs=cJSON_GetObjectItemCaseSensitive(finish,"requires_tools");
+            int valid=finishes==1 && status && (!strcmp(status,"complete") || !strcmp(status,"blocked")) &&
+                cJSON_IsFalse(needs) && answer && *answer;
+            if(valid) {
+                if(native_end_out)*native_end_out=!strcmp(status,"blocked")?2:1;
+                if(raw_out)*raw_out=xstrdup(answer);
+                free(resp.content);free(resp.tool_actions_json);free(resp.error);
+                cJSON_Delete(calls);cJSON_Delete(finish);return 0;
+            }
+            if(err_out)*err_out=xstrdup("native turn has no executable tool calls or valid complete_task declaration; call the required tools, or complete_task(status, requires_tools=false, answer) only after work is finished");
+            free(resp.content);free(resp.tool_actions_json);free(resp.error);
+            cJSON_Delete(calls);cJSON_Delete(finish);return -1;
+        }
+        cJSON_Delete(calls);cJSON_Delete(finish);
+    }
     if(resp.tool_actions_json) {
         /* Blocks, not stop_reason or text wording, own the continuation decision. */
         free(resp.content);resp.content=resp.tool_actions_json;resp.tool_actions_json=NULL;
@@ -786,12 +833,6 @@ static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_act
         if (err_out)
             *err_out = xstrdup("LLM returned an empty response");
         return -1;
-    }
-    if(resp.native_end_turn) {
-        /* A native final text can quote JSON tool examples. Only actual
-         * tool-call blocks are executable in this protocol. */
-        if(raw_out)*raw_out=plan;else free(plan);
-        return 0;
     }
     /* Some providers include reasoning tags in content. Never parse a tool
      * example from their hidden preamble as the executable plan. JSON replies

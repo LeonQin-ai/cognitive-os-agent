@@ -40,7 +40,6 @@ typedef struct llm_response {
     char *error;   /* NULL if ok (caller frees) */
     int truncated; /* provider stopped at its output-token limit */
     char *tool_actions_json; /* normalized native tool calls, caller frees */
-    int native_end_turn; /* explicit provider end without tool calls */
 } llm_response;
 
 typedef void (*llm_stream_cb)(const char *delta, void *ud);

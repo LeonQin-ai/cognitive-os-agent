@@ -219,8 +219,6 @@ static int anthropic_chat(llm *llm, const llm_request *req, llm_response *resp) 
     if ((!native_valid && native_seen) || (tool_stop && !resp->tool_actions_json))
         set_error(resp,"anthropic: incomplete native tool use; no actions executed");
     cJSON_Delete(actions);
-    resp->native_end_turn=req->tools_json && !resp->tool_actions_json && !resp->truncated &&
-        cJSON_IsString(stop_reason) && !strcmp(stop_reason->valuestring,"end_turn");
     resp->content = strbuf_detach(&sb);
     if ((!resp->content || !*resp->content) && !resp->tool_actions_json) {
         cJSON *err_obj = cJSON_GetObjectItemCaseSensitive(root, "error");

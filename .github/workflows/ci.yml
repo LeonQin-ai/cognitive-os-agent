@@ -5,6 +5,10 @@ on:
     branches: [main]
   pull_request:
 
+# Existing fixtures exercise the explicitly supported legacy text protocol.
+env:
+  COA_TOOL_PROTOCOL: legacy
+
 jobs:
   macos:
     name: macOS (${{ matrix.runner }})
@@ -38,7 +42,7 @@ jobs:
       - name: Visual provider timeout and recovery regression
         run: COA_BUILD_DIR=build-macos python3 tests/test_vision_wait_e2e.py
       - name: Native tool block continuation regression
-        run: python tests/test_native_tool_loop.py
+        run: COA_BUILD_DIR=build-macos python3 tests/test_native_tool_loop.py
       - name: Information answer completion regression
         run: COA_BUILD_DIR=build-macos python3 tests/test_information_answers_e2e.py
       - name: Reciprocal group discussion regression

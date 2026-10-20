@@ -3,6 +3,8 @@ import json,socket,subprocess,tempfile,threading,time,urllib.request,os
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
 backend=Path(__file__).resolve().parents[1]
+build=backend/os.environ.get('COA_BUILD_DIR','build')
+build.mkdir(parents=True,exist_ok=True)
 for provider_name in ('openai','anthropic'):
  counts={};catalogs=[]
  class Provider(BaseHTTPRequestHandler):
@@ -12,14 +14,20 @@ for provider_name in ('openai','anthropic'):
    catalogs.append(body.get('tools',[]))
    text=body['messages'][-1]['content']
    current=text.split('## Current request\n',1)[-1].split('\n## ',1)[0]
-   case=next(k for k in ('NATIVE_MIXED','NATIVE_FINAL','NATIVE_BAD','NATIVE_EXAMPLE') if k in current)
+   case=next(k for k in ('NATIVE_MIXED','NATIVE_FINAL','NATIVE_BAD','NATIVE_EXAMPLE','NATIVE_PENDING','NATIVE_BLOCKED','NATIVE_CHATTER') if k in current)
    n=counts.get(case,0);counts[case]=n+1
    calls=[];answer='';stop='stop'
-   if case=='NATIVE_EXAMPLE':answer=json.dumps([{'tool':'file_write','args':{'path':'example-only.txt','content':'example'}}])
+   if case=='NATIVE_BLOCKED':calls=[('complete_task',{'status':'blocked','requires_tools':False,'answer':'Missing provider credential; user action required.'})]
+   elif case=='NATIVE_CHATTER':answer='Zyxwv alpha beta gamma'
+   elif case=='NATIVE_PENDING':
+    if n==0:calls=[('complete_task',{'status':'complete','requires_tools':True,'answer':'pending'})]
+    elif n==1:calls=[('file_write',{'path':'pending.txt','content':'actually written'})]
+    else:answer='pending.txt verified.'
+   elif case=='NATIVE_EXAMPLE':answer=json.dumps([{'tool':'file_write','args':{'path':'example-only.txt','content':'example'}}])
    elif case=='NATIVE_FINAL':answer='我需要说明：缓存使已读取的内容能够复用，这是最终的原理解释。'
    elif case=='NATIVE_MIXED':
     if n==0:
-     answer='已经完成。';calls=[('file_write',{'path':'native.txt','content':'native-marker'})]
+     answer='已经完成。';calls=[('file_write',{'path':'native.txt','content':'native-marker'}),('complete_task',{'status':'complete','requires_tools':False,'answer':'premature finish'})]
     elif n==1:
      answer='دَعْنِي أتحقق من النتيجة';calls=[('file_read',{'path':'native.txt'})]
     else:answer='已生成并实际读取 native.txt，native-marker。'
@@ -27,6 +35,7 @@ for provider_name in ('openai','anthropic'):
     if n==0:calls=[('file_write',{'path':'must-not-exist.txt','content':'bad-prefix'}),('file_write','{"path":')]
     elif n==1:calls=[('file_write',{'path':'repaired.txt','content':'recovered'})]
     else:answer='已交付 repaired.txt。'
+   if not calls and case!='NATIVE_CHATTER':calls=[('complete_task',{'status':'complete','requires_tools':False,'answer':answer})];answer=''
    if provider_name=='openai':
     message={'content':answer or None}
     if calls:message['tool_calls']=[{'id':'c'+str(i),'type':'function','function':{'name':name,'arguments':json.dumps(args) if isinstance(args,dict) else args}} for i,(name,args) in enumerate(calls)]
@@ -44,8 +53,8 @@ for provider_name in ('openai','anthropic'):
   def request(path,body=None):
    req=urllib.request.Request(f'http://127.0.0.1:{port}'+path,data=json.dumps(body).encode() if body is not None else None,headers={'Content-Type':'application/json'})
    with urllib.request.urlopen(req,timeout=5) as response:return json.load(response)
-  with (backend/'build'/('native-loop-'+provider_name+'.log')).open('w',encoding='utf-8') as log:
-   process=subprocess.Popen([str(backend/'build'/('cognitive-os-agent.exe' if os.name=='nt' else 'cognitive-os-agent')),'--state',str(state),'--workspace',str(state),'serve',str(port)],cwd=backend,stdout=log,stderr=log,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
+  with (build/('native-loop-'+provider_name+'.log')).open('w',encoding='utf-8') as log:
+   process=subprocess.Popen([str(build/('cognitive-os-agent.exe' if os.name=='nt' else 'cognitive-os-agent')),'--state',str(state),'--workspace',str(state),'serve',str(port)],cwd=backend,stdout=log,stderr=log,env={**os.environ,'COA_TOOL_PROTOCOL':'native'},creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
    try:
     for _ in range(150):
      try:request('/v1/scheduler');break
@@ -69,6 +78,12 @@ for provider_name in ('openai','anthropic'):
     assert not (state/'must-not-exist.txt').exists()
     assert (state/'repaired.txt').read_text()=='recovered'
     assert len(bad['steps'])==1,bad
+    pending=run('创建 pending.txt NATIVE_PENDING')
+    assert pending['status']=='DONE' and counts['NATIVE_PENDING']==3 and (state/'pending.txt').exists(),pending
+    blocked=run('处理任务 NATIVE_BLOCKED')
+    assert blocked['status']=='FAILED' and counts['NATIVE_BLOCKED']==1 and 'Missing provider credential' in blocked['output'],blocked
+    chatter=run('处理任务 NATIVE_CHATTER')
+    assert chatter['status']=='FAILED' and 2<=counts['NATIVE_CHATTER']<=5 and not chatter['steps'],chatter
     assert catalogs and all(catalogs)
     for catalog in catalogs:
      write=next(t.get('function',t) for t in catalog if t.get('function',t).get('name')=='file_write')
