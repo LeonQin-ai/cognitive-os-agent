@@ -202,3 +202,21 @@ Issue 原文在最终答复中说“我已经阅读了大部分核心文件。�
 合计**9,518 tokens**，0模型失败；历史各含自身随机标记而无对方标记，重启后核对通过。没有消耗百万次模型请求。另有本地fixture曾因mock模型不允许/v1/chat而被409拒绝，已改用本地原生协议HTTP fixture；该失败没有调用付费API。
 
 证据仅留本地build/issue182-million-final/scale-manifest.json、issue182-million-final.log、issue182-million/paging-report.json及issue182-million-live.log。小规模与HTTP回归已接入CI，百万规模入口：`cognitive-os-agent-test --session-scale 1000000 <new-state-dir>`；此目录应为空，避免混入旧样本。可选真实API入口：`tests/test_session_paging_e2e.py --state <isolated-test-state> --config <installed-config>`。
+
+
+## #184 原生完成状态与普通场景矩阵
+
+修复 f8d9a2a：剩余全文读取和12/16轮只读阶段规则仍按提示词判断，即使原生complete_task声明完成也可能FAILED。原生协议现在统一使用结构化工具/完成决定，不以引用、否定或回答中的读写词覆盖结果；这些旧推断只留在显式legacy/mock兼容模式。未解决的真实工具错误、blocked、无效协议及输出截断仍保留原状态检查，不把所有结果强行设为DONE。
+
+新增OpenAI/Anthropic双协议回归：14类普通问句（含“你有什么特殊功能”原句）、概念/引用、翻译、伪代码、跨语言、仅讲方法；相关片段读取、17步有进展只读任务、失败修复后DONE、错误未解决仍FAILED。fixture路由改为测试侧独立控制，不把NATIVE_*特殊标记拼进用户输入。修改前概念解释用例实际FAILED且2次请求；修改后两协议全部通过。legacy进展专项519/0，兼容完成恢复HTTP专项通过。
+
+真实API全部经Cognitive OS Agent使用已配置ark/deepseek-v4.1-flash，记录在本地build/live-api-suite-20261020-181606/：
+
+| 场景 | 状态 | 请求/工具 | 输入tokens | 输出tokens | 耗时ms |
+|---|---|---|---:|---:|---:|
+| 你有什么特殊功能 | DONE | 1/0 | 4,583 | 562 | 5,817 |
+| 引用全文读取语句，仅解释概念 | DONE | 1/0 | 4,775 | 569 | 4,423 |
+| 创建/删除语句翻译，不执行 | DONE | 1/0 | 4,938 | 104 | 1,659 |
+| 介绍查看Windows CPU/内存的方法，不执行 | DONE | 1/0 | 5,016 | 640 | 4,115 |
+
+合计**21,187 tokens**（输入19,312/输出1,875），4任务均0模型失败；无失败的付费尝试，未人工代写答案或执行不需要的工具。确定性fixture回归不计为真实API能力成绩。

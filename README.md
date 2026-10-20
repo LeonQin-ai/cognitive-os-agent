@@ -79,6 +79,8 @@ Additional regressions cover early-stop filename discovery and a **36,938-charac
 
 Session regression: **1,000,000 durable chat sessions**, 17.496 s creation phase, complete enumeration after restart; real REST/browser paging and two configured-model requests passed (9,518 tokens). This measures metadata creation, not one million HTTP/model requests or DOM nodes.
 
+Native completion regressions now cover 14 ordinary-answer categories per OpenAI/Anthropic protocol plus partial reading, sustained research and failure recovery. Four configured-API informational tasks each completed in one request with no tools (21,187 tokens total).
+
 | Benchmark | Score | Model |
 |---|---|---|
 | GAIA 2023 validation (official 165 tasks) | **78.79%** (L1 84.91 / L2 81.40 / L3 57.69) | GLM-5.3-flash |
