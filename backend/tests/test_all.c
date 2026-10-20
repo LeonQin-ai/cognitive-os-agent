@@ -3858,8 +3858,10 @@ static void test_search_work_bounds(void) {
     CHECK(r && r->ok && strstr(r->output,"Binary files skipped") && !strstr(r->output,"binary.bin"));tool_result_free(r);
     r=tool_execute(reg,"grep","{\"pattern\":\"needle\",\"path\":\"chunks.txt\",\"ignore_case\":true,\"output_mode\":\"count\"}",&ctx);
     CHECK(r && r->ok && strstr(r->output,"chunks.txt:2"));tool_result_free(r);
+    r=tool_execute(reg,"grep","{\"pattern\":\"prefix\",\"path\":\"budget.txt\",\"output_mode\":\"files_with_matches\",\"max_scan_bytes\":8}",&ctx);
+    CHECK(r && r->ok && strstr(r->output,"budget.txt") && !strstr(r->output,"byte budget"));tool_result_free(r);
     r=tool_execute(reg,"grep","{\"pattern\":\"TAIL\",\"path\":\"budget.txt\",\"max_scan_bytes\":8}",&ctx);
-    CHECK(r && !r->ok && strstr(r->output,"byte budget") && !strstr(r->output,"No matches found"));tool_result_free(r);
+    CHECK(r && !r->ok && strstr(r->output,"byte budget") && strstr(r->output,"not exhaustive") && !strstr(r->output,"No matches found"));tool_result_free(r);
     r=tool_execute(reg,"grep","{\"pattern\":\"not-there\",\"max_files\":1}",&ctx);
     CHECK(r && !r->ok && strstr(r->output,"file budget"));tool_result_free(r);
     struct search_abort_state abort={.stop_after=4};ctx.should_abort=search_abort_fixture;ctx.abort_ud=&abort;

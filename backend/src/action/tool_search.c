@@ -334,7 +334,12 @@ static void grep_file(const char *rel, const char *full, grep_state *g) {
             while(matched_len && c!=(unsigned char)(g->ignore_case ? ci_char((unsigned char)g->needle[matched_len]) : g->needle[matched_len]))
                 matched_len=g->prefix[matched_len-1];
             if(c==(unsigned char)(g->ignore_case ? ci_char((unsigned char)g->needle[matched_len]) : g->needle[matched_len])) matched_len++;
-            if(matched_len==g->needle_len) { matched=1;matched_len=g->prefix[matched_len-1]; }
+            if(matched_len==g->needle_len) {
+                matched=1;matched_len=g->prefix[matched_len-1];
+                /* Filename discovery needs only the first match, even when
+                 * a generated/minified text line has no newline for MiB. */
+                if(g->mode==0) {hits=1;done=1;break;}
+            }
         }
         free(chunk);
         if(!more || !count) {
@@ -483,7 +488,10 @@ static tool_result *grep_exec(const tool *self, const tool_ctx *ctx, const char 
         strbuf_append(&g.sb, "No matches found (literal text matching, not regular expressions). "
             "If pattern uses alternatives such as a|b, issue separate literal searches for a and b; "
             "do not infer that those individual symbols are absent. Use a specific symbol instead of reading the whole file.\n");
-    if(g.stop_reason) strbuf_appendf(&g.sb,"[Search stopped: %s]\n",g.stop_reason);
+    if(g.stop_reason) {
+        strbuf_appendf(&g.sb,"[Search stopped: %s]\n",g.stop_reason);
+        strbuf_append(&g.sb,"[Returned matches remain valid but are not exhaustive. For discovery, inspect matching files; for complete coverage, narrow path/glob or explicitly raise the search budget. Do not repeat the same broad query unchanged.]\n");
+    }
     if(g.skipped_generated) strbuf_append(&g.sb,"[Generated directories skipped; use their explicit path or include_generated=true to search them.]\n");
     if(g.skipped_binary) strbuf_append(&g.sb,"[Binary files skipped.]\n");
     if(g.truncated) strbuf_append(&g.sb,"[Search incomplete: directory nesting exceeded 64.]\n");
