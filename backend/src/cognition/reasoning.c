@@ -135,8 +135,7 @@ struct run_step {
 };
 
 /* Find-or-create the session with this id (NULL/"" = default). Registry cap
- * SESSION_MAX; beyond it the default session is reused (no unbounded
- * growth from hostile clients). Callers hold no run in flight. (Defined
+ * SESSION_MAX; capacity exhaustion fails instead of aliasing another chat. Callers hold no run in flight. (Defined
  * after struct reasoning — see below.) */
 
 struct reasoning {
@@ -566,13 +565,6 @@ static struct session *session_get_locked(reasoning *r, const char *id) {
         }
     }
 
-    if (!s) { /* cap reached or alloc failed: fall back to default */
-        for (size_t i = 0; i < r->ss->nsessions; i++)
-            if (strcmp(r->ss->sessions[i]->id, "default") == 0) {
-                s = r->ss->sessions[i];
-                break;
-            }
-    }
 
     return s;
 }
@@ -3534,6 +3526,11 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
      * executing (across lanes via the shared store). */
     mutex_lock(&r->ss->sess_mtx);
     r->cur = session_get_locked(r, session_id);
+    if (!r->cur) {
+        mutex_unlock(&r->ss->sess_mtx);
+        if (answer) *answer=xstrdup("Chat session capacity exhausted; no other conversation was used.");
+        return -1;
+    }
     /* A session is a sequential conversation. Different sessions may run on
      * different lanes, but accepting two runs for the same session lets their
      * histories, summaries and steering messages interleave. */

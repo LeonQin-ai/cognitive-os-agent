@@ -3275,13 +3275,15 @@ function renderChatTabs(list){
   if(bar) bar.innerHTML = '';
   if(list.length) CHAT_TABS_CACHE = list;
   else if(CHAT_TABS_CACHE.length) list = CHAT_TABS_CACHE;
-  const ids = list.map(s => s.id || 'default');
+  /* Hidden legacy tabs must not allocate a DOM node per stored session. */
+  const byId = new Map(list.map(s => [s.id || 'default',s]));
+  const ids = [...byId.keys()].slice(-12);
   /* 当前会话的标签必须无条件可见：新建会话在后端注册前、发送首条消息后
    * 的刷新空档，服务端列表都还不含它——缺失即补上，否则标签会被列表
    * 重绘"覆盖"掉（新会话闪现后消失，或旧标签全被清空只剩新的）。 */
   if(CHAT_SESSION !== 'default' && !ids.includes(CHAT_SESSION)) ids.push(CHAT_SESSION);
   if(bar) ids.forEach(id => {
-    const info = list.find(s => (s.id || 'default') === id);
+    const info = byId.get(id);
     const tab = document.createElement('span');
     tab.className = 'chat-tab' + (id === CHAT_SESSION ? ' on' : '');
     const name = document.createElement('span');
@@ -3345,9 +3347,17 @@ function sideRecent(list){
     return activity(b) - activity(a);
   });
   const ids = ordered.map(s => s.id || 'default');
-  if(CHAT_SESSION !== 'default' && !ids.includes(CHAT_SESSION)) ids.push(CHAT_SESSION);
+  /* Keep the selected conversation visible even when an older list response
+   * excludes it or twelve older rows have later activity timestamps. */
+  if(CHAT_SESSION !== 'default'){
+    const index=ids.indexOf(CHAT_SESSION);
+    if(index>=0) ids.splice(index,1);
+    ids.unshift(CHAT_SESSION);
+  }
+  const visibleIds=new Set(ids.slice(0,12));
+  const visible = new Map(ordered.filter(s=>visibleIds.has(s.id || 'default')).map(s=>[s.id || 'default',s]));
   ids.slice(0,12).forEach(id => {
-    const info = ordered.find(s => (s.id || 'default') === id);
+    const info = visible.get(id);
     const row = document.createElement('div');
     row.className = 'side-recent-row';
     const b = document.createElement('button');
@@ -3687,7 +3697,7 @@ async function chatNewSession(options={}){
   chatAttachActivate(CHAT_SESSION);
   if($('ssh-session-details')?.open) void sshSessionLoad();
   CHAT_NEW_SESSION = false; /* 后端已注册时无需等首条消息 */
-  CHAT_TABS_CACHE = [...CHAT_TABS_CACHE.filter(s => (s.id || 'default') !== id), {id, turns:0}];
+  CHAT_TABS_CACHE = [...CHAT_TABS_CACHE.filter(s => (s.id || 'default') !== id), {id, turns:0, created_ms:Date.now(), last_active_ms:Date.now()}];
   CHAT_MSGS = [];
   renderChatTabs([]);
   const box = $('chat-box'); if(box) box.innerHTML = '';

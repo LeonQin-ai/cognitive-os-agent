@@ -134,6 +134,22 @@ const fs = require('node:fs');
     assert.equal(sessionCreates,beforeSlowCreate+2,'explicit clicks queue distinct sessions while the create POST is delayed');
     assert.equal(await page.evaluate(()=>current),'chat','the new session remains in the chat panel after late panel loads');
 
+    // #182: a stale/list page containing twelve older sessions must not hide
+    // the newly selected chat. A million stored rows must use bounded DOM.
+    await page.evaluate(()=>{
+      const saved=CHAT_TABS_CACHE;
+      const rows=Array.from({length:1000000},(_,i)=>({id:'million-'+i,title:'历史 '+i,created_ms:i+1}));
+      renderChatTabs(rows);
+      window.issue182Million={rows:document.querySelectorAll('#side-recent .side-recent-row').length,
+        selected:document.querySelector('#side-recent button.on')?.textContent,
+        tabs:document.querySelectorAll('#chat-tabs .chat-tab').length};
+      CHAT_TABS_CACHE=saved;renderChatTabs(saved);
+    });
+    const million=await page.evaluate(()=>window.issue182Million);
+    assert.equal(million.rows,12,'million-row fixture renders only the visible recent window');
+    assert.ok(million.selected,'current new chat remains selected when absent from a million stale rows');
+    assert.ok(million.tabs<=14,'hidden legacy tabs never allocate one million DOM nodes');
+
     const currentAfterCreate=await page.evaluate(()=>CHAT_SESSION);
     const createsBeforeFailure=sessionCreates;
     failSessionCreates=true;

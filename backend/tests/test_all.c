@@ -4743,6 +4743,30 @@ static void test_chat_upload_evolve(void) {
         runtime_shutdown(&ctx);
     }
 
+    /* #182: a full resident registry must never run a new ID in default. */
+    {
+        config cfg; memset(&cfg,0,sizeof(cfg));
+        cfg.state_root="state-test/session-cap-isolation";
+        cfg.workspace="state-test/loop-w"; cfg.provider="mock";
+        runtime_ctx ctx;
+        if(init(&ctx,&cfg)!=0){ CHECK(0); return; }
+        char *answer=NULL;
+        CHECK(reasoning_run_ex(ctx.reasoning,"default","original-default-marker",&answer)==0);
+        free(answer);answer=NULL;
+        int made=0;
+        for(int i=0;i<70;i++){
+            char *id=reasoning_session_new(ctx.reasoning);
+            if(!id)break;
+            made++;free(id);
+        }
+        CHECK(made>0 && made<70);
+        CHECK(reasoning_run_ex(ctx.reasoning,"overflow-must-not-alias","overflow-contamination-marker",&answer)<0);
+        CHECK(answer && strstr(answer,"capacity exhausted"));free(answer);
+        char *history=reasoning_history_json(ctx.reasoning,10);
+        CHECK(history && strstr(history,"original-default-marker") && !strstr(history,"overflow-contamination-marker"));
+        free(history);runtime_shutdown(&ctx);
+    }
+
     /* multi-session chat: two named sessions carry isolated histories; the
      * default session is untouched; session_clear wipes one session only */
     {
