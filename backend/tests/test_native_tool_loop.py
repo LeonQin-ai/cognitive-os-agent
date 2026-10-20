@@ -28,6 +28,10 @@ for provider_name in ('openai','anthropic'):
   def do_POST(self):
    body=json.loads(self.rfile.read(int(self.headers['Content-Length'])))
    catalogs.append(body.get('tools',[]))
+   system=body['messages'][0]['content']
+   if isinstance(system,str):
+    assert 'Respond with ONLY a JSON array' not in system
+    assert '-> [{"tool"' not in system
    case=active_case
    n=counts.get(case,0);counts[case]=n+1
    calls=[];answer='';stop='stop'
@@ -38,6 +42,11 @@ for provider_name in ('openai','anthropic'):
    elif case=='NATIVE_RESEARCH':
     if n<17:calls=[('file_read',{'path':f'research-{n}.txt'})]
     else:answer='17份样例均已核对，这是只读分析结果，无需创建文件。'
+   elif case=='NATIVE_SCHEMA':
+    if n==0:calls=[('file_write',{'path':'schema-prefix.txt','content':'must not execute'}),('file_read',{'tool':'file_read','args':{'path':'schema.txt'}})]
+    elif n==1:calls=[('file_write',{'path':'schema.txt','content':'schema-repaired'})]
+    elif n==2:calls=[('file_read',{'path':'schema.txt'})]
+    else:answer='参数已校正并成功核对 schema-repaired。'
    elif case=='NATIVE_FAILED':
     if n==0:calls=[('file_read',{'path':'unresolved-missing.txt'})]
     else:answer='模型声称成功，但实际文件读取仍然失败。'
@@ -124,6 +133,10 @@ for provider_name in ('openai','anthropic'):
     assert recovered['status']=='DONE' and counts['NATIVE_RECOVERED']==4,recovered
     alias=run('NATIVE_ALIAS','处理目录别名下的目标文件并核对结果。')
     assert alias['status']=='DONE' and counts['NATIVE_ALIAS']==4,alias
+    schema=run('NATIVE_SCHEMA','处理目标文件并核对内容。')
+    assert schema['status']=='DONE' and counts['NATIVE_SCHEMA']==4 and len(schema['steps'])==2,schema
+    assert not (state/'schema-prefix.txt').exists()
+    assert all(st['ok'] for st in schema['steps']),schema
     failed=run('NATIVE_FAILED','读取指定文件并总结。')
     assert failed['status']=='FAILED' and 2<=counts['NATIVE_FAILED']<=3 and any(not st['ok'] for st in failed['steps']),failed
     example=run('NATIVE_EXAMPLE','解释工具调用格式')

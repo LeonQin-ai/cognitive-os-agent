@@ -37,7 +37,7 @@ config.update({'reasoning.max_rounds':-1,'llm.routing':'fixed','scheduler.worker
 report_path=output/'report.json'
 report=json.loads(report_path.read_text(encoding='utf-8')) if report_path.exists() else {'model':config.get('llm.model'),'cases':{},'attempts':[]}
 selected=args.cases.split(',')
-assert all(c in ('source','ppt','image','ocr','diagram_ocr','analysis','html','header_recovery','search_discovery','capabilities','quoted_read','translation','howto') for c in selected)
+assert all(c in ('source','ppt','image','ocr','diagram_ocr','analysis','html','header_recovery','search_discovery','capabilities','quoted_read','translation','howto','missing_recovery') for c in selected)
 source_files=[(backend/p).as_posix() for p in ('include/context/mmu.h','src/retrieval/context_builder.c','src/cognition/reasoning.c')]
 active=None
 last_task={}
@@ -107,6 +107,10 @@ with tempfile.TemporaryDirectory(prefix='coa-live-suite-state-') as folder:
                         prompt='把这句话翻译成英语：创建文件，然后删除文件。这是翻译任务，不要执行这些操作。'
                     elif case=='howto':
                         prompt='请解释如何查看Windows机器的CPU和内存状态，只介绍方法，不执行命令。'
+                    elif case=='missing_recovery':
+                        marker='RECOVER-'+secrets.token_hex(5)
+                        fixture=active/'recover.txt'
+                        prompt=f'文件容错回归：先仅调用file_read读取 {fixture.as_posix()} 一次，让工具报告尚不存在；不要提前创建。观察失败后再用file_write创建同一文件，内容为 {marker}，然后实际file_read同一文件核对。完成后直接返回标记，不重复最初错误步骤。'
                     elif case=='source':
                         prompt=prefix+f'阅读这些源码的相关实现并生成 source-overview.md，不要求全文：{json.dumps(source_files,ensure_ascii=False)}。技术开发者概要不少于1500字，覆盖 MMU、上下文组装、工具执行、循环停止和失败恢复，引用实际函数/路径，说明边界与取舍。实际保存文件，并自行检查内容和字数。最终答复给出文件位置。'
                     elif case=='search_discovery':
@@ -153,6 +157,11 @@ with tempfile.TemporaryDirectory(prefix='coa-live-suite-state-') as folder:
                         assert task.get('tool_calls')==0 and not task.get('steps'),'informational request executed a tool'
                         if case=='translation':assert 'creat' in text.lower() and 'delet' in text.lower(),text
                         result['checks']={'answer_characters':len(text),'completed':True,'no_tools':True}
+                    elif case=='missing_recovery':
+                        reads=[st for st in task.get('steps',[]) if st['tool']=='file_read']
+                        assert reads and not reads[0]['ok'] and any(st['ok'] for st in reads[1:]),reads
+                        assert fixture.read_text(encoding='utf-8')==marker and marker in (task.get('output') or '')
+                        result['checks']={'actual_read_failure':True,'actual_repaired_read':True,'marker_matched':True}
                     elif case=='source':
                         path=active/'source-overview.md';text=path.read_text(encoding='utf-8');result['artifacts']['overview']=str(path)
                         result['checks']={'characters':len(text),'source_references':sum(p in text for p in ('mmu.h','context_builder.c','reasoning.c'))}

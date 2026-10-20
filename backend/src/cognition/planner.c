@@ -97,12 +97,29 @@ static const char *SYS_PROMPT_TAIL =
     "answers that need arithmetic or filtering over file contents with a python "
     "script via shell — do not count long tables in your head.";
 
+static const char *SYS_NATIVE_HEAD=
+    "You are the planner of a cognitive OS. Decide whether the user request needs tool operations. "
+    "Use the supplied native function schemas when operations are required. Pass each function's "
+    "parameter object directly; never nest an action envelope with tool/args inside its parameters. "
+    "When no further operations are needed, call complete_task(status=complete, requires_tools=false, answer). "
+    "If genuinely blocked with no actionable recovery, call complete_task(status=blocked, requires_tools=false, answer). "
+    "Tool errors are observations: diagnose and repair them before completing. "
+    "Business rules and tool deny policies override user requests; never bypass them through another tool.\n";
+static const char *SYS_NATIVE_TAIL=
+    "Use dedicated git and MCP functions for their operations. Only supply schema-defined arguments. "
+    "Conversational answers, translations, explanations and requested code examples can be returned through "
+    "complete_task without executing those examples. Genuine file operations require actual tool calls and verification. "
+    "For a missing input path, discover its real location; for an explicitly requested new output file, create it "
+    "rather than repeatedly reading the absent file. Read requested source scope and follow page offsets when needed. "
+    "On Windows explicitly select PowerShell for PowerShell syntax. Binary documents require extraction tools "
+    "or appropriate Python libraries, not repeated raw text reads.\n";
+
 /* Build the system prompt from the ACTUAL tool + skill registries. Returns a
  * malloc'd prompt, or NULL when no registry is available (caller falls back
  * to the static catalog). Tools denied by `policy` are hidden entirely
  * (Claude Code: deny rules both block calls AND remove from the tool pool). */
 static char *build_catalog_prompt(const tool_registry *tools, struct skill_registry *skills,
-                                  struct policy_engine *policy) {
+                                  struct policy_engine *policy, int native) {
     strbuf b;
     int have_skill_tool = 0;
     int have_glob_tool = 0;
@@ -110,7 +127,7 @@ static char *build_catalog_prompt(const tool_registry *tools, struct skill_regis
     if (!tools)
         return NULL;
     strbuf_init(&b);
-    strbuf_append(&b, SYS_PROMPT_HEAD);
+    strbuf_append(&b, native ? SYS_NATIVE_HEAD:SYS_PROMPT_HEAD);
     for (size_t i = 0; i < (size_t)tool_registry_count(tools); i++) {
         const tool *t = tool_registry_get(tools, i);
         if (!t || !t->name)
@@ -131,7 +148,9 @@ static char *build_catalog_prompt(const tool_registry *tools, struct skill_regis
             }
         }
     }
-    if (have_glob_tool)
+    if (have_glob_tool && native)
+        strbuf_append(&b,"For file discovery use glob with a non-empty pattern parameter, then reuse the returned paths.\n");
+    if (have_glob_tool && !native)
         strbuf_append(&b, "Example file discovery: "
                           "[{\"tool\":\"glob\",\"args\":{\"pattern\":\"**/*flow*\"}}]. "
                           "Every glob action needs a non-empty pattern; fix schema errors before retrying.\n");
@@ -154,12 +173,13 @@ static char *build_catalog_prompt(const tool_registry *tools, struct skill_regis
             strbuf_appendf(&b, "  * %s (%s): %s\n", s->name, s->kind ? s->kind : "",
                                s->description ? s->description : "");
         }
-        strbuf_append(&b, "When the user ASKS what skills/tools you have (e.g. \"你有哪些skills\", "
+        if(native)strbuf_append(&b,"Explain registered capabilities via complete_task when no operations are required.\n");
+        else strbuf_append(&b, "When the user ASKS what skills/tools you have (e.g. \"你有哪些skills\", "
                               "\"list your skills\"), answer in PLAIN TEXT listing these skill names and "
                               "their use. Do NOT call any tool or skill to answer such a question.\n");
     }
 
-    strbuf_append(&b, SYS_PROMPT_TAIL);
+    strbuf_append(&b, native ? SYS_NATIVE_TAIL:SYS_PROMPT_TAIL);
     return strbuf_detach(&b);
 }
 
@@ -627,7 +647,7 @@ int planner_uses_native_tools(const llm *l) {
 
 size_t planner_input_budget_bytes_with_output(llm *l, const tool_registry *tools,
     struct skill_registry *skills, struct policy_engine *policy, int output_tokens) {
-    char *sys = build_catalog_prompt(tools, skills, policy);
+    char *sys = build_catalog_prompt(tools, skills, policy,planner_uses_native_tools(l));
     size_t sys_bytes = strlen(sys ? sys : SYS_PROMPT);
     free(sys);
     if(planner_uses_native_tools(l)) {
@@ -781,8 +801,8 @@ static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_act
     req.tools_json=native_tools;
     char *native_system=NULL;
     if(native_tools) {
-        strbuf system;strbuf_init(&system);strbuf_append(&system,msgs[0].content);
-        strbuf_append(&system,"\nNATIVE TOOL PROTOCOL OVERRIDES TEXT EXAMPLES: When further operations are needed, emit native tool calls using the supplied function schemas. Any text alongside a tool call is commentary, never completion. After all operations and verification finish, call complete_task with status=complete, requires_tools=false, and the final answer. If blocked with no actionable tool recovery, use status=blocked. Plain text is commentary, never a completion declaration. Never set requires_tools=false when operations remain. Never call complete_task together with other tools. Tool errors are observations to diagnose and correct.\n");
+        strbuf system;strbuf_init(&system);strbuf_append(&system,sys_prompt ? sys_prompt:SYS_NATIVE_HEAD);
+        strbuf_append(&system,"\nNATIVE TOOL PROTOCOL: When further operations are needed, emit native tool calls using the supplied function schemas. Any text alongside a tool call is commentary, never completion. After all operations and verification finish, call complete_task with status=complete, requires_tools=false, and the final answer. If blocked with no actionable tool recovery, use status=blocked. Plain text is commentary, never a completion declaration. Never set requires_tools=false when operations remain. Never call complete_task together with other tools. Tool errors are observations to diagnose and correct.\n");
         native_system=strbuf_detach(&system);msgs[0].content=native_system;
     }
     rc = llm_chat(llm, &req, &resp);
@@ -819,6 +839,19 @@ static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_act
                 if(err_out)*err_out=xstrdup("invalid native tool identifier; no actions executed");
                 free(resp.content);free(resp.tool_actions_json);free(resp.error);cJSON_Delete(calls);return -1;
             }
+        }
+        /* Validate the whole native batch before any action can execute. An
+         * invalid parameter object is a planning error, not a failed file read. */
+        cJSON_ArrayForEach(candidate,calls) {
+            const char *name=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(candidate,"tool"));
+            if(!strcmp(name,"complete_task"))continue;
+            const tool *definition=tools ? tool_find((tool_registry *)tools,name):NULL;
+            char *args=cJSON_PrintUnformatted(cJSON_GetObjectItemCaseSensitive(candidate,"args")),*error=NULL;
+            if(definition && tool_validate_args(definition,args,&error)) {
+                if(err_out){strbuf e;strbuf_init(&e);strbuf_appendf(&e,"native arguments for %s do not match schema: %s; no actions executed. Pass function parameters directly, not a tool/args action envelope.",name,error?error:"invalid arguments");*err_out=strbuf_detach(&e);}
+                free(args);free(error);free(resp.content);free(resp.tool_actions_json);free(resp.error);cJSON_Delete(calls);return -1;
+            }
+            free(args);free(error);
         }
         for(int i=cJSON_GetArraySize(calls)-1;i>=0;--i) {
             cJSON *call=cJSON_GetArrayItem(calls,i);
@@ -1000,14 +1033,14 @@ int planner_plan(llm *llm, const char *prompt, planned_action **actions, int *n_
 int planner_plan_ex(llm *llm, const struct tool_registry *tools, struct skill_registry *skills,
                         struct policy_engine *policy, const char *prompt, planned_action **actions,
                         int *n_actions, char **raw_out, char **err_out) {
-    char *sys = build_catalog_prompt(tools, skills, policy);
+    char *sys = build_catalog_prompt(tools, skills, policy,planner_uses_native_tools(llm));
     return plan_with(llm, sys, prompt, actions, n_actions, raw_out, err_out, NULL, NULL, 0, tools, policy, NULL);
 }
 
 int planner_plan_attachments_ex(llm *llm, const struct tool_registry *tools, struct skill_registry *skills,
     struct policy_engine *policy, const char *prompt, planned_action **actions,
     int *n_actions, char **raw_out, char **err_out, const char *attachments, int *truncated_out) {
-    return plan_with(llm, build_catalog_prompt(tools,skills,policy), prompt, actions,
+    return plan_with(llm, build_catalog_prompt(tools,skills,policy,planner_uses_native_tools(llm)), prompt, actions,
         n_actions, raw_out, err_out, attachments, truncated_out, 0, tools, policy, NULL);
 }
 
@@ -1015,7 +1048,7 @@ int planner_plan_attachments_ex_with_output(llm *llm, const struct tool_registry
     struct skill_registry *skills, struct policy_engine *policy, const char *prompt,
     planned_action **actions, int *n_actions, char **raw_out, char **err_out,
     const char *attachments, int *truncated_out, int output_tokens) {
-    return plan_with(llm, build_catalog_prompt(tools,skills,policy), prompt, actions,
+    return plan_with(llm, build_catalog_prompt(tools,skills,policy,planner_uses_native_tools(llm)), prompt, actions,
         n_actions, raw_out, err_out, attachments, truncated_out, output_tokens, tools, policy, NULL);
 }
 
@@ -1023,6 +1056,6 @@ int planner_plan_turn(llm *llm, const struct tool_registry *tools,
     struct skill_registry *skills, struct policy_engine *policy, const char *prompt,
     planned_action **actions, int *n_actions, char **raw_out, char **err_out,
     const char *attachments, int *truncated_out, int output_tokens, int *native_end_out) {
-    return plan_with(llm,build_catalog_prompt(tools,skills,policy),prompt,actions,n_actions,
+    return plan_with(llm,build_catalog_prompt(tools,skills,policy,planner_uses_native_tools(llm)),prompt,actions,n_actions,
         raw_out,err_out,attachments,truncated_out,output_tokens,tools,policy,native_end_out);
 }
