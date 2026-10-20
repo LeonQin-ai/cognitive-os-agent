@@ -270,6 +270,7 @@ struct reasoning {
     int prog_model_failures; /* consecutive/total request failures this run */
     int visual_request_failed; /* avoid silently repeating expensive image requests */
     int planner_response_truncated;
+    int planner_native_end_turn;
     int planner_output_escalated; /* one bounded 32K -> 64K retry after truncation */
     char last_model_error[1024];
 
@@ -1759,10 +1760,10 @@ static int h_reason(state_machine *sm, void *ud, const char *input, char **out) 
     int64_t llm_span = trace_begin_task(r->trace, r->run_task ? r->run_task->id : r->trace_task_id, "llm.plan");
     r->planner_response_truncated=0;
     int output_override = r->planner_output_escalated ? 65536 : 0;
-    int rc = planner_plan_attachments_ex_with_output(r->llm, r->tools, r->skills, r->policy,
+    int rc = planner_plan_turn(r->llm, r->tools, r->skills, r->policy,
                                  aug ? aug : input, &r->actions, &r->n_actions,
                                  &raw, &plan_err, r->run_task ? r->run_task->attachments_json : NULL,
-                                 &r->planner_response_truncated, output_override);
+                                 &r->planner_response_truncated, output_override, &r->planner_native_end_turn);
     if (r->planner_response_truncated && !r->planner_output_escalated) {
         r->planner_output_escalated = 1;
         log_info("planner: response hit output limit; escalating subsequent requests to a bounded 64K ceiling");
@@ -3873,7 +3874,7 @@ restart_planning:
                 (prompt_requests_read(completion_instruction(r,prompt)) && !r->run_file_reads && !run_has_mutating_action(r));
             int needs_observation = prompt_requires_observation(completion_instruction(r,prompt)) &&
                                     r->run_successful_tools == 0;
-            int needs_intent_recovery = !prompt_is_direct_information_request(completion_instruction(r,prompt)) &&
+            int needs_intent_recovery = !r->planner_native_end_turn && !prompt_is_direct_information_request(completion_instruction(r,prompt)) &&
                                         (r->run_successful_tools == 0 || answer_only_announces_work(txt)) &&
                                         looks_like_intent(txt);
             if (needs_action || needs_read || needs_observation || needs_intent_recovery) {
@@ -3919,7 +3920,7 @@ restart_planning:
                 const char *t2 = txt;
                 while (t2 && *t2 == ' ')
                     t2++;
-                if (r->max_rounds > 1 && r->intent_nudged < 4 &&
+                if (!r->planner_native_end_turn && r->max_rounds > 1 && r->intent_nudged < 4 &&
                     r->round_idx < r->max_rounds && t2 && *t2 == '[') {
                     r->intent_nudged++;
                     round_log_append(r, txt);

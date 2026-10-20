@@ -44,6 +44,23 @@ static char *build_request_body(const llm_request *req, const char *model, int s
     if (stream)
         cJSON_AddBoolToObject(root, "stream", 1);
 
+    if (req->tools_json) {
+        cJSON *source=cJSON_Parse(req->tools_json), *entry;
+        cJSON *native=cJSON_CreateArray();
+        cJSON_ArrayForEach(entry,source) {
+            cJSON *fn=cJSON_GetObjectItemCaseSensitive(entry,"function");
+            const char *name=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(fn,"name"));
+            if (!name) continue;
+            cJSON *tool=cJSON_CreateObject();cJSON_AddStringToObject(tool,"name",name);
+            const char *desc=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(fn,"description"));
+            cJSON_AddStringToObject(tool,"description",desc?desc:"");
+            cJSON *params=cJSON_GetObjectItemCaseSensitive(fn,"parameters");
+            cJSON_AddItemToObject(tool,"input_schema",params?cJSON_Duplicate(params,1):cJSON_CreateObject());
+            cJSON_AddItemToArray(native,tool);
+        }
+        cJSON_Delete(source);
+        if(cJSON_GetArraySize(native))cJSON_AddItemToObject(root,"tools",native);else cJSON_Delete(native);
+    }
     msgs = cJSON_AddArrayToObject(root, "messages");
     for (size_t i = 0; i < req->num_messages; i++) {
         const llm_message *m = &req->messages[i];
@@ -182,8 +199,30 @@ static int anthropic_chat(llm *llm, const llm_request *req, llm_response *resp) 
         }
     }
 
+    cJSON *actions=cJSON_CreateArray(), *block;
+    int native_valid=!resp->truncated, native_seen=0;
+    cJSON_ArrayForEach(block,content) {
+        const char *type=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(block,"type"));
+        if (!type || strcmp(type,"tool_use")) continue;
+        native_seen=1;
+        const char *name=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(block,"name"));
+        cJSON *input=cJSON_GetObjectItemCaseSensitive(block,"input");
+        if(!name || !*name || !cJSON_IsObject(input)) { native_valid=0;break; }
+        cJSON *action=cJSON_CreateObject();cJSON_AddStringToObject(action,"tool",name);
+        cJSON_AddItemToObject(action,"args",cJSON_Duplicate(input,1));cJSON_AddItemToArray(actions,action);
+    }
+    if(cJSON_GetArraySize(actions) && native_valid) {
+        resp->tool_actions_json=cJSON_PrintUnformatted(actions);
+        log_info("anthropic: native tool blocks=%d",cJSON_GetArraySize(actions));
+    }
+    int tool_stop=cJSON_IsString(stop_reason) && !strcmp(stop_reason->valuestring,"tool_use");
+    if ((!native_valid && native_seen) || (tool_stop && !resp->tool_actions_json))
+        set_error(resp,"anthropic: incomplete native tool use; no actions executed");
+    cJSON_Delete(actions);
+    resp->native_end_turn=req->tools_json && !resp->tool_actions_json && !resp->truncated &&
+        cJSON_IsString(stop_reason) && !strcmp(stop_reason->valuestring,"end_turn");
     resp->content = strbuf_detach(&sb);
-    if (!resp->content || !*resp->content) {
+    if ((!resp->content || !*resp->content) && !resp->tool_actions_json) {
         cJSON *err_obj = cJSON_GetObjectItemCaseSensitive(root, "error");
         const char *em = err_obj && cJSON_IsObject(err_obj) ? err_obj->string : "no content in response";
         set_error(resp, em);

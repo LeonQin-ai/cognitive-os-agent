@@ -75,6 +75,13 @@ static char *build_request_body(const llm_request *req, const char *model, int s
         cJSON_AddItemToArray(msgs, o);
     }
 
+    if (req->tools_json) {
+        cJSON *tools=cJSON_Parse(req->tools_json);
+        if (cJSON_IsArray(tools) && cJSON_GetArraySize(tools)>0) {
+            cJSON_AddItemToObject(root,"tools",tools);
+            cJSON_AddStringToObject(root,"tool_choice","auto");
+        } else cJSON_Delete(tools);
+    }
     cJSON_AddNumberToObject(root, "temperature", req->temperature);
     if (req->max_tokens > 0)
         cJSON_AddNumberToObject(root, "max_tokens", req->max_tokens);
@@ -211,9 +218,41 @@ static int openai_chat(llm *llm, const llm_request *req, llm_response *resp) {
     msg = choices && choices->child ? cJSON_GetObjectItemCaseSensitive(choices->child, "message") : NULL;
     cJSON *finish = choices && choices->child ? cJSON_GetObjectItemCaseSensitive(choices->child, "finish_reason") : NULL;
     resp->truncated = cJSON_IsString(finish) && !strcmp(finish->valuestring, "length");
+    cJSON *native=msg ? cJSON_GetObjectItemCaseSensitive(msg,"tool_calls") : NULL;
+    if (native && !cJSON_IsNull(native) && !cJSON_IsArray(native)) {
+        set_error(resp,"openai: malformed or empty tool_calls");cJSON_Delete(root);return -1;
+    }
+    if (cJSON_IsArray(native) && cJSON_GetArraySize(native)>0) {
+        cJSON *actions=cJSON_CreateArray(), *call;
+        int valid=!resp->truncated;
+        cJSON_ArrayForEach(call,native) {
+            cJSON *fn=cJSON_GetObjectItemCaseSensitive(call,"function");
+            const char *name=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(fn,"name"));
+            const char *arguments=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(fn,"arguments"));
+            const char *end=NULL;
+            cJSON *args=arguments ? cJSON_ParseWithOpts(arguments,&end,1):NULL;
+            if (!name || !*name || !cJSON_IsObject(args)) { cJSON_Delete(args);valid=0;break; }
+            cJSON *action=cJSON_CreateObject();
+            cJSON_AddStringToObject(action,"tool",name);cJSON_AddItemToObject(action,"args",args);
+            cJSON_AddItemToArray(actions,action);
+        }
+        if (!valid) {
+            cJSON_Delete(actions);cJSON_Delete(root);
+            set_error(resp,"openai: incomplete native tool arguments; no actions executed");return -1;
+        }
+        resp->tool_actions_json=cJSON_PrintUnformatted(actions);
+        log_info("openai: native tool blocks=%d",cJSON_GetArraySize(actions));cJSON_Delete(actions);
+    }
+    resp->native_end_turn=req->tools_json && !resp->tool_actions_json && !resp->truncated &&
+        cJSON_IsString(finish) && !strcmp(finish->valuestring,"stop");
+    if (!resp->tool_actions_json && cJSON_IsString(finish) && !strcmp(finish->valuestring,"tool_calls")) {
+        set_error(resp,"openai: tool_calls stop without tool call blocks");cJSON_Delete(root);return -1;
+    }
     content = msg ? cJSON_GetObjectItemCaseSensitive(msg, "content") : NULL;
     if (content && cJSON_IsString(content) && content->valuestring[0]) {
         resp->content = xstrdup(content->valuestring);
+    } else if (resp->tool_actions_json) {
+        resp->content=xstrdup("");
     } else {
         /* Reasoning models (GLM/DeepSeek-R1 style) can exhaust the token
          * budget while thinking and return an empty content with the

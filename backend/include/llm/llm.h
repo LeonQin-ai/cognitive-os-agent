@@ -30,6 +30,7 @@ typedef struct llm_request {
     double temperature;
     int max_tokens;
     const char *reasoning_effort; /* optional OpenAI-compatible reasoning control */
+    const char *tools_json; /* optional OpenAI-format native function catalog, borrowed */
     int stream;      /* set by the streaming entry points */
     long timeout_ms; /* HTTP timeout override; 0 = llm_timeout_ms() default */
 } llm_request;
@@ -38,6 +39,8 @@ typedef struct llm_response {
     char *content; /* full accumulated text (caller frees) */
     char *error;   /* NULL if ok (caller frees) */
     int truncated; /* provider stopped at its output-token limit */
+    char *tool_actions_json; /* normalized native tool calls, caller frees */
+    int native_end_turn; /* explicit provider end without tool calls */
 } llm_response;
 
 typedef void (*llm_stream_cb)(const char *delta, void *ud);

@@ -119,8 +119,10 @@ int llm_chat(llm *llm, const llm_request *req, llm_response *resp) {
         safe_req.messages = safe;
         rc = llm->vt->chat(llm, &safe_req, resp);
         llm_redacted_messages_free(safe, req->num_messages);
-        if (rc == 0 && resp)
+        if (rc == 0 && resp) {
             secret_guard_llm_output(&resp->content);
+            secret_guard_llm_output(&resp->tool_actions_json);
+        }
         return rc;
     }
 }
@@ -223,9 +225,11 @@ char *llm_chat_simple_ex(llm *llm, const char *system_prompt, const char *user_p
             resp.error = NULL;
             free(e);
         }
+        free(resp.content);free(resp.tool_actions_json);
         return NULL;
     }
 
+    free(resp.tool_actions_json);
     out = resp.content;
     resp.content = NULL;
     return out;

@@ -61,6 +61,12 @@ int planner_plan_attachments_ex_with_output(llm *llm, const struct tool_registry
     planned_action **actions, int *n_actions, char **raw_out, char **err_out,
     const char *attachments, int *truncated_out, int output_tokens);
 
+/* Native call blocks take precedence over assistant commentary and stop hints. */
+int planner_plan_turn(llm *llm, const struct tool_registry *tools,
+    struct skill_registry *skills, struct policy_engine *policy, const char *prompt,
+    planned_action **actions, int *n_actions, char **raw_out, char **err_out,
+    const char *attachments, int *truncated_out, int output_tokens, int *native_end_out);
+
 void planner_actions_free(planned_action *a, int n);
 
 #ifdef __cplusplus

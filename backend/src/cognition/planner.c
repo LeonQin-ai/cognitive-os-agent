@@ -615,10 +615,33 @@ size_t planner_input_budget_bytes(llm *l, const tool_registry *tools,
     return planner_input_budget_bytes_with_output(l, tools, skills, policy, 0);
 }
 
+static char *native_tool_catalog(const tool_registry *tools, struct policy_engine *policy) {
+    if (!tools) return NULL;
+    cJSON *list=cJSON_CreateArray();
+    for (int i=0;i<tool_registry_count(tools);++i) {
+        const tool *t=tool_registry_get(tools,(size_t)i);
+        if(!t || !t->name || strlen(t->name)>64 ||
+           (policy && policy_check(policy,t->name,"{}",NULL)==POLICY_DENY)) continue;
+        int valid=1;
+        for(const unsigned char *p=(const unsigned char*)t->name;*p;++p)
+            if(!isalnum(*p) && *p!='_' && *p!='-')valid=0;
+        if(!valid)continue;
+        cJSON *entry=cJSON_CreateObject(), *fn=cJSON_CreateObject();
+        cJSON_AddStringToObject(entry,"type","function");cJSON_AddItemToObject(entry,"function",fn);
+        cJSON_AddStringToObject(fn,"name",t->name);
+        cJSON_AddStringToObject(fn,"description",t->description?t->description:"");
+        cJSON *schema=t->json_schema?cJSON_Parse(t->json_schema):NULL;
+        if(!cJSON_IsObject(schema)) {cJSON_Delete(schema);schema=cJSON_CreateObject();cJSON_AddStringToObject(schema,"type","object");}
+        cJSON_AddItemToObject(fn,"parameters",schema);cJSON_AddItemToArray(list,entry);
+    }
+    char *result=cJSON_GetArraySize(list)?cJSON_PrintUnformatted(list):NULL;cJSON_Delete(list);return result;
+}
+
 static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_action **actions, int *n_actions,
                      char **raw_out, char **err_out, const char *attachments, int *truncated_out,
-                     int output_tokens) {
+                     int output_tokens, const tool_registry *tools, struct policy_engine *policy, int *native_end_out) {
     llm_request req = {0};
+    if(native_end_out)*native_end_out=0;
     llm_response resp = {0};
     int rc;
     char *plan;
@@ -719,7 +742,19 @@ static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_act
                              * invisible reasoning and returned empty content
                              * (finish_reason=length) */
     if(visual && req.max_tokens>8192) req.max_tokens=8192;
+    char *native_tools=NULL;
+    if (llm->provider && (!strcmp(llm->provider,"openai") || !strcmp(llm->provider,"anthropic")))
+        native_tools=native_tool_catalog(tools,policy);
+    req.tools_json=native_tools;
+    char *native_system=NULL;
+    if(native_tools) {
+        strbuf system;strbuf_init(&system);strbuf_append(&system,msgs[0].content);
+        strbuf_append(&system,"\nNATIVE TOOL PROTOCOL OVERRIDES TEXT EXAMPLES: When further operations are needed, emit native tool calls using the supplied function schemas. Any text alongside a tool call is commentary, never completion. After all operations and verification finish, answer directly with final text and no tool calls. Do not announce future work as final text. Tool errors are observations to diagnose and correct.\n");
+        native_system=strbuf_detach(&system);msgs[0].content=native_system;
+    }
     rc = llm_chat(llm, &req, &resp);
+    free(native_tools);free(native_system);
+    if(native_end_out)*native_end_out=resp.native_end_turn;
     if(truncated_out) *truncated_out=resp.truncated;
     for (int i=0;i<28;i++) free(owned[i]);
     cJSON_Delete(files);
@@ -735,9 +770,15 @@ static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_act
         }
         free(resp.content);
         free(resp.error);
+        free(resp.tool_actions_json);
         return visual ? -2 : -1;
     }
 
+    if(resp.tool_actions_json) {
+        /* Blocks, not stop_reason or text wording, own the continuation decision. */
+        free(resp.content);resp.content=resp.tool_actions_json;resp.tool_actions_json=NULL;
+        if(native_end_out)*native_end_out=0;
+    }
     plan = resp.content;
     resp.content = NULL;
     free(resp.error);
@@ -745,6 +786,12 @@ static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_act
         if (err_out)
             *err_out = xstrdup("LLM returned an empty response");
         return -1;
+    }
+    if(resp.native_end_turn) {
+        /* A native final text can quote JSON tool examples. Only actual
+         * tool-call blocks are executable in this protocol. */
+        if(raw_out)*raw_out=plan;else free(plan);
+        return 0;
     }
     /* Some providers include reasoning tags in content. Never parse a tool
      * example from their hidden preamble as the executable plan. JSON replies
@@ -873,21 +920,21 @@ void planner_actions_free(planned_action *a, int n) {
 
 int planner_plan(llm *llm, const char *prompt, planned_action **actions, int *n_actions, char **raw_out,
                      char **err_out) {
-    return plan_with(llm, NULL, prompt, actions, n_actions, raw_out, err_out, NULL, NULL, 0);
+    return plan_with(llm, NULL, prompt, actions, n_actions, raw_out, err_out, NULL, NULL, 0, NULL, NULL, NULL);
 }
 
 int planner_plan_ex(llm *llm, const struct tool_registry *tools, struct skill_registry *skills,
                         struct policy_engine *policy, const char *prompt, planned_action **actions,
                         int *n_actions, char **raw_out, char **err_out) {
     char *sys = build_catalog_prompt(tools, skills, policy);
-    return plan_with(llm, sys, prompt, actions, n_actions, raw_out, err_out, NULL, NULL, 0);
+    return plan_with(llm, sys, prompt, actions, n_actions, raw_out, err_out, NULL, NULL, 0, tools, policy, NULL);
 }
 
 int planner_plan_attachments_ex(llm *llm, const struct tool_registry *tools, struct skill_registry *skills,
     struct policy_engine *policy, const char *prompt, planned_action **actions,
     int *n_actions, char **raw_out, char **err_out, const char *attachments, int *truncated_out) {
     return plan_with(llm, build_catalog_prompt(tools,skills,policy), prompt, actions,
-        n_actions, raw_out, err_out, attachments, truncated_out, 0);
+        n_actions, raw_out, err_out, attachments, truncated_out, 0, tools, policy, NULL);
 }
 
 int planner_plan_attachments_ex_with_output(llm *llm, const struct tool_registry *tools,
@@ -895,5 +942,13 @@ int planner_plan_attachments_ex_with_output(llm *llm, const struct tool_registry
     planned_action **actions, int *n_actions, char **raw_out, char **err_out,
     const char *attachments, int *truncated_out, int output_tokens) {
     return plan_with(llm, build_catalog_prompt(tools,skills,policy), prompt, actions,
-        n_actions, raw_out, err_out, attachments, truncated_out, output_tokens);
+        n_actions, raw_out, err_out, attachments, truncated_out, output_tokens, tools, policy, NULL);
+}
+
+int planner_plan_turn(llm *llm, const struct tool_registry *tools,
+    struct skill_registry *skills, struct policy_engine *policy, const char *prompt,
+    planned_action **actions, int *n_actions, char **raw_out, char **err_out,
+    const char *attachments, int *truncated_out, int output_tokens, int *native_end_out) {
+    return plan_with(llm,build_catalog_prompt(tools,skills,policy),prompt,actions,n_actions,
+        raw_out,err_out,attachments,truncated_out,output_tokens,tools,policy,native_end_out);
 }
