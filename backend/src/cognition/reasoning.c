@@ -2651,6 +2651,15 @@ static int answer_only_announces_work(const char *text) {
         strstr(text, "结果:") || strstr(text, "结论:")) return 0;
     for (size_t i = 0; i < sizeof(prefixes) / sizeof(prefixes[0]); ++i)
         if (information_prefix(text, prefixes[i])) return 1;
+    /* #175: a brief progress preamble ("I have read most files. Let me
+     * read the rest") is still narration, not the requested analysis.
+     * Keep this confined to short, single-paragraph text without findings. */
+    static const char *const pending[] = {
+        "让我读取", "让我继续", "我还需要读取", "让我检查", "让我核对",
+        "Let me read", "let me read", "Let me check", "I still need to"
+    };
+    for (size_t i = 0; i < sizeof(pending) / sizeof(pending[0]); ++i)
+        if (strstr(text, pending[i])) return 1;
     return 0;
 }
 

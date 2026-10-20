@@ -9,7 +9,13 @@ class Provider(BaseHTTPRequestHandler):
         body=json.loads(self.rfile.read(int(self.headers['Content-Length'])))
         text=body['messages'][-1]['content']
         current=text.split('## Current request\n',1)[-1].split('\n## ',1)[0]
-        if 'HTML_STALL' in current:
+        if 'ANALYSIS_175' in current:
+            n=counts.get('analysis175',0);counts['analysis175']=n+1
+            answer=(json.dumps([{'tool':'file_read','args':{'path':'partial.txt','max_bytes':100}}]) if n==0 else
+                    '我已经阅读了大部分核心文件。让我读取 `mmu.c` 的剩余部分，以完成对上下文工程实现的完整分析。' if n==1 else
+                    json.dumps([{'tool':'file_read','args':{'path':'partial.txt','offset_bytes':7500}}]) if n==2 else
+                    '上下文工程分析结果：已经读取到 EOF_DIAGNOSTIC；缓存负责已读页面复用，磁盘负责原文持久化。')
+        elif 'HTML_STALL' in current:
             n=counts.get('stall',0);counts['stall']=n+1
             answer='我需要先检查报告内容，然后继续生成架构图。阶段 '+str(n)
         elif 'HTML_RECOVERY' in current:
@@ -79,6 +85,10 @@ with tempfile.TemporaryDirectory(prefix='coa-completion-recovery-') as folder:
             no_action=finished(request('/v1/tasks',{'prompt':'注册这些skills REGISTER_DIAGNOSTIC'})['id'])
             assert no_action['status']=='FAILED' and 'skill_manage' in no_action['output'],no_action
             (state/'partial.txt').write_text('x'*7500+'EOF_DIAGNOSTIC',encoding='utf-8')
+            analysis=finished(request('/v1/tasks',{'prompt':'分析代码中的上下文工程怎么实现 ANALYSIS_175'})['id'])
+            assert analysis['status']=='DONE' and counts['analysis175']==4,analysis
+            assert 'EOF_DIAGNOSTIC' in analysis['output'] and '让我读取' not in analysis['output'],analysis
+            print('PASS: issue175 progress preamble is not final analysis; remaining read and actual answer execute')
             started=request('/v1/tasks',{'prompt':'完整读取文件 partial.txt READ_DIAGNOSTIC'})
             partial=finished(started['id'])
             assert partial['status']=='FAILED' and 'offset_bytes=4000' in partial['output'] and 'partial.txt' in partial['output'],partial
