@@ -14,10 +14,13 @@ for provider_name in ('openai','anthropic'):
    catalogs.append(body.get('tools',[]))
    text=body['messages'][-1]['content']
    current=text.split('## Current request\n',1)[-1].split('\n## ',1)[0]
-   case=next(k for k in ('NATIVE_MIXED','NATIVE_FINAL','NATIVE_BAD','NATIVE_EXAMPLE','NATIVE_PENDING','NATIVE_BLOCKED','NATIVE_CHATTER') if k in current)
+   case=next(k for k in ('NATIVE_MIXED','NATIVE_FINAL','NATIVE_BAD','NATIVE_EXAMPLE','NATIVE_PENDING','NATIVE_BLOCKED','NATIVE_CHATTER','NATIVE_DISCOVERY') if k in current)
    n=counts.get(case,0);counts[case]=n+1
    calls=[];answer='';stop='stop'
-   if case=='NATIVE_BLOCKED':calls=[('complete_task',{'status':'blocked','requires_tools':False,'answer':'Missing provider credential; user action required.'})]
+   if case=='NATIVE_DISCOVERY':
+    if n==0:calls=[('grep',{'path':'native.txt','pattern':'native-marker','output_mode':'files_with_matches'})]
+    else:answer='命中文件 native.txt；没有读取文件，也没有写入文件。'
+   elif case=='NATIVE_BLOCKED':calls=[('complete_task',{'status':'blocked','requires_tools':False,'answer':'Missing provider credential; user action required.'})]
    elif case=='NATIVE_CHATTER':answer='Zyxwv alpha beta gamma'
    elif case=='NATIVE_PENDING':
     if n==0:calls=[('complete_task',{'status':'complete','requires_tools':True,'answer':'pending'})]
@@ -78,6 +81,8 @@ for provider_name in ('openai','anthropic'):
     assert not (state/'must-not-exist.txt').exists()
     assert (state/'repaired.txt').read_text()=='recovered'
     assert len(bad['steps'])==1,bad
+    discovery=run('仅搜索文件名，不读文件，不写文件 NATIVE_DISCOVERY')
+    assert discovery['status']=='DONE' and counts['NATIVE_DISCOVERY']==2 and [s['tool'] for s in discovery['steps']]==['grep'],discovery
     pending=run('创建 pending.txt NATIVE_PENDING')
     assert pending['status']=='DONE' and counts['NATIVE_PENDING']==3 and (state/'pending.txt').exists(),pending
     blocked=run('处理任务 NATIVE_BLOCKED')

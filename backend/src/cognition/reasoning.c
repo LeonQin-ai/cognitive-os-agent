@@ -3874,8 +3874,9 @@ restart_planning:
             int needs_read = (prompt_requires_full_read(completion_instruction(r,prompt)) &&
                 (required_pending_reads(r,completion_instruction(r,prompt)) || r->read_tracking_overflow ||
                  answer_reports_required_unread(r,completion_instruction(r,prompt),txt))) ||
-                (prompt_requests_read(completion_instruction(r,prompt)) && !r->run_file_reads && !run_has_mutating_action(r));
-            int needs_observation = prompt_requires_observation(completion_instruction(r,prompt)) &&
+                (!r->planner_native_end_turn && prompt_requests_read(completion_instruction(r,prompt)) &&
+                 !r->run_file_reads && !run_has_mutating_action(r));
+            int needs_observation = !r->planner_native_end_turn && prompt_requires_observation(completion_instruction(r,prompt)) &&
                                     r->run_successful_tools == 0;
             /* Prose heuristics are confined to the explicitly selected legacy
              * text protocol (and offline mock). Native turns can reach here
