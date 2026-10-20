@@ -42,12 +42,14 @@ for provider_name in ('openai','anthropic'):
    n=counts.get(case,0);counts[case]=n+1
    calls=[];answer='';stop='stop'
    if case.startswith('ANSWER_'):answer=matrix[int(case.split('_')[1])][1]
-   elif case in ('NATIVE_IPC_PROGRESS','NATIVE_IPC_PENDING'):
+   elif case in ('NATIVE_IPC_PROGRESS','NATIVE_IPC_PENDING','NATIVE_IPC_PREMATURE'):
     if n==0:calls=[('file_read',{'path':'native.txt'})]
     elif n==1:
      answer='基于已收集的大量代码证据，我需要再补充读取几个关键的 IPC 接口定义文件，以完整分析服务端与客户端的通信机制。'
      if case=='NATIVE_IPC_PENDING':calls=[('complete_task',{'status':'complete','requires_tools':True,'answer':answer})];answer=''
-    elif n==2:calls=[('file_read',{'path':'ipc.h'})]
+    elif n==2:
+     if case=='NATIVE_IPC_PREMATURE':assert 'Completion review:' in body['messages'][-1]['content']
+     calls=[('file_read',{'path':'ipc.h'})]
     else:answer='服务端接收请求并发送响应，客户端发起调用；ipc.h 定义 IPC_REQUEST 和 IPC_RESPONSE 接口。'
    elif case=='NATIVE_PARTIAL':
     if n==0:calls=[('file_read',{'path':'explanation.txt','max_bytes':32})]
@@ -129,7 +131,7 @@ for provider_name in ('openai','anthropic'):
       if t['status'] not in ('RUNNING','QUEUED','CANCELLING'):return t
       assert time.monotonic()<deadline,t;time.sleep(.05)
     mixed=run('NATIVE_MIXED','生成 native.txt 并读取核对')
-    assert mixed['status']=='DONE' and counts['NATIVE_MIXED']==3,mixed
+    assert mixed['status']=='DONE' and counts['NATIVE_MIXED']==4,mixed
     assert (state/'native.txt').read_text()=='native-marker'
     assert [s['tool'] for s in mixed['steps']]==['file_write','file_read'],mixed
     final=run('NATIVE_FINAL','解释缓存原理')
@@ -139,20 +141,20 @@ for provider_name in ('openai','anthropic'):
     for i,(prompt,answer) in enumerate(matrix):
      case=f'ANSWER_{i}';task=run(case,prompt)
      assert task['status']=='DONE' and counts[case]==1 and not task['steps'] and task['output']==answer,(prompt,task)
-    for case in ('NATIVE_IPC_PROGRESS','NATIVE_IPC_PENDING'):
+    for case in ('NATIVE_IPC_PROGRESS','NATIVE_IPC_PENDING','NATIVE_IPC_PREMATURE'):
      ipc=run(case,'分析代码中的服务端和客户端。')
-     assert ipc['status']=='DONE' and counts[case]==4,ipc
+     assert ipc['status']=='DONE' and counts[case]==(4 if case=='NATIVE_IPC_PREMATURE' else 5),ipc
      assert [st['tool'] for st in ipc['steps']]==['file_read','file_read'] and 'IPC_REQUEST' in ipc['output'],ipc
     partial=run('NATIVE_PARTIAL','阅读样例文件的相关片段，解释注释中的“完整读取全部源码”是什么意思。')
-    assert partial['status']=='DONE' and counts['NATIVE_PARTIAL']==2 and len(partial['steps'])==1,partial
+    assert partial['status']=='DONE' and counts['NATIVE_PARTIAL']==3 and len(partial['steps'])==1,partial
     research=run('NATIVE_RESEARCH','请分析样例中的 create operation，提供技术说明。')
-    assert research['status']=='DONE' and counts['NATIVE_RESEARCH']==18 and len(research['steps'])==17,research
+    assert research['status']=='DONE' and counts['NATIVE_RESEARCH']==19 and len(research['steps'])==17,research
     recovered=run('NATIVE_RECOVERED','处理目标文件并核对最终内容。')
-    assert recovered['status']=='DONE' and counts['NATIVE_RECOVERED']==4,recovered
+    assert recovered['status']=='DONE' and counts['NATIVE_RECOVERED']==5,recovered
     alias=run('NATIVE_ALIAS','处理目录别名下的目标文件并核对结果。')
-    assert alias['status']=='DONE' and counts['NATIVE_ALIAS']==4,alias
+    assert alias['status']=='DONE' and counts['NATIVE_ALIAS']==5,alias
     schema=run('NATIVE_SCHEMA','处理目标文件并核对内容。')
-    assert schema['status']=='DONE' and counts['NATIVE_SCHEMA']==4 and len(schema['steps'])==2,schema
+    assert schema['status']=='DONE' and counts['NATIVE_SCHEMA']==5 and len(schema['steps'])==2,schema
     assert not (state/'schema-prefix.txt').exists()
     assert all(st['ok'] for st in schema['steps']),schema
     failed=run('NATIVE_FAILED','读取指定文件并总结。')
@@ -160,14 +162,14 @@ for provider_name in ('openai','anthropic'):
     example=run('NATIVE_EXAMPLE','解释工具调用格式')
     assert example['status']=='DONE' and counts['NATIVE_EXAMPLE']==1 and not (state/'example-only.txt').exists(),example
     bad=run('NATIVE_BAD','创建 repaired.txt')
-    assert bad['status']=='DONE' and counts['NATIVE_BAD']==3,bad
+    assert bad['status']=='DONE' and counts['NATIVE_BAD']==4,bad
     assert not (state/'must-not-exist.txt').exists()
     assert (state/'repaired.txt').read_text()=='recovered'
     assert len(bad['steps'])==1,bad
     discovery=run('NATIVE_DISCOVERY','仅搜索文件名，不读文件，不写文件')
-    assert discovery['status']=='DONE' and counts['NATIVE_DISCOVERY']==2 and [s['tool'] for s in discovery['steps']]==['grep'],discovery
+    assert discovery['status']=='DONE' and counts['NATIVE_DISCOVERY']==3 and [s['tool'] for s in discovery['steps']]==['grep'],discovery
     pending=run('NATIVE_PENDING','创建 pending.txt')
-    assert pending['status']=='DONE' and counts['NATIVE_PENDING']==3 and (state/'pending.txt').exists(),pending
+    assert pending['status']=='DONE' and counts['NATIVE_PENDING']==4 and (state/'pending.txt').exists(),pending
     blocked=run('NATIVE_BLOCKED','处理任务')
     assert blocked['status']=='FAILED' and counts['NATIVE_BLOCKED']==1 and 'Missing provider credential' in blocked['output'],blocked
     chatter=run('NATIVE_CHATTER','处理任务')
@@ -177,7 +179,7 @@ for provider_name in ('openai','anthropic'):
      write=next(t.get('function',t) for t in catalog if t.get('function',t).get('name')=='file_write')
      schema=write.get('parameters',write.get('input_schema'))
      assert schema['type']=='object' and 'path' in schema['properties'] and 'content' in schema['properties']
-    print('PASS:',provider_name,f'{len(matrix)} ordinary answers + partial reading, 17-step research, recovered/real failures; fixture routing is out of band, no magic prompt tags')
+    print('PASS:',provider_name,f'{len(matrix)} ordinary answers + premature completion review, partial reading, 17-step research, recovered/real failures; fixture routing is out of band, no magic prompt tags')
    finally:
     process.terminate()
     try:process.wait(timeout=5)

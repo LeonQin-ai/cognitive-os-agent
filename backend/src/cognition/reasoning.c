@@ -3709,6 +3709,7 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     int search_only_rounds = 0;
     int artifact_read_nudged = 0;
     int failure_recovery_nudges = 0, truncated_response_nudges = 0;
+    int completion_reviewed = 0;
     int output_truncated_unresolved = 0;
     char *truncated_prefix = NULL;
     int synthesized = 0; /* fallback answer may describe an incomplete run */
@@ -3966,6 +3967,26 @@ restart_planning:
                                         "如果任务已完成，请直接输出纯文本的最终答案（不要输出 JSON）。");
                     continue;
                 }
+            }
+            /* A syntactically valid completion is a candidate, not proof of
+             * delivery. Review once per run, like a bounded
+             * stop hook. Never classify answer prose or recursively review
+             * the review itself; ordinary zero-tool conversation needs no extra call. */
+            if (r->planner_native_end_turn == 1 && r->run_successful_tools > 0 &&
+                !completion_reviewed) {
+                if (r->round_idx >= r->max_rounds) {
+                    unfinished = 1;
+                    final_text = xstrdup(txt ? txt : "");
+                    break;
+                }
+                completion_reviewed = 1;
+                round_log_append(r, txt ? txt : "");
+                round_log_append(r, "[system] Completion review: compare the proposed answer against the ORIGINAL user request and actual tool evidence. "
+                                    "A completion declaration alone is not evidence. If any requested analysis, operation, artifact or verification is still missing, "
+                                    "call the next necessary tool now. If all requested work is already delivered, call complete_task with the full final answer; "
+                                    "do not merely announce future work. Report genuinely blocked work with status blocked. "
+                                    "This review runs once per task; do not reread evidence solely to confirm completion.");
+                continue;
             }
             final_text = xstrdup(txt ? txt : "");
             break;
