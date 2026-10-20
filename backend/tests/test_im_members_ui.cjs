@@ -10,6 +10,7 @@ const assert=require('node:assert/strict');
     const errors=[]; page.on('pageerror',e=>errors.push(e.message));
     let agents=[], posts=[], updates=[], fail=false, failSend=true, failStop=false, nextTask=0;
     const tasks=new Map(), stopped=[];
+    let stopGate=null;
     let sessions=[{id:11,name:'empty',kind:'group',members:[],discussion_rounds:2,messages:0}];
     await page.route('http://ui.test/**',async route=>{
       const req=route.request(), url=new URL(req.url()); let data=[],status=200;
@@ -38,7 +39,7 @@ const assert=require('node:assert/strict');
         if(req.method()==='DELETE'){
           stopped.push(id);
           if(failStop){status=409;data={error:'retry stop'};}
-          else {tasks.set(id,{status:'CANCELLED'});data={ok:true};}
+          else {if(stopGate) await stopGate;tasks.set(id,{status:'CANCELLED'});data={ok:true};}
         }
       }
       return route.fulfill({status,contentType:'application/json',body:JSON.stringify(data)});
@@ -106,9 +107,13 @@ const assert=require('node:assert/strict');
       imRunUpdate({task_id:0,session_id:11,status:'cancelled',reason:'new_message'});
     });
     assert.match(await page.locator('#im-run-status').innerText(),/已排队/,'old completion cannot replace the newer discussion');
+    // Hold the acknowledgement so polling cannot skip the pending state
+    // before Playwright observes it. Release only after the pending assertions.
+    let releaseStop; stopGate=new Promise(resolve=>{releaseStop=resolve;});
     await page.locator('#im-stop').click();
     await page.waitForFunction(()=>!$('im-stop').hidden&&$('im-stop').disabled);
     assert.deepEqual(stopped,[1]);
+    stopGate=null; releaseStop();
     await page.waitForFunction(()=>$('im-run-status').textContent==='讨论已停止');
     assert(await page.locator('#im-stop').isHidden());
 
