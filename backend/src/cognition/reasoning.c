@@ -2656,7 +2656,8 @@ static int answer_only_announces_work(const char *text) {
      * Keep this confined to short, single-paragraph text without findings. */
     static const char *const pending[] = {
         "让我读取", "让我继续", "我还需要读取", "让我检查", "让我核对",
-        "Let me read", "let me read", "Let me check", "I still need to"
+        "Let me read", "let me read", "Let me check", "I still need to",
+        "需要调用工具", "需要使用工具", "现在需要创建", "直接生成 HTML 文件"
     };
     for (size_t i = 0; i < sizeof(pending) / sizeof(pending[0]); ++i)
         if (strstr(text, pending[i])) return 1;

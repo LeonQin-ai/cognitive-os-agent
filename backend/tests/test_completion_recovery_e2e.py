@@ -9,7 +9,13 @@ class Provider(BaseHTTPRequestHandler):
         body=json.loads(self.rfile.read(int(self.headers['Content-Length'])))
         text=body['messages'][-1]['content']
         current=text.split('## Current request\n',1)[-1].split('\n## ',1)[0]
-        if 'ANALYSIS_175' in current:
+        if 'USE_TOOLS176' in current:
+            n=counts.get('tools176',0);counts['tools176']=n+1
+            answer=(json.dumps([{'tool':'list_dir','args':{'path':'.'}}]) if n==0 else
+                    '根据已有初步资料，我需要调用工具完成检查，再交付实际分析。' if n==1 else
+                    json.dumps([{'tool':'list_dir','args':{'path':'.'}}]) if n==2 else
+                    '检查结果：目录资料已核对，现有分析已完成。')
+        elif 'ANALYSIS_175' in current:
             n=counts.get('analysis175',0);counts['analysis175']=n+1
             answer=(json.dumps([{'tool':'file_read','args':{'path':'partial.txt','max_bytes':100}}]) if n==0 else
                     '我已经阅读了大部分核心文件。让我读取 `mmu.c` 的剩余部分，以完成对上下文工程实现的完整分析。' if n==1 else
@@ -74,6 +80,9 @@ with tempfile.TemporaryDirectory(prefix='coa-completion-recovery-') as folder:
                     if t['status'] in ('DONE','FAILED','CANCELLED','TIMEOUT'): return t
                     assert time.monotonic()<deadline,t
                     time.sleep(.05)
+            tool_needed=finished(request('/v1/tasks',{'prompt':'分析当前架构 USE_TOOLS176'})['id'])
+            assert tool_needed['status']=='DONE' and counts['tools176']==4,tool_needed
+            print('PASS: explicit remaining tool need after observations continues tool execution')
             html=finished(request('/v1/tasks',{'prompt':'输出一个html报告并检查内容 HTML_RECOVERY'})['id'])
             assert html['status']=='DONE' and counts.get('html')==5,html
             assert (state/'report.html').exists()
