@@ -534,7 +534,10 @@ static int h_chat_sessions(const http_request *req, http_response *resp, void *u
     if (!authz_ok(ctx, req, resp))
         return 0;
     if (strcmp(req->method, "GET") == 0) {
-        char *js = reasoning_sessions_json(ctx->reasoning);
+        char cursor[128],limit_text[24];
+        query_param(req,"limit",limit_text,sizeof(limit_text));
+        query_param(req,"cursor",cursor,sizeof(cursor));
+        char *js = *limit_text ? reasoning_sessions_page_json(ctx->reasoning,cursor,(size_t)strtoul(limit_text,NULL,10)) : reasoning_sessions_json(ctx->reasoning);
         http_resp_append(resp, js ? js : "[]");
         free(js);
         return 0;

@@ -3214,9 +3214,19 @@ function chatSessionList(r){
   return [];
 }
 
-async function loadChatSessions(){
-  const r = await call('GET', '/v1/chat/sessions');
+let CHAT_SESSION_NEXT=null, CHAT_SESSION_CURSOR='', CHAT_SESSION_PAGED=false;
+let CHAT_SESSION_LIST_SEQ=0, CHAT_SELECTED_INFO=null;
+async function loadChatSessions(cursor=''){
+  const seq=++CHAT_SESSION_LIST_SEQ;
+  const r = await call('GET', '/v1/chat/sessions?limit=12' + (cursor ? '&cursor='+encodeURIComponent(cursor):''));
+  if(seq!==CHAT_SESSION_LIST_SEQ || r.status!==200) return;
+  CHAT_SESSION_CURSOR=cursor;
+  CHAT_SESSION_NEXT=r.obj?.next_cursor || null;
+  CHAT_SESSION_PAGED=!!(r.obj && !Array.isArray(r.obj) && Array.isArray(r.obj.sessions));
   const list = chatSessionList(r);
+  const selected=list.find(s=>s.id===CHAT_SESSION);
+  if(selected)CHAT_SELECTED_INFO=selected;
+  CHAT_TABS_CACHE=list;
   renderChatTabs(list);
   void chatReconcileRecentFailures(list);
 }
@@ -3354,10 +3364,11 @@ function sideRecent(list){
     if(index>=0) ids.splice(index,1);
     ids.unshift(CHAT_SESSION);
   }
-  const visibleIds=new Set(ids.slice(0,12));
+  const windowSize=CHAT_SESSION_PAGED ? 13:12;
+  const visibleIds=new Set(ids.slice(0,windowSize));
   const visible = new Map(ordered.filter(s=>visibleIds.has(s.id || 'default')).map(s=>[s.id || 'default',s]));
-  ids.slice(0,12).forEach(id => {
-    const info = visible.get(id);
+  ids.slice(0,windowSize).forEach(id => {
+    const info = visible.get(id) || (CHAT_SELECTED_INFO?.id===id ? CHAT_SELECTED_INFO:null);
     const row = document.createElement('div');
     row.className = 'side-recent-row';
     const b = document.createElement('button');
@@ -3390,6 +3401,14 @@ function sideRecent(list){
     row.appendChild(del);
     box.appendChild(row);
   });
+  if(CHAT_SESSION_NEXT){
+    const more=document.createElement('button');more.id='recent-older';more.textContent='更早会话';
+    more.onclick=()=>loadChatSessions(CHAT_SESSION_NEXT);box.appendChild(more);
+  }
+  if(CHAT_SESSION_CURSOR){
+    const newest=document.createElement('button');newest.id='recent-newest';newest.textContent='返回最近会话';
+    newest.onclick=()=>loadChatSessions();box.appendChild(newest);
+  }
   if(nav) nav.scrollTop = scrollTop;
 }
 
@@ -3644,6 +3663,7 @@ function chatHistoryEntries(turns, runs){
 async function chatSwitchSession(id){
   if(id === CHAT_SESSION){ switchPanel('chat'); chatFocusComposer(id); return; }
   chatCacheStore(); // 保存当前会话消息，切回时即时回放
+  CHAT_SELECTED_INFO=CHAT_TABS_CACHE.find(s=>s.id===id) || null;
   CHAT_SESSION = id;
   chatAttachActivate(id);
   if($('ssh-session-details')?.open) void sshSessionLoad();
@@ -3693,6 +3713,7 @@ async function chatNewSession(options={}){
     toast('新建聊天失败：' + reason);
     return false;
   }
+  CHAT_SELECTED_INFO={id,turns:0,created_ms:Date.now()};
   CHAT_SESSION = id;
   chatAttachActivate(CHAT_SESSION);
   if($('ssh-session-details')?.open) void sshSessionLoad();

@@ -1054,6 +1054,7 @@ int init(runtime_ctx *ctx, const config *cfg) {
             ctx->lane_task[i] = 0;
             memset(&rc, 0, sizeof(rc));
             rc.llm = ctx->llm;
+            rc.defer_session_load = 1;
             rc.tools = ctx->tools;
             rc.memory = ctx->memory;
             rc.memory_service = ctx->memsvc;

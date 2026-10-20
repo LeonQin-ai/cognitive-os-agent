@@ -30,6 +30,7 @@
 #include "infra/trace.h"
 #include "infra/metrics.h"
 #include "security/secret.h"
+#include "api/auth.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -41,7 +42,6 @@
 /* One chat session: isolated conversation history, compaction summary and
  * session notes. Sessions are created on demand by reasoning_run_ex
  * (id NULL or "" = the default shared session, used by every legacy caller). */
-#define SESSION_MAX 64
 struct session {
     char *id;
     mutex_t mtx;
@@ -112,6 +112,8 @@ struct sess_meta {
     long long total_ms;
     long long last_active_ms;
     int shared_memory;
+    int deleted;
+    size_t prev, next; /* metadata LRU links, index + 1 */
 };
 
 struct sess_store {
@@ -121,6 +123,10 @@ struct sess_store {
     size_t nsessions, scap;
     struct sess_meta *meta;
     size_t nmeta, metacap;
+    size_t *meta_slots, meta_slotcap, meta_indexed;
+    size_t meta_head, meta_tail, meta_live;
+    FILE *meta_log;
+    int meta_loaded, meta_error;
 };
 
 /* One executed action of the current/most recent run (step registry). */
@@ -134,9 +140,7 @@ struct run_step {
     int ms;
 };
 
-/* Find-or-create the session with this id (NULL/"" = default). Registry cap
- * SESSION_MAX; capacity exhaustion fails instead of aliasing another chat. Callers hold no run in flight. (Defined
- * after struct reasoning — see below.) */
+/* Sessions are materialized only on use; empty chats retain metadata only. */
 
 struct reasoning {
     mutex_t progress_mtx;
@@ -529,6 +533,60 @@ static int run_aborted(reasoning *r) {
     return 1;
 }
 
+/* Metadata lookup is independent of the resident history registry. */
+static size_t meta_hash(const char *id) {
+    size_t h=(size_t)2166136261u;
+    for(;*id;id++) h=(h^(unsigned char)*id)*(size_t)16777619u;
+    return h;
+}
+static int meta_index_sync(sess_store *ss) {
+    if(!ss->meta_slotcap || (ss->nmeta+1)*2>=ss->meta_slotcap) {
+        size_t cap=ss->meta_slotcap ? ss->meta_slotcap*2 : 32;
+        while(cap<(ss->nmeta+1)*2) cap*=2;
+        size_t *slots=calloc(cap,sizeof(*slots)); if(!slots)return -1;
+        free(ss->meta_slots);ss->meta_slots=slots;ss->meta_slotcap=cap;ss->meta_indexed=0;
+    }
+    while(ss->meta_indexed<ss->nmeta) {
+        size_t i=ss->meta_indexed++,slot=meta_hash(ss->meta[i].id)&(ss->meta_slotcap-1);
+        while(ss->meta_slots[slot])slot=(slot+1)&(ss->meta_slotcap-1);
+        ss->meta_slots[slot]=i+1;
+    }
+    return 0;
+}
+static struct sess_meta *meta_find(sess_store *ss,const char *id) {
+    if(meta_index_sync(ss))return NULL;
+    size_t slot=meta_hash(id)&(ss->meta_slotcap-1);
+    while(ss->meta_slots[slot]) {
+        size_t i=ss->meta_slots[slot]-1;
+        if(!strcmp(ss->meta[i].id,id))return &ss->meta[i];
+        slot=(slot+1)&(ss->meta_slotcap-1);
+    }
+    return NULL;
+}
+static void meta_touch(sess_store *ss,struct sess_meta *m) {
+    size_t i=(size_t)(m-ss->meta)+1;
+    if(m->prev)ss->meta[m->prev-1].next=m->next;
+    else if(ss->meta_head==i)ss->meta_head=m->next;
+    if(m->next)ss->meta[m->next-1].prev=m->prev;
+    else if(ss->meta_tail==i)ss->meta_tail=m->prev;
+    m->prev=0;m->next=ss->meta_head;
+    if(ss->meta_head)ss->meta[ss->meta_head-1].prev=i;
+    else ss->meta_tail=i;
+    ss->meta_head=i;
+}
+static struct sess_meta *meta_ensure(sess_store *ss,const char *id) {
+    struct sess_meta *m=meta_find(ss,id);if(m)return m;
+    if(ss->nmeta==ss->metacap){
+        size_t cap=ss->metacap ? ss->metacap*2 : 16;
+        void *items=realloc(ss->meta,cap*sizeof(*ss->meta));if(!items)return NULL;
+        ss->meta=items;ss->metacap=cap;
+    }
+    m=&ss->meta[ss->nmeta++];memset(m,0,sizeof(*m));
+    snprintf(m->id,sizeof(m->id),"%s",id);ss->meta_live++;
+    if(meta_index_sync(ss))return NULL;
+    return m;
+}
+
 /* Find-or-create the session with this id. Caller holds sess_mtx. */
 static int tool_abort_requested(void *ud) { return run_aborted((reasoning *)ud); }
 
@@ -540,28 +598,22 @@ static struct session *session_get_locked(reasoning *r, const char *id) {
         if (strcmp(r->ss->sessions[i]->id, want) == 0)
             return r->ss->sessions[i];
 
-    if (r->ss->nsessions < SESSION_MAX) {
+    {
         s = session_new(want);
         if (s) {
             s->shared_memory = atomic_load(&r->ss->shared_memory_global);
-            for (size_t i = 0; i < r->ss->nmeta; i++) {
-                const struct sess_meta *m = &r->ss->meta[i];
-                if (strcmp(m->id, want) != 0)
-                    continue;
-                snprintf(s->title, sizeof(s->title), "%s", m->title);
-                s->created_ms = m->created_ms;
-                s->total_ms = m->total_ms;
-                s->last_active_ms = m->last_active_ms;
-                break;
+            const struct sess_meta *m=meta_find(r->ss,want);
+            if(m && !m->deleted){
+                snprintf(s->title,sizeof(s->title),"%s",m->title);
+                s->created_ms=m->created_ms;s->total_ms=m->total_ms;s->last_active_ms=m->last_active_ms;
             }
-            struct session **na = realloc(r->ss->sessions, (r->ss->nsessions + 1) * sizeof(*na));
-            if (na) {
-                r->ss->sessions = na;
-                r->ss->sessions[r->ss->nsessions++] = s;
-            } else {
-                session_free(s);
-                s = NULL;
+            if(r->ss->nsessions==r->ss->scap){
+                size_t cap=r->ss->scap ? r->ss->scap*2 : 16;
+                void *items=realloc(r->ss->sessions,cap*sizeof(*r->ss->sessions));
+                if(!items){session_free(s);return NULL;}
+                r->ss->sessions=items;r->ss->scap=cap;
             }
+            r->ss->sessions[r->ss->nsessions++]=s;
         }
     }
 
@@ -606,31 +658,15 @@ static void chat_file_path(char *out, size_t n, const char *state_root, const ch
 
 /* ---- session metadata index (chat/sessions.json) ---- */
 
-/* 32-bit random value: rand() is only 15 bits on some platforms (Windows),
- * so chain three calls. */
-static unsigned session_rnd32(void) {
-    unsigned v = (unsigned)rand() & 0x7fffu;
-
-    v = (v << 15) | ((unsigned)rand() & 0x7fffu);
-    return (v << 2) | ((unsigned)rand() & 0x3u);
-}
-
-/* Random UUID-v4-shaped session id (36 chars). Seeded once per process. */
-static void session_uuid(char out[37]) {
-    static int seeded = 0;
-    unsigned a, b, c, d;
-
-    if (!seeded) {
-        srand((unsigned)time(NULL) ^ (unsigned)time_now_ms());
-        seeded = 1;
-    }
-    a = session_rnd32();
-    b = session_rnd32();
-    c = session_rnd32();
-    d = session_rnd32();
-    /* UUID-v4 shape: version nibble fixed to 4, variant bits 10x */
-    snprintf(out, 37, "%08x-%04x-4%03x-%04x-%04x%08x", a, b & 0xffffu, c & 0xfffu,
-             ((c >> 12) & 0x3fffu) | 0x8000u, d & 0xffffu, (a ^ d) & 0xffffffffu);
+/* OS entropy avoids Windows CRT rand() thread-local sequences repeating on
+ * different HTTP workers. Never return an existing conversation's ID. */
+static int session_uuid(char out[37]) {
+    char hex[33];auth_generate_token(hex,16);
+    if(!hex[0]){out[0]='\0';return -1;}
+    unsigned variant=hex[16]<='9' ? (unsigned)(hex[16]-'0') : (unsigned)(hex[16]-'a'+10);
+    hex[12]='4';hex[16]="89ab"[variant&3];
+    snprintf(out,37,"%.8s-%.4s-%.4s-%.4s-%.12s",hex,hex+8,hex+12,hex+16,hex+20);
+    return 0;
 }
 
 static void meta_index_path(char *out, size_t n, const char *state_root) {
@@ -641,6 +677,28 @@ static void meta_index_path(char *out, size_t n, const char *state_root) {
     path_join(out, n, dir, "sessions.json");
 }
 
+static cJSON *meta_json(const struct sess_meta *m,int shared) {
+    cJSON *o=cJSON_CreateObject();
+    cJSON_AddStringToObject(o,"id",m->id);cJSON_AddStringToObject(o,"title",m->title);
+    cJSON_AddNumberToObject(o,"created_ms",(double)m->created_ms);
+    cJSON_AddNumberToObject(o,"total_ms",(double)m->total_ms);
+    cJSON_AddNumberToObject(o,"last_active_ms",(double)m->last_active_ms);
+    cJSON_AddBoolToObject(o,"shared_memory",shared);
+    if(m->deleted)cJSON_AddBoolToObject(o,"deleted",1);
+    return o;
+}
+static int meta_log_write(FILE *f,const struct sess_meta *m) {
+    cJSON *o=meta_json(m,m->shared_memory);char *js=cJSON_PrintUnformatted(o);cJSON_Delete(o);
+    int rc=!js || fputs(js,f)==EOF || fputc('\n',f)==EOF;free(js);return rc ? -1:0;
+}
+static void meta_log_path(reasoning *r,char *path,size_t cap){
+    char dir[600];path_join(dir,sizeof(dir),r->state_root,"chat");fs_mkdirs(dir);
+    path_join(path,cap,dir,"sessions-index.jsonl");
+}
+/* Beyond the small legacy index, append one changed record, never rewrite N. */
+static void meta_log_change(reasoning *r,const struct sess_meta *m){
+    if(r->ss->meta_log && meta_log_write(r->ss->meta_log,m))r->ss->meta_error=1;
+}
 /* Caller holds sess_mtx. */
 static void meta_save_locked(reasoning *r) {
     cJSON *arr;
@@ -648,13 +706,31 @@ static void meta_save_locked(reasoning *r) {
     FILE *f;
     char path[700];
 
-    if (!r->state_root)
+    if (!r->state_root) return;
+    if(r->ss->meta_log){
+        if(fflush(r->ss->meta_log))r->ss->meta_error=1;
         return;
+    }
+    if(r->ss->nmeta>128){
+        char journal[700],tmp[720];meta_log_path(r,journal,sizeof(journal));
+        snprintf(tmp,sizeof(tmp),"%s.migrate",journal);
+        FILE *log=fopen(tmp,"wb");int failed=!log;
+        if(log){
+            for(size_t i=0;i<r->ss->nmeta && !failed;i++)failed=meta_log_write(log,&r->ss->meta[i]);
+            if(fclose(log))failed=1;
+        }
+        if(!failed && rename(tmp,journal)==0){
+            r->ss->meta_log=fopen(journal,"ab");
+            if(!r->ss->meta_log)r->ss->meta_error=1;
+        }else r->ss->meta_error=1;
+        return;
+    }
     arr = cJSON_CreateArray();
     if (!arr)
         return;
     for (size_t i = 0; i < r->ss->nmeta; i++) {
         struct sess_meta *m = &r->ss->meta[i];
+        if(m->deleted)continue;
         cJSON *o = cJSON_CreateObject();
         if (!o)
             break;
@@ -674,35 +750,18 @@ static void meta_save_locked(reasoning *r) {
     meta_index_path(path, sizeof(path), r->state_root);
     f = fopen(path, "wb");
     if (f) {
-        fputs(js, f);
-        fclose(f);
-    }
+        if(fputs(js,f)==EOF)r->ss->meta_error=1;
+        if(fclose(f))r->ss->meta_error=1;
+    }else r->ss->meta_error=1;
     free(js);
 }
 
 /* Copy a live session's metadata into the index (find-or-create).
  * Caller holds sess_mtx. */
 static void meta_upsert_locked(reasoning *r, struct session *s) {
-    struct sess_meta *m = NULL;
-
-    for (size_t i = 0; i < r->ss->nmeta; i++)
-        if (strcmp(r->ss->meta[i].id, s->id) == 0) {
-            m = &r->ss->meta[i];
-            break;
-        }
-    if (!m) {
-        if (r->ss->nmeta == r->ss->metacap) {
-            size_t ncap = r->ss->metacap ? r->ss->metacap * 2 : 16;
-            struct sess_meta *nm = realloc(r->ss->meta, ncap * sizeof(*nm));
-            if (!nm)
-                return;
-            r->ss->meta = nm;
-            r->ss->metacap = ncap;
-        }
-        m = &r->ss->meta[r->ss->nmeta++];
-        memset(m, 0, sizeof(*m));
-        snprintf(m->id, sizeof(m->id), "%s", s->id);
-    }
+    struct sess_meta *m=meta_ensure(r->ss,s->id);
+    if(!m){r->ss->meta_error=1;return;}
+    if(m->deleted){m->deleted=0;r->ss->meta_live++;}
     /* live values win; read s fields under its own lock (try-lock-free: the
      * run path calls this with only sess_mtx held) */
     mutex_lock(&s->mtx);
@@ -712,6 +771,7 @@ static void meta_upsert_locked(reasoning *r, struct session *s) {
     m->last_active_ms = s->last_active_ms;
     m->shared_memory = s->shared_memory;
     mutex_unlock(&s->mtx);
+    meta_touch(r->ss,m);meta_log_change(r,m);
 }
 
 /* Recover a session title from the first user message ("q") of its persisted
@@ -757,7 +817,7 @@ static int title_recover_from_transcript(const char *state_root, const char *id,
 }
 
 /* Load the persisted index at startup (call before any run). */
-static void meta_load(reasoning *r) {
+static void meta_load_legacy(reasoning *r) {
     char path[700];
     FILE *f;
     char *buf;
@@ -784,7 +844,7 @@ static void meta_load(reasoning *r) {
     fseek(f, 0, SEEK_END);
     len = ftell(f);
     fseek(f, 0, SEEK_SET);
-    if (len <= 0 || len > 512 * 1024) {
+    if (len <= 0) {
         fclose(f);
         return;
     }
@@ -840,11 +900,6 @@ static void meta_load(reasoning *r) {
      * user message of their persisted transcript (a degraded in-memory index
      * could be saved out with titles wiped — regression guard) */
     int healed = 0;
-    for (size_t i = 0; i < r->ss->nmeta; i++) {
-        struct sess_meta *m = &r->ss->meta[i];
-        if (!m->title[0] && title_recover_from_transcript(r->state_root, m->id, m->title, sizeof(m->title)))
-            healed = 1;
-    }
     /* self-heal 2: transcripts on disk missing from the index (e.g. the
      * degraded save dropped them) are re-admitted with recovered titles */
     {
@@ -861,14 +916,11 @@ static void meta_load(reasoning *r) {
                     continue;
                 char sid[128];
                 snprintf(sid, sizeof(sid), "%.*s", (int)(nl - 6), name);
-                int seen = 0;
-                for (size_t k = 0; k < r->ss->nmeta; k++)
-                    if (strcmp(r->ss->meta[k].id, sid) == 0) {
-                        seen = 1;
-                        break;
-                    }
-                if (seen)
+                struct sess_meta *existing=meta_find(r->ss,sid);
+                if(existing){
+                    if(!existing->title[0] && title_recover_from_transcript(r->state_root,sid,existing->title,sizeof(existing->title)))healed=1;
                     continue;
+                }
                 if (r->ss->nmeta == r->ss->metacap) {
                     size_t ncap = r->ss->metacap ? r->ss->metacap * 2 : 16;
                     struct sess_meta *nm = realloc(r->ss->meta, ncap * sizeof(*nm));
@@ -892,6 +944,56 @@ static void meta_load(reasoning *r) {
     cJSON_Delete(root);
 }
 
+static int meta_activity_compare(const void *a,const void *b){
+    const struct sess_meta *x=a,*y=b;
+    long long ax=x->last_active_ms ? x->last_active_ms:x->created_ms;
+    long long ay=y->last_active_ms ? y->last_active_ms:y->created_ms;
+    return ax<ay ? -1:ax>ay ? 1:strcmp(x->id,y->id);
+}
+
+/* Streaming journal replay: bounded JSON record, no 512-KB index cutoff. */
+static void meta_load(reasoning *r){
+    if(r->ss->meta_loaded)return;
+    r->ss->meta_loaded=1;
+    char path[700];FILE *f=NULL;
+    if(r->state_root){meta_log_path(r,path,sizeof(path));f=fopen(path,"rb");}
+    if(f){
+        char line[4096];
+        while(fgets(line,sizeof(line),f)){
+            cJSON *o=cJSON_Parse(line),*id=o?cJSON_GetObjectItemCaseSensitive(o,"id"):NULL;
+            if(cJSON_IsString(id) && id->valuestring[0] && strlen(id->valuestring)<64){
+                struct sess_meta *m=meta_ensure(r->ss,id->valuestring);
+                if(!m){r->ss->meta_error=1;cJSON_Delete(o);break;}
+                int was=m->deleted;
+                cJSON *v=cJSON_GetObjectItemCaseSensitive(o,"title");
+                snprintf(m->title,sizeof(m->title),"%s",cJSON_IsString(v)?v->valuestring:"");
+                v=cJSON_GetObjectItemCaseSensitive(o,"created_ms");m->created_ms=cJSON_IsNumber(v)?(long long)v->valuedouble:0;
+                v=cJSON_GetObjectItemCaseSensitive(o,"total_ms");m->total_ms=cJSON_IsNumber(v)?(long long)v->valuedouble:0;
+                v=cJSON_GetObjectItemCaseSensitive(o,"last_active_ms");m->last_active_ms=cJSON_IsNumber(v)?(long long)v->valuedouble:0;
+                m->shared_memory=1;m->deleted=cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(o,"deleted"));
+                if(!was && m->deleted)r->ss->meta_live--;
+                if(was && !m->deleted)r->ss->meta_live++;
+                meta_touch(r->ss,m);
+            }
+            cJSON_Delete(o);
+        }
+        fclose(f);r->ss->meta_log=fopen(path,"ab");
+        if(!r->ss->meta_log)r->ss->meta_error=1;
+        else if(fputc('\n',r->ss->meta_log)==EOF || fflush(r->ss->meta_log))r->ss->meta_error=1; /* isolate an interrupted trailing record */
+        char setting_path[700];path_join(setting_path,sizeof(setting_path),r->state_root,"chat/memory-sharing.json");
+        char *js=fs_read_file(setting_path);cJSON *o=js?cJSON_Parse(js):NULL;
+        cJSON *shared=o?cJSON_GetObjectItemCaseSensitive(o,"shared"):NULL;
+        if(cJSON_IsBool(shared))atomic_store(&r->ss->shared_memory_global,cJSON_IsTrue(shared));
+        cJSON_Delete(o);free(js);
+    }else{
+        meta_load_legacy(r);
+        if(r->ss->nmeta>1)qsort(r->ss->meta,r->ss->nmeta,sizeof(*r->ss->meta),meta_activity_compare);
+        free(r->ss->meta_slots);r->ss->meta_slots=NULL;r->ss->meta_slotcap=0;r->ss->meta_indexed=0;
+        meta_index_sync(r->ss);r->ss->meta_live=r->ss->nmeta;
+        for(size_t i=0;i<r->ss->nmeta;i++)meta_touch(r->ss,&r->ss->meta[i]);
+    }
+}
+
 /* ---- shared session registry: public sess_store API ---- */
 
 sess_store *sess_store_new(void) {
@@ -909,7 +1011,7 @@ void sess_store_free(sess_store *ss) {
     for (size_t i = 0; i < ss->nsessions; i++)
         session_free(ss->sessions[i]);
     free(ss->sessions);
-    free(ss->meta);
+    free(ss->meta);free(ss->meta_slots);if(ss->meta_log)fclose(ss->meta_log);
     mutex_destroy(&ss->sess_mtx);
     free(ss);
 }
@@ -923,13 +1025,14 @@ void reasoning_attach_sess_store(reasoning *r, sess_store *ss) {
     for (size_t i = 0; i < r->own_store_.nsessions; i++)
         session_free(r->own_store_.sessions[i]);
     free(r->own_store_.sessions);
-    free(r->own_store_.meta);
+    free(r->own_store_.meta);free(r->own_store_.meta_slots);if(r->own_store_.meta_log)fclose(r->own_store_.meta_log);
     r->own_store_.sessions = NULL;
     r->own_store_.nsessions = 0;
     r->own_store_.scap = 0;
     r->own_store_.meta = NULL;
     r->own_store_.nmeta = 0;
     r->own_store_.metacap = 0;
+    r->own_store_.meta_slots=NULL;r->own_store_.meta_log=NULL;
     r->cur = NULL;
     mutex_unlock(&r->own_store_.sess_mtx);
     mutex_destroy(&r->own_store_.sess_mtx);
@@ -939,7 +1042,7 @@ void reasoning_attach_sess_store(reasoning *r, sess_store *ss) {
      * 最近 list keeps human-readable titles after a restart (regression:
      * session tabs fell back to raw uuid). First attach wins; later lanes
      * see nmeta > 0 and skip. */
-    if (ss->nmeta == 0)
+    if (!ss->meta_loaded)
         meta_load(r);
 }
 
@@ -2480,7 +2583,7 @@ reasoning *reasoning_new(const reasoning_config *cfg) {
     r->index = cfg->index;
     r->plugin_registry = cfg->plugin_registry;
     r->state_root = cfg->state_root ? xstrdup(cfg->state_root) : NULL;
-    meta_load(r); /* session metadata index (chat/sessions.json) */
+    if(!cfg->defer_session_load)meta_load(r); /* runtime lanes load shared index once */
     /* 0 = use default; negative = unlimited (loop guards on round_idx only
      * hitting INT_MAX, so clamp to a practical upper bound) */
     r->max_rounds = cfg->max_rounds != 0 ? cfg->max_rounds : AGENT_LOOP_MAX_ROUNDS;
@@ -2517,7 +2620,7 @@ void reasoning_free(reasoning *r) {
         for (size_t i = 0; i < r->own_store_.nsessions; i++)
             session_free(r->own_store_.sessions[i]);
         free(r->own_store_.sessions);
-        free(r->own_store_.meta);
+        free(r->own_store_.meta);free(r->own_store_.meta_slots);if(r->own_store_.meta_log)fclose(r->own_store_.meta_log);
         mutex_destroy(&r->own_store_.sess_mtx);
     }
     for (int i=0;i<r->n_steps;++i) step_strings_free(&r->steps[i]);
@@ -3122,8 +3225,7 @@ char *reasoning_history_json_ex(reasoning *r, const char *session_id, int max_tu
     mutex_lock(&r->ss->sess_mtx);
     for (size_t i = 0; i < r->ss->nsessions && !known; i++)
         known = strcmp(r->ss->sessions[i]->id, want) == 0;
-    for (size_t i = 0; i < r->ss->nmeta && !known; i++)
-        known = strcmp(r->ss->meta[i].id, want) == 0;
+    if(!known){struct sess_meta *m=meta_find(r->ss,want);known=m && !m->deleted;}
     mutex_unlock(&r->ss->sess_mtx);
     if (!known && r->state_root) {
         char path[700];
@@ -3165,143 +3267,54 @@ char *reasoning_history_json(reasoning *r, int max_turns) {
 
 /* Sessions listing for the UI:
  * [{id, title, turns, created_ms, total_ms, last_active_ms, shared_memory, task}]. */
-char *reasoning_sessions_json(reasoning *r) {
-    cJSON *arr;
-    char *sjson;
-    char dir[600];
-
-    if (!r)
-        return xstrdup("[]");
-    mutex_lock(&r->ss->sess_mtx);
-    arr = cJSON_CreateArray();
-    for (size_t i = 0; i < r->ss->nsessions; i++) {
-        struct session *s = r->ss->sessions[i];
-        cJSON *o = cJSON_CreateObject();
-        cJSON_AddStringToObject(o, "id", s->id);
+static cJSON *session_meta_json(reasoning *r,const struct sess_meta *m){
+    cJSON *o=meta_json(m,atomic_load(&r->ss->shared_memory_global));
+    cJSON_AddNumberToObject(o,"turns",0);cJSON_AddStringToObject(o,"task","");
+    for(size_t i=0;i<r->ss->nsessions;i++){
+        struct session *s=r->ss->sessions[i];if(strcmp(s->id,m->id))continue;
         mutex_lock(&s->mtx);
-        if (!s->title[0]) {
-            /* replayed sessions have an empty title (record_turn only names a
-             * session on its true first turn; replayed history defeats that)
-             * — adopt the title from the persisted sessions.json index so the
-             * "最近" list keeps the human-readable name after a click
-             * materializes the session (user report: 最近预览回退成 uuid) */
-            for (size_t k = 0; k < r->ss->nmeta; k++)
-                if (strcmp(r->ss->meta[k].id, s->id) == 0) {
-                    snprintf(s->title, sizeof(s->title), "%s", r->ss->meta[k].title);
-                    break;
-                }
-        }
-        cJSON_AddStringToObject(o, "title", s->title);
-        cJSON_AddNumberToObject(o, "turns", (double)s->hist_n);
-        cJSON_AddNumberToObject(o, "created_ms", (double)s->created_ms);
-        cJSON_AddNumberToObject(o, "total_ms", (double)s->total_ms);
-        cJSON_AddNumberToObject(o, "last_active_ms", (double)s->last_active_ms);
-        cJSON_AddBoolToObject(o, "shared_memory", atomic_load(&r->ss->shared_memory_global));
-        cJSON_AddStringToObject(o, "task", s->sn_task);
-        mutex_unlock(&s->mtx);
-        cJSON_AddItemToArray(arr, o);
+        cJSON_ReplaceItemInObject(o,"turns",cJSON_CreateNumber((double)s->hist_n));
+        cJSON_ReplaceItemInObject(o,"task",cJSON_CreateString(s->sn_task));
+        mutex_unlock(&s->mtx);break;
     }
-
-    /* sessions persisted on disk but not yet materialized in memory (e.g.
-     * after a restart) still show up in the "最近" list — metadata (title/
-     * times/shared flag) comes from the sessions.json index */
-    if (r->state_root) {
-        path_join(dir, sizeof(dir), r->state_root, "chat");
-        dir_list dl;
-        if (fs_list_dir(dir, &dl) == 0) {
-            for (size_t i = 0; i < dl.count; i++) {
-                if (dl.items[i].is_dir)
-                    continue;
-                const char *name = dl.items[i].name;
-                size_t nl = strlen(name);
-                if (nl < 7 || strcmp(name + nl - 6, ".jsonl") != 0)
-                    continue;
-                char sid[128];
-                snprintf(sid, sizeof(sid), "%.*s", (int)(nl - 6), name);
-                int seen = 0;
-                for (size_t k = 0; k < r->ss->nsessions; k++)
-                    if (strcmp(r->ss->sessions[k]->id, sid) == 0) {
-                        seen = 1;
-                        break;
-                    }
-                if (seen)
-                    continue;
-                cJSON *o = cJSON_CreateObject();
-                if (!o)
-                    break;
-                const struct sess_meta *m = NULL;
-                for (size_t k = 0; k < r->ss->nmeta; k++)
-                    if (strcmp(r->ss->meta[k].id, sid) == 0) {
-                        m = &r->ss->meta[k];
-                        break;
-                    }
-                cJSON_AddStringToObject(o, "id", sid);
-                cJSON_AddStringToObject(o, "title", m ? m->title : "");
-                cJSON_AddNumberToObject(o, "turns", 0);
-                cJSON_AddNumberToObject(o, "created_ms", (double)(m ? m->created_ms : 0));
-                cJSON_AddNumberToObject(o, "total_ms", (double)(m ? m->total_ms : 0));
-                cJSON_AddNumberToObject(o, "last_active_ms", (double)(m ? m->last_active_ms : 0));
-                cJSON_AddBoolToObject(o, "shared_memory", atomic_load(&r->ss->shared_memory_global));
-                cJSON_AddStringToObject(o, "task", "");
-                cJSON_AddItemToArray(arr, o);
-            }
-            fs_list_free(&dl);
-        }
+    return o;
+}
+char *reasoning_sessions_page_json(reasoning *r,const char *cursor,size_t limit){
+    if(!r)return xstrdup("{\"sessions\":[],\"total\":0,\"next_cursor\":null}");
+    if(!limit || limit>100)limit=12;
+    mutex_lock(&r->ss->sess_mtx);
+    size_t pos=r->ss->meta_head;
+    if(cursor && *cursor){struct sess_meta *m=meta_find(r->ss,cursor);pos=m?(size_t)(m-r->ss->meta)+1:0;}
+    cJSON *root=cJSON_CreateObject(),*arr=cJSON_CreateArray();size_t n=0;
+    while(pos && n<limit){
+        const struct sess_meta *m=&r->ss->meta[pos-1];pos=m->next;
+        if(m->deleted)continue;
+        cJSON_AddItemToArray(arr,session_meta_json(r,m));n++;
     }
-
-    /* A session can contain only a failed/cancelled task, so it has metadata
-     * and a task-journal entry but no successful chat transcript yet. Keep it
-     * in 最近 after restart so the durable execution record remains reachable. */
-    for (size_t i = 0; i < r->ss->nmeta; i++) {
-        const struct sess_meta *m = &r->ss->meta[i];
-        int seen = 0;
-        cJSON *existing;
-        cJSON_ArrayForEach(existing, arr) {
-            cJSON *id = cJSON_GetObjectItemCaseSensitive(existing, "id");
-            if (cJSON_IsString(id) && strcmp(id->valuestring, m->id) == 0) {
-                seen = 1;
-                break;
-            }
-        }
-        if (seen)
-            continue;
-        cJSON *o = cJSON_CreateObject();
-        if (!o)
-            break;
-        cJSON_AddStringToObject(o, "id", m->id);
-        cJSON_AddStringToObject(o, "title", m->title);
-        cJSON_AddNumberToObject(o, "turns", 0);
-        cJSON_AddNumberToObject(o, "created_ms", (double)m->created_ms);
-        cJSON_AddNumberToObject(o, "total_ms", (double)m->total_ms);
-        cJSON_AddNumberToObject(o, "last_active_ms", (double)m->last_active_ms);
-        cJSON_AddBoolToObject(o, "shared_memory", atomic_load(&r->ss->shared_memory_global));
-        cJSON_AddStringToObject(o, "task", "");
-        cJSON_AddItemToArray(arr, o);
-    }
-
-    mutex_unlock(&r->ss->sess_mtx);
-    sjson = cJSON_PrintUnformatted(arr);
-    cJSON_Delete(arr);
-    return sjson ? sjson : xstrdup("[]");
+    while(pos && r->ss->meta[pos-1].deleted)pos=r->ss->meta[pos-1].next;
+    cJSON_AddItemToObject(root,"sessions",arr);cJSON_AddNumberToObject(root,"total",(double)r->ss->meta_live);
+    if(pos)cJSON_AddStringToObject(root,"next_cursor",r->ss->meta[pos-1].id);else cJSON_AddNullToObject(root,"next_cursor");
+    char *js=cJSON_PrintUnformatted(root);cJSON_Delete(root);mutex_unlock(&r->ss->sess_mtx);return js;
+}
+char *reasoning_sessions_json(reasoning *r){
+    if(!r)return xstrdup("[]");
+    mutex_lock(&r->ss->sess_mtx);cJSON *arr=cJSON_CreateArray();
+    for(size_t i=0;i<r->ss->nmeta;i++)if(!r->ss->meta[i].deleted)cJSON_AddItemToArray(arr,session_meta_json(r,&r->ss->meta[i]));
+    char *js=cJSON_PrintUnformatted(arr);cJSON_Delete(arr);mutex_unlock(&r->ss->sess_mtx);return js;
 }
 
 /* Create a fresh session with a random UUID id; registers it in the session
  * table and the metadata index. Returns a malloc'd id string, NULL on failure. */
 char *reasoning_session_new(reasoning *r) {
-    char uuid[37];
-    struct session *s;
-
-    if (!r)
-        return NULL;
-    session_uuid(uuid);
-    s = session_get(r, uuid);
-    if (!s || strcmp(s->id, uuid) != 0)
-        return NULL; /* cap reached or alloc failed — do not silently alias */
-    mutex_lock(&r->ss->sess_mtx);
-    meta_upsert_locked(r, s);
-    meta_save_locked(r);
+    if(!r)return NULL;
+    char uuid[37];mutex_lock(&r->ss->sess_mtx);
+    do{if(session_uuid(uuid)){mutex_unlock(&r->ss->sess_mtx);return NULL;}}while(meta_find(r->ss,uuid));
+    struct session *s=session_new(uuid);
+    if(!s){mutex_unlock(&r->ss->sess_mtx);return NULL;}
+    meta_upsert_locked(r,s);meta_save_locked(r);session_free(s);
+    int failed=r->ss->meta_error;
     mutex_unlock(&r->ss->sess_mtx);
-    return xstrdup(uuid);
+    return failed ? NULL:xstrdup(uuid);
 }
 
 void reasoning_session_note_prompt(reasoning *r, const char *session_id, const char *prompt) {
@@ -3372,6 +3385,7 @@ char *reasoning_session_last_input(reasoning *r, const char *session_id) {
             s = r->ss->sessions[i];
             break;
         }
+    if(!s){struct sess_meta *m=meta_find(r->ss,session_id);if(m && !m->deleted)s=session_get_locked(r,session_id);}
     mutex_unlock(&r->ss->sess_mtx);
     if (!s)
         return NULL;
@@ -3400,6 +3414,7 @@ int reasoning_session_clear(reasoning *r, const char *session_id) {
             break;
         }
 
+    if(!s){struct sess_meta *m=meta_find(r->ss,want);if(m && !m->deleted)s=session_get_locked(r,want);}
     mutex_unlock(&r->ss->sess_mtx);
     if (!s)
         return -1;
@@ -3425,6 +3440,12 @@ int reasoning_session_clear(reasoning *r, const char *session_id) {
     return 0;
 }
 
+static int meta_delete_locked(reasoning *r,const char *id){
+    struct sess_meta *m=meta_find(r->ss,id);
+    if(!m || m->deleted)return 0;
+    m->deleted=1;r->ss->meta_live--;meta_log_change(r,m);return 1;
+}
+
 /* Delete a session entirely: unregister it, drop its meta index entry and
  * remove the durable chat/<id>.jsonl transcript. Returns 0 ok, -1 unknown,
  * -2 busy (a run is in flight on the session — cancelling first is safer). */
@@ -3446,15 +3467,7 @@ int reasoning_session_delete(reasoning *r, const char *session_id) {
 
     if (!s) {
         /* not live in memory — still drop it from the persisted meta index */
-        int removed = 0;
-        for (size_t i = 0; i < r->ss->nmeta; i++) {
-            if (strcmp(r->ss->meta[i].id, want) == 0) {
-                memmove(&r->ss->meta[i], &r->ss->meta[i + 1], (r->ss->nmeta - i - 1) * sizeof(r->ss->meta[0]));
-                r->ss->nmeta--;
-                removed = 1;
-                break;
-            }
-        }
+        int removed=meta_delete_locked(r,want);
         meta_save_locked(r);
         mutex_unlock(&r->ss->sess_mtx);
         if (removed && r->state_root) {
@@ -3476,13 +3489,7 @@ int reasoning_session_delete(reasoning *r, const char *session_id) {
     r->ss->nsessions--;
     if (r->cur == s)
         r->cur = NULL;
-    for (size_t i = 0; i < r->ss->nmeta; i++) {
-        if (strcmp(r->ss->meta[i].id, want) == 0) {
-            memmove(&r->ss->meta[i], &r->ss->meta[i + 1], (r->ss->nmeta - i - 1) * sizeof(r->ss->meta[0]));
-            r->ss->nmeta--;
-            break;
-        }
-    }
+    meta_delete_locked(r,want);
     meta_save_locked(r);
     mutex_unlock(&r->ss->sess_mtx);
 
@@ -3528,7 +3535,7 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     r->cur = session_get_locked(r, session_id);
     if (!r->cur) {
         mutex_unlock(&r->ss->sess_mtx);
-        if (answer) *answer=xstrdup("Chat session capacity exhausted; no other conversation was used.");
+        if (answer) *answer=xstrdup("Chat session allocation failed; no other conversation was used.");
         return -1;
     }
     /* A session is a sequential conversation. Different sessions may run on

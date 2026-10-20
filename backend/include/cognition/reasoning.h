@@ -32,6 +32,7 @@ struct plugin_registry; /* plugin_runtime/registry.h */
 
 typedef struct reasoning_config {
     llm *llm;                                /* required */
+    int defer_session_load; /* runtime shared lanes load the metadata index once */
     tool_registry *tools;                    /* required */
     memory *memory;                          /* may be NULL */
     memory_service *memory_service;          /* optional Memory OS interface */
@@ -94,7 +95,7 @@ int reasoning_run(reasoning *r, const char *prompt, char **answer);
 /* Same, bound to a named chat session: conversation history, compaction
  * summary and session notes are isolated per session_id (NULL/"" = the
  * shared default session used by reasoning_run). Sessions are created
- * on demand (capped); runs must still be serialized by the caller. */
+ * on demand; runs must still be serialized by the caller. */
 int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, char **answer);
 
 /* Swap the active LLM at runtime. Caller serializes access (the ctx run-lock);
@@ -146,6 +147,8 @@ char *reasoning_history_json_ex(reasoning *r, const char *session_id, int max_tu
  * shared_memory, task}; clear one session's history and notes (returns -1
  * if the session does not exist). Callers free the JSON string. */
 char *reasoning_sessions_json(reasoning *r);
+/* Bounded cursor page: {sessions,total,next_cursor}; limit <=100. */
+char *reasoning_sessions_page_json(reasoning *r, const char *cursor, size_t limit);
 int reasoning_session_clear(reasoning *r, const char *session_id);
 
 /* Delete a session entirely: unregister it, drop its meta index entry and

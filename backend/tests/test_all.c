@@ -4709,6 +4709,61 @@ static void test_agent_loop(void) {
     }
 }
 
+/* Public creation API, durable restart, cursor traversal and history isolation. */
+static void test_session_scale(const char *root,int count){
+    config cfg;memset(&cfg,0,sizeof(cfg));cfg.state_root=root;cfg.workspace=root;cfg.provider="mock";
+    runtime_ctx ctx;if(init(&ctx,&cfg)!=0){CHECK(0);return;}
+    char *first=NULL,*middle=NULL,*last=NULL;long long started=(long long)time_now_ms();
+    for(int i=0;i<count;i++){
+        char *id=reasoning_session_new(ctx.reasoning);CHECK(id!=NULL);if(!id)break;
+        if(i==0)first=xstrdup(id);if(i==count/2)middle=xstrdup(id);
+        if(i==count-1)last=xstrdup(id);free(id);
+    }
+    long long created=(long long)time_now_ms()-started;
+    CHECK(first && middle && last);
+    if(first)reasoning_session_note_prompt(ctx.reasoning,first,"scale first conversation");
+    if(last)reasoning_session_note_prompt(ctx.reasoning,last,"scale last conversation");
+    runtime_shutdown(&ctx);
+    CHECK(init(&ctx,&cfg)==0);
+    char cursor[64]="";size_t seen=0;int sawfirst=0,sawlast=0;
+    do{
+        char *js=reasoning_sessions_page_json(ctx.reasoning,cursor,100);
+        cJSON *page=js?cJSON_Parse(js):NULL;free(js);
+        CHECK(page!=NULL);if(!page)break;
+        cJSON *total=cJSON_GetObjectItemCaseSensitive(page,"total"),*arr=cJSON_GetObjectItemCaseSensitive(page,"sessions");
+        CHECK(cJSON_IsNumber(total) && total->valuedouble==count);
+        CHECK(cJSON_IsArray(arr) && cJSON_GetArraySize(arr)<=100);
+        cJSON *item;cJSON_ArrayForEach(item,arr){
+            cJSON *id=cJSON_GetObjectItemCaseSensitive(item,"id");CHECK(cJSON_IsString(id));
+            if(cJSON_IsString(id)){sawfirst|=first && !strcmp(first,id->valuestring);sawlast|=last && !strcmp(last,id->valuestring);}
+            seen++;
+        }
+        cJSON *next=cJSON_GetObjectItemCaseSensitive(page,"next_cursor");
+        snprintf(cursor,sizeof(cursor),"%s",cJSON_IsString(next)?next->valuestring:"");
+        cJSON_Delete(page);CHECK(seen<=(size_t)count);if(seen>(size_t)count)break;
+    }while(*cursor);
+    CHECK(seen==(size_t)count && sawfirst && sawlast);
+    if(first && last){
+        char *answer=NULL;CHECK(reasoning_run_ex(ctx.reasoning,first,"scale-first-private-marker",&answer)==0);free(answer);answer=NULL;
+        CHECK(reasoning_run_ex(ctx.reasoning,last,"scale-last-private-marker",&answer)==0);free(answer);
+        char *a=reasoning_history_json_ex(ctx.reasoning,first,10),*b=reasoning_history_json_ex(ctx.reasoning,last,10);
+        CHECK(a && strstr(a,"scale-first-private-marker") && !strstr(a,"scale-last-private-marker"));
+        CHECK(b && strstr(b,"scale-last-private-marker") && !strstr(b,"scale-first-private-marker"));free(a);free(b);
+        CHECK(reasoning_session_delete(ctx.reasoning,middle)==0);
+    }
+    runtime_shutdown(&ctx);CHECK(init(&ctx,&cfg)==0);
+    char *page=reasoning_sessions_page_json(ctx.reasoning,NULL,12);cJSON *o=cJSON_Parse(page);free(page);
+    cJSON *n=cJSON_GetObjectItemCaseSensitive(o,"total");CHECK(cJSON_IsNumber(n) && n->valuedouble==count-1);cJSON_Delete(o);
+    runtime_shutdown(&ctx);
+    char path[1024];snprintf(path,sizeof(path),"%s/scale-manifest.json",root);
+    cJSON *manifest=cJSON_CreateObject();cJSON_AddNumberToObject(manifest,"created",count);
+    cJSON_AddNumberToObject(manifest,"create_ms",(double)created);cJSON_AddNumberToObject(manifest,"enumerated_after_restart",(double)seen);
+    cJSON_AddStringToObject(manifest,"first",first?first:"");cJSON_AddStringToObject(manifest,"last",last?last:"");
+    char *js=cJSON_PrintUnformatted(manifest);if(js)fs_write_file(path,js,strlen(js));free(js);cJSON_Delete(manifest);
+    printf("session-scale: created=%d enumerated=%zu create_ms=%lld\n",count,seen,created);
+    free(first);free(middle);free(last);
+}
+
 /* ---------- chat history + upload RAG + self-evolution restart rebind ---------- */
 static void test_chat_upload_evolve(void) {
     section("chat history / upload RAG / evolve rebind");
@@ -4743,7 +4798,7 @@ static void test_chat_upload_evolve(void) {
         runtime_shutdown(&ctx);
     }
 
-    /* #182: a full resident registry must never run a new ID in default. */
+    /* #182: creating beyond the old cap must preserve independent histories. */
     {
         config cfg; memset(&cfg,0,sizeof(cfg));
         cfg.state_root="state-test/session-cap-isolation";
@@ -4759,9 +4814,9 @@ static void test_chat_upload_evolve(void) {
             if(!id)break;
             made++;free(id);
         }
-        CHECK(made>0 && made<70);
-        CHECK(reasoning_run_ex(ctx.reasoning,"overflow-must-not-alias","overflow-contamination-marker",&answer)<0);
-        CHECK(answer && strstr(answer,"capacity exhausted"));free(answer);
+        CHECK(made==70);
+        CHECK(reasoning_run_ex(ctx.reasoning,"overflow-must-not-alias","overflow-contamination-marker",&answer)==0);
+        CHECK(answer != NULL);free(answer);
         char *history=reasoning_history_json(ctx.reasoning,10);
         CHECK(history && strstr(history,"original-default-marker") && !strstr(history,"overflow-contamination-marker"));
         free(history);runtime_shutdown(&ctx);
@@ -9265,6 +9320,10 @@ int main(int argc, char **argv) {
     int askpass_rc = ssh_askpass_run_if_requested();
     if (askpass_rc >= 0) return askpass_rc;
     setvbuf(stdout, NULL, _IONBF, 0); /* unbuffered: survive crashes mid-run */
+    if(argc==4 && !strcmp(argv[1],"--session-scale")){
+        int count=atoi(argv[2]);if(count<3 || count>1000000)return 2;
+        test_session_scale(argv[3],count);printf("%d passed, %d failed\n",g_pass,g_fail);return g_fail?1:0;
+    }
     if (argc==2 && !strcmp(argv[1],"--search-tools")) {
         test_edit_search();test_search_work_bounds();
         printf("%d passed, %d failed\n",g_pass,g_fail); return g_fail?1:0;

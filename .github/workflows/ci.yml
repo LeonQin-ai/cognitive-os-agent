@@ -41,6 +41,10 @@ jobs:
         run: COA_BUILD_DIR=build-macos python3 tests/test_crash_recovery_e2e.py
       - name: Visual provider timeout and recovery regression
         run: COA_BUILD_DIR=build-macos python3 tests/test_vision_wait_e2e.py
+      - name: Durable session scale and cursor regression
+        run: |
+          ./build-macos/cognitive-os-agent-test --session-scale 300 state-test/session-scale-ci
+          COA_BUILD_DIR=build-macos python3 tests/test_session_paging_e2e.py
       - name: Native tool block continuation regression
         run: COA_BUILD_DIR=build-macos python3 tests/test_native_tool_loop.py
       - name: Information answer completion regression
@@ -78,6 +82,10 @@ jobs:
         run: python3 tests/test_crash_recovery_e2e.py
       - name: Visual provider timeout and recovery regression
         run: python3 tests/test_vision_wait_e2e.py
+      - name: Durable session scale and cursor regression
+        run: |
+          ./build/cognitive-os-agent-test --session-scale 300 state-test/session-scale-ci
+          python tests/test_session_paging_e2e.py
       - name: Native tool block continuation regression
         run: python tests/test_native_tool_loop.py
       - name: Information answer completion regression
@@ -154,6 +162,10 @@ jobs:
         run: python tests/test_im_discussion_e2e.py
       - name: Incomplete diagnostics and recovery API regression
         run: python tests/test_completion_recovery_e2e.py
+      - name: Durable session scale and cursor regression
+        run: |
+          ./build/cognitive-os-agent-test.exe --session-scale 300 state-test/session-scale-ci
+          python tests/test_session_paging_e2e.py
       - name: Native tool block continuation regression
         run: python tests/test_native_tool_loop.py
       - name: Information answer completion regression
@@ -180,3 +192,4 @@ jobs:
           NODE_PATH="$PWD/webarena/node_modules" node tests/test_image_chat_ui.cjs
           NODE_PATH="$PWD/webarena/node_modules" node tests/test_plugin_install_ui.cjs
           python tests/test_image_preview.py
+          COA_PAGING_BROWSER=1 NODE_PATH="$PWD/webarena/node_modules" python tests/test_session_paging_e2e.py

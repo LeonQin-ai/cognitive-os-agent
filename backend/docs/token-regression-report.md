@@ -184,3 +184,21 @@ Issue 原文在最终答复中说“我已经阅读了大部分核心文件。�
 | live-api-suite-20261020-170711 | DONE，8.935秒，666字 | 1 | 4,583 | 930 | 0工具、0模型失败 |
 
 成功尝试已返回usage合计5,513 tokens；失败尝试可能另有服务商费用。测试没有直接代调模型、代写答复或更改用户运行任务。两次原句测试本身不证明报告现场和能力词误判完全同因；新增确定性用例复现并验证的是已定位的关键词推断漏点。
+
+
+## #182 百万会话后端与真实 UI 验证
+
+后端改为空会话仅持久化元数据、按需加载运行态；去掉64个驻留会话创建门槛及默认会话别名。小型旧JSON索引兼容保留，超过128条迁移为增量JSONL，元数据哈希查找与活动链表支持游标分页；启动流式重放，共享聊天lane只加载一次。旧索引超过512KiB、删除墓碑与不完整日志尾部也有专项测试。会话ID使用系统随机源并核对重复，避免Windows CRT线程随机序列复用。
+
+本地Windows真实调用 `reasoning_session_new()` 创建1,000,000会话，**创建阶段17.496秒**；重启后游标完整枚举1,000,000条，并验证首尾独立历史、删除再重启不复活。结果2,040,010断言通过、0失败。时间仅为创建阶段，不是百万条HTTP请求耗时，也不是百万个完整聊天内容同时加载；UI通过分页访问全部会话，不创建百万DOM节点。
+
+在百万记录库上另经真实REST创建160个会话，浏览器点击新聊天、翻页、返回最近均通过；持久化重启后保留。经配置中的ark/deepseek-v4.1-flash、通过Cognitive OS Agent发送两条独立会话回归：
+
+| 会话 | 状态 | 请求/工具 | 输入tokens | 输出tokens | 耗时ms |
+|---|---|---|---:|---:|---:|
+| first | DONE | 1 / 0 | 4,647 | 94 | 3,324 |
+| second | DONE | 1 / 0 | 4,683 | 94 | 1,464 |
+
+合计**9,518 tokens**，0模型失败；历史各含自身随机标记而无对方标记，重启后核对通过。没有消耗百万次模型请求。另有本地fixture曾因mock模型不允许/v1/chat而被409拒绝，已改用本地原生协议HTTP fixture；该失败没有调用付费API。
+
+证据仅留本地build/issue182-million-final/scale-manifest.json、issue182-million-final.log、issue182-million/paging-report.json及issue182-million-live.log。小规模与HTTP回归已接入CI，百万规模入口：`cognitive-os-agent-test --session-scale 1000000 <new-state-dir>`；此目录应为空，避免混入旧样本。可选真实API入口：`tests/test_session_paging_e2e.py --state <isolated-test-state> --config <installed-config>`。
