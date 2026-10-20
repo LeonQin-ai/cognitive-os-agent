@@ -3849,7 +3849,7 @@ restart_planning:
                     final_text = xstrdup(txt);
                     break;
                 }
-                if (r->max_rounds <= 1 || r->intent_nudged >= 4 || r->round_idx >= r->max_rounds) {
+                if (r->max_rounds <= 1 || r->intent_nudged >= (needs_intent_recovery ? 4 : 1) || r->round_idx >= r->max_rounds) {
                     unfinished = 1;
                     final_text = xstrdup(txt ? txt : "");
                     break;
