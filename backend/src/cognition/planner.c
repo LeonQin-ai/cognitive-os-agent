@@ -810,6 +810,7 @@ static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_act
             int valid=finishes==1 && status && (!strcmp(status,"complete") || !strcmp(status,"blocked")) &&
                 cJSON_IsFalse(needs) && answer && *answer;
             if(valid) {
+                log_info("planner: native completion status=%s requires_tools=false",status);
                 if(native_end_out)*native_end_out=!strcmp(status,"blocked")?2:1;
                 if(raw_out)*raw_out=xstrdup(answer);
                 free(resp.content);free(resp.tool_actions_json);free(resp.error);

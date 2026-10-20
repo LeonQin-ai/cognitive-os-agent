@@ -3877,6 +3877,9 @@ restart_planning:
                 (prompt_requests_read(completion_instruction(r,prompt)) && !r->run_file_reads && !run_has_mutating_action(r));
             int needs_observation = prompt_requires_observation(completion_instruction(r,prompt)) &&
                                     r->run_successful_tools == 0;
+            /* Prose heuristics are confined to the explicitly selected legacy
+             * text protocol (and offline mock). Native turns can reach here
+             * without actions only via a validated complete_task declaration. */
             int needs_intent_recovery = !r->planner_native_end_turn && !prompt_is_direct_information_request(completion_instruction(r,prompt)) &&
                                         (r->run_successful_tools == 0 || answer_only_announces_work(txt)) &&
                                         looks_like_intent(txt);

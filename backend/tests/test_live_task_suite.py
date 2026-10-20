@@ -1,7 +1,7 @@
 """Opt-in paid API regressions through Cognitive OS Agent, never direct LLM calls.
 
 --config points to installed configuration; keys are never printed. All files
-and task evidence stay in build/. The harness creates only OCR test inputs and
+and task evidence stay in build/. The harness creates only OCR/header test inputs and
 read-only verification reports; the agent must produce every requested artifact.
 """
 import argparse
@@ -37,7 +37,7 @@ config.update({'reasoning.max_rounds':-1,'llm.routing':'fixed','scheduler.worker
 report_path=output/'report.json'
 report=json.loads(report_path.read_text(encoding='utf-8')) if report_path.exists() else {'model':config.get('llm.model'),'cases':{},'attempts':[]}
 selected=args.cases.split(',')
-assert all(c in ('source','ppt','image','ocr','diagram_ocr','analysis','html') for c in selected)
+assert all(c in ('source','ppt','image','ocr','diagram_ocr','analysis','html','header_recovery') for c in selected)
 source_files=[(backend/p).as_posix() for p in ('include/context/mmu.h','src/retrieval/context_builder.c','src/cognition/reasoning.c')]
 active=None
 last_task={}
@@ -101,6 +101,12 @@ with tempfile.TemporaryDirectory(prefix='coa-live-suite-state-') as folder:
                     attached=None
                     if case=='source':
                         prompt=prefix+f'阅读这些源码的相关实现并生成 source-overview.md，不要求全文：{json.dumps(source_files,ensure_ascii=False)}。技术开发者概要不少于1500字，覆盖 MMU、上下文组装、工具执行、循环停止和失败恢复，引用实际函数/路径，说明边界与取舍。实际保存文件，并自行检查内容和字数。最终答复给出文件位置。'
+                    elif case=='header_recovery':
+                        header=active/'include/context/probe.h';header.parent.mkdir(parents=True)
+                        marker='HEADER-'+secrets.token_hex(5)
+                        header.write_text('#define RECOVERY_MARKER "'+marker+'"\n',encoding='utf-8')
+                        wrong=(active/'src/context/probe.h').as_posix()
+                        prompt=f'一次性容错测试：仅在第一步调用 file_read 读取 {wrong} 一次，让工具实际报告错误。此错误是测试预期，之后禁止重试此错误路径。接着查找真实 probe.h 并实际读取，最终返回 RECOVERY_MARKER 的实际值。纠正后直接交付，不重复初始错误步骤，不写文件。'
                     elif case=='analysis':
                         prompt=f'分析一下 {backend.as_posix()} 代码中的上下文工程怎么实现的。基于实际源码，给出完整技术分析，覆盖 mmu.c、context_builder.c、attention.c、embedding.c，说明上下文预算、缓存、检索及失败边界。请直接交付分析，不写文件，不只返回接下来要做什么。'
                     elif case=='html':
@@ -134,6 +140,12 @@ with tempfile.TemporaryDirectory(prefix='coa-live-suite-state-') as folder:
                         path=active/'source-overview.md';text=path.read_text(encoding='utf-8');result['artifacts']['overview']=str(path)
                         result['checks']={'characters':len(text),'source_references':sum(p in text for p in ('mmu.h','context_builder.c','reasoning.c'))}
                         assert len(text)>=1500 and result['checks']['source_references']>=2
+                    elif case=='header_recovery':
+                        reads=[st for st in task.get('steps',[]) if st.get('tool')=='file_read']
+                        assert any(not st.get('ok') and 'src/context/probe.h' in st.get('args','').lower().replace('\\','/') for st in reads)
+                        assert any(st.get('ok') and 'include/context/probe.h' in st.get('args','').lower().replace('\\','/') for st in reads)
+                        assert marker in (task.get('output') or '')
+                        result['checks']={'missing_src_observed':True,'real_include_read':True,'hidden_marker_matched':True}
                     elif case=='analysis':
                         text=task.get('output') or ''
                         assert len(text)>1500 and all(k in text for k in ('mmu','context_builder','embedding'))

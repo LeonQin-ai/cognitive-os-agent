@@ -73,6 +73,8 @@ Token/completion regression: a real-model targeted case now finishes naturally i
 
 Latest real-API suite: source overview, 16-slide PPT, tool-generated PNG, text-image OCR and diagram recognition **5/5 passed**, totaling **590,674 tokens**. The report also records failed diagnostic costs and fixes. Native model image generation was not exercised.
 
+The default loop now follows native tool blocks and typed completion declarations rather than prose keywords. Final real-API HTML, source-analysis and path-recovery cases **3/3 passed**; the report includes failed/cancelled iterations and their costs.
+
 | Benchmark | Score | Model |
 |---|---|---|
 | GAIA 2023 validation (official 165 tasks) | **78.79%** (L1 84.91 / L2 81.40 / L3 57.69) | GLM-5.3-flash |
