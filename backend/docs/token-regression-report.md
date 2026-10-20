@@ -71,3 +71,17 @@ CI 以 GitHub Actions 最新提交的实际状态为准；本地通过不代替�
 修复前另外两次付费诊断不能遗漏：一次长 PPT 在严格解码任务 JSON 时发现 #171，最后有效采样约 49 次请求、1,331,475 输入、42,678 输出 tokens，最终 usage 未取得；一次源码概要在递归 grep 中发现 #172，最后有效采样 25 次请求、329,913 输入、9,570 输出 tokens，停止隔离测试以避免继续无效消耗。这些是失败诊断成本下界，不计入上表成功组，也不能算作零消耗或公平 A/B 对照。
 
 成功组原始任务、提示词、报告及产物保留在本地 `build/live-api-suite-20261020-072127/`；失败现场在 `build/live-long-task-20261020-065407/` 与 `build/live-api-suite-20261020-070823/`。这些目录不提交远端。可选付费复测入口：`python tests/test_live_task_suite.py --config <已配置状态文件>`，支持 `--cases` 选择项目；普通 CI 不调用真实模型。
+
+
+## 原生图片生成接口验证（2026-10-20）
+
+在完成五任务回归后，另通过 Cognitive OS Agent 执行只读取本地凭据的 HTTP 探针；没有改用 Pillow/SVG 生成图片。使用当前 deepseek-v4.1-flash 模型和现有 Key：
+
+| 接口 | 实际结果 | 图片数 |
+|---|---|---:|
+| `/api/plan/v3/images/generations` | HTTP 400 InvalidParameter：image generation is only supported by certain models | 0 |
+| `/api/v3/images/generations` | HTTP 401 AuthenticationError：现有 Key 在此端点认证未通过 | 0 |
+
+结论：当前配置未能原生生图；第一条响应明确拒绝当前模型的图片生成请求。标准端点的 401 不能用来判断模型能力，也不能推断所有方舟 Key 均不可用。方舟[官方图片生成文档](https://docs.volcengine.com/docs/ark/image-generation-api?lang=zh)列出的生图模型为 Seedream 系列；需另行配置支持的模型及该接口可用的凭据才能继续验证成功生图。
+
+本次 Agent 任务正常 DONE：2 次模型请求、1 次工具调用、6,127 输入及 961 输出 tokens，耗时 11.3 秒。这代表探测执行成功，**不代表生图功能通过**。原始证据仅保留本地 `build/native-image-probe/result.json` 与 `build/live-api-suite-20261020-084249/`，没有保存或输出 Key。
