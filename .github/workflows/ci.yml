@@ -45,6 +45,8 @@ jobs:
         run: |
           ./build-macos/cognitive-os-agent-test --session-scale 300 state-test/session-scale-ci
           COA_BUILD_DIR=build-macos python3 tests/test_session_paging_e2e.py
+      - name: Strict C11 wasm libc portability
+        run: python tests/test_wasm_libc_portability.py
       - name: Model capability migration and persistence
         run: python tests/test_model_capabilities_e2e.py
       - name: Native tool block continuation regression
@@ -88,6 +90,8 @@ jobs:
         run: |
           ./build/cognitive-os-agent-test --session-scale 300 state-test/session-scale-ci
           python tests/test_session_paging_e2e.py
+      - name: Strict C11 wasm libc portability
+        run: python tests/test_wasm_libc_portability.py
       - name: Model capability migration and persistence
         run: python tests/test_model_capabilities_e2e.py
       - name: Native tool block continuation regression
@@ -170,6 +174,8 @@ jobs:
         run: |
           ./build/cognitive-os-agent-test.exe --session-scale 300 state-test/session-scale-ci
           python tests/test_session_paging_e2e.py
+      - name: Strict C11 wasm libc portability
+        run: python tests/test_wasm_libc_portability.py
       - name: Model capability migration and persistence
         run: python tests/test_model_capabilities_e2e.py
       - name: Native tool block continuation regression

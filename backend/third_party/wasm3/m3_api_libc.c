@@ -6,6 +6,7 @@
 //
 
 #include "m3_api_libc.h"
+#include "m3_strnlen.h"
 
 #include "m3_env.h"
 #include "m3_exception.h"
@@ -115,7 +116,7 @@ m3ApiRawFunction(m3_libc_printf)
     }
 
     m3ApiCheckMem(i_fmt, 1);
-    size_t fmt_len = strnlen(i_fmt, 1024);
+    size_t fmt_len = m3_libc_strnlen(i_fmt, 1024);
     m3ApiCheckMem(i_fmt, fmt_len+1); // include `\0`
 
     FILE* file = stdout;
@@ -150,7 +151,7 @@ m3ApiRawFunction(m3_libc_printf)
                 char buffer[32] = { 0, };
                 internal_itoa(int_temp, buffer, (ch == 'x') ? 16 : 10);
                 fputs(buffer, file);
-                length += strnlen(buffer, sizeof(buffer));
+                length += m3_libc_strnlen(buffer, sizeof(buffer));
                 break;
             }
             case 's': {
@@ -163,7 +164,7 @@ m3ApiRawFunction(m3_libc_printf)
                     string_temp = "(null)";
                     string_len = 6;
                 } else {
-                    string_len = strnlen(string_temp, 1024);
+                    string_len = m3_libc_strnlen(string_temp, 1024);
                     m3ApiCheckMem(string_temp, string_len+1);
                 }
 
