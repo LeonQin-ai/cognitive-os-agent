@@ -1,7 +1,7 @@
 """Opt-in paid API regressions through Cognitive OS Agent, never direct LLM calls.
 
 --config points to installed configuration; keys are never printed. All files
-and task evidence stay in build/. The harness creates only OCR/header test inputs and
+and task evidence stay in build/. The harness creates only OCR/header/search test inputs and
 read-only verification reports; the agent must produce every requested artifact.
 """
 import argparse
@@ -37,7 +37,7 @@ config.update({'reasoning.max_rounds':-1,'llm.routing':'fixed','scheduler.worker
 report_path=output/'report.json'
 report=json.loads(report_path.read_text(encoding='utf-8')) if report_path.exists() else {'model':config.get('llm.model'),'cases':{},'attempts':[]}
 selected=args.cases.split(',')
-assert all(c in ('source','ppt','image','ocr','diagram_ocr','analysis','html','header_recovery') for c in selected)
+assert all(c in ('source','ppt','image','ocr','diagram_ocr','analysis','html','header_recovery','search_discovery') for c in selected)
 source_files=[(backend/p).as_posix() for p in ('include/context/mmu.h','src/retrieval/context_builder.c','src/cognition/reasoning.c')]
 active=None
 last_task={}
@@ -101,6 +101,9 @@ with tempfile.TemporaryDirectory(prefix='coa-live-suite-state-') as folder:
                     attached=None
                     if case=='source':
                         prompt=prefix+f'阅读这些源码的相关实现并生成 source-overview.md，不要求全文：{json.dumps(source_files,ensure_ascii=False)}。技术开发者概要不少于1500字，覆盖 MMU、上下文组装、工具执行、循环停止和失败恢复，引用实际函数/路径，说明边界与取舍。实际保存文件，并自行检查内容和字数。最终答复给出文件位置。'
+                    elif case=='search_discovery':
+                        fixture=active/'long-line.txt';fixture.write_text('DISCOVERY_NEEDLE'+'x'*150000,encoding='utf-8')
+                        prompt=f'只用一次grep在 {fixture.as_posix()} 查找 DISCOVERY_NEEDLE；output_mode 必须是 files_with_matches，max_scan_bytes 必须是32。只需文件名发现，命中后直接交付文件名，不读文件、不扩大预算、不写文件。'
                     elif case=='header_recovery':
                         header=active/'include/context/probe.h';header.parent.mkdir(parents=True)
                         marker='HEADER-'+secrets.token_hex(5)
@@ -140,6 +143,15 @@ with tempfile.TemporaryDirectory(prefix='coa-live-suite-state-') as folder:
                         path=active/'source-overview.md';text=path.read_text(encoding='utf-8');result['artifacts']['overview']=str(path)
                         result['checks']={'characters':len(text),'source_references':sum(p in text for p in ('mmu.h','context_builder.c','reasoning.c'))}
                         assert len(text)>=1500 and result['checks']['source_references']>=2
+                    elif case=='search_discovery':
+                        steps=task.get('steps',[])
+                        assert steps and task.get('tool_calls')==1 and all(st['tool']=='grep' and st['ok'] for st in steps),steps
+                        assert all(st['out']=='previous search result reused' for st in steps[1:]),steps
+                        call=json.loads(steps[0]['args'])
+                        assert call['output_mode']=='files_with_matches' and call['max_scan_bytes']==32
+                        assert 'long-line.txt' in steps[0]['out'] and 'byte budget' not in steps[0]['out']
+                        assert 'long-line.txt' in (task.get('output') or '')
+                        result['checks']={'first_match_within_32_bytes':True,'single_actual_grep':True,'no_full_read':True,'cached_repeat_requests':len(steps)-1}
                     elif case=='header_recovery':
                         reads=[st for st in task.get('steps',[]) if st.get('tool')=='file_read']
                         assert any(not st.get('ok') and 'src/context/probe.h' in st.get('args','').lower().replace('\\','/') for st in reads)
