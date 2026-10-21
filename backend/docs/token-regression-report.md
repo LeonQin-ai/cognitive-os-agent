@@ -352,3 +352,6 @@ CI 39542621593 的 Linux ASAN 给出确定证据：git_exec 释放 args JSON 后
 
 
 #194 兼容性修正：首轮完整单元/CI 发现已有 mode32 嵌套项目恢复（workspace/src/memory/new.txt→搜索 workspace/backend→读取 backend/src/memory/new.txt）被新搜索根判断拦住。保留该旧场景：搜索根和失败路径均位于 Agent 工作区时可使用工作区作为共同锚点，但发现候选仍必须来自实际搜索根、完整目录后缀匹配且真正读取成功。修正后 --progress-loop **519 passed, 0 failed**，外部项目双原生协议全部通过。未为该兼容修正追加付费请求，前述 25889 tokens 为外部路径实测成本。
+
+
+#194 macOS 路径别名修正：CI 39587209993 的 macOS 外部项目 glob 用例进一步确认 `/var/...` 与 `/private/var/...` 不一致：真实搜索根/文件 realpath 成功，但不存在的失败路径无法 realpath，保留别名前缀。normalized_evidence_path 现对缺失路径解析最近存在的祖先，再附加缺失后缀，统一错误路径与发现路径的目录别名；保留 POSIX/Windows 根目录语义。新增 POSIX 明确的项目符号链接恢复场景，Windows 无管理员权限不创建符号链接；macOS 原失败场景保留，不将测试路径强制 resolve 来隐藏产品问题。未新增付费请求，实测成本不变。

@@ -295,8 +295,26 @@ static void normalized_evidence_path(reasoning *r, const char *path, char *out, 
     char *workspace=fs_absolute_path(r->workspace && *r->workspace ? r->workspace : ".");
     char full[2048]; path_resolve(full, sizeof(full), workspace ? workspace:r->workspace, path && *path ? path : ".");
     free(workspace);
-    char *absolute = fs_absolute_path(full);
-    snprintf(out, cap, "%s", absolute ? absolute : full);
+    /* realpath cannot resolve a missing leaf. Canonicalize its nearest
+     * existing ancestor so /var aliases and symlinked projects still match
+     * the canonical paths emitted by discovery tools. */
+    char ancestor[2048];snprintf(ancestor,sizeof(ancestor),"%s",full);
+    size_t ancestor_len=strlen(ancestor);
+    while(!fs_exists(ancestor)) {
+        char *slash=strrchr(ancestor,'/');
+#ifdef _WIN32
+        char *backslash=strrchr(ancestor,'\\');
+        if(backslash && (!slash || backslash>slash))slash=backslash;
+#endif
+        if(!slash)break;
+        if(slash==ancestor || (slash==ancestor+2 && ancestor[1]==':')) {
+            slash[1]='\0';ancestor_len=(size_t)(slash-ancestor)+1;break;
+        }
+        *slash='\0';ancestor_len=(size_t)(slash-ancestor);
+    }
+    char *absolute=fs_absolute_path(fs_exists(ancestor)?ancestor:full);
+    if(fs_exists(ancestor))snprintf(out,cap,"%s%s",absolute?absolute:ancestor,full+ancestor_len);
+    else snprintf(out, cap, "%s", absolute ? absolute : full);
     free(absolute);
     for (char *p = out; *p; ++p) {
         if (*p == '\\') *p = '/';

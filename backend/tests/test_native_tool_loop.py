@@ -60,9 +60,9 @@ for provider_name in ('openai','anthropic'):
     else:answer='chapter.md written and verified.'
    elif case.startswith('NATIVE_EXTERNAL_'):
     discovery='grep' if case.endswith('GREP') else 'glob'
-    if n==0:calls=[('file_read',{'path':(external/'context.h' if case=='NATIVE_EXTERNAL_BASENAME' else wrong).as_posix()})]
+    if n==0:calls=[('file_read',{'path':(external/'context.h' if case=='NATIVE_EXTERNAL_BASENAME' else state/'external-project-link/addons/rmrs/context.h' if case=='NATIVE_EXTERNAL_ALIAS' else wrong).as_posix()})]
     elif n==1:
-     calls=[('glob',{'path':external.as_posix(),'pattern':'**/context.h'})] if discovery=='glob' else [('grep',{'path':external.as_posix(),'pattern':'external-recovery-marker','output_mode':'files_with_matches'})]
+     calls=[('glob',{'path':(state/'external-project-link' if case=='NATIVE_EXTERNAL_ALIAS' else external).as_posix(),'pattern':'**/context.h'})] if discovery=='glob' else [('grep',{'path':external.as_posix(),'pattern':'external-recovery-marker','output_mode':'files_with_matches'})]
     elif n==2 and case!='NATIVE_EXTERNAL_DISCOVERY_ONLY':calls=[('file_read',{'path':(decoy if case=='NATIVE_EXTERNAL_DECOY' else actual).as_posix()})]
     else:answer='external-recovery-marker verified.'
    elif case.startswith('NATIVE_TOOL_DIAGNOSTIC_'):
@@ -163,7 +163,9 @@ for provider_name in ('openai','anthropic'):
   threading.Thread(target=server.serve_forever,daemon=True).start()
   (state/'cognitive-os-agent.json').write_text(json.dumps({'llm.provider':provider_name,'llm.model':'native-test','llm.api_key':'local-fixture','llm.base_url':f'http://127.0.0.1:{server.server_port}','reasoning.max_rounds':32}),encoding='utf-8')
   (state/'routes.json').write_text(json.dumps([{'name':'fixture-metadata','provider':provider_name,'model':'native-test','base_url':f'http://127.0.0.1:{server.server_port}','api_key':'local-fixture','context_window':1048576,'max_output_tokens':4096,'context_source':'provider_metadata'}]),encoding='utf-8')
-  if os.name!='nt':(state/'alias').symlink_to(state,target_is_directory=True)
+  if os.name!='nt':
+   (state/'alias').symlink_to(state,target_is_directory=True)
+   (state/'external-project-link').symlink_to(external,target_is_directory=True)
   else:(state/'alias').mkdir()
   (state/'blocked-target').mkdir()
   (state/'ipc.h').write_text('enum { IPC_REQUEST=31, IPC_RESPONSE=32 };',encoding='utf-8')
@@ -200,9 +202,10 @@ for provider_name in ('openai','anthropic'):
     assert (state/'chapter.md').read_text(encoding='utf-8')=='Literal </parameter>\n<｜DSML｜ parameter name="content"> is document content.'
     empty=run('NATIVE_EMPTY_WRITE','创建一个空文件。')
     assert empty['status']=='DONE' and counts['NATIVE_EMPTY_WRITE']==3 and (state/'explicit-empty.txt').read_bytes()==b'',empty
-    for case in ('NATIVE_EXTERNAL_GLOB','NATIVE_EXTERNAL_GREP','NATIVE_EXTERNAL_DECOY','NATIVE_EXTERNAL_DISCOVERY_ONLY','NATIVE_EXTERNAL_BASENAME'):
+    for case in ('NATIVE_EXTERNAL_GLOB','NATIVE_EXTERNAL_GREP','NATIVE_EXTERNAL_DECOY','NATIVE_EXTERNAL_DISCOVERY_ONLY','NATIVE_EXTERNAL_BASENAME','NATIVE_EXTERNAL_ALIAS'):
+     if case=='NATIVE_EXTERNAL_ALIAS' and os.name=='nt':continue
      relocated=run(case,'定位并读取目标项目文件。')
-     success=case in ('NATIVE_EXTERNAL_GLOB','NATIVE_EXTERNAL_GREP')
+     success=case in ('NATIVE_EXTERNAL_GLOB','NATIVE_EXTERNAL_GREP','NATIVE_EXTERNAL_ALIAS')
      assert relocated['status']==('DONE' if success else 'FAILED'),relocated
      assert counts[case]<=(5 if success else 6),relocated
     for tool in ('list_dir','grep','git','shell','file_edit','file_write','mcp','skill'):
