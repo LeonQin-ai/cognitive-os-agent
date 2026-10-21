@@ -58,6 +58,10 @@ for provider_name in ('openai','anthropic'):
      calls=[('file_write',{'path':'chapter.md','content':'Literal </parameter>\n<｜DSML｜ parameter name="content"> is document content.'})]
     elif n==2:calls=[('file_read',{'path':'chapter.md'})]
     else:answer='chapter.md written and verified.'
+   elif case=='NATIVE_UNRELATED_WRITE':
+    if n==0:calls=[('file_write',{'path':'blocked-target','content':'must be written'})]
+    elif n==1:calls=[('file_write',{'path':'unrelated.txt','content':'other file'})]
+    else:answer='Only the unrelated file succeeded; original target is unresolved.'
    elif case=='NATIVE_EMPTY_WRITE':
     if n==0:calls=[('file_write',{'path':'explicit-empty.txt','content':''})]
     else:answer='Empty file created as requested.'
@@ -129,6 +133,7 @@ for provider_name in ('openai','anthropic'):
   (state/'routes.json').write_text(json.dumps([{'name':'fixture-metadata','provider':provider_name,'model':'native-test','base_url':f'http://127.0.0.1:{server.server_port}','api_key':'local-fixture','context_window':1048576,'max_output_tokens':4096,'context_source':'provider_metadata'}]),encoding='utf-8')
   if os.name!='nt':(state/'alias').symlink_to(state,target_is_directory=True)
   else:(state/'alias').mkdir()
+  (state/'blocked-target').mkdir()
   (state/'ipc.h').write_text('enum { IPC_REQUEST=31, IPC_RESPONSE=32 };',encoding='utf-8')
   (state/'explanation.txt').write_text('Example comment: full source reading.\n'+'x'*5000,encoding='utf-8')
   for i in range(17):(state/f'research-{i}.txt').write_text(f'unique-example-{i}',encoding='utf-8')
@@ -163,6 +168,8 @@ for provider_name in ('openai','anthropic'):
     assert (state/'chapter.md').read_text(encoding='utf-8')=='Literal </parameter>\n<｜DSML｜ parameter name="content"> is document content.'
     empty=run('NATIVE_EMPTY_WRITE','创建一个空文件。')
     assert empty['status']=='DONE' and counts['NATIVE_EMPTY_WRITE']==3 and (state/'explicit-empty.txt').read_bytes()==b'',empty
+    unrelated=run('NATIVE_UNRELATED_WRITE','写入目标并核对。')
+    assert unrelated['status']=='FAILED' and counts['NATIVE_UNRELATED_WRITE']<=5 and any(not st['ok'] for st in unrelated['steps']),unrelated
     final=run('NATIVE_FINAL','解释缓存原理')
     assert final['status']=='DONE' and counts['NATIVE_FINAL']==1,final
     capability=run('NATIVE_CAPABILITY','你有啥特殊的，创建、安装、修复这些能力有哪些特点？')

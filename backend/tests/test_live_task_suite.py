@@ -37,7 +37,7 @@ config.update({'reasoning.max_rounds':-1,'llm.routing':'fixed','scheduler.worker
 report_path=output/'report.json'
 report=json.loads(report_path.read_text(encoding='utf-8')) if report_path.exists() else {'model':config.get('llm.model'),'cases':{},'attempts':[]}
 selected=args.cases.split(',')
-assert all(c in ('source','ppt','image','ocr','diagram_ocr','analysis','html','header_recovery','search_discovery','capabilities','quoted_read','translation','howto','missing_recovery','ipc_analysis','creative_write') for c in selected)
+assert all(c in ('source','ppt','image','ocr','diagram_ocr','analysis','html','header_recovery','search_discovery','capabilities','quoted_read','translation','howto','missing_recovery','ipc_analysis','creative_write','unrelated_write_failure') for c in selected)
 source_files=[(backend/p).as_posix() for p in ('include/context/mmu.h','src/retrieval/context_builder.c','src/cognition/reasoning.c')]
 active=None
 last_task={}
@@ -107,6 +107,10 @@ with tempfile.TemporaryDirectory(prefix='coa-live-suite-state-') as folder:
                         prompt='把这句话翻译成英语：创建文件，然后删除文件。这是翻译任务，不要执行这些操作。'
                     elif case=='howto':
                         prompt='请解释如何查看Windows机器的CPU和内存状态，只介绍方法，不执行命令。'
+                    elif case=='unrelated_write_failure':
+                        blocked=active/'blocked-target';blocked.mkdir(exist_ok=True)
+                        marker='WRITE_B_'+secrets.token_hex(8)
+                        prompt=prefix+f'写入故障回归：先实际调用file_write向 {blocked.as_posix()} 写入A（此路径是已有目录，禁止删除或替换目录）。随后file_write向 {(active/"other.txt").as_posix()} 写入 {marker} 并file_read核对。只执行这两次写入尝试和B读取，不执行shell、不重试或修复A。最终整体必须报告未完成，因为A未写入成功；B成功不能代表A成功。'
                     elif case=='creative_write':
                         prompt=prefix+'写一篇600到900字的玄幻架空历史热血短篇，融合霍去病、黄巢、秦始皇和新中国成立的意象，内容完整且有结局。保存为 story.md，实际读取核验正文和结尾后交付。本次是一篇独立短篇，不拓展为连载。'
                     elif case=='missing_recovery':
@@ -158,6 +162,18 @@ with tempfile.TemporaryDirectory(prefix='coa-live-suite-state-') as folder:
                     (active/'prompt.txt').write_text(prompt,encoding='utf-8')
                     task=run_task(prompt,session,attached);result.update(task_summary(task))
                     if case=='ocr':(active/'expected.json').write_text(json.dumps(expected,ensure_ascii=False),encoding='utf-8')
+                    if case=='unrelated_write_failure':
+                        assert task.get('status')=='FAILED' and blocked.is_dir(),task.get('status')
+                        assert (active/'other.txt').read_text(encoding='utf-8')==marker
+                        steps=task.get('steps',[])
+                        assert any(st['tool']=='file_write' and not st['ok'] for st in steps)
+                        assert any(st['tool']=='file_write' and st['ok'] for st in steps)
+                        assert any(st['tool']=='file_read' and st['ok'] for st in steps)
+                        result['checks']={'expected_failure_preserved':True,'unrelated_file_verified':True}
+                        result['passed']=True
+                        report['cases'][case]=result;report['attempts'].append(result);save_report()
+                        print(json.dumps(result,ensure_ascii=False),flush=True)
+                        continue
                     assert task.get('status')=='DONE','Agent did not finish: '+str(task.get('output',''))[:500]
                     if case in ('capabilities','quoted_read','translation','howto'):
                         text=task.get('output') or ''

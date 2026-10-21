@@ -308,7 +308,8 @@ static void normalized_evidence_path(reasoning *r, const char *path, char *out, 
 
 static void failure_scope(reasoning *r, const char *name, const char *args_json, char *out, size_t cap) {
     out[0] = '\0';
-    if (!is_exploratory_tool(name) && strcmp(name, "file_read")) return;
+    if (!is_exploratory_tool(name) && strcmp(name, "file_read") &&
+        strcmp(name,"file_write") && strcmp(name,"file_edit")) return;
     cJSON *args = cJSON_Parse(args_json ? args_json : "{}");
     const char *path = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(args, "path"));
     normalized_evidence_path(r, path, out, cap);
