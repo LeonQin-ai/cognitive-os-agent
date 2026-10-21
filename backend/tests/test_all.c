@@ -695,6 +695,36 @@ static void test_snapshot_tx(void) {
         &ssh_ctx);
     CHECK(powershell && powershell->ok && strstr(powershell->output, "PS_OK"));
     tool_result_free(powershell);
+    /* #200: variables survive raw script and explicit CMD launcher paths.
+     * A nested launcher in script mode fails before any side effect. */
+    const char *ps_cases[] = {
+        "$p='PS_VARIABLE'; $t=3; Write-Output ($p + ':' + $t)",
+        "powershell -NoProfile -Command \"$p='PS_VARIABLE'; $t=3; Write-Output ($p + ':' + $t)\""
+    };
+    for (int i = 0; i < 2; ++i) {
+        cJSON *a = cJSON_CreateObject();
+        cJSON_AddStringToObject(a, "command", ps_cases[i]);
+        cJSON_AddStringToObject(a, "shell", i ? "cmd" : "powershell");
+        char *json = cJSON_PrintUnformatted(a);
+        tool_result *v = tool_execute(reg, "shell", json, &ssh_ctx);
+        CHECK(v && v->ok && strstr(v->output, "PS_VARIABLE:3"));
+        tool_result_free(v); free(json); cJSON_Delete(a);
+    }
+    const char *launchers[] = {"powershell", "PowerShell.exe", "pwsh", "pwsh.exe", "\"C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe\""};
+    fs_remove("state-test/nested-ps-side-effect.txt");
+    for (size_t i = 0; i < sizeof(launchers)/sizeof(launchers[0]); ++i) {
+        cJSON *a = cJSON_CreateObject();
+        strbuf command; strbuf_init(&command);
+        strbuf_appendf(&command, "%s -NoProfile -Command \"Set-Content state-test/nested-ps-side-effect.txt bad\"", launchers[i]);
+        cJSON_AddStringToObject(a, "command", command.buf);
+        cJSON_AddStringToObject(a, "shell", "powershell");
+        char *json = cJSON_PrintUnformatted(a);
+        tool_result *v = tool_execute(reg, "shell", json, &ssh_ctx);
+        CHECK(v && !v->ok && strstr(v->output, "Nothing was executed"));
+        CHECK(!fs_exists("state-test/nested-ps-side-effect.txt"));
+        tool_result_free(v); free(json); cJSON_Delete(a); strbuf_free(&command);
+    }
+
 #endif
     /* A failed password login must not leave local secret/helper files behind.
      * Use a separate working directory to cover relative state_root paths. */

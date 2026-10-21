@@ -37,7 +37,7 @@ config.update({'reasoning.max_rounds':-1,'llm.routing':'fixed','scheduler.worker
 report_path=output/'report.json'
 report=json.loads(report_path.read_text(encoding='utf-8')) if report_path.exists() else {'model':config.get('llm.model'),'cases':{},'attempts':[]}
 selected=args.cases.split(',')
-assert all(c in ('source','ppt','image','ocr','diagram_ocr','analysis','html','header_recovery','search_discovery','capabilities','quoted_read','translation','howto','missing_recovery','ipc_analysis','creative_write','unrelated_write_failure','git_diagnostic','external_recovery','rename_story','shell_artifact') for c in selected)
+assert all(c in ('source','ppt','image','ocr','diagram_ocr','analysis','html','header_recovery','search_discovery','capabilities','quoted_read','translation','howto','missing_recovery','ipc_analysis','creative_write','unrelated_write_failure','git_diagnostic','external_recovery','rename_story','shell_artifact','powershell_contract') for c in selected)
 source_files=[(backend/p).as_posix() for p in ('include/context/mmu.h','src/retrieval/context_builder.c','src/cognition/reasoning.c')]
 active=None
 last_task={}
@@ -114,6 +114,9 @@ with tempfile.TemporaryDirectory(prefix='coa-live-suite-state-') as folder:
                         blocked=active/'blocked-target';blocked.mkdir(exist_ok=True)
                         marker='WRITE_B_'+secrets.token_hex(8)
                         prompt=prefix+f'写入故障回归：先实际调用file_write向 {blocked.as_posix()} 写入A（此路径是已有目录，禁止删除或替换目录）。随后file_write向 {(active/"other.txt").as_posix()} 写入 {marker} 并file_read核对。只执行这两次写入尝试和B读取，不执行shell、不重试或修复A。最终整体必须报告未完成，因为A未写入成功；B成功不能代表A成功。'
+                    elif case=='powershell_contract':
+                        marker='PS-'+secrets.token_hex(5);target=active/'powershell.txt'
+                        prompt=f'Windows工具契约回归：先调用一次shell，shell=powershell，command为 powershell -NoProfile -Command \"Write-Output nested\"，预期工具在执行前拒绝。收到错误后按工具提示纠正：用shell=powershell直接传PowerShell脚本文本，定义$p为 {target.as_posix()}，$t为 {marker}，用Set-Content写入，再file_read核验。不要继续嵌套启动器，不用file_write代写，只写此文件。最后报告已恢复和文件内容。'
                     elif case=='shell_artifact':
                         marker='ARTIFACT-'+secrets.token_hex(5);target=active/'result.json'
                         prompt=f'用Python生成 {target.as_posix()}，JSON内容为 marker={marker}、values=[1,4,9]、verified=true。通过shell工具执行Python命令，outputs参数声明这个产物路径；实际file_read核对内容后给出结果。只生成这一个文件，不操作其他目录或版本控制。'
@@ -211,6 +214,13 @@ with tempfile.TemporaryDirectory(prefix='coa-live-suite-state-') as folder:
                         assert task.get('tool_calls')==0 and not task.get('steps'),'informational request executed a tool'
                         if case=='translation':assert 'creat' in text.lower() and 'delet' in text.lower(),text
                         result['checks']={'answer_characters':len(text),'completed':True,'no_tools':True}
+                    elif case=='powershell_contract':
+                        assert target.read_text(encoding='utf-8-sig').strip()==marker
+                        steps=task.get('steps',[])
+                        assert any(st['tool']=='shell' and not st['ok'] and 'Nothing was executed' in st.get('out','') for st in steps), 'missing expected contract rejection'
+                        assert any(st['tool']=='shell' and st['ok'] and json.loads(st['args']).get('shell')=='powershell' for st in steps)
+                        assert any(st['tool']=='file_read' and st['ok'] for st in steps)
+                        result['checks']={'rejected_before_execution':True,'raw_script_recovered':True,'read_back_matched':True}
                     elif case=='shell_artifact':
                         data=json.loads(target.read_text(encoding='utf-8'))
                         assert data=={'marker':marker,'values':[1,4,9],'verified':True},data

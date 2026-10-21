@@ -81,6 +81,25 @@ static char *oem_to_utf8(const char *in) {
     return u8;
 }
 
+/* PowerShell mode accepts script text, not a second PowerShell launcher.
+ * Reject before execution: an outer interpreter would expand inner variables.
+ * This is executable-token validation, never task/answer classification. */
+static int is_powershell_launcher(const char *command) {
+    const char *p = command;
+    while (isspace((unsigned char)*p)) ++p;
+    char quote = (*p == '\"' || *p == '\'') ? *p++ : 0;
+    const char *start = p;
+    while (*p && (quote ? *p != quote : !isspace((unsigned char)*p))) ++p;
+    const char *base = start;
+    for (const char *q = start; q < p; ++q)
+        if (*q == '/' || *q == '\\') base = q + 1;
+    size_t n = (size_t)(p - base);
+    return (n == 10 && _strnicmp(base, "powershell", n) == 0) ||
+           (n == 14 && _strnicmp(base, "powershell.exe", n) == 0) ||
+           (n == 4 && _strnicmp(base, "pwsh", n) == 0) ||
+           (n == 8 && _strnicmp(base, "pwsh.exe", n) == 0);
+}
+
 /* -EncodedCommand takes UTF-16LE base64, avoiding cmd/PowerShell quote
  * reinterpretation for commands containing pipes, quotes or Unicode. */
 static char *powershell_command(const char *utf8) {
@@ -156,6 +175,10 @@ static tool_result *shell_exec_impl(const tool *self, const tool_ctx *ctx, const
         if (strcmp(choice, "cmd") == 0) native_shell = 1;
         else if (strcmp(choice, "powershell") == 0) {
 #if defined(_WIN32)
+            if (is_powershell_launcher(command_text)) {
+                cJSON_Delete(args);
+                return tool_result_new(0, "shell: powershell mode requires raw script text, without powershell/pwsh -Command. Pass the script directly with shell=powershell, or use shell=cmd for a complete launcher command. Nothing was executed.");
+            }
             ps_command = powershell_command(command_text);
             if (!ps_command) { cJSON_Delete(args); return tool_result_new(0, "shell: invalid PowerShell command"); }
             command_text = ps_command;
@@ -225,7 +248,7 @@ static tool_result *shell_exec(const tool *self, const tool_ctx *ctx, const char
 const tool *tool_shell(void) {
     static const tool t = {
         "shell",
-        "Run a command and capture stdout+stderr. For file generation/modification, declare affected output file paths in outputs so verified artifact changes count as progress even if stdout repeats. Omit outputs for read-only checks. On Windows set shell=powershell for PowerShell syntax, shell=cmd for CMD, or omit for auto.",
+        "Run a command and capture stdout+stderr. For file generation/modification, declare affected output file paths in outputs so verified artifact changes count as progress even if stdout repeats. Omit outputs for read-only checks. On Windows shell=powershell accepts raw PowerShell SCRIPT text (variables and pipelines supported); do not wrap it in powershell/pwsh -Command. For a complete executable launcher command use shell=cmd. Omit shell for auto.",
         "{\"type\":\"object\",\"properties\":{\"command\":{\"type\":\"string\"},\"timeout_ms\":{\"type\":\"integer\"},\"shell\":{\"type\":\"string\"},\"outputs\":{\"type\":\"array\",\"maxItems\":16,\"items\":{\"type\":\"string\"},\"description\":\"Output file paths changed by this command, used to verify actual artifact progress\"}}"
         "}",
         1,
