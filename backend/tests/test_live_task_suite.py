@@ -37,7 +37,7 @@ config.update({'reasoning.max_rounds':-1,'llm.routing':'fixed','scheduler.worker
 report_path=output/'report.json'
 report=json.loads(report_path.read_text(encoding='utf-8')) if report_path.exists() else {'model':config.get('llm.model'),'cases':{},'attempts':[]}
 selected=args.cases.split(',')
-assert all(c in ('source','ppt','image','ocr','diagram_ocr','analysis','html','header_recovery','search_discovery','capabilities','quoted_read','translation','howto','missing_recovery','ipc_analysis','creative_write','unrelated_write_failure') for c in selected)
+assert all(c in ('source','ppt','image','ocr','diagram_ocr','analysis','html','header_recovery','search_discovery','capabilities','quoted_read','translation','howto','missing_recovery','ipc_analysis','creative_write','unrelated_write_failure','git_diagnostic') for c in selected)
 source_files=[(backend/p).as_posix() for p in ('include/context/mmu.h','src/retrieval/context_builder.c','src/cognition/reasoning.c')]
 active=None
 last_task={}
@@ -107,6 +107,9 @@ with tempfile.TemporaryDirectory(prefix='coa-live-suite-state-') as folder:
                         prompt='把这句话翻译成英语：创建文件，然后删除文件。这是翻译任务，不要执行这些操作。'
                     elif case=='howto':
                         prompt='请解释如何查看Windows机器的CPU和内存状态，只介绍方法，不执行命令。'
+                    elif case=='git_diagnostic':
+                        git_dir=state/'git-nonrepo';git_dir.mkdir(exist_ok=True)
+                        prompt=f'回归检查：仅实际调用 git 工具一次，args 为 status --short，dir 明确传 {git_dir.as_posix()}。这是无 .git 的临时目录，预期工具失败；不要 git init，不修复目录，不重试、不运行 shell。最后报告被阻塞和实际目录，不能把仓库检查标记为成功。'
                     elif case=='unrelated_write_failure':
                         blocked=active/'blocked-target';blocked.mkdir(exist_ok=True)
                         marker='WRITE_B_'+secrets.token_hex(8)
@@ -162,6 +165,19 @@ with tempfile.TemporaryDirectory(prefix='coa-live-suite-state-') as folder:
                     (active/'prompt.txt').write_text(prompt,encoding='utf-8')
                     task=run_task(prompt,session,attached);result.update(task_summary(task))
                     if case=='ocr':(active/'expected.json').write_text(json.dumps(expected,ensure_ascii=False),encoding='utf-8')
+                    if case=='git_diagnostic':
+                        assert task.get('status')=='FAILED',task.get('status')
+                        steps=task.get('steps',[])
+                        assert len(steps)==1 and steps[0]['tool']=='git' and not steps[0]['ok'],steps
+                        invocation=json.loads(steps[0]['args'])
+                        assert invocation['dir']==git_dir.as_posix(),invocation
+                        assert git_dir.as_posix() in steps[0]['out'] and 'not inside a Git repository' in steps[0]['out'],steps
+                        assert not (git_dir/'.git').exists()
+                        result['checks']={'actual_git_failure':True,'explicit_directory_preserved':True,'no_retry':True}
+                        result['passed']=True
+                        report['cases'][case]=result;report['attempts'].append(result);save_report()
+                        print(json.dumps(result,ensure_ascii=False),flush=True)
+                        continue
                     if case=='unrelated_write_failure':
                         assert task.get('status')=='FAILED' and blocked.is_dir(),task.get('status')
                         assert (active/'other.txt').read_text(encoding='utf-8')==marker

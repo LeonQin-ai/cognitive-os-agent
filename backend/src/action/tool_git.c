@@ -53,9 +53,12 @@ static tool_result *git_exec(const tool *self, const tool_ctx *ctx, const char *
         snprintf(cmd, sizeof(cmd), "git %s", subargs);
 
     pr = proc_run(cmd, 15000);
-    cJSON_Delete(args);
-    if (!pr)
+    /* dir/subargs borrow storage from args. Keep it alive until every
+     * diagnostic has copied those strings (#196). */
+    if (!pr) {
+        cJSON_Delete(args);
         return tool_result_new(0, "git: failed to spawn git");
+    }
 
     if (pr->exit_code != 0 && !pr->timed_out && pr->output &&
         strstr(pr->output, "not a git repository")) {
@@ -69,11 +72,13 @@ static tool_result *git_exec(const tool *self, const tool_ctx *ctx, const char *
                  "in the git tool's 'dir' property. Original error: %.6000s",
                  working_dir, pr->output);
         r = tool_result_new(0, diagnostic);
+        cJSON_Delete(args);
         proc_result_free(pr);
         return r;
     }
 
     r = tool_result_new(pr->exit_code == 0 && !pr->timed_out, pr->output ? pr->output : "");
+    cJSON_Delete(args);
     proc_result_free(pr);
     return r;
 }

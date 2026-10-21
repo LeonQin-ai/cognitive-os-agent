@@ -67,6 +67,7 @@ for provider_name in ('openai','anthropic'):
      pending=next(f for f in cursor['unresolved_failures'] if f['tool']==tool)
      expected={k:v for k,v in args.items() if k not in ('content','old_string','new_string')}
      assert pending['arguments']==expected and pending['error'],pending
+     if tool=='git':assert str(state) in pending['error'],pending
      calls=[('complete_task',{'status':'blocked','requires_tools':False,'answer':'Original tool failure remains; diagnostics retained.'})]
    elif case=='NATIVE_DELAYED_RECOVERY':
     if n==0:calls=[('file_read',{'path':'delayed-missing.txt','offset_bytes':19,'max_bytes':64})]

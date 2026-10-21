@@ -329,3 +329,12 @@ CI 39537163033 新增其他工具矩阵在 Linux/macOS 暴露已有缺陷：snap
 新增快照单元测试覆盖已有空/非空目录、pending 回滚、提交后恢复、重开快照按 ID 恢复及定向恢复拒绝；原生双协议矩阵明确检查写入失败后 blocked-target 仍是目录。专项全通过。原生测试异常时额外输出本地 fixture 日志尾部，便于核实 ASAN 子进程错误，不忽略失败或增加重试。
 
 真实 Agent 回归：2026-10-21，隔离实例复用 ark/deepseek-v4.1-flash，unrelated_write_failure 预期 FAILED、回归 PASS，原目录保留，其他文件写入/读取成功不能掩盖目标失败。3 模型请求/3 工具、0 请求失败、8.045 秒，输入 14220+输出 944=**15164 tokens**。本地证据 build/live-api-suite-20261021-121033/。该实测在 Windows，POSIX 差异由 Linux/macOS CI 验证。
+
+
+### #196：Git 非仓库错误分支访问已释放的 dir
+
+CI 39542621593 的 Linux ASAN 给出确定证据：git_exec 释放 args JSON 后使用其中 dir 借用指针构造非仓库诊断，heap-use-after-free 位于 tool_git.c:63。将 JSON 生命周期延长到诊断复制结束，并覆盖 spawn 失败、非仓库与普通返回的释放路径。
+
+新增单元用例显式传入仓库外目录并核对实际目录和非仓库诊断；原生工具失败矩阵增加 git 错误必须包含完整目录的断言，双协议通过。ASAN 原生用例已在修复前明确触发崩溃。
+
+真实 Agent 测试两次均计费：第一次 fixture 误放在源码仓库 build/，Git 正确识别父级仓库，不满足失败预期，回归失败；2 请求/1 工具，输入8653+输出1199=9852 tokens，11.281秒，证据 build/live-api-suite-20261021-121532/。修正测试目录到仓库外临时状态目录后回归通过：实际 Git 失败，任务预期 FAILED，目录诊断正确、无重试、未创建 .git；2 请求/1 工具，0 请求失败，输入8947+输出483=9430 tokens，5.081秒，证据 build/live-api-suite-20261021-121606/。两次均通过配置的 ark/deepseek-v4.1-flash 的隔离 Agent 实例，合计 **19282 tokens**，不隐去 fixture 失败成本。

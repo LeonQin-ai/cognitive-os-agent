@@ -2723,6 +2723,17 @@ static void test_git_empty_args_checks_status(void) {
         CHECK(r && r->output && strstr(r->output, "not inside a Git repository"));
         CHECK(r && r->output && strstr(r->output, absolute_temp_path));
         tool_result_free(r);
+        /* Explicit dir is owned by the parsed JSON, not ctx (#196). */
+        ctx.workspace=".";
+        cJSON *arguments=cJSON_CreateObject();
+        cJSON_AddStringToObject(arguments,"dir",absolute_temp_path);
+        cJSON_AddStringToObject(arguments,"args","status --short");
+        char *explicit_args=cJSON_PrintUnformatted(arguments);
+        r=tool_execute(reg,"git",explicit_args,&ctx);
+        CHECK(r && !r->ok);
+        CHECK(r && r->output && strstr(r->output,"not inside a Git repository"));
+        CHECK(r && r->output && strstr(r->output,absolute_temp_path));
+        tool_result_free(r);free(explicit_args);cJSON_Delete(arguments);
         TEST_RMDIR(absolute_temp_path);
     }
     free(absolute_temp_path);
