@@ -1371,8 +1371,23 @@ static void test_incomplete_run_memory_gate(void) {
 /* ---------- llm bridge: capabilities + cancel ---------- */
 static void nop_stream_cb(const char *delta, void *ud) { (void)delta; (void)ud; }
 
+static int summary_budget_chat(llm *self,const llm_request *req,llm_response *resp) {
+    *(int *)self->impl=req->max_tokens;resp->content=xstrdup("summary");return 0;
+}
+
 static void test_llm_caps_cancel(void) {
     section("llm_caps_cancel");
+    static const llm_vtable budget_vt={.chat=summary_budget_chat};
+    int observed_budget=0;
+    llm budget_model={.vt=&budget_vt,.impl=&observed_budget,.max_output_tokens=4096};
+    char *summary=llm_chat_simple(&budget_model,"system","summary request");
+    CHECK(summary && observed_budget==4096);free(summary);
+    summary=llm_chat_simple_ex(&budget_model,"system","small summary",512);
+    CHECK(summary && observed_budget==512);free(summary);
+    budget_model.max_output_tokens=0;
+    summary=llm_chat_simple(&budget_model,"system","unknown capacity");
+    CHECK(summary && observed_budget==16384);free(summary);
+
     /* capability table per provider (no network: construction is offline) */
     llm *mock = llm_create("mock", NULL, NULL, "mock");
     CHECK(mock != NULL);
@@ -9459,6 +9474,10 @@ int main(int argc, char **argv) {
     if (argc==2 && !strcmp(argv[1],"--usage")) {
         test_usage(); test_usage_concurrent_agents(); test_llm_adapters_http();
         printf("\n%d passed, %d failed\n", g_pass, g_fail); return g_fail ? 1 : 0;
+    }
+    if(argc==2 && !strcmp(argv[1],"--llm-budget")) {
+        test_llm_caps_cancel();
+        printf("%d passed, %d failed\n",g_pass,g_fail);return g_fail?1:0;
     }
     if(argc==2 && !strcmp(argv[1],"--scheduler")) {
         test_scheduler();test_scheduler_mn();

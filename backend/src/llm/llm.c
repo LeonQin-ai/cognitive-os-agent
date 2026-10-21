@@ -221,6 +221,8 @@ char *llm_chat_simple_ex(llm *llm, const char *system_prompt, const char *user_p
     req.num_messages = 2;
     req.temperature = 0.2;
     req.max_tokens = max_tokens > 0 ? max_tokens : 16384;
+    if(llm && llm->max_output_tokens>0 && req.max_tokens>llm->max_output_tokens)
+        req.max_tokens=(int)llm->max_output_tokens;
     if (llm_chat(llm, &req, &resp) != 0) {
         if (resp.error) {
             log_warn("llm: chat_simple failed: %s", resp.error);
