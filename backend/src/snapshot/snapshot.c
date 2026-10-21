@@ -19,7 +19,7 @@ typedef struct captured {
     char *path;
     char hash[17]; /* content hash of the original; empty if file didn't exist */
     int existed;
-    int skipped; /* existed but too large to capture; rollback leaves it as-is */
+    int skipped; /* existing directory or uncaptured file: leave it as-is */
 } captured;
 
 typedef struct snapshot_entry {
@@ -182,8 +182,12 @@ int snapshot_capture(snapshot *s, const char *path) {
     captured cap;
     memset(&cap, 0, sizeof(cap));
     cap.path = xstrdup(path);
-    cap.existed = fs_exists(path) && !fs_is_dir(path);
-    if (cap.existed) {
+    cap.existed = fs_exists(path);
+    if (cap.existed && fs_is_dir(path)) {
+        /* File snapshots cannot restore directory trees. Never label an
+         * existing directory "absent": POSIX remove() deletes empty dirs. */
+        cap.skipped = 1;
+    } else if (cap.existed) {
         long long sz = fs_file_size(path);
         if (s->max_file > 0 && sz > s->max_file) {
             /* too large to copy into the block store: mark skipped. Rollback
@@ -324,8 +328,8 @@ static int restore_entry(snapshot *s, snapshot_entry *e) {
     for (size_t i = 0; i < e->nfiles; i++) {
         captured *cap = &e->files[i];
         if (cap->existed && cap->skipped) {
-            /* original content was too large to capture — leave the (modified)
-             * file alone rather than deleting a huge file we cannot restore */
+            /* An existing directory or oversized file was not captured.
+             * Leave it alone rather than removing an object we cannot restore. */
             continue;
         }
         if (cap->existed && cap->hash[0]) {

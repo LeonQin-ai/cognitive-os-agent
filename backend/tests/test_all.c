@@ -4116,6 +4116,30 @@ static void test_snapshot_bigfile(void) {
     CHECK(snap != NULL);
     if (!snap) return;
 
+    /* Existing directories are never absent-file tombstones (#195). */
+    const char *empty_dir="state-test/snap-big/existing-empty";
+    const char *full_dir="state-test/snap-big/existing-full";
+    const char *child="state-test/snap-big/existing-full/keep.txt";
+    CHECK(fs_mkdirs(empty_dir)==0 && fs_mkdirs(full_dir)==0);
+    CHECK(fs_write_file(child,"keep",4)==0);
+    CHECK(snapshot_capture(snap,empty_dir)==0 && snapshot_capture(snap,full_dir)==0);
+    CHECK(snapshot_restore_pending(snap)==0);
+    CHECK(fs_is_dir(empty_dir) && fs_is_dir(full_dir) && fs_exists(child));
+    CHECK(snapshot_capture(snap,empty_dir)==0 && snapshot_capture(snap,full_dir)==0);
+    const char *directory_id=snapshot_commit(snap);
+    CHECK(directory_id!=NULL);
+    char *saved_directory_id=directory_id?xstrdup(directory_id):NULL;
+    CHECK(snapshot_restore_latest(snap)==0 && fs_is_dir(empty_dir) && fs_exists(child));
+    snapshot *reopened=snapshot_open("state-test/snap-big");
+    CHECK(reopened!=NULL);
+    if(reopened) {
+        CHECK(saved_directory_id && snapshot_restore(reopened,saved_directory_id)==0 && fs_is_dir(empty_dir) && fs_exists(child));
+        const char *paths[]={empty_dir};
+        CHECK(saved_directory_id && snapshot_restore_files(reopened,saved_directory_id,paths,1)==-1 && fs_is_dir(empty_dir));
+        snapshot_close(reopened);
+    }
+    free(saved_directory_id);
+
     /* --- small file (under the 1KB limit) still round-trips --- */
     const char *small = "state-test/snap-big/small.txt";
     fs_write_file(small, "original-small", 14);

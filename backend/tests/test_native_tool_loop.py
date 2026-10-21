@@ -191,6 +191,7 @@ for provider_name in ('openai','anthropic'):
     for tool in ('list_dir','grep','git','shell','file_edit','file_write','mcp','skill'):
      diagnostic=run('NATIVE_TOOL_DIAGNOSTIC_'+tool,'检查工具失败后的恢复诊断。')
      assert diagnostic['status']=='FAILED' and counts['NATIVE_TOOL_DIAGNOSTIC_'+tool]==5,diagnostic
+     if tool=='file_write':assert (state/'blocked-target').is_dir(), 'Failed write rollback removed existing directory'
     delayed=run('NATIVE_DELAYED_RECOVERY','核对目标文件，完成相关资料研究。')
     assert delayed['status']=='DONE' and counts['NATIVE_DELAYED_RECOVERY']==9,delayed
     unrelated=run('NATIVE_UNRELATED_WRITE','写入目标并核对。')
@@ -243,6 +244,10 @@ for provider_name in ('openai','anthropic'):
      assert schema['type']=='object' and set(schema['required'])=={'path','content'}
      assert 'format' not in schema['properties']['path']
     print('PASS:',provider_name,f'{len(matrix)} ordinary answers + premature completion review, partial reading, 17-step research, recovered/real failures; fixture routing is out of band, no magic prompt tags')
+   except BaseException:
+    log.flush()
+    print((build/('native-loop-'+provider_name+'.log')).read_text(encoding='utf-8',errors='replace')[-16000:],flush=True)
+    raise
    finally:
     process.terminate()
     try:process.wait(timeout=5)

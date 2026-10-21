@@ -320,3 +320,12 @@ Issue 原文在最终答复中说“我已经阅读了大部分核心文件。�
 新增 OpenAI/Anthropic 双协议测试矩阵覆盖以上八类工具：实际失败后执行三次无关读取，再断言原参数标识与错误仍在，并以 blocked 结束；缺少诊断的修复前版本在 list_dir 用例失败，新版本全通过。glob 对不存在目录返回空匹配属于当前成功语义，本次不把空结果当作失败；grep 使用明确的扫描字节预算超限触发真实失败。
 
 真实 Agent 验证：本机隔离实例 ark/deepseek-v4.1-flash，unrelated_write_failure 为预期 FAILED（回归 PASS），目标目录保留，其他文件成功写入及重读仍不掩盖目标失败。4 模型请求、3 工具调用、0 模型请求失败，13.666 秒，输入 19504 + 输出 945 = **20449 tokens**。证据本地 build/live-api-suite-20261021-111013/。该用例验证非读取失败处理，未声称逐个使用付费模型测试八类工具。
+
+
+### #195：POSIX 回滚误删已有空目录
+
+CI 39537163033 新增其他工具矩阵在 Linux/macOS 暴露已有缺陷：snapshot_capture 以“存在且不是目录”计算 existed，导致已有目录进入不存在文件分支；POSIX remove 可删除空目录，失败 file_write 回滚后目录消失，后续同路径写入误成功。现在将目录记录为 existed+skipped，使用既有持久化字段保留目录现场。
+
+新增快照单元测试覆盖已有空/非空目录、pending 回滚、提交后恢复、重开快照按 ID 恢复及定向恢复拒绝；原生双协议矩阵明确检查写入失败后 blocked-target 仍是目录。专项全通过。原生测试异常时额外输出本地 fixture 日志尾部，便于核实 ASAN 子进程错误，不忽略失败或增加重试。
+
+真实 Agent 回归：2026-10-21，隔离实例复用 ark/deepseek-v4.1-flash，unrelated_write_failure 预期 FAILED、回归 PASS，原目录保留，其他文件写入/读取成功不能掩盖目标失败。3 模型请求/3 工具、0 请求失败、8.045 秒，输入 14220+输出 944=**15164 tokens**。本地证据 build/live-api-suite-20261021-121033/。该实测在 Windows，POSIX 差异由 Linux/macOS CI 验证。
