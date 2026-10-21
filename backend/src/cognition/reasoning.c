@@ -1826,10 +1826,21 @@ static char *build_context(reasoning *r, const char *prompt) {
             cJSON_AddStringToObject(attempt,"tool",last->tool);cJSON_AddNumberToObject(attempt,"ok",last->ok);
             cJSON_AddStringToObject(attempt,"target",last->target);cJSON_AddItemToObject(state,"last_attempt",attempt);
         }
+        if(r->last_model_error[0]) cJSON_AddStringToObject(state,"last_planner_error",r->last_model_error);
+        cJSON *pending=cJSON_AddArrayToObject(state,"unresolved_failures");
+        for(int i=0;i<r->unresolved_failed_tool_count && i<8;i++) {
+            cJSON *failure=cJSON_CreateObject();
+            cJSON_AddStringToObject(failure,"tool",r->unresolved_failed_tools[i]);
+            char *scope=str_head(r->unresolved_failed_scopes[i],240);
+            char *safe=scope?str_utf8_sanitize(scope):NULL;
+            cJSON_AddStringToObject(failure,"scope",safe?safe:"");free(scope);free(safe);
+            cJSON_AddItemToArray(pending,failure);
+        }
+        cJSON_AddNumberToObject(state,"unresolved_failure_count",r->unresolved_failed_tool_count);
         char *json=cJSON_PrintUnformatted(state);cJSON_Delete(state);
         strbuf note;strbuf_init(&note);strbuf_append(&note,"\n## Current execution state\n");
         strbuf_append(&note,json?json:"{}");free(json);
-        strbuf_append(&note,"\nThis is a CONTINUATION, not a fresh request. The attempts above already happened in this run, including expected or unexpected failures. Choose the NEXT remaining action from the observations; do not repeat the initial step just because the original request is shown again. Retry a failed action only after changing the cause.\n");
+        strbuf_append(&note,"\nThis is a CONTINUATION, not a fresh request. The attempts above already happened in this run, including expected or unexpected failures. Choose the NEXT remaining action from the observations; do not repeat the initial step just because the original request is shown again. Retry a failed action only after changing the cause. Resolve listed failures early using a successful corrected retry or verified replacement; they do not disappear when unrelated work succeeds. For planner/schema errors, send native function arguments as separate JSON properties (path, content, offsets); do not embed protocol markup or content into path, and do not repeat completed writes.\n");
         continuation=strbuf_detach(&note);
     }
     size_t request_bytes = strlen(prompt) + strlen("## Current request\n") + (continuation?strlen(continuation):0);

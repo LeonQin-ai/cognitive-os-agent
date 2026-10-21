@@ -40,9 +40,27 @@ for provider_name in ('openai','anthropic'):
     assert cursor['round']>=2
     if case in ('NATIVE_RECOVERED','NATIVE_ALIAS') and counts[case]==1:
      assert cursor['attempted_steps']==1 and cursor['last_attempt']['ok']==0
+     assert cursor['unresolved_failure_count']==1 and cursor['unresolved_failures'][0]['tool']=='file_read'
    n=counts.get(case,0);counts[case]=n+1
    calls=[];answer='';stop='stop'
    if case.startswith('ANSWER_'):answer=matrix[int(case.split('_')[1])][1]
+   elif case in ('NATIVE_READ_PROTOCOL','NATIVE_READ_CONTROL'):
+    bad='native.txt</parameter>\n<｜DSML｜ parameter name="offset_bytes" string="false">0' if case=='NATIVE_READ_PROTOCOL' else 'bad\nname.txt'
+    if n==0:calls=[('file_read',{'path':bad})]
+    elif n==1:
+     assert cursor['attempted_steps']==0 and cursor['unresolved_failure_count']==0 and cursor['last_planner_error']
+     calls=[('file_read',{'path':'native.txt'})]
+    else:answer='native-marker verified.'
+   elif case=='NATIVE_WRITE_PROTOCOL':
+    if n==0:calls=[('file_write',{'path':'bad-prefix.txt','content':'must not execute'}),('file_write',{'path':'chapter.md</parameter>\n<｜DSML｜ parameter name="content">story'})]
+    elif n==1:
+     assert cursor['attempted_steps']==0 and cursor['unresolved_failure_count']==0
+     calls=[('file_write',{'path':'chapter.md','content':'Literal </parameter>\n<｜DSML｜ parameter name="content"> is document content.'})]
+    elif n==2:calls=[('file_read',{'path':'chapter.md'})]
+    else:answer='chapter.md written and verified.'
+   elif case=='NATIVE_EMPTY_WRITE':
+    if n==0:calls=[('file_write',{'path':'explicit-empty.txt','content':''})]
+    else:answer='Empty file created as requested.'
    elif case in ('NATIVE_IPC_PROGRESS','NATIVE_IPC_PENDING','NATIVE_IPC_PREMATURE'):
     if n==0:calls=[('file_read',{'path':'native.txt'})]
     elif n==1:
@@ -136,6 +154,15 @@ for provider_name in ('openai','anthropic'):
     assert mixed['status']=='DONE' and counts['NATIVE_MIXED']==4,mixed
     assert (state/'native.txt').read_text()=='native-marker'
     assert [s['tool'] for s in mixed['steps']]==['file_write','file_read'],mixed
+    for case in ('NATIVE_READ_PROTOCOL','NATIVE_READ_CONTROL'):
+     repaired=run(case,'读取文件核对标记。')
+     assert repaired['status']=='DONE' and counts[case]==4 and len(repaired['steps'])==1 and repaired['steps'][0]['ok'],repaired
+    repaired=run('NATIVE_WRITE_PROTOCOL','保存一份含有协议示例文字的文档，并读取核对。')
+    assert repaired['status']=='DONE' and counts['NATIVE_WRITE_PROTOCOL']==5 and len(repaired['steps'])==2,repaired
+    assert not (state/'bad-prefix.txt').exists()
+    assert (state/'chapter.md').read_text(encoding='utf-8')=='Literal </parameter>\n<｜DSML｜ parameter name="content"> is document content.'
+    empty=run('NATIVE_EMPTY_WRITE','创建一个空文件。')
+    assert empty['status']=='DONE' and counts['NATIVE_EMPTY_WRITE']==3 and (state/'explicit-empty.txt').read_bytes()==b'',empty
     final=run('NATIVE_FINAL','解释缓存原理')
     assert final['status']=='DONE' and counts['NATIVE_FINAL']==1,final
     capability=run('NATIVE_CAPABILITY','你有啥特殊的，创建、安装、修复这些能力有哪些特点？')
@@ -180,7 +207,8 @@ for provider_name in ('openai','anthropic'):
     for catalog in catalogs:
      write=next(t.get('function',t) for t in catalog if t.get('function',t).get('name')=='file_write')
      schema=write.get('parameters',write.get('input_schema'))
-     assert schema['type']=='object' and 'path' in schema['properties'] and 'content' in schema['properties']
+     assert schema['type']=='object' and set(schema['required'])=={'path','content'}
+     assert 'format' not in schema['properties']['path']
     print('PASS:',provider_name,f'{len(matrix)} ordinary answers + premature completion review, partial reading, 17-step research, recovered/real failures; fixture routing is out of band, no magic prompt tags')
    finally:
     process.terminate()

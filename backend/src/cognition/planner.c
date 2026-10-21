@@ -684,6 +684,12 @@ static char *native_tool_catalog(const tool_registry *tools, struct policy_engin
         cJSON_AddStringToObject(fn,"description",t->description?t->description:"");
         cJSON *schema=t->json_schema?cJSON_Parse(t->json_schema):NULL;
         if(!cJSON_IsObject(schema)) {cJSON_Delete(schema);schema=cJSON_CreateObject();cJSON_AddStringToObject(schema,"type","object");}
+        /* file-path is a local validation format, not a provider JSON-schema extension. */
+        cJSON *property;
+        cJSON_ArrayForEach(property,cJSON_GetObjectItemCaseSensitive(schema,"properties")) {
+            const char *format=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(property,"format"));
+            if(format && !strcmp(format,"file-path")) cJSON_DeleteItemFromObjectCaseSensitive(property,"format");
+        }
         cJSON_AddItemToObject(fn,"parameters",schema);cJSON_AddItemToArray(list,entry);
     }
     cJSON *finish=cJSON_Parse("{\"type\":\"function\",\"function\":{\"name\":\"complete_task\",\"description\":\"End this task only when no further tool operations are required. Report complete or blocked and the final answer. If tools are needed, call those tools instead.\",\"parameters\":{\"type\":\"object\",\"properties\":{\"status\":{\"type\":\"string\",\"enum\":[\"complete\",\"blocked\"]},\"requires_tools\":{\"type\":\"boolean\"},\"answer\":{\"type\":\"string\"}},\"required\":[\"status\",\"requires_tools\",\"answer\"]}}}");

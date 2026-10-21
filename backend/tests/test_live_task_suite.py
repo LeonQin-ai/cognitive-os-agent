@@ -37,7 +37,7 @@ config.update({'reasoning.max_rounds':-1,'llm.routing':'fixed','scheduler.worker
 report_path=output/'report.json'
 report=json.loads(report_path.read_text(encoding='utf-8')) if report_path.exists() else {'model':config.get('llm.model'),'cases':{},'attempts':[]}
 selected=args.cases.split(',')
-assert all(c in ('source','ppt','image','ocr','diagram_ocr','analysis','html','header_recovery','search_discovery','capabilities','quoted_read','translation','howto','missing_recovery','ipc_analysis') for c in selected)
+assert all(c in ('source','ppt','image','ocr','diagram_ocr','analysis','html','header_recovery','search_discovery','capabilities','quoted_read','translation','howto','missing_recovery','ipc_analysis','creative_write') for c in selected)
 source_files=[(backend/p).as_posix() for p in ('include/context/mmu.h','src/retrieval/context_builder.c','src/cognition/reasoning.c')]
 active=None
 last_task={}
@@ -107,6 +107,8 @@ with tempfile.TemporaryDirectory(prefix='coa-live-suite-state-') as folder:
                         prompt='把这句话翻译成英语：创建文件，然后删除文件。这是翻译任务，不要执行这些操作。'
                     elif case=='howto':
                         prompt='请解释如何查看Windows机器的CPU和内存状态，只介绍方法，不执行命令。'
+                    elif case=='creative_write':
+                        prompt=prefix+'写一篇600到900字的玄幻架空历史热血短篇，融合霍去病、黄巢、秦始皇和新中国成立的意象，内容完整且有结局。保存为 story.md，实际读取核验正文和结尾后交付。本次是一篇独立短篇，不拓展为连载。'
                     elif case=='missing_recovery':
                         marker='RECOVER-'+secrets.token_hex(5)
                         fixture=active/'recover.txt'
@@ -163,6 +165,14 @@ with tempfile.TemporaryDirectory(prefix='coa-live-suite-state-') as folder:
                         assert task.get('tool_calls')==0 and not task.get('steps'),'informational request executed a tool'
                         if case=='translation':assert 'creat' in text.lower() and 'delet' in text.lower(),text
                         result['checks']={'answer_characters':len(text),'completed':True,'no_tools':True}
+                    elif case=='creative_write':
+                        path=active/'story.md';text=path.read_text(encoding='utf-8')
+                        assert 500<=len(text)<=4000, 'Unexpected story size'
+                        steps=task.get('steps',[])
+                        assert any(st['tool']=='file_write' and st['ok'] for st in steps)
+                        assert any(st['tool']=='file_read' and st['ok'] and 'story.md' in st['args'] for st in steps)
+                        result['checks']={'characters':len(text),'written_and_read':True}
+                        result['artifacts']['story']=str(path)
                     elif case=='missing_recovery':
                         reads=[st for st in task.get('steps',[]) if st['tool']=='file_read']
                         assert reads and not reads[0]['ok'] and any(st['ok'] for st in reads[1:]),reads

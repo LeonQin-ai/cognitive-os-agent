@@ -386,7 +386,11 @@ static tool_result *file_write_exec(const tool *self, const tool_ctx *ctx, const
         return tool_result_new(0, "file_write: missing string arg 'path'");
     }
 
-    const char *content = (content_j && cJSON_IsString(content_j)) ? content_j->valuestring : "";
+    if (!cJSON_IsString(content_j)) {
+        cJSON_Delete(args);
+        return tool_result_new(0, "file_write: missing string arg 'content'; pass it as a separate JSON parameter (use an explicit empty string for an empty file)");
+    }
+    const char *content = content_j->valuestring;
 
     /* Models sometimes emit a literal "..." placeholder instead of the real
      * file body (it even overwrote a generated header once). Reject the
@@ -640,7 +644,7 @@ const tool *tool_list_dir(void) {
     static const tool t = {
         "list_dir",
         "List files and subdirectories in a directory (default: workspace root).",
-        "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}}}",
+        "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"format\":\"file-path\"}}}",
         0,
         list_dir_exec,
         NULL,
@@ -654,7 +658,7 @@ const tool *tool_file_read(void) {
         "Read text in pages of 4..4000 bytes (default 4000). Oversized integer max_bytes is capped to 4000. "
         "Continue using the returned next_offset_bytes, never offset + requested max_bytes. "
         "Pass discovered absolute paths unchanged. Directories return listings.",
-        "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"offset_bytes\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":9007199254740991},\"max_bytes\":{\"type\":\"integer\",\"minimum\":4,\"maximum\":4000,\"default\":4000}},\"required\":[\"path\"]}",
+        "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"format\":\"file-path\"},\"offset_bytes\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":9007199254740991},\"max_bytes\":{\"type\":\"integer\",\"minimum\":4,\"maximum\":4000,\"default\":4000}},\"required\":[\"path\"]}",
         0,
         file_read_exec,
         NULL,
@@ -666,7 +670,7 @@ const tool *tool_file_write(void) {
     static const tool t = {
         "file_write",
         "Write content to a file (creates parent directories).",
-        "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"content\":{\"type\":\"string\"}}}",
+        "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"format\":\"file-path\"},\"content\":{\"type\":\"string\"}},\"required\":[\"path\",\"content\"]}",
         1,
         file_write_exec,
         NULL,
@@ -681,7 +685,7 @@ const tool *tool_file_edit(void) {
         "NEVER write new files unless required. The edit FAILS if old_string is not unique in the "
         "file - either provide a larger string with more surrounding context to make it unique, or "
         "use replace_all to change every instance of old_string.",
-        "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},"
+        "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"format\":\"file-path\"},"
         "\"old_string\":{\"type\":\"string\"},\"new_string\":{\"type\":\"string\"},"
         "\"replace_all\":{\"type\":\"boolean\"}},"
         "\"required\":[\"path\",\"old_string\",\"new_string\"]}",

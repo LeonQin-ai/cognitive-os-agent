@@ -152,6 +152,21 @@ static int json_type_matches(const cJSON *v, const char *type) {
     return 1; /* unknown type keyword: don't reject */
 }
 
+/* File tools accept single-line paths. Validate representation, never infer
+ * intent from prose or rewrite a malformed path into a different target. */
+static int valid_file_path(const char *path) {
+    if(!path || !*path) return 0;
+    for(size_t i=0;path[i];i++) {
+        unsigned char c=(unsigned char)path[i];
+        if(c<32 || c==127) return 0;
+#ifdef _WIN32
+        if(strchr("<>\"|*",c)) return 0;
+        if(c=='?' && !(i==2 && path[0]=='\\' && path[1]=='\\' && path[3]=='\\')) return 0;
+#endif
+    }
+    return 1;
+}
+
 int tool_validate_args(const tool *tool, const char *args_json, char **err_out) {
     cJSON *schema;
     int rc = 0;
@@ -211,6 +226,11 @@ int tool_validate_args(const tool *tool, const char *args_json, char **err_out) 
 
                 if (!pspec)
                     continue; /* unspecified keys allowed */
+                const char *format=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(pspec,"format"));
+                if(format && !strcmp(format,"file-path") && cJSON_IsString(child) && !valid_file_path(child->valuestring)) {
+                    if(err_out) *err_out=xstrdup("path must be a nonempty single-line filesystem path; pass other parameters as separate JSON keys, never inside path");
+                    rc=-1;break;
+                }
                 ptype = cJSON_GetObjectItemCaseSensitive(pspec, "type");
                 const char *tname = (ptype && cJSON_IsString(ptype)) ? ptype->valuestring : NULL;
                 if (!json_type_matches(child, tname)) {
