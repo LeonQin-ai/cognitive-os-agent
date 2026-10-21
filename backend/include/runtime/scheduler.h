@@ -39,7 +39,7 @@ typedef struct task {
     TASK_ATOMIC(task_status) status;
     char *attachments_json; /* owned immutable task snapshot; never in history */
     char *input;  /* task description / prompt */
-    char *output; /* set by runner */
+    char *output; /* runner transfers ownership to scheduler; borrowed readers must not free */
     mutex_t progress_mtx;
     char *progress_json; /* immutable snapshot, protected by progress_mtx */
     /* Sanitized execution timeline kept in memory while the task runs. It is

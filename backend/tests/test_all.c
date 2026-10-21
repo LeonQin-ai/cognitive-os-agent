@@ -289,8 +289,7 @@ static void test_scheduler(void) {
     CHECK(t->status == TS_DONE);
     if (t) {
         CHECK_STR(t->output, "ran");
-        free(t->output);
-        t->output = NULL;
+        /* Borrowed task output stays owned by the scheduler until task_free. */
     }
     CHECK(scheduler_total(s) == 1);
     CHECK(scheduler_shutdown(s, 3000) == 0);
@@ -482,10 +481,18 @@ static void test_scheduler_mn(void) {
             char buf[32];
             snprintf(buf, sizeof(buf), "task-%d", i);
             CHECK_STR(t->output, buf);
-            free(t->output);
-            t->output = NULL;
+            /* scheduler_get borrows the task; never free its output here. */
         }
         CHECK(mn_runs[i] == 1);
+    }
+    scheduler_stats stats;
+    scheduler_get_stats(s,&stats); /* retained-byte accounting reads owned outputs */
+    CHECK(stats.retained==MN_COUNT);
+    for(int i=0;i<MN_COUNT;i++) {
+        task *retained=scheduler_get(s,i);char expected[32];
+        snprintf(expected,sizeof(expected),"task-%d",i);
+        CHECK(retained && retained->output);
+        if(retained) CHECK_STR(retained->output,expected);
     }
     CHECK(scheduler_total(s) == MN_COUNT);
     CHECK(scheduler_shutdown(s, 5000) == 0);
@@ -9389,6 +9396,10 @@ int main(int argc, char **argv) {
     if (argc==2 && !strcmp(argv[1],"--usage")) {
         test_usage(); test_usage_concurrent_agents(); test_llm_adapters_http();
         printf("\n%d passed, %d failed\n", g_pass, g_fail); return g_fail ? 1 : 0;
+    }
+    if(argc==2 && !strcmp(argv[1],"--scheduler")) {
+        test_scheduler();test_scheduler_mn();
+        printf("%d passed, %d failed\n",g_pass,g_fail);return g_fail?1:0;
     }
     if (argc==2 && !strcmp(argv[1],"--planner")) {
         test_planner_dsml(); test_failed_script_recovery_guidance(); test_rate_limit_stops_without_retry(); test_transport_failure_stops_after_recovery(); test_git_empty_args_checks_status(); test_planner();

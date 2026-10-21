@@ -121,7 +121,9 @@ jobs:
       - name: Build with ASAN
         run: make CFLAGS="-std=c11 -O1 -g -fsanitize=address -fno-omit-frame-pointer -Iinclude -Ithird_party/cJSON -Ithird_party/wasm3"
       - name: Unit tests under ASAN
-        run: LD_PRELOAD=$(gcc -print-file-name=libasan.so) ASAN_OPTIONS=detect_leaks=0 ./build/cognitive-os-agent-test
+        run: |
+          LD_PRELOAD=$(gcc -print-file-name=libasan.so) ASAN_OPTIONS=detect_leaks=0 ./build/cognitive-os-agent-test --scheduler
+          LD_PRELOAD=$(gcc -print-file-name=libasan.so) ASAN_OPTIONS=detect_leaks=0 ./build/cognitive-os-agent-test
       - name: Native tool block continuation under ASAN
         run: ASAN_OPTIONS=detect_leaks=0 python3 tests/test_native_tool_loop.py
 
