@@ -58,6 +58,16 @@ for provider_name in ('openai','anthropic'):
      calls=[('file_write',{'path':'chapter.md','content':'Literal </parameter>\n<｜DSML｜ parameter name="content"> is document content.'})]
     elif n==2:calls=[('file_read',{'path':'chapter.md'})]
     else:answer='chapter.md written and verified.'
+   elif case=='NATIVE_DELAYED_RECOVERY':
+    if n==0:calls=[('file_read',{'path':'delayed-missing.txt','offset_bytes':19,'max_bytes':64})]
+    elif n<5:calls=[('file_read',{'path':f'research-{n}.txt'})]
+    elif n==5:
+     pending=cursor['unresolved_failures'][0]
+     assert pending['arguments']=={'path':'delayed-missing.txt','offset_bytes':19,'max_bytes':64},pending
+     assert pending['error'] and 'delayed-missing.txt' in pending['error'],pending
+     calls=[('file_write',{'path':'delayed-missing.txt','content':'x'*19+'recovered-delayed'})]
+    elif n==6:calls=[('file_read',{'path':'delayed-missing.txt','offset_bytes':19,'max_bytes':64})]
+    else:answer='recovered-delayed verified after unrelated research.'
    elif case=='NATIVE_UNRELATED_WRITE':
     if n==0:calls=[('file_write',{'path':'blocked-target','content':'must be written'})]
     elif n==1:calls=[('file_write',{'path':'unrelated.txt','content':'other file'})]
@@ -87,7 +97,7 @@ for provider_name in ('openai','anthropic'):
     else:answer='参数已校正并成功核对 schema-repaired。'
    elif case=='NATIVE_FAILED':
     if n==0:calls=[('file_read',{'path':'unresolved-missing.txt'})]
-    else:answer='模型声称成功，但实际文件读取仍然失败。'
+    else:answer='模型声称成功，但实际文件读取仍然失败。'+'技术分析正文。'*2000+'SUMMARY_END_194'
    elif case in ('NATIVE_RECOVERED','NATIVE_ALIAS'):
     path='recover.txt' if case=='NATIVE_RECOVERED' else (state/'alias'/'alias-recover.txt').as_posix()
     if n==0:calls=[('file_read',{'path':path})]
@@ -168,6 +178,8 @@ for provider_name in ('openai','anthropic'):
     assert (state/'chapter.md').read_text(encoding='utf-8')=='Literal </parameter>\n<｜DSML｜ parameter name="content"> is document content.'
     empty=run('NATIVE_EMPTY_WRITE','创建一个空文件。')
     assert empty['status']=='DONE' and counts['NATIVE_EMPTY_WRITE']==3 and (state/'explicit-empty.txt').read_bytes()==b'',empty
+    delayed=run('NATIVE_DELAYED_RECOVERY','核对目标文件，完成相关资料研究。')
+    assert delayed['status']=='DONE' and counts['NATIVE_DELAYED_RECOVERY']==9,delayed
     unrelated=run('NATIVE_UNRELATED_WRITE','写入目标并核对。')
     assert unrelated['status']=='FAILED' and counts['NATIVE_UNRELATED_WRITE']<=5 and any(not st['ok'] for st in unrelated['steps']),unrelated
     final=run('NATIVE_FINAL','解释缓存原理')
@@ -195,6 +207,7 @@ for provider_name in ('openai','anthropic'):
     assert all(st['ok'] for st in schema['steps']),schema
     failed=run('NATIVE_FAILED','读取指定文件并总结。')
     assert failed['status']=='FAILED' and 2<=counts['NATIVE_FAILED']<=3 and any(not st['ok'] for st in failed['steps']),failed
+    assert failed['output'].endswith('SUMMARY_END_194') and failed['output'].count('技术分析正文。')==2000,failed
     example=run('NATIVE_EXAMPLE','解释工具调用格式')
     assert example['status']=='DONE' and counts['NATIVE_EXAMPLE']==1 and not (state/'example-only.txt').exists(),example
     bad=run('NATIVE_BAD','创建 repaired.txt')

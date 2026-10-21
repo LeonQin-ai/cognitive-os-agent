@@ -237,6 +237,8 @@ struct reasoning {
     int run_had_action_failure;
     char unresolved_failed_tools[32][48];
     char unresolved_failed_scopes[32][2048];
+    char unresolved_read_args[32][4096];
+    char unresolved_read_errors[32][1024];
     char unresolved_discovered_reads[32][2048];
     int unresolved_failed_tool_count;
     int unresolved_failed_tools_overflow;
@@ -356,15 +358,38 @@ static void record_discovered_read_paths(reasoning *r, const char *tool_name, co
 /* Track the affected path as well as the tool. A verified replacement read
  * can supersede a failed exploratory lookup in that scope (#161), while a
  * read of another directory cannot verify a failure or a failed command. */
-static void note_failed_tool(reasoning *r, const char *tool_name, const char *args_json) {
+static void note_failed_tool(reasoning *r, const char *tool_name, const char *args_json, const char *error) {
     if (!r || !tool_name || !*tool_name) return;
     char scope[2048]; failure_scope(r, tool_name, args_json, scope, sizeof(scope));
+    int slot=r->unresolved_failed_tool_count;
     for (int i = 0; i < r->unresolved_failed_tool_count; ++i)
-        if (!strcmp(r->unresolved_failed_tools[i], tool_name) && !strcmp(r->unresolved_failed_scopes[i], scope)) return;
+        if (!strcmp(r->unresolved_failed_tools[i], tool_name) && !strcmp(r->unresolved_failed_scopes[i], scope)) { slot=i; break; }
+    /* Keep the actual failed page and diagnostic independently of the rolling
+     * observations/256-step timeline. Never copy write bodies or shell secrets. */
+    if (slot<32 && !strcmp(tool_name,"file_read")) {
+        cJSON *args=cJSON_Parse(args_json ? args_json : "{}");
+        cJSON *read=cJSON_CreateObject();
+        const char *keys[]={"path","offset_bytes","max_bytes"};
+        for(int k=0;k<3;k++) {
+            cJSON *value=cJSON_GetObjectItemCaseSensitive(args,keys[k]);
+            if(value)cJSON_AddItemToObject(read,keys[k],cJSON_Duplicate(value,1));
+        }
+        char *json=cJSON_PrintUnformatted(read);
+        /* A partial JSON object would be misleading evidence. */
+        snprintf(r->unresolved_read_args[slot],sizeof(r->unresolved_read_args[slot]),"%s",
+                 json && strlen(json)<sizeof(r->unresolved_read_args[slot]) ? json : "{}");
+        char *safe=str_utf8_sanitize(error ? error : "");
+        snprintf(r->unresolved_read_errors[slot],sizeof(r->unresolved_read_errors[slot]),"%s",safe?safe:"");
+        free(safe);free(json);cJSON_Delete(read);cJSON_Delete(args);
+    }
+    if(slot<r->unresolved_failed_tool_count)return;
     if (r->unresolved_failed_tool_count >=
         (int)(sizeof(r->unresolved_failed_tools) / sizeof(r->unresolved_failed_tools[0]))) {
         r->unresolved_failed_tools_overflow = 1;
         return;
+    }
+    if(strcmp(tool_name,"file_read")) {
+        r->unresolved_read_args[slot][0]='\0';r->unresolved_read_errors[slot][0]='\0';
     }
     snprintf(r->unresolved_failed_scopes[r->unresolved_failed_tool_count], sizeof(r->unresolved_failed_scopes[0]), "%s", scope);
     r->unresolved_discovered_reads[r->unresolved_failed_tool_count][0] = '\0';
@@ -408,6 +433,10 @@ static void resolve_failed_tool(reasoning *r, const char *tool_name, const char 
                         (size_t)(r->unresolved_failed_tool_count - i) * sizeof(r->unresolved_failed_tools[0]));
                 memmove(r->unresolved_failed_scopes[i], r->unresolved_failed_scopes[i + 1],
                         (size_t)(r->unresolved_failed_tool_count - i) * sizeof(r->unresolved_failed_scopes[0]));
+                memmove(r->unresolved_read_args[i], r->unresolved_read_args[i + 1],
+                        (size_t)(r->unresolved_failed_tool_count - i) * sizeof(r->unresolved_read_args[0]));
+                memmove(r->unresolved_read_errors[i], r->unresolved_read_errors[i + 1],
+                        (size_t)(r->unresolved_failed_tool_count - i) * sizeof(r->unresolved_read_errors[0]));
                 memmove(r->unresolved_discovered_reads[i], r->unresolved_discovered_reads[i + 1],
                         (size_t)(r->unresolved_failed_tool_count - i) * sizeof(r->unresolved_discovered_reads[0]));
             }
@@ -1835,6 +1864,12 @@ static char *build_context(reasoning *r, const char *prompt) {
             char *scope=str_head(r->unresolved_failed_scopes[i],240);
             char *safe=scope?str_utf8_sanitize(scope):NULL;
             cJSON_AddStringToObject(failure,"scope",safe?safe:"");free(scope);free(safe);
+            if(!strcmp(r->unresolved_failed_tools[i],"file_read")) {
+                cJSON *args=cJSON_Parse(r->unresolved_read_args[i]);
+                if(args)cJSON_AddItemToObject(failure,"arguments",args);
+                char *error=str_utf8_sanitize(r->unresolved_read_errors[i]);
+                cJSON_AddStringToObject(failure,"error",error?error:"");free(error);
+            }
             cJSON_AddItemToArray(pending,failure);
         }
         cJSON_AddNumberToObject(state,"unresolved_failure_count",r->unresolved_failed_tool_count);
@@ -2260,7 +2295,7 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
                 planned_tool->json_schema ? planned_tool->json_schema : "{}");
             if(attempts>1) {
                 r->all_actions_ok=0; r->run_had_action_failure=1;
-                note_failed_tool(r,r->actions[i].tool,r->actions[i].args_json);
+                note_failed_tool(r,r->actions[i].tool,r->actions[i].args_json,arg_error);
                 r->round_repeat_reads++;
                 run_step_add(r,r->actions[i].tool,r->actions[i].args_json,
                     "repeated invalid arguments suppressed; correct arguments using tool schema",0,0);
@@ -2371,7 +2406,7 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
         if (rc != 0) {
             r->all_actions_ok = 0;
             r->run_had_action_failure = 1;
-            note_failed_tool(r, r->actions[i].tool, r->actions[i].args_json);
+            note_failed_tool(r, r->actions[i].tool, r->actions[i].args_json, step_out);
             strbuf_appendf(&b, "[%s] FAILED\n", r->actions[i].tool);
             log_warn("reasoning: action '%s' failed", r->actions[i].tool);
             if (r->last_failed_action_sig == action_sig)
@@ -3698,6 +3733,8 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     r->run_had_action_failure = 0;
     memset(r->unresolved_failed_tools, 0, sizeof(r->unresolved_failed_tools));
     memset(r->unresolved_failed_scopes, 0, sizeof(r->unresolved_failed_scopes));
+    memset(r->unresolved_read_args, 0, sizeof(r->unresolved_read_args));
+    memset(r->unresolved_read_errors, 0, sizeof(r->unresolved_read_errors));
     memset(r->unresolved_discovered_reads, 0, sizeof(r->unresolved_discovered_reads));
     r->unresolved_failed_tool_count = 0;
     r->unresolved_failed_tools_overflow = 0;
