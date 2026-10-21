@@ -225,8 +225,8 @@ static tool_result *shell_exec(const tool *self, const tool_ctx *ctx, const char
 const tool *tool_shell(void) {
     static const tool t = {
         "shell",
-        "Run a command and capture stdout+stderr. On Windows set shell=powershell for PowerShell syntax, shell=cmd for CMD, or omit for auto.",
-        "{\"type\":\"object\",\"properties\":{\"command\":{\"type\":\"string\"},\"timeout_ms\":{\"type\":\"integer\"},\"shell\":{\"type\":\"string\"}}"
+        "Run a command and capture stdout+stderr. For file generation/modification, declare affected output file paths in outputs so verified artifact changes count as progress even if stdout repeats. Omit outputs for read-only checks. On Windows set shell=powershell for PowerShell syntax, shell=cmd for CMD, or omit for auto.",
+        "{\"type\":\"object\",\"properties\":{\"command\":{\"type\":\"string\"},\"timeout_ms\":{\"type\":\"integer\"},\"shell\":{\"type\":\"string\"},\"outputs\":{\"type\":\"array\",\"maxItems\":16,\"items\":{\"type\":\"string\"},\"description\":\"Output file paths changed by this command, used to verify actual artifact progress\"}}"
         "}",
         1,
         shell_exec,

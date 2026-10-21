@@ -22,11 +22,16 @@ matrix=[
  ('请介绍风险和权限限制，不做任何系统修改。','我需要说明：执行工具受权限约束，说明边界不需要实际修改系统。'),
 ]
 for provider_name in ('openai','anthropic'):
- counts={};catalogs=[];active_case=None
+ counts={};catalogs=[];active_case=None;summary_calls={}
  class Provider(BaseHTTPRequestHandler):
   def log_message(self,*args):pass
   def do_POST(self):
    body=json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+   if not body.get('tools'):
+    assert 0<body['max_tokens']<=4096, 'Summary must also respect model output capacity'
+    summary_calls[active_case]=summary_calls.get(active_case,0)+1
+    response={'choices':[{'message':{'content':'Stopped repeated verification; preserve existing artifacts.'},'finish_reason':'stop'}]} if provider_name=='openai' else {'content':[{'type':'text','text':'Stopped repeated verification; preserve existing artifacts.'}],'stop_reason':'end_turn'}
+    raw=json.dumps(response).encode();self.send_response(200);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(raw)));self.end_headers();self.wfile.write(raw);return
    assert body['max_tokens']==4096, 'Model output capacity must bound the request budget'
    catalogs.append(body.get('tools',[]))
    system=body['messages'][0]['content']
@@ -58,6 +63,15 @@ for provider_name in ('openai','anthropic'):
      calls=[('file_write',{'path':'chapter.md','content':'Literal </parameter>\n<｜DSML｜ parameter name="content"> is document content.'})]
     elif n==2:calls=[('file_read',{'path':'chapter.md'})]
     else:answer='chapter.md written and verified.'
+   elif case in ('NATIVE_VERIFY_SPIN','NATIVE_VERIFY_PROGRESS','NATIVE_FRESH_OBSERVATIONS','NATIVE_VERIFY_SHELL_PROGRESS','NATIVE_VERIFY_TOUCH_SPIN','NATIVE_VERIFY_OSCILLATE_SPIN','NATIVE_VERIFY_MANY_ARTIFACTS'):
+    if n<40:
+     if case=='NATIVE_VERIFY_SPIN' and n>=5:assert cursor['no_progress_warning'] is True,cursor
+     calls=[('shell',{'command':f'python {"verify-fresh.py" if case=="NATIVE_FRESH_OBSERVATIONS" else "verify-loop.py"} {n}'})]
+     if case=='NATIVE_VERIFY_PROGRESS':calls.insert(0,('file_write',{'path':'progress-artifact.txt','content':f'actual-new-content-{n}'}))
+     if case in ('NATIVE_VERIFY_SHELL_PROGRESS','NATIVE_VERIFY_TOUCH_SPIN','NATIVE_VERIFY_OSCILLATE_SPIN','NATIVE_VERIFY_MANY_ARTIFACTS'):
+      calls[0][1]['command']+=' '+{'NATIVE_VERIFY_SHELL_PROGRESS':'write','NATIVE_VERIFY_TOUCH_SPIN':'touch','NATIVE_VERIFY_OSCILLATE_SPIN':'oscillate','NATIVE_VERIFY_MANY_ARTIFACTS':'many'}[case]
+      calls[0][1]['outputs']=[f'artifact-{n}-{i}.txt' for i in range(4)] if case=='NATIVE_VERIFY_MANY_ARTIFACTS' else ['shell-progress.txt']
+    else:answer='All generated content is verified.'
    elif case.startswith('NATIVE_EXTERNAL_'):
     discovery='grep' if case.endswith('GREP') else 'glob'
     if n==0:calls=[('file_read',{'path':(external/'context.h' if case=='NATIVE_EXTERNAL_BASENAME' else state/'external-project-link/addons/rmrs/context.h' if case=='NATIVE_EXTERNAL_ALIAS' else wrong).as_posix()})]
@@ -161,12 +175,14 @@ for provider_name in ('openai','anthropic'):
   decoy=external/'src/other/context.h';decoy.parent.mkdir(parents=True);decoy.write_text('unrelated')
   state=Path(folder);server=ThreadingHTTPServer(('127.0.0.1',0),Provider)
   threading.Thread(target=server.serve_forever,daemon=True).start()
-  (state/'cognitive-os-agent.json').write_text(json.dumps({'llm.provider':provider_name,'llm.model':'native-test','llm.api_key':'local-fixture','llm.base_url':f'http://127.0.0.1:{server.server_port}','reasoning.max_rounds':32}),encoding='utf-8')
+  (state/'cognitive-os-agent.json').write_text(json.dumps({'llm.provider':provider_name,'llm.model':'native-test','llm.api_key':'local-fixture','llm.base_url':f'http://127.0.0.1:{server.server_port}','reasoning.max_rounds':-1}),encoding='utf-8')
   (state/'routes.json').write_text(json.dumps([{'name':'fixture-metadata','provider':provider_name,'model':'native-test','base_url':f'http://127.0.0.1:{server.server_port}','api_key':'local-fixture','context_window':1048576,'max_output_tokens':4096,'context_source':'provider_metadata'}]),encoding='utf-8')
   if os.name!='nt':
    (state/'alias').symlink_to(state,target_is_directory=True)
    (state/'external-project-link').symlink_to(external,target_is_directory=True)
   else:(state/'alias').mkdir()
+  (state/'verify-loop.py').write_text('import sys\nn=int(sys.argv[1])\nprint("#< CLIXML" if n%2 else "")\nprint("\\n".join("chapter-%02d: complete verified content with stable names and structure"%i for i in range(20)))\nprint("EXIT_LABEL_%d=0"%n)\nif n%2:print(\'<Objs Version="1.1.0.1"><Obj S="progress" RefId="%d"><MS>transient-%d</MS></Obj></Objs>\'%(n,n))\n\nif len(sys.argv)>2:\n open("shell-progress.txt","w").write(str(n) if sys.argv[2]=="write" else str(n%2) if sys.argv[2]=="oscillate" else "same-content")\n\nif len(sys.argv)>2 and sys.argv[2]=="many":\n for i in range(4):open("artifact-%d-%d.txt"%(n,i),"w").write("generated-%d-%d"%(n,i))\n',encoding='utf-8')
+  (state/'verify-fresh.py').write_text('import hashlib,sys\nn=int(sys.argv[1])\nprint("\\n".join(hashlib.sha256((str(n)+":"+str(i)).encode()).hexdigest() for i in range(20)))\n',encoding='utf-8')
   (state/'blocked-target').mkdir()
   (state/'ipc.h').write_text('enum { IPC_REQUEST=31, IPC_RESPONSE=32 };',encoding='utf-8')
   (state/'explanation.txt').write_text('Example comment: full source reading.\n'+'x'*5000,encoding='utf-8')
@@ -202,6 +218,25 @@ for provider_name in ('openai','anthropic'):
     assert (state/'chapter.md').read_text(encoding='utf-8')=='Literal </parameter>\n<｜DSML｜ parameter name="content"> is document content.'
     empty=run('NATIVE_EMPTY_WRITE','创建一个空文件。')
     assert empty['status']=='DONE' and counts['NATIVE_EMPTY_WRITE']==3 and (state/'explicit-empty.txt').read_bytes()==b'',empty
+    spin=run('NATIVE_VERIFY_SPIN','执行校验并按真实进展收尾。')
+    assert spin['status']=='FAILED' and counts['NATIVE_VERIFY_SPIN']<=12,{k:spin.get(k) for k in ('status','round','tool_calls')}
+    assert summary_calls.get('NATIVE_VERIFY_SPIN')==1,summary_calls
+    assert spin['llm_calls']==counts['NATIVE_VERIFY_SPIN']+1,spin['llm_calls']
+    advancing=run('NATIVE_VERIFY_PROGRESS','持续生成新内容并校验，全部完成后交付。')
+    assert advancing['status']=='DONE' and counts['NATIVE_VERIFY_PROGRESS']==42,advancing
+    assert (state/'progress-artifact.txt').read_text()=='actual-new-content-39'
+    shell_progress=run('NATIVE_VERIFY_SHELL_PROGRESS','用脚本持续生成实际新内容。')
+    assert shell_progress['status']=='DONE' and counts['NATIVE_VERIFY_SHELL_PROGRESS']==42,{k:shell_progress.get(k) for k in ('status','round','tool_calls')}
+    assert (state/'shell-progress.txt').read_text()=='39'
+    touch=run('NATIVE_VERIFY_TOUCH_SPIN','反复校验同一个内容版本。')
+    assert touch['status']=='FAILED' and counts['NATIVE_VERIFY_TOUCH_SPIN']<=12,{k:touch.get(k) for k in ('status','round','tool_calls')}
+    oscillate=run('NATIVE_VERIFY_OSCILLATE_SPIN','不能把来回重写旧版本当作新进展。')
+    assert oscillate['status']=='FAILED' and counts['NATIVE_VERIFY_OSCILLATE_SPIN']<=12,{k:oscillate.get(k) for k in ('status','round','tool_calls')}
+    many=run('NATIVE_VERIFY_MANY_ARTIFACTS','分阶段生成160个不同文件。')
+    assert many['status']=='DONE' and counts['NATIVE_VERIFY_MANY_ARTIFACTS']==42,{k:many.get(k) for k in ('status','round','tool_calls')}
+    assert len(list(state.glob('artifact-*.txt')))==160
+    fresh=run('NATIVE_FRESH_OBSERVATIONS','持续收集新的观察证据，再完成分析。')
+    assert fresh['status']=='DONE' and counts['NATIVE_FRESH_OBSERVATIONS']==42,{k:fresh.get(k) for k in ('status','round','tool_calls')}
     for case in ('NATIVE_EXTERNAL_GLOB','NATIVE_EXTERNAL_GREP','NATIVE_EXTERNAL_DECOY','NATIVE_EXTERNAL_DISCOVERY_ONLY','NATIVE_EXTERNAL_BASENAME','NATIVE_EXTERNAL_ALIAS'):
      if case=='NATIVE_EXTERNAL_ALIAS' and os.name=='nt':continue
      relocated=run(case,'定位并读取目标项目文件。')
@@ -263,6 +298,7 @@ for provider_name in ('openai','anthropic'):
      schema=write.get('parameters',write.get('input_schema'))
      assert schema['type']=='object' and set(schema['required'])=={'path','content'}
      assert 'format' not in schema['properties']['path']
+    print('PROGRESS:',provider_name,{'spin_planning_calls':counts['NATIVE_VERIFY_SPIN'],'spin_summary_calls':summary_calls['NATIVE_VERIFY_SPIN'],'new_content_calls':counts['NATIVE_VERIFY_PROGRESS'],'new_evidence_calls':counts['NATIVE_FRESH_OBSERVATIONS'],'shell_artifact_calls':counts['NATIVE_VERIFY_SHELL_PROGRESS'],'touch_spin_calls':counts['NATIVE_VERIFY_TOUCH_SPIN'],'oscillate_spin_calls':counts['NATIVE_VERIFY_OSCILLATE_SPIN'],'many_artifact_calls':counts['NATIVE_VERIFY_MANY_ARTIFACTS']})
     print('PASS:',provider_name,f'{len(matrix)} ordinary answers + premature completion review, partial reading, 17-step research, recovered/real failures; fixture routing is out of band, no magic prompt tags')
    except BaseException:
     log.flush()

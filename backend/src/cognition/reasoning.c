@@ -142,6 +142,13 @@ struct run_step {
 
 /* Sessions are materialized only on use; empty chats retain metadata only. */
 
+/* Bounded bottom-k sketches retain evidence identity, never tool payloads. */
+struct opaque_observation {
+    uint64_t tool, exact, sample[32];
+    size_t bytes;
+    int samples;
+};
+
 struct reasoning {
     mutex_t progress_mtx;
     char *progress_json;
@@ -251,6 +258,12 @@ struct reasoning {
     int round_search_skips;
     /* Independent of the bounded prompt log/cache: folding observations must
      * not make alternating old reads look like newly discovered evidence. */
+    struct { char path[2048]; uint64_t version, digest; } artifact_seen[128];
+    int artifact_seen_n;
+    uint64_t artifact_versions_seen[2048];
+    int artifact_versions_seen_n;
+    struct opaque_observation opaque_seen[256];
+    int opaque_seen_n;
     uint64_t observation_seen[2048];
     int observation_seen_n, round_new_observations, round_repeat_reads;
     int progress_cycle_warning_active;
@@ -1830,7 +1843,7 @@ static char *build_context(reasoning *r, const char *prompt) {
         if (strstr(r->round_log, "(earlier action results were folded away"))
             strbuf_append(&b, "(earlier action results were folded away to fit the budget)\n");
         if (r->progress_cycle_warning_active)
-            strbuf_append(&b, "[system] 检测到跨轮次循环：多轮交替读取或检查只返回已有结果，没有新增进展。不要重读相同文件页；请读取缺失的新页、修正失败原因并验证产物，或直接根据已有证据回答。\n");
+            strbuf_append(&b, "[system] 检测到跨轮次循环：多轮工具检查只返回已有或近似相同的结果，没有新增进展。不要重读相同文件页；请读取缺失的新页、修正失败原因并验证产物，或直接根据已有证据回答。\n");
         strbuf_append(&b, r->round_log + log_start);
         if(planner_uses_native_tools(r->llm))
             strbuf_append(&b,"\nContinue this SAME request from the observed tool results. Use native functions for remaining work; use complete_task only when complete or blocked. Do not restart completed setup or repeat unchanged failed probes.\n\n");
@@ -1914,6 +1927,7 @@ static char *build_context(reasoning *r, const char *prompt) {
             cJSON_AddItemToArray(pending,failure);
         }
         cJSON_AddNumberToObject(state,"unresolved_failure_count",r->unresolved_failed_tool_count);
+        cJSON_AddBoolToObject(state,"no_progress_warning",r->progress_cycle_warning_active);
         char *json=cJSON_PrintUnformatted(state);cJSON_Delete(state);
         strbuf note;strbuf_init(&note);strbuf_append(&note,"\n## Current execution state\n");
         strbuf_append(&note,json?json:"{}");free(json);
@@ -2148,7 +2162,148 @@ static uint64_t semantic_action_signature(const char *tool, const char *args_jso
     return h ? h : 1;
 }
 
-static void observe_action_progress(reasoning *r,const planned_action *action,uint64_t output_hash,int is_search) {
+/* Only transport framing is removed. The original observation remains intact
+ * in task records and model context; no task/answer keywords are interpreted. */
+static char *stable_observation_text(const char *raw) {
+    const char *p=raw?raw:"";
+    int clixml=strstr(p,"#< CLIXML")!=NULL;
+    char *out=malloc(strlen(p)+1);
+    if(!out)return NULL;
+    size_t n=0;int space=0;
+    while(*p) {
+        if(clixml && !strncmp(p,"#< CLIXML",9)){p+=9;continue;}
+        if(clixml && (!strncmp(p,"<Objs ",6) || !strncmp(p,"</Objs>",7))) {
+            const char *end=strchr(p,'>');if(end){p=end+1;continue;}
+        }
+        if(clixml && !strncmp(p,"<Obj ",5)) {
+            const char *header=strchr(p,'>');
+            const char *tag=strstr(p,"S=\"progress\"");
+            if(header && tag && tag<header) {
+                const char *q=p;int depth=0;
+                while((q=strchr(q,'<'))!=NULL) {
+                    if(!strncmp(q,"<Obj ",5) || !strncmp(q,"<Obj>",5))depth++;
+                    else if(!strncmp(q,"</Obj>",6) && --depth==0){q+=6;break;}
+                    q++;
+                }
+                if(q){p=q;continue;}
+            }
+        }
+        unsigned char c=(unsigned char)*p++;
+        if(c==' ' || c=='\t' || c=='\r' || c=='\n'){space=n>0;continue;}
+        if(space){out[n++]=' ';space=0;}
+        out[n++]=(char)c;
+    }
+    out[n]='\0';return out;
+}
+
+static void observation_sketch(struct opaque_observation *shape,const char *text) {
+    shape->bytes=strlen(text);shape->exact=hash64(text,shape->bytes);
+    if(shape->bytes<128)return; /* short results require exact equality */
+    for(size_t i=0;i+16<=shape->bytes;i++) {
+        uint64_t h=hash64(text+i,16);int pos=0;
+        while(pos<shape->samples && shape->sample[pos]<h)pos++;
+        if((pos<shape->samples && shape->sample[pos]==h) || pos==32)continue;
+        if(shape->samples<32)shape->samples++;
+        memmove(shape->sample+pos+1,shape->sample+pos,
+                (size_t)(shape->samples-pos-1)*sizeof(uint64_t));
+        shape->sample[pos]=h;
+    }
+}
+
+/* Explicit tool effects, never command-name guessing. Small artifacts use
+ * content fingerprints so touching/rewriting identical files is not progress;
+ * large artifacts use the OS revision fingerprint without loading whole files. */
+static int declared_artifact_progress(reasoning *r,const char *args_json) {
+    cJSON *args=cJSON_Parse(args_json?args_json:"{}");
+    cJSON *outputs=cJSON_GetObjectItemCaseSensitive(args,"outputs"),*item;
+    int changed=0,checked=0;
+    int declared=cJSON_IsArray(outputs) && cJSON_GetArraySize(outputs)>0;
+    cJSON_ArrayForEach(item,outputs) {
+        if(++checked>16)break;
+        if(!cJSON_IsString(item))continue;
+        char path[2048];normalized_evidence_path(r,item->valuestring,path,sizeof(path));
+        if(fs_is_dir(path))continue;
+        uint64_t version=fs_file_version(path);if(!version)continue;
+        int i=0;while(i<r->artifact_seen_n && strcmp(r->artifact_seen[i].path,path))i++;
+        if(i<r->artifact_seen_n && r->artifact_seen[i].version==version)continue;
+        long long size=fs_file_size(path);uint64_t digest=version;
+        if(size==0)digest=hash64("",0);
+        else if(size>0 && size<=1024*1024) {
+            size_t got=0;int more=0;
+            char *bytes=fs_read_file_slice(path,0,(size_t)size,&got,&more);
+            if(!bytes || more || got!=(size_t)size){free(bytes);continue;}
+            digest=hash64(bytes,got);free(bytes);
+        }
+        if(i==r->artifact_seen_n) {
+            if(i==128) {
+                memmove(r->artifact_seen,r->artifact_seen+1,127*sizeof(*r->artifact_seen));i=127;
+            } else r->artifact_seen_n++;
+            snprintf(r->artifact_seen[i].path,sizeof(r->artifact_seen[i].path),"%s",path);
+        }
+        r->artifact_seen[i].version=version;r->artifact_seen[i].digest=digest;
+        uint64_t revision=hash64(path,strlen(path)) ^ (digest*UINT64_C(0x9e3779b185ebca87));
+        int known=0;
+        for(int v=0;v<r->artifact_versions_seen_n;v++)if(r->artifact_versions_seen[v]==revision){known=1;break;}
+        if(!known) {
+            changed=1;
+            if(r->artifact_versions_seen_n==2048){memmove(r->artifact_versions_seen,r->artifact_versions_seen+1,2047*sizeof(uint64_t));r->artifact_versions_seen_n--;}
+            r->artifact_versions_seen[r->artifact_versions_seen_n++]=revision;
+        }
+    }
+    cJSON_Delete(args);return changed?1:declared?0:-1;
+}
+
+static int opaque_observation_is_new(reasoning *r,const char *tool,const char *args_json,const char *raw) {
+    const char *body=raw?raw:"";
+    size_t tool_len=strlen(tool);
+    if(body[0]=='[' && !strncmp(body+1,tool,tool_len) &&
+       !strncmp(body+1+tool_len,"] ",2))body+=tool_len+3;
+    char *text=stable_observation_text(body);
+    if(!text || !*text){free(text);return -1;} /* no evidence: use invocation identity */
+    struct opaque_observation current={0};
+    current.tool=hash64(tool,tool_len);
+    cJSON *args=cJSON_Parse(args_json?args_json:"{}");
+    if(strcmp(tool,"shell")) {
+        /* Structured APIs, SSH and Git retain invocation/target identity.
+         * Different side-effecting remote calls may legitimately return OK. */
+        current.tool^=observation_json_hash(args);
+    }
+    cJSON_Delete(args);observation_sketch(&current,text);free(text);
+    for(int i=0;i<r->opaque_seen_n;i++) {
+        const struct opaque_observation *old=&r->opaque_seen[i];
+        if(old->tool!=current.tool)continue;
+        if(old->exact==current.exact)return 0;
+        if(old->samples==32 && current.samples==32 &&
+           old->bytes*4>=current.bytes*3 && current.bytes*4>=old->bytes*3) {
+            int a=0,b=0,common=0;
+            while(a<32 && b<32) {
+                if(old->sample[a]==current.sample[b]){common++;a++;b++;}
+                else if(old->sample[a]<current.sample[b])a++;else b++;
+            }
+            /* Tiny labels/transport variation cannot create new evidence. */
+            if(common>=28)return 0;
+        }
+    }
+    int cap=(int)(sizeof(r->opaque_seen)/sizeof(r->opaque_seen[0]));
+    if(r->opaque_seen_n==cap){memmove(r->opaque_seen,r->opaque_seen+1,(size_t)(cap-1)*sizeof(*r->opaque_seen));r->opaque_seen_n--;}
+    r->opaque_seen[r->opaque_seen_n++]=current;return 1;
+}
+
+static void observe_action_progress(reasoning *r,const planned_action *action,uint64_t output_hash,int is_search,const char *observed) {
+    if(!is_search && strcmp(action->tool,"file_write") && strcmp(action->tool,"file_edit")) {
+        int artifact_changed=declared_artifact_progress(r,action->args_json);
+        int fresh=opaque_observation_is_new(r,action->tool,action->args_json,observed);
+        if(artifact_changed>=0) {
+            /* A file-producing command cannot claim progress merely by
+             * printing a new label while its declared artifacts stay unchanged. */
+            if(artifact_changed)r->round_new_observations++;else r->round_repeat_reads++;
+            return;
+        }
+        if(fresh>=0) {
+            if(fresh)r->round_new_observations++;else r->round_repeat_reads++;
+            return;
+        }
+    }
     cJSON *args=cJSON_Parse(action->args_json ? action->args_json : "{}");
     /* File identity is the resolved source, not spelling of its path or
      * irrelevant argument fields. Returned byte ranges identify new pages. */
@@ -2163,7 +2318,7 @@ static void observe_action_progress(reasoning *r,const planned_action *action,ui
     cJSON_Delete(args);
     uint64_t signature=(identity ^ hash64(action->tool,strlen(action->tool)))*UINT64_C(0x100000001b3) ^ output_hash;
     for (int j=0;j<r->observation_seen_n;j++) if (r->observation_seen[j]==signature) {
-        if (is_search) r->round_repeat_reads++;
+        r->round_repeat_reads++;
         return;
     }
     int cap=(int)(sizeof(r->observation_seen)/sizeof(r->observation_seen[0]));
@@ -2443,6 +2598,7 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
         run_step_add(r, r->actions[i].tool, r->actions[i].args_json, full_step_out ? full_step_out : step_out, rc == 0 ? 1 : 0,
                      (int)(time_now_ms() - t_tool0));
         if (rc == 0) record_discovered_read_paths(r, r->actions[i].tool, r->actions[i].args_json, full_step_out ? full_step_out : step_out);
+        if(rc==0)observe_action_progress(r,&r->actions[i],output_hash,is_search,full_step_out?full_step_out:step_out);
         free(full_step_out);
         if (rc != 0) {
             r->all_actions_ok = 0;
@@ -2469,7 +2625,6 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
             for(int k=0;k<r->invalid_args_n;k++)
                 if(!strcmp(r->invalid_args[k].tool,r->actions[i].tool)) r->invalid_args[k].attempts=0;
             r->last_failed_action_sig = 0;
-            observe_action_progress(r,&r->actions[i],output_hash,is_search);
             if (strcmp(r->actions[i].tool, "file_read") == 0)
                 record_read_page(r, r->actions[i].args_json, step_out);
             r->same_action_failures = 0;
@@ -3786,6 +3941,7 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     r->search_seen_n = r->versioned_seen_n = 0;
     r->round_search_skips = 0;
     r->observation_seen_n = 0;
+    r->opaque_seen_n = 0;r->artifact_seen_n=0;r->artifact_versions_seen_n=0;
     r->round_new_observations = r->round_repeat_reads = 0;
     r->progress_cycle_warning_active = 0;
     pending_reads_clear(r);
@@ -3826,6 +3982,7 @@ restart_planning:
             search_only_rounds = artifact_read_nudged = 0;
             no_progress_rounds = cycle_reads = cycle_nudged = cycle_aborted = 0;
             r->observation_seen_n = 0;
+            r->opaque_seen_n = 0;r->artifact_seen_n=0;r->artifact_versions_seen_n=0;
             free(r->prev_plan); r->prev_plan = NULL;
             /* A steering message defines a revised task and needs a fresh
              * planning budget. Without resetting the per-plan counter, an
@@ -3866,8 +4023,8 @@ restart_planning:
                 if (no_progress_rounds>=4 && cycle_reads>=2 && !cycle_nudged) {
                     cycle_nudged=1;
                     r->progress_cycle_warning_active=1;
-                    round_log_append(r,"[system] 检测到跨轮次循环：多轮交替读取或检查只返回已有结果，没有新增进展。"
-                        "不要重读相同文件页或换序执行旧检查；请读取真正缺失的新页、修正失败原因并验证产物，"
+                    round_log_append(r,"[system] 检测到跨轮次循环：多轮工具检查只返回已有或近似相同的结果，没有新增进展。"
+                        "不要只换命令包装、打印标签或顺序来重复旧检查；请读取真正缺失的新页、修正失败原因并验证产物，"
                         "或直接根据已有证据回答。继续重复将停止本次无进展循环。");
                 }
                 if (no_progress_rounds>=8 && cycle_reads>=2) {
@@ -4177,7 +4334,10 @@ restart_planning:
         if (user) {
             snprintf(user, strlen(prompt) + sizeof(tail) + 64, "任务: %s\n\n已执行动作的观察记录（末段）:\n%s", prompt,
                      tail);
+            long long summary_started=time_now_ms();
+            r->prog_llm_calls++; /* finalization is a real model request too */
             char *ans = llm_chat_simple(r->llm, sys, user);
+            r->prog_llm_ms+=time_now_ms()-summary_started;
             if (ans && *ans) {
                 final_text = ans;
                 synthesized = 1;

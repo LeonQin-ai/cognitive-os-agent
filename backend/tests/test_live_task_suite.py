@@ -37,7 +37,7 @@ config.update({'reasoning.max_rounds':-1,'llm.routing':'fixed','scheduler.worker
 report_path=output/'report.json'
 report=json.loads(report_path.read_text(encoding='utf-8')) if report_path.exists() else {'model':config.get('llm.model'),'cases':{},'attempts':[]}
 selected=args.cases.split(',')
-assert all(c in ('source','ppt','image','ocr','diagram_ocr','analysis','html','header_recovery','search_discovery','capabilities','quoted_read','translation','howto','missing_recovery','ipc_analysis','creative_write','unrelated_write_failure','git_diagnostic','external_recovery') for c in selected)
+assert all(c in ('source','ppt','image','ocr','diagram_ocr','analysis','html','header_recovery','search_discovery','capabilities','quoted_read','translation','howto','missing_recovery','ipc_analysis','creative_write','unrelated_write_failure','git_diagnostic','external_recovery','rename_story','shell_artifact') for c in selected)
 source_files=[(backend/p).as_posix() for p in ('include/context/mmu.h','src/retrieval/context_builder.c','src/cognition/reasoning.c')]
 active=None
 last_task={}
@@ -114,6 +114,15 @@ with tempfile.TemporaryDirectory(prefix='coa-live-suite-state-') as folder:
                         blocked=active/'blocked-target';blocked.mkdir(exist_ok=True)
                         marker='WRITE_B_'+secrets.token_hex(8)
                         prompt=prefix+f'写入故障回归：先实际调用file_write向 {blocked.as_posix()} 写入A（此路径是已有目录，禁止删除或替换目录）。随后file_write向 {(active/"other.txt").as_posix()} 写入 {marker} 并file_read核对。只执行这两次写入尝试和B读取，不执行shell、不重试或修复A。最终整体必须报告未完成，因为A未写入成功；B成功不能代表A成功。'
+                    elif case=='shell_artifact':
+                        marker='ARTIFACT-'+secrets.token_hex(5);target=active/'result.json'
+                        prompt=f'用Python生成 {target.as_posix()}，JSON内容为 marker={marker}、values=[1,4,9]、verified=true。通过shell工具执行Python命令，outputs参数声明这个产物路径；实际file_read核对内容后给出结果。只生成这一个文件，不操作其他目录或版本控制。'
+                    elif case=='rename_story':
+                        marker='RENAME-'+secrets.token_hex(5)
+                        chapters=[]
+                        for i,name in enumerate(('霍去病','黄巢','嬴政'),1):
+                            chapter=active/f'chapter{i:02d}.md';chapter.write_text(f'# 第{i}章\n{name}是这段架空历史故事的主人公。他的经历借鉴历史人物事迹，但世界和人物都应为虚构。\n'+marker+f'-{i}\n',encoding='utf-8');chapters.append(chapter)
+                        prompt=f'修改 {active.as_posix()} 中这三章小说：主角不要直接叫霍去病、黄巢、嬴政，请改为相互区分的架空姓名，保留事迹意象与架空历史设定，保留每章末尾标记，不增加章节。先读取，再实际修改并核验，最后给出处理结果。只处理这三个章节文件，不操作其他目录或版本控制。'
                     elif case=='creative_write':
                         prompt=prefix+'写一篇600到900字的玄幻架空历史热血短篇，融合霍去病、黄巢、秦始皇和新中国成立的意象，内容完整且有结局。保存为 story.md，实际读取核验正文和结尾后交付。本次是一篇独立短篇，不拓展为连载。'
                     elif case=='missing_recovery':
@@ -202,6 +211,21 @@ with tempfile.TemporaryDirectory(prefix='coa-live-suite-state-') as folder:
                         assert task.get('tool_calls')==0 and not task.get('steps'),'informational request executed a tool'
                         if case=='translation':assert 'creat' in text.lower() and 'delet' in text.lower(),text
                         result['checks']={'answer_characters':len(text),'completed':True,'no_tools':True}
+                    elif case=='shell_artifact':
+                        data=json.loads(target.read_text(encoding='utf-8'))
+                        assert data=={'marker':marker,'values':[1,4,9],'verified':True},data
+                        steps=task.get('steps',[])
+                        assert any(st['ok'] and st['tool']=='shell' and target.as_posix() in json.loads(st['args']).get('outputs',[]) for st in steps),steps
+                        assert any(st['ok'] and st['tool']=='file_read' and target.as_posix()==json.loads(st['args']).get('path') for st in steps),steps
+                        result['checks']={'python_generated':True,'declared_output':True,'read_back_matched':True}
+                    elif case=='rename_story':
+                        steps=task.get('steps',[])
+                        for i,chapter in enumerate(chapters,1):
+                            text=chapter.read_text(encoding='utf-8')
+                            assert marker+f'-{i}' in text and not any(name in text for name in ('霍去病','黄巢','嬴政')),str(chapter)
+                            assert any(st['ok'] and st['tool']=='file_read' and chapter.name in st['args'] for st in steps),steps
+                        assert any(st['ok'] and st['tool'] in ('file_edit','file_write','shell') for st in steps),steps
+                        result['checks']={'chapters_renamed':3,'markers_retained':True,'read_and_mutated':True}
                     elif case=='creative_write':
                         path=active/'story.md';text=path.read_text(encoding='utf-8')
                         assert 500<=len(text)<=4000, 'Unexpected story size'
