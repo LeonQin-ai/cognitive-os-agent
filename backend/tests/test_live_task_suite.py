@@ -37,7 +37,7 @@ config.update({'reasoning.max_rounds':-1,'llm.routing':'fixed','scheduler.worker
 report_path=output/'report.json'
 report=json.loads(report_path.read_text(encoding='utf-8')) if report_path.exists() else {'model':config.get('llm.model'),'cases':{},'attempts':[]}
 selected=args.cases.split(',')
-assert all(c in ('source','ppt','image','ocr','diagram_ocr','analysis','html','header_recovery','search_discovery','capabilities','quoted_read','translation','howto','missing_recovery','ipc_analysis','creative_write','unrelated_write_failure','git_diagnostic') for c in selected)
+assert all(c in ('source','ppt','image','ocr','diagram_ocr','analysis','html','header_recovery','search_discovery','capabilities','quoted_read','translation','howto','missing_recovery','ipc_analysis','creative_write','unrelated_write_failure','git_diagnostic','external_recovery') for c in selected)
 source_files=[(backend/p).as_posix() for p in ('include/context/mmu.h','src/retrieval/context_builder.c','src/cognition/reasoning.c')]
 active=None
 last_task={}
@@ -131,6 +131,11 @@ with tempfile.TemporaryDirectory(prefix='coa-live-suite-state-') as folder:
                     elif case=='search_discovery':
                         fixture=active/'long-line.txt';fixture.write_text('DISCOVERY_NEEDLE'+'x'*150000,encoding='utf-8')
                         prompt=f'只用一次grep在 {fixture.as_posix()} 查找 DISCOVERY_NEEDLE；output_mode 必须是 files_with_matches，max_scan_bytes 必须是32。只需文件名发现，命中后直接交付文件名，不读文件、不扩大预算、不写文件。'
+                    elif case=='external_recovery':
+                        project=state/'outside-project';actual=project/'src/addons/rmrs/context.h';actual.parent.mkdir(parents=True)
+                        marker='OUTSIDE-'+secrets.token_hex(5);actual.write_text(marker,encoding='utf-8')
+                        wrong=(project/'addons/rmrs/context.h').as_posix()
+                        prompt=f'项目位于 {project.as_posix()}，不是 Agent 工作区。回归步骤：先仅 file_read 读取 {wrong} 一次，预期不存在；再 glob，path 明确用 {project.as_posix()}、pattern 用 **/context.h；最后 file_read 读取 glob 返回的真实路径，返回文件中的标记。禁止重试错误路径、写文件或运行 shell；成功核对替代路径后完成任务。'
                     elif case=='header_recovery':
                         header=active/'include/context/probe.h';header.parent.mkdir(parents=True)
                         marker='HEADER-'+secrets.token_hex(5)
@@ -229,6 +234,13 @@ with tempfile.TemporaryDirectory(prefix='coa-live-suite-state-') as folder:
                         assert 'long-line.txt' in steps[0]['out'] and 'byte budget' not in steps[0]['out']
                         assert 'long-line.txt' in (task.get('output') or '')
                         result['checks']={'first_match_within_32_bytes':True,'single_actual_grep':True,'no_full_read':True,'cached_repeat_requests':len(steps)-1}
+                    elif case=='external_recovery':
+                        steps=task.get('steps',[]);reads=[st for st in steps if st['tool']=='file_read']
+                        assert reads and not reads[0]['ok'] and json.loads(reads[0]['args'])['path']==wrong,reads
+                        assert any(st['ok'] and json.loads(st['args'])['path']==actual.as_posix() for st in reads),reads
+                        assert any(st['tool']=='glob' and st['ok'] and json.loads(st['args'])['path']==project.as_posix() for st in steps),steps
+                        assert marker in (task.get('output') or '')
+                        result['checks']={'external_search_root':True,'wrong_path_failed':True,'discovered_replacement_read':True,'marker_matched':True}
                     elif case=='header_recovery':
                         reads=[st for st in task.get('steps',[]) if st.get('tool')=='file_read']
                         assert any(not st.get('ok') and 'src/context/probe.h' in st.get('args','').lower().replace('\\','/') for st in reads)

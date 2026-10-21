@@ -58,6 +58,13 @@ for provider_name in ('openai','anthropic'):
      calls=[('file_write',{'path':'chapter.md','content':'Literal </parameter>\n<｜DSML｜ parameter name="content"> is document content.'})]
     elif n==2:calls=[('file_read',{'path':'chapter.md'})]
     else:answer='chapter.md written and verified.'
+   elif case.startswith('NATIVE_EXTERNAL_'):
+    discovery='grep' if case.endswith('GREP') else 'glob'
+    if n==0:calls=[('file_read',{'path':(external/'context.h' if case=='NATIVE_EXTERNAL_BASENAME' else wrong).as_posix()})]
+    elif n==1:
+     calls=[('glob',{'path':external.as_posix(),'pattern':'**/context.h'})] if discovery=='glob' else [('grep',{'path':external.as_posix(),'pattern':'external-recovery-marker','output_mode':'files_with_matches'})]
+    elif n==2 and case!='NATIVE_EXTERNAL_DISCOVERY_ONLY':calls=[('file_read',{'path':(decoy if case=='NATIVE_EXTERNAL_DECOY' else actual).as_posix()})]
+    else:answer='external-recovery-marker verified.'
    elif case.startswith('NATIVE_TOOL_DIAGNOSTIC_'):
     tool=case.removeprefix('NATIVE_TOOL_DIAGNOSTIC_')
     args={'list_dir':{'path':'missing-directory'},'glob':{'path':'missing-directory','pattern':'*.c'},'grep':{'path':'explanation.txt','pattern':'needle','max_scan_bytes':1},'git':{'dir':str(state),'args':'status --short'},'shell':{'command':'exit 7','timeout_ms':1000},'file_edit':{'path':'native.txt','old_string':'absent-unique','new_string':'large-edit-body'},'file_write':{'path':'blocked-target','content':'large-write-body'},'mcp':{'server':'not-registered','tool':'probe'},'skill':{'name':'not-registered'}}[tool]
@@ -147,7 +154,11 @@ for provider_name in ('openai','anthropic'):
     content += [{'type':'tool_use','id':'c'+str(i),'name':name,'input':args} for i,(name,args) in enumerate(calls)]
     response={'content':content,'stop_reason':'end_turn'}
    raw=json.dumps(response).encode();self.send_response(200);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(raw)));self.end_headers();self.wfile.write(raw)
- with tempfile.TemporaryDirectory(prefix='coa-native-loop-') as folder:
+ with tempfile.TemporaryDirectory(prefix='coa-native-loop-') as folder, tempfile.TemporaryDirectory(prefix='coa-native-project-') as external_folder:
+  external=Path(external_folder)
+  actual=external/'src/addons/rmrs/context.h';actual.parent.mkdir(parents=True);actual.write_text('external-recovery-marker')
+  wrong=external/'addons/rmrs/context.h'
+  decoy=external/'src/other/context.h';decoy.parent.mkdir(parents=True);decoy.write_text('unrelated')
   state=Path(folder);server=ThreadingHTTPServer(('127.0.0.1',0),Provider)
   threading.Thread(target=server.serve_forever,daemon=True).start()
   (state/'cognitive-os-agent.json').write_text(json.dumps({'llm.provider':provider_name,'llm.model':'native-test','llm.api_key':'local-fixture','llm.base_url':f'http://127.0.0.1:{server.server_port}','reasoning.max_rounds':32}),encoding='utf-8')
@@ -189,6 +200,11 @@ for provider_name in ('openai','anthropic'):
     assert (state/'chapter.md').read_text(encoding='utf-8')=='Literal </parameter>\n<｜DSML｜ parameter name="content"> is document content.'
     empty=run('NATIVE_EMPTY_WRITE','创建一个空文件。')
     assert empty['status']=='DONE' and counts['NATIVE_EMPTY_WRITE']==3 and (state/'explicit-empty.txt').read_bytes()==b'',empty
+    for case in ('NATIVE_EXTERNAL_GLOB','NATIVE_EXTERNAL_GREP','NATIVE_EXTERNAL_DECOY','NATIVE_EXTERNAL_DISCOVERY_ONLY','NATIVE_EXTERNAL_BASENAME'):
+     relocated=run(case,'定位并读取目标项目文件。')
+     success=case in ('NATIVE_EXTERNAL_GLOB','NATIVE_EXTERNAL_GREP')
+     assert relocated['status']==('DONE' if success else 'FAILED'),relocated
+     assert counts[case]<=(5 if success else 6),relocated
     for tool in ('list_dir','grep','git','shell','file_edit','file_write','mcp','skill'):
      diagnostic=run('NATIVE_TOOL_DIAGNOSTIC_'+tool,'检查工具失败后的恢复诊断。')
      assert diagnostic['status']=='FAILED' and counts['NATIVE_TOOL_DIAGNOSTIC_'+tool]==5,diagnostic

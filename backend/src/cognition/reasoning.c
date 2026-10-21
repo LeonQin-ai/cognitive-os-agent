@@ -319,33 +319,47 @@ static void failure_scope(reasoning *r, const char *name, const char *args_json,
 }
 
 /* A guessed repository root can be wrong. Keep the discovery evidence that
- * relates a missing workspace-relative path to a real nested source path.
+ * relates a missing search-root-relative path to a real nested source path.
+ * The search root may be a project outside the configured Agent workspace.
  * The entire relative suffix must match, not merely a shared basename, and
  * discovery alone never resolves the failed read: that file must be read. */
-static void record_discovered_read_paths(reasoning *r, const char *tool_name, const char *output) {
-    if (strcmp(tool_name, "glob") || !output || !r->unresolved_failed_tool_count) return;
-    char root[2048]; normalized_evidence_path(r, ".", root, sizeof(root));
+static void record_discovered_read_paths(reasoning *r, const char *tool_name, const char *args_json, const char *output) {
+    if ((strcmp(tool_name,"glob") && strcmp(tool_name,"grep")) || !output || !r->unresolved_failed_tool_count) return;
+    cJSON *args=cJSON_Parse(args_json?args_json:"{}");
+    const char *mode=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(args,"output_mode"));
+    /* Only file-name observations are discovery evidence, never snippets. */
+    if(!strcmp(tool_name,"grep") && mode && strcmp(mode,"files_with_matches")){cJSON_Delete(args);return;}
+    const char *search_root=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(args,"path"));
+    char root[2048]; normalized_evidence_path(r,search_root?search_root:".",root,sizeof(root));
+    cJSON_Delete(args);
     size_t root_len = strlen(root);
     const char *line = output;
     while (*line) {
         const char *end = strchr(line, '\n');
         if (!end) end = line + strlen(line);
         const char *begin = line;
-        if (!strncmp(begin, "[glob] ", 7)) begin += 7;
+        if (!strncmp(begin, "[glob] ", 7) || !strncmp(begin,"[grep] ",7)) begin += 7;
         size_t length = (size_t)(end - begin);
         while (length && (begin[length - 1] == '\r' || begin[length - 1] == ' ')) --length;
-        if (length && length < 2048 && (begin[0] == '/' || (length > 2 && begin[1] == ':'))) {
+        if (length && length < 2048 && (!strcmp(tool_name,"grep") || begin[0] == '/' || (length > 2 && begin[1] == ':'))) {
             char path[2048], candidate[2048];
             memcpy(path, begin, length); path[length] = '\0';
-            normalized_evidence_path(r, path, candidate, sizeof(candidate));
+            /* grep emits names relative to its explicit search directory. */
+            char full[2048];path_resolve(full,sizeof(full),root,path);
+            normalized_evidence_path(r, full, candidate, sizeof(candidate));
+            if(!fs_exists(candidate) || fs_is_dir(candidate)){line=*end?end+1:end;continue;}
             size_t candidate_len = strlen(candidate);
+            /* A matching basename in another search root is not a repair. */
+            if(strncmp(candidate,root,root_len) || candidate[root_len]!='/') {
+                line=*end?end+1:end;continue;
+            }
             for (int i = 0; i < r->unresolved_failed_tool_count; ++i) {
                 const char *failed = r->unresolved_failed_scopes[i];
                 if (strcmp(r->unresolved_failed_tools[i], "file_read") ||
                     strncmp(failed, root, root_len) || failed[root_len] != '/') continue;
                 const char *relative = failed + root_len + 1;
                 size_t suffix_len = strlen(relative);
-                if (suffix_len && candidate_len > suffix_len &&
+                if (suffix_len && strchr(relative,'/') && candidate_len > suffix_len &&
                     candidate[candidate_len - suffix_len - 1] == '/' &&
                     !strcmp(candidate + candidate_len - suffix_len, relative))
                     snprintf(r->unresolved_discovered_reads[i], sizeof(r->unresolved_discovered_reads[i]), "%s", candidate);
@@ -2401,7 +2415,7 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
         r->prog_tool_ms += time_now_ms() - t_tool0;
         run_step_add(r, r->actions[i].tool, r->actions[i].args_json, full_step_out ? full_step_out : step_out, rc == 0 ? 1 : 0,
                      (int)(time_now_ms() - t_tool0));
-        if (rc == 0) record_discovered_read_paths(r, r->actions[i].tool, full_step_out ? full_step_out : step_out);
+        if (rc == 0) record_discovered_read_paths(r, r->actions[i].tool, r->actions[i].args_json, full_step_out ? full_step_out : step_out);
         free(full_step_out);
         if (rc != 0) {
             r->all_actions_ok = 0;
