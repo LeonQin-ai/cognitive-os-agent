@@ -119,6 +119,8 @@ int task_close_messages(task *t); /* false if accepted messages still need proce
 void scheduler_set_completion_cb(scheduler *s, task_completion cb, void *ud);
 
 /* Wait until no tasks are queued or running. Returns 0 ok, -1 timeout. */
+/* Wait for runners, completion callbacks and retained-history accounting.
+ * Call from an external thread, never this scheduler's completion callback. */
 int scheduler_wait_idle(scheduler *s, int timeout_ms);
 /* Stop accepting work and join worker threads. Returns 0 ok, -1 timeout. */
 int scheduler_shutdown(scheduler *s, int timeout_ms);

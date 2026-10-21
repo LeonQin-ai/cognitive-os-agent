@@ -34,6 +34,7 @@ struct scheduler {
     cond idle;
     int shutdown_flag;
     int active; /* queued + running */
+    int completing; /* callbacks/final accounting outside active count */
 
     task_completion on_complete;
     void *complete_ud;
@@ -202,6 +203,7 @@ static void worker_main(void *arg) {
         mutex_lock(&s->mtx);
         int done = !t->coro || coro_done((coro *)t->coro);
         if (done) {
+            s->completing++;
             finalize_task(s, t);
             if (t->coro) {
                 coro_free((coro *)t->coro);
@@ -226,7 +228,8 @@ static void worker_main(void *arg) {
             free(t->attachments_json); t->attachments_json = NULL;
             t->completed = 1;
             prune_history(s);
-            if (s->active == 0)
+            s->completing--;
+            if (s->active == 0 && s->completing == 0)
                 cond_broadcast(&s->idle);
             mutex_unlock(&s->mtx);
         }
@@ -462,7 +465,7 @@ void scheduler_set_completion_cb(scheduler *s, task_completion cb, void *ud) {
 int scheduler_wait_idle(scheduler *s, int timeout_ms) {
     int64_t deadline = timeout_ms > 0 ? time_now_ms() + timeout_ms : 0;
     mutex_lock(&s->mtx);
-    while (s->active > 0) {
+    while (s->active > 0 || s->completing > 0) {
         if (timeout_ms > 0 && time_now_ms() >= deadline) {
             mutex_unlock(&s->mtx);
             return -1;

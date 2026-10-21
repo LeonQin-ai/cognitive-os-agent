@@ -355,3 +355,10 @@ CI 39542621593 的 Linux ASAN 给出确定证据：git_exec 释放 args JSON 后
 
 
 #194 macOS 路径别名修正：CI 39587209993 的 macOS 外部项目 glob 用例进一步确认 `/var/...` 与 `/private/var/...` 不一致：真实搜索根/文件 realpath 成功，但不存在的失败路径无法 realpath，保留别名前缀。normalized_evidence_path 现对缺失路径解析最近存在的祖先，再附加缺失后缀，统一错误路径与发现路径的目录别名；保留 POSIX/Windows 根目录语义。新增 POSIX 明确的项目符号链接恢复场景，Windows 无管理员权限不创建符号链接；macOS 原失败场景保留，不将测试路径强制 resolve 来隐藏产品问题。未新增付费请求，实测成本不变。
+
+
+### #197：idle 早于完成回调和历史记账返回
+
+Windows CI 39587956864 暴露 scheduler_mn 的 retained 计数竞态；worker 在完成回调前已递减 active，wait_idle 只检查 active，可能在 completed/history 写入前返回。增加 completing 计数，idle 仅在运行任务及完成回调/记账均结束后成立，保持既有 active 统计含义。
+
+新增受控完成回调测试：用原子门阻塞回调，wait_idle(10ms) 必须超时；释放回调后等待成功，保留输出与 retained=1 均正确。旧版确定性断言失败（297通过、2失败），修复后 --scheduler **299通过、0失败**。不增加随机重试或固定 sleep 来掩盖竞态。此改动为调度同步边界，没有新增模型规划行为，未为其额外调用付费 API，新增模型 token 为0；#194 先前实测 25889 tokens 保留。

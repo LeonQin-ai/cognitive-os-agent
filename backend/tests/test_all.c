@@ -466,6 +466,17 @@ static void mn_runner(task *t, scheduler *s, void *ud) {
     t->status = TS_DONE;
 }
 
+static atomic_int idle_callback_started, idle_callback_release;
+static void idle_boundary_runner(task *t,scheduler *s,void *ud) {
+    (void)s;(void)ud;t->output=xstrdup("idle-boundary");t->status=TS_DONE;
+}
+static void idle_boundary_callback(task *t,void *ud) {
+    (void)t;(void)ud;
+    atomic_store(&idle_callback_started,1);
+    long long deadline=time_now_ms()+2000;
+    while(!atomic_load(&idle_callback_release) && time_now_ms()<deadline)time_sleep_ms(1);
+}
+
 static void test_scheduler_mn(void) {
     section("scheduler_mn");
     memset(mn_runs, 0, sizeof(mn_runs));
@@ -497,6 +508,23 @@ static void test_scheduler_mn(void) {
     CHECK(scheduler_total(s) == MN_COUNT);
     CHECK(scheduler_shutdown(s, 5000) == 0);
     scheduler_free(s);
+
+    /* Completion callbacks and retained history belong to the idle boundary. */
+    atomic_store(&idle_callback_started,0);atomic_store(&idle_callback_release,0);
+    s=scheduler_new(1,idle_boundary_runner,NULL);CHECK(s!=NULL);
+    if(!s)return;
+    scheduler_set_completion_cb(s,idle_boundary_callback,NULL);
+    CHECK(scheduler_submit(s,0,"idle-boundary",NULL,0)>=0);
+    long long deadline=time_now_ms()+1000;
+    while(!atomic_load(&idle_callback_started) && time_now_ms()<deadline)time_sleep_ms(1);
+    CHECK(atomic_load(&idle_callback_started));
+    CHECK(scheduler_wait_idle(s,10)==-1);
+    atomic_store(&idle_callback_release,1);
+    CHECK(scheduler_wait_idle(s,1000)==0);
+    scheduler_get_stats(s,&stats);CHECK(stats.retained==1);
+    task *finished=scheduler_get(s,0);
+    CHECK(finished && finished->output && !strcmp(finished->output,"idle-boundary"));
+    CHECK(scheduler_shutdown(s,1000)==0);scheduler_free(s);
 }
 
 /* ---------- core: state machine ---------- */
