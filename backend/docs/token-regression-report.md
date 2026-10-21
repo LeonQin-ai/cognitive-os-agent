@@ -349,3 +349,6 @@ CI 39542621593 的 Linux ASAN 给出确定证据：git_exec 释放 args JSON 后
 新增双原生协议场景：外部项目 glob 恢复、grep 文件名恢复均 DONE；同名无关文件、只发现未读、仅 basename 相同三类均保持 FAILED，防止宽松匹配导致虚假成功。原有长任务、阶段性答复及真实未解决失败回归仍通过。
 
 真实 Agent 回归 external_recovery 使用已配置 ark/deepseek-v4.1-flash，通过隔离实例执行错路径读取、显式外部项目 glob、真实文件重读、随机标记核对；DONE，5 请求/3 工具、0 请求失败、14.154秒；输入24757+输出1132=**25889 tokens**。证据 build/live-api-suite-20261021-184326/。仅测试同结构最小复现，未重放用户 UBSE 私有项目全量分析。
+
+
+#194 兼容性修正：首轮完整单元/CI 发现已有 mode32 嵌套项目恢复（workspace/src/memory/new.txt→搜索 workspace/backend→读取 backend/src/memory/new.txt）被新搜索根判断拦住。保留该旧场景：搜索根和失败路径均位于 Agent 工作区时可使用工作区作为共同锚点，但发现候选仍必须来自实际搜索根、完整目录后缀匹配且真正读取成功。修正后 --progress-loop **519 passed, 0 failed**，外部项目双原生协议全部通过。未为该兼容修正追加付费请求，前述 25889 tokens 为外部路径实测成本。

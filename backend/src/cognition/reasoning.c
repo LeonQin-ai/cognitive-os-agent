@@ -333,6 +333,8 @@ static void record_discovered_read_paths(reasoning *r, const char *tool_name, co
     char root[2048]; normalized_evidence_path(r,search_root?search_root:".",root,sizeof(root));
     cJSON_Delete(args);
     size_t root_len = strlen(root);
+    char workspace[2048];normalized_evidence_path(r,".",workspace,sizeof(workspace));
+    size_t workspace_len=strlen(workspace);
     const char *line = output;
     while (*line) {
         const char *end = strchr(line, '\n');
@@ -355,9 +357,16 @@ static void record_discovered_read_paths(reasoning *r, const char *tool_name, co
             }
             for (int i = 0; i < r->unresolved_failed_tool_count; ++i) {
                 const char *failed = r->unresolved_failed_scopes[i];
-                if (strcmp(r->unresolved_failed_tools[i], "file_read") ||
-                    strncmp(failed, root, root_len) || failed[root_len] != '/') continue;
-                const char *relative = failed + root_len + 1;
+                if (strcmp(r->unresolved_failed_tools[i], "file_read")) continue;
+                size_t anchor_len=root_len;
+                if(strncmp(failed,root,root_len) || failed[root_len]!='/') {
+                    /* Preserve existing nested-workspace discovery: a guessed
+                     * src/foo path may be found under workspace/backend/src/foo. */
+                    if(strncmp(root,workspace,workspace_len) || root[workspace_len]!='/' ||
+                       strncmp(failed,workspace,workspace_len) || failed[workspace_len]!='/')continue;
+                    anchor_len=workspace_len;
+                }
+                const char *relative = failed + anchor_len + 1;
                 size_t suffix_len = strlen(relative);
                 if (suffix_len && strchr(relative,'/') && candidate_len > suffix_len &&
                     candidate[candidate_len - suffix_len - 1] == '/' &&
