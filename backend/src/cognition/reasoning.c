@@ -237,8 +237,8 @@ struct reasoning {
     int run_had_action_failure;
     char unresolved_failed_tools[32][48];
     char unresolved_failed_scopes[32][2048];
-    char unresolved_read_args[32][4096];
-    char unresolved_read_errors[32][1024];
+    char unresolved_failure_args[32][4096];
+    char unresolved_failure_errors[32][1024];
     char unresolved_discovered_reads[32][2048];
     int unresolved_failed_tool_count;
     int unresolved_failed_tools_overflow;
@@ -364,32 +364,32 @@ static void note_failed_tool(reasoning *r, const char *tool_name, const char *ar
     int slot=r->unresolved_failed_tool_count;
     for (int i = 0; i < r->unresolved_failed_tool_count; ++i)
         if (!strcmp(r->unresolved_failed_tools[i], tool_name) && !strcmp(r->unresolved_failed_scopes[i], scope)) { slot=i; break; }
-    /* Keep the actual failed page and diagnostic independently of the rolling
-     * observations/256-step timeline. Never copy write bodies or shell secrets. */
-    if (slot<32 && !strcmp(tool_name,"file_read")) {
+    /* Failure evidence must outlive the rolling observation/step windows for
+     * every tool. Preserve invocation identity but omit file mutation bodies. */
+    if (slot<32) {
         cJSON *args=cJSON_Parse(args_json ? args_json : "{}");
-        cJSON *read=cJSON_CreateObject();
-        const char *keys[]={"path","offset_bytes","max_bytes"};
-        for(int k=0;k<3;k++) {
-            cJSON *value=cJSON_GetObjectItemCaseSensitive(args,keys[k]);
-            if(value)cJSON_AddItemToObject(read,keys[k],cJSON_Duplicate(value,1));
+        if(!cJSON_IsObject(args)){cJSON_Delete(args);args=cJSON_CreateObject();}
+        if(!strcmp(tool_name,"file_write"))cJSON_DeleteItemFromObjectCaseSensitive(args,"content");
+        if(!strcmp(tool_name,"file_edit")) {
+            cJSON_DeleteItemFromObjectCaseSensitive(args,"old_string");
+            cJSON_DeleteItemFromObjectCaseSensitive(args,"new_string");
         }
-        char *json=cJSON_PrintUnformatted(read);
-        /* A partial JSON object would be misleading evidence. */
-        snprintf(r->unresolved_read_args[slot],sizeof(r->unresolved_read_args[slot]),"%s",
-                 json && strlen(json)<sizeof(r->unresolved_read_args[slot]) ? json : "{}");
-        char *safe=str_utf8_sanitize(error ? error : "");
-        snprintf(r->unresolved_read_errors[slot],sizeof(r->unresolved_read_errors[slot]),"%s",safe?safe:"");
-        free(safe);free(json);cJSON_Delete(read);cJSON_Delete(args);
+        char *json=cJSON_PrintUnformatted(args);
+        char *redacted=secret_redact_ssh_passwords(json?json:"{}",json?strlen(json):2,NULL);
+        char *safe_args=str_utf8_sanitize(redacted?redacted:"{}");
+        /* Never expose a partially cut JSON object as executable arguments. */
+        snprintf(r->unresolved_failure_args[slot],sizeof(r->unresolved_failure_args[slot]),"%s",
+                 safe_args && strlen(safe_args)<sizeof(r->unresolved_failure_args[slot]) ? safe_args : "{}");
+        char *redacted_error=secret_redact_ssh_passwords(error?error:"",error?strlen(error):0,NULL);
+        char *safe=str_utf8_sanitize(redacted_error?redacted_error:"");
+        snprintf(r->unresolved_failure_errors[slot],sizeof(r->unresolved_failure_errors[slot]),"%s",safe?safe:"");
+        free(safe);free(redacted_error);free(safe_args);free(redacted);free(json);cJSON_Delete(args);
     }
     if(slot<r->unresolved_failed_tool_count)return;
     if (r->unresolved_failed_tool_count >=
         (int)(sizeof(r->unresolved_failed_tools) / sizeof(r->unresolved_failed_tools[0]))) {
         r->unresolved_failed_tools_overflow = 1;
         return;
-    }
-    if(strcmp(tool_name,"file_read")) {
-        r->unresolved_read_args[slot][0]='\0';r->unresolved_read_errors[slot][0]='\0';
     }
     snprintf(r->unresolved_failed_scopes[r->unresolved_failed_tool_count], sizeof(r->unresolved_failed_scopes[0]), "%s", scope);
     r->unresolved_discovered_reads[r->unresolved_failed_tool_count][0] = '\0';
@@ -433,10 +433,10 @@ static void resolve_failed_tool(reasoning *r, const char *tool_name, const char 
                         (size_t)(r->unresolved_failed_tool_count - i) * sizeof(r->unresolved_failed_tools[0]));
                 memmove(r->unresolved_failed_scopes[i], r->unresolved_failed_scopes[i + 1],
                         (size_t)(r->unresolved_failed_tool_count - i) * sizeof(r->unresolved_failed_scopes[0]));
-                memmove(r->unresolved_read_args[i], r->unresolved_read_args[i + 1],
-                        (size_t)(r->unresolved_failed_tool_count - i) * sizeof(r->unresolved_read_args[0]));
-                memmove(r->unresolved_read_errors[i], r->unresolved_read_errors[i + 1],
-                        (size_t)(r->unresolved_failed_tool_count - i) * sizeof(r->unresolved_read_errors[0]));
+                memmove(r->unresolved_failure_args[i], r->unresolved_failure_args[i + 1],
+                        (size_t)(r->unresolved_failed_tool_count - i) * sizeof(r->unresolved_failure_args[0]));
+                memmove(r->unresolved_failure_errors[i], r->unresolved_failure_errors[i + 1],
+                        (size_t)(r->unresolved_failed_tool_count - i) * sizeof(r->unresolved_failure_errors[0]));
                 memmove(r->unresolved_discovered_reads[i], r->unresolved_discovered_reads[i + 1],
                         (size_t)(r->unresolved_failed_tool_count - i) * sizeof(r->unresolved_discovered_reads[0]));
             }
@@ -1864,10 +1864,10 @@ static char *build_context(reasoning *r, const char *prompt) {
             char *scope=str_head(r->unresolved_failed_scopes[i],240);
             char *safe=scope?str_utf8_sanitize(scope):NULL;
             cJSON_AddStringToObject(failure,"scope",safe?safe:"");free(scope);free(safe);
-            if(!strcmp(r->unresolved_failed_tools[i],"file_read")) {
-                cJSON *args=cJSON_Parse(r->unresolved_read_args[i]);
+            {
+                cJSON *args=cJSON_Parse(r->unresolved_failure_args[i]);
                 if(args)cJSON_AddItemToObject(failure,"arguments",args);
-                char *error=str_utf8_sanitize(r->unresolved_read_errors[i]);
+                char *error=str_utf8_sanitize(r->unresolved_failure_errors[i]);
                 cJSON_AddStringToObject(failure,"error",error?error:"");free(error);
             }
             cJSON_AddItemToArray(pending,failure);
@@ -3733,8 +3733,8 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     r->run_had_action_failure = 0;
     memset(r->unresolved_failed_tools, 0, sizeof(r->unresolved_failed_tools));
     memset(r->unresolved_failed_scopes, 0, sizeof(r->unresolved_failed_scopes));
-    memset(r->unresolved_read_args, 0, sizeof(r->unresolved_read_args));
-    memset(r->unresolved_read_errors, 0, sizeof(r->unresolved_read_errors));
+    memset(r->unresolved_failure_args, 0, sizeof(r->unresolved_failure_args));
+    memset(r->unresolved_failure_errors, 0, sizeof(r->unresolved_failure_errors));
     memset(r->unresolved_discovered_reads, 0, sizeof(r->unresolved_discovered_reads));
     r->unresolved_failed_tool_count = 0;
     r->unresolved_failed_tools_overflow = 0;

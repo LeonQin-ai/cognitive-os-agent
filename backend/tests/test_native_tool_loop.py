@@ -58,6 +58,16 @@ for provider_name in ('openai','anthropic'):
      calls=[('file_write',{'path':'chapter.md','content':'Literal </parameter>\n<｜DSML｜ parameter name="content"> is document content.'})]
     elif n==2:calls=[('file_read',{'path':'chapter.md'})]
     else:answer='chapter.md written and verified.'
+   elif case.startswith('NATIVE_TOOL_DIAGNOSTIC_'):
+    tool=case.removeprefix('NATIVE_TOOL_DIAGNOSTIC_')
+    args={'list_dir':{'path':'missing-directory'},'glob':{'path':'missing-directory','pattern':'*.c'},'grep':{'path':'explanation.txt','pattern':'needle','max_scan_bytes':1},'git':{'dir':str(state),'args':'status --short'},'shell':{'command':'exit 7','timeout_ms':1000},'file_edit':{'path':'native.txt','old_string':'absent-unique','new_string':'large-edit-body'},'file_write':{'path':'blocked-target','content':'large-write-body'},'mcp':{'server':'not-registered','tool':'probe'},'skill':{'name':'not-registered'}}[tool]
+    if n==0:calls=[(tool,args)]
+    elif n<4:calls=[('file_read',{'path':f'research-{n}.txt'})]
+    else:
+     pending=next(f for f in cursor['unresolved_failures'] if f['tool']==tool)
+     expected={k:v for k,v in args.items() if k not in ('content','old_string','new_string')}
+     assert pending['arguments']==expected and pending['error'],pending
+     calls=[('complete_task',{'status':'blocked','requires_tools':False,'answer':'Original tool failure remains; diagnostics retained.'})]
    elif case=='NATIVE_DELAYED_RECOVERY':
     if n==0:calls=[('file_read',{'path':'delayed-missing.txt','offset_bytes':19,'max_bytes':64})]
     elif n<5:calls=[('file_read',{'path':f'research-{n}.txt'})]
@@ -178,6 +188,9 @@ for provider_name in ('openai','anthropic'):
     assert (state/'chapter.md').read_text(encoding='utf-8')=='Literal </parameter>\n<｜DSML｜ parameter name="content"> is document content.'
     empty=run('NATIVE_EMPTY_WRITE','创建一个空文件。')
     assert empty['status']=='DONE' and counts['NATIVE_EMPTY_WRITE']==3 and (state/'explicit-empty.txt').read_bytes()==b'',empty
+    for tool in ('list_dir','grep','git','shell','file_edit','file_write','mcp','skill'):
+     diagnostic=run('NATIVE_TOOL_DIAGNOSTIC_'+tool,'检查工具失败后的恢复诊断。')
+     assert diagnostic['status']=='FAILED' and counts['NATIVE_TOOL_DIAGNOSTIC_'+tool]==5,diagnostic
     delayed=run('NATIVE_DELAYED_RECOVERY','核对目标文件，完成相关资料研究。')
     assert delayed['status']=='DONE' and counts['NATIVE_DELAYED_RECOVERY']==9,delayed
     unrelated=run('NATIVE_UNRELATED_WRITE','写入目标并核对。')
