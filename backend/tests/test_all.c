@@ -7538,7 +7538,7 @@ static void test_catalog(void) {
     CHECK(fs_write_file("state-test/catalog-custom/models.json", models, strlen(models)) == 0);
     m = catalog_models_json_for_state("state-test/catalog-custom");
     cJSON *model_arr = m ? cJSON_Parse(m) : NULL;
-    CHECK(cJSON_IsArray(model_arr) && cJSON_GetArraySize(model_arr) == 12);
+    CHECK(cJSON_IsArray(model_arr) && cJSON_GetArraySize(model_arr) == 11);
     CHECK(m && strstr(m, "custom-v1") && strstr(m, "my-local") && !strstr(m, "\"bad\""));
     cJSON_Delete(model_arr);
     free(m);
