@@ -3,7 +3,8 @@ import json, os, socket, subprocess, tempfile, threading, time, urllib.request
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 root=Path(__file__).resolve().parents[1]
-binary=root/os.environ.get('COA_BUILD_DIR','build')/('cognitive-os-agent.exe' if os.name=='nt' else 'cognitive-os-agent')
+build=root/os.environ.get('COA_BUILD_DIR','build')
+binary=build/('cognitive-os-agent.exe' if os.name=='nt' else 'cognitive-os-agent')
 class Provider(BaseHTTPRequestHandler):
     calls=0; mode=''; workspace=None
     def log_message(self,*args): pass
@@ -35,7 +36,7 @@ try:
             def request(path,body=None):
                 req=urllib.request.Request(f'http://127.0.0.1:{current}'+path,data=json.dumps(body).encode() if body is not None else None,headers={'Content-Type':'application/json'})
                 with urllib.request.urlopen(req,timeout=5) as response:return json.load(response)
-            with (root/'build'/f'optional-read-{mode}.log').open('w',encoding='utf-8') as log:
+            with (build/f'optional-read-{mode}.log').open('w',encoding='utf-8') as log:
                 def start():
                     p=subprocess.Popen([str(binary),'--state',str(state),'--workspace',str(work),'serve',str(current)],cwd=root,stdout=log,stderr=log,env={**os.environ,'COA_TOOL_PROTOCOL':'native'},creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
                     for _ in range(100):
