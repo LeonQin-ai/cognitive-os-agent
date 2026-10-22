@@ -3,6 +3,7 @@
 #include "os/os_thread.h"
 #include "os/os_time.h"
 #include "infra/util.h"
+#include "security/secret.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -15,6 +16,24 @@ struct trace {
     size_t next; /* insertion slot (ring) */
     int64_t next_id;
 };
+
+static void span_clear(trace_span *s) {
+    free(s->name); free(s->command); free(s->result);
+    memset(s, 0, sizeof(*s));
+}
+
+static char *bounded_detail(const char *text, int *truncated) {
+    char *safe = secret_redact_ssh_passwords(text, strlen(text), NULL);
+    char *valid = str_utf8_sanitize(safe ? safe : ""); free(safe);
+    if (!valid) return NULL;
+    size_t len = strlen(valid), cap = 4096;
+    *truncated = len > cap;
+    if (*truncated) {
+        while (cap && ((unsigned char)valid[cap] & 0xc0) == 0x80) --cap;
+        valid[cap] = 0;
+    }
+    return valid;
+}
 
 trace *trace_new(size_t capacity) {
     trace *t;
@@ -41,7 +60,7 @@ void trace_free(trace *t) {
         return;
     mutex_lock(&t->mtx);
     for (size_t i = 0; i < t->count; i++)
-        free(t->spans[i].name);
+        span_clear(&t->spans[i]);
     free(t->spans);
     mutex_unlock(&t->mtx);
     mutex_destroy(&t->mtx);
@@ -58,7 +77,7 @@ int64_t trace_begin_task(trace *t, int64_t task_id, const char *name) {
     s = &t->spans[t->next];
     if (t->count < t->cap)
         t->count++;
-    free(s->name);
+    span_clear(s);
     s->name = xstrdup(name);
     s->id = t->next_id++;
     s->task_id = task_id;
@@ -91,6 +110,22 @@ void trace_end(trace *t, int64_t id, int status) {
     mutex_unlock(&t->mtx);
 }
 
+void trace_command_details(trace *t, int64_t id, const char *command, const char *result) {
+    if (!t || (!command && !result)) return;
+    int ct = 0, rt = 0;
+    char *c = command ? bounded_detail(command, &ct) : NULL;
+    char *r = result ? bounded_detail(result, &rt) : NULL;
+    mutex_lock(&t->mtx);
+    for (size_t i = 0; i < t->count; ++i) {
+        trace_span *s = &t->spans[i];
+        if (s->id != id) continue;
+        if (c) { free(s->command); s->command = c; c = NULL; s->command_truncated = ct; }
+        if (r) { free(s->result); s->result = r; r = NULL; s->result_truncated = rt; }
+        break;
+    }
+    mutex_unlock(&t->mtx); free(c); free(r);
+}
+
 int trace_count(trace *t) {
     int n;
 
@@ -107,7 +142,7 @@ void trace_clear(trace *t) {
         return;
     mutex_lock(&t->mtx);
     for (size_t i = 0; i < t->count; i++)
-        free(t->spans[i].name);
+        span_clear(&t->spans[i]);
     t->count = 0;
     t->next = 0;
     mutex_unlock(&t->mtx);
@@ -137,8 +172,16 @@ char *trace_json_task_limit(trace *t, int64_t task_id, size_t limit) {
         cJSON_AddStringToObject(o, "name", s->name ? s->name : "");
         cJSON_AddNumberToObject(o, "start_ms", (double)s->start_ms);
         cJSON_AddNumberToObject(o, "end_ms", (double)s->end_ms);
-        cJSON_AddNumberToObject(o, "duration_ms", (double)(s->end_ms ? s->end_ms - s->start_ms : 0));
+        cJSON_AddNumberToObject(o, "duration_ms", (double)((s->end_ms ? s->end_ms : time_now_ms()) - s->start_ms));
         cJSON_AddNumberToObject(o, "status", s->status);
+        if (s->command) {
+            cJSON_AddStringToObject(o, "command", s->command);
+            cJSON_AddBoolToObject(o, "command_truncated", s->command_truncated);
+        }
+        if (s->result) {
+            cJSON_AddStringToObject(o, "result", s->result);
+            cJSON_AddBoolToObject(o, "result_truncated", s->result_truncated);
+        }
         cJSON_AddItemToArray(arr, o);
         if (limit && (size_t)cJSON_GetArraySize(arr) > limit)
             cJSON_Delete(cJSON_DetachItemFromArray(arr, 0));

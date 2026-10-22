@@ -2571,6 +2571,16 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
         span_name[span_len] = '\0';
         int64_t tool_span = trace_begin_task(r->trace, r->run_task ? r->run_task->id : r->trace_task_id,
                                              span_name);
+        cJSON *span_args = cJSON_Parse(r->actions[i].args_json);
+        const char *span_command = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(span_args,"command"));
+        strbuf git_command; strbuf_init(&git_command);
+        if (!span_command && !strcmp(r->actions[i].tool,"git")) {
+            const char *git_args = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(span_args,"args"));
+            if (git_args) { strbuf_appendf(&git_command,"git %s",git_args); span_command=git_command.buf; }
+        }
+        int command_span = span_command != NULL;
+        if (command_span) trace_command_details(r->trace,tool_span,span_command,NULL);
+        cJSON_Delete(span_args); strbuf_free(&git_command);
         char step_out[240] = ""; /* output head for the step registry */
         char *full_step_out = NULL;
         uint64_t output_hash=0;
@@ -2619,6 +2629,7 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
                 output_hash = hash64(body ? body : "", body ? strlen(body) : 0);
             }
         }
+        if (command_span) trace_command_details(r->trace,tool_span,NULL,full_step_out ? full_step_out : step_out);
         trace_end(r->trace, tool_span, rc == 0 ? 1 : -1);
         r->prog_tool_ms += time_now_ms() - t_tool0;
         run_step_add(r, r->actions[i].tool, r->actions[i].args_json, full_step_out ? full_step_out : step_out, rc == 0 ? 1 : 0,

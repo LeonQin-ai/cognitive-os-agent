@@ -3410,6 +3410,32 @@ static void test_trace(void) {
     free(j);
     trace_clear(t);
     CHECK(trace_count(t) == 0);
+    /* #205: details survive persistence/filtering, remain valid UTF-8 and
+     * are freed both when the ring wraps and when a cleared slot is reused. */
+    int64_t command_id = trace_begin_task(t, 77, "tool.shell");
+    trace_command_details(t, command_id, "echo trace-command", "exit code 7\ntrace-result");
+    trace_end(t, command_id, -1);
+    j = trace_json_task(t, 77);
+    CHECK(j && strstr(j,"trace-command") && strstr(j,"trace-result") && strstr(j,"duration_ms"));
+    free(j);
+    char long_detail[6001];
+    for (int i=0; i<6000; i+=3) memcpy(long_detail+i,"中",3);
+    long_detail[6000]=0;
+    trace_command_details(t,command_id,NULL,long_detail);
+    j=trace_json_task(t,77);
+    CHECK(j && str_utf8_valid_n(j,-1) && strstr(j,"\"result_truncated\":true"));
+    free(j);
+    trace_clear(t);
+    for (int i=0;i<20;i++) {
+        int64_t replacement=trace_begin_task(t,88,"tool.shell");
+        trace_command_details(t,replacement,"echo replacement","ring-result");
+        trace_end(t,replacement,1);
+    }
+    CHECK(trace_count(t)==8);
+    trace_command_details(t,command_id,"must-not-attach-to-reused-slot",NULL);
+    j=trace_json(t);
+    CHECK(j && !strstr(j,"trace-command") && !strstr(j,"must-not-attach"));
+    free(j);
     trace_free(t);
 }
 
@@ -9513,6 +9539,10 @@ int main(int argc, char **argv) {
     if (argc==2 && !strcmp(argv[1],"--usage")) {
         test_usage(); test_usage_concurrent_agents(); test_llm_adapters_http();
         printf("\n%d passed, %d failed\n", g_pass, g_fail); return g_fail ? 1 : 0;
+    }
+    if(argc==2 && !strcmp(argv[1],"--trace")) {
+        test_trace();
+        printf("%d passed, %d failed\n",g_pass,g_fail);return g_fail?1:0;
     }
     if(argc==2 && !strcmp(argv[1],"--llm-budget")) {
         test_llm_caps_cancel();

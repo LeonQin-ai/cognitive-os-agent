@@ -20,6 +20,8 @@ typedef struct trace_span {
     int64_t start_ms;
     int64_t end_ms; /* 0 = still open */
     int status;     /* 0 = running, 1 = ok, -1 = error */
+    char *command, *result; /* optional bounded UTF-8 command execution details */
+    int command_truncated, result_truncated;
 } trace_span;
 
 trace *trace_new(size_t capacity);
@@ -27,10 +29,12 @@ void trace_free(trace *t);
 
 /* Open a span; returns a positive id (0 on failure). */
 int64_t trace_begin(trace *t, const char *name);
-/* Correlate a span with a scheduler task without storing prompt/tool payloads. */
+/* Correlate a span with a scheduler task; optional command details are separate. */
 int64_t trace_begin_task(trace *t, int64_t task_id, const char *name);
 /* Close a span by id. status: 1 ok, -1 error. Unknown ids are ignored. */
 void trace_end(trace *t, int64_t id, int status);
+/* NULL leaves the existing field unchanged; SSH passwords are redacted. */
+void trace_command_details(trace *t, int64_t id, const char *command, const char *result);
 
 int trace_count(trace *t);
 /* JSON array of spans {id,name,start_ms,end_ms,duration_ms,status} (caller frees). */

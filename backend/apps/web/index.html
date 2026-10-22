@@ -1619,7 +1619,18 @@ function renderTraceSpans(target, spans, emptyText){
     const time = document.createElement('span'); time.className = 'muted';
     const duration = s.end_ms ? s.duration_ms : Math.max(0, Date.now() - (s.start_ms || Date.now()));
     time.textContent = (s.start_ms ? new Date(s.start_ms).toLocaleTimeString() + ' · ' : '') + duration + ' ms';
-    row.append(state,name,task,time); target.append(row);
+    row.append(state,name,task,time);
+    if(typeof s.command === 'string' || typeof s.result === 'string'){
+      const detail = document.createElement('details'); detail.style.gridColumn = '1 / -1';
+      const summary = document.createElement('summary'); summary.textContent = '命令与执行结果'; detail.append(summary);
+      [['执行命令',s.command,s.command_truncated],['执行结果',s.result,s.result_truncated]].forEach(([label,value,truncated]) => {
+        if(typeof value !== 'string') return;
+        const title = document.createElement('div'); title.textContent = label + (truncated ? '（预览已截断，完整记录见任务工具详情）' : '');
+        const pre = document.createElement('pre'); pre.textContent = value || '（无输出）';
+        pre.style.whiteSpace = 'pre-wrap'; pre.style.overflowWrap = 'anywhere'; detail.append(title,pre);
+      }); row.append(detail);
+    }
+    target.append(row);
   });
 }
 
