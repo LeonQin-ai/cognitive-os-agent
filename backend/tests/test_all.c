@@ -7502,11 +7502,10 @@ static void test_catalog(void) {
     if (m) {
         CHECK(strstr(m, "\"ollama\"") != NULL && strstr(m, "\"groq\"") != NULL &&
               strstr(m, "\"deepseek\"") != NULL && strstr(m, "\"gemini\"") != NULL &&
-              strstr(m, "\"id\":\"nvidia-nim-glm-flash\"") != NULL &&
+              strstr(m, "\"id\":\"nvidia-nim\"") != NULL &&
               strstr(m, "\"base_url\":\"https://integrate.api.nvidia.com/v1\"") != NULL &&
               strstr(m, "\"model\":\"z-ai/glm-5.3-flash\"") != NULL &&
-              strstr(m, "\"id\":\"nvidia-nim-deepseek-v41-flash\"") != NULL &&
-              strstr(m, "\"model\":\"deepseek-ai/deepseek-v4.1-flash\"") != NULL);
+              strstr(m, "\"id\":\"nvidia-nim-deepseek-v41-flash\"") == NULL);
         /* free-key signup links + local-runtime flag (#60) */
         CHECK(strstr(m, "\"signup_url\":\"https://console.groq.com/keys\"") != NULL);
         CHECK(strstr(m, "\"signup_url\":\"https://platform.deepseek.com/api_keys\"") != NULL);

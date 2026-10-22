@@ -17,11 +17,13 @@ const assert = require('node:assert/strict');
       call=async()=>({status:200,obj:[]});
       await loadModels();
       const select=$('r-provider');
-      select.value='nvidia-deepseek-v41';
+      const assertNvidia = [...select.options].filter(o=>o.textContent.includes('NVIDIA'));
+      if(assertNvidia.length!==1) throw new Error('Expected one NVIDIA preset');
+      select.value='nvidia';
       select.dispatchEvent(new Event('change'));
       return {model:$('r-model').value,base:$('r-base').value,provider:presetProvider()};
     });
-    assert.deepEqual(preset,{model:'deepseek-ai/deepseek-v4.1-flash',base:'https://integrate.api.nvidia.com/v1',provider:'openai'});
+    assert.deepEqual(preset,{model:'z-ai/glm-5.3-flash',base:'https://integrate.api.nvidia.com/v1',provider:'openai'});
     const results=await page.evaluate(async()=>{
       const out=[], model='nvidia/nemotron-3.5-super-vl:free';
       let posts=0, polls=0;

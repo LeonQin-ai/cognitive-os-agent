@@ -49,14 +49,10 @@ static const model_entry MODELS[] = {
      "Coding Plan 专用端点；可选模型：glm-5.3 / glm-5.3-flash / doubao-seed-2.0-lite / doubao-seed-2.1-turbo / "
      "deepseek-v4-flash / deepseek-v4-pro / kimi-k2.7-code / minimax-m3",
      "https://console.volcengine.com/ark", 0},
-    {"nvidia-nim-glm-flash", "NVIDIA NIM · GLM 5.3 Flash", "openai", "https://integrate.api.nvidia.com/v1",
+    {"nvidia-nim", "NVIDIA NIM", "openai", "https://integrate.api.nvidia.com/v1",
      "z-ai/glm-5.3-flash", "build.nvidia.com API Key",
-     "通过 NVIDIA 托管的 OpenAI 兼容端点调用；支持文本/图像输入、工具调用。",
-     "https://build.nvidia.com/z-ai/glm-5.3-flash", 0},
-    {"nvidia-nim-deepseek-v41-flash", "NVIDIA NIM · DeepSeek V4.1 Flash", "openai", "https://integrate.api.nvidia.com/v1",
-     "deepseek-ai/deepseek-v4.1-flash", "build.nvidia.com API Key",
-     "多模态（文本/图像）推理模型；路由测试会关闭推理并限制输出，避免短测试耗尽 token。",
-     "https://build.nvidia.com/deepseek-ai/deepseek-v4.1-flash", 0},
+     "统一 OpenAI 兼容端点；默认 GLM 5.3 Flash，也可在配置表单中选择或填写 deepseek-ai/deepseek-v4.1-flash 等模型。",
+     "https://build.nvidia.com/models", 0},
 };
 #define N_MODELS (int)(sizeof(MODELS) / sizeof(MODELS[0]))
 
