@@ -1,5 +1,6 @@
 """Exercise completion state through real HTTP, scheduler, planner and file tools."""
 import json
+import os
 from pathlib import Path
 import socket
 import subprocess
@@ -17,6 +18,12 @@ counts = {}
 NON_SSH_TEXT = ('password=CodeOnly_98+! token=ghp_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN\n'
     'Bearer abcdef1234567890abcdef123456\n'
     'D:/random-Q7m2V9k4X1r8T6p3Z5n0/backend/src/record.c')
+# Exercise a long Unicode answer, not the degenerate output rejected by #202.
+# Distinct evidence in each paragraph also makes omissions/reordering visible.
+LONG_SOURCE_REPORT = '源码资料：' + ''.join(
+    f'章节{i:04d}：文件src/module_{i}/store.c的恢复证据编号为{i*i*17}，'
+    f'需核对第{i*31+1}行的持久化结果。\n' for i in range(200)) + 'REPORT_END_MARKER'
+assert len(LONG_SOURCE_REPORT) > 5000
 class Provider(BaseHTTPRequestHandler):
     def log_message(self, *args): pass
     def do_POST(self):
@@ -60,7 +67,7 @@ class Provider(BaseHTTPRequestHandler):
                 assert 'MIDDLE_SOURCE_PROOF' in text and 'output elided' not in text
                 answer='批量源码完整保留。'
         elif '长答案历史回归测试' in current:
-            answer='源码资料：'+'文'*5000+'REPORT_END_MARKER'
+            answer=LONG_SOURCE_REPORT
         elif '非SSH文本保留回归测试' in current:
             count=counts.get('unredacted',0); counts['unredacted']=count+1
             if count==0:
@@ -115,6 +122,8 @@ class Provider(BaseHTTPRequestHandler):
         self.send_header('Content-Length',str(len(data))); self.end_headers(); self.wfile.write(data)
 
 backend = Path(__file__).resolve().parents[1]
+build = backend / os.environ.get('COA_BUILD_DIR', 'build')
+binary = build / ('cognitive-os-agent.exe' if os.name == 'nt' else 'cognitive-os-agent')
 with tempfile.TemporaryDirectory(prefix='coa-source-read-') as directory:
     state = Path(directory)
     (state / 'source.c').write_text('x' * 7970 + 'END_SOURCE' + 'x' * 20, encoding='utf-8')
@@ -143,8 +152,8 @@ with tempfile.TemporaryDirectory(prefix='coa-source-read-') as directory:
             headers={'Content-Type': 'application/json'})
         with urllib.request.urlopen(req, timeout=5) as response:
             return json.load(response)
-    with (backend / 'build' / 'source-read-e2e-server.log').open('w') as log:
-        process = subprocess.Popen([str(backend / 'build' / 'cognitive-os-agent.exe'),
+    with (build / 'source-read-e2e-server.log').open('w') as log:
+        process = subprocess.Popen([str(binary),
             '--state', str(state), '--workspace', str(state), 'serve', str(port)],
             cwd=backend, stdout=log, stderr=log, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
         try:
@@ -187,6 +196,7 @@ with tempfile.TemporaryDirectory(prefix='coa-source-read-') as directory:
                     for step in task.get('steps',[]):
                         assert json.loads(step['args'])['path'].startswith('batch-')
                 if index == 4:
+                    assert task['output']==LONG_SOURCE_REPORT, 'Long Unicode answer changed before history storage'
                     long_output=task['output']
                 if index == 6:
                     assert task['tool_calls']==2 and all(step['ok']==1 for step in task['steps']), task
@@ -207,7 +217,7 @@ with tempfile.TemporaryDirectory(prefix='coa-source-read-') as directory:
             history=request('/v1/chat/history?session=read-test-4')
             assert history['turns'][-1]['a']==long_output, 'Chat history truncated the answer'
             process.terminate(); process.wait(timeout=10)
-            process=subprocess.Popen([str(backend / 'build' / 'cognitive-os-agent.exe'),
+            process=subprocess.Popen([str(binary),
                 '--state',str(state),'--workspace',str(state),'serve',str(port)],
                 cwd=backend,stdout=log,stderr=log,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
             deadline=time.monotonic()+20

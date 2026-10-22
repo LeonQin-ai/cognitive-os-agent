@@ -198,6 +198,7 @@ static int openai_chat(llm *llm, const llm_request *req, llm_response *resp) {
         return -1;
     }
 
+    resp->http_status = r->status;
     if (r->status != 200) {
         char err[512];
         snprintf(err, sizeof(err), "openai http %d: %s", r->status, r->body && r->body[0] ? r->body : "(empty)");
@@ -218,7 +219,11 @@ static int openai_chat(llm *llm, const llm_request *req, llm_response *resp) {
     msg = choices && choices->child ? cJSON_GetObjectItemCaseSensitive(choices->child, "message") : NULL;
     cJSON *finish = choices && choices->child ? cJSON_GetObjectItemCaseSensitive(choices->child, "finish_reason") : NULL;
     resp->truncated = cJSON_IsString(finish) && !strcmp(finish->valuestring, "length");
+    snprintf(resp->stop_reason, sizeof(resp->stop_reason), "%s", cJSON_IsString(finish) ? finish->valuestring : "");
     cJSON *native=msg ? cJSON_GetObjectItemCaseSensitive(msg,"tool_calls") : NULL;
+    content = msg ? cJSON_GetObjectItemCaseSensitive(msg, "content") : NULL;
+    resp->visible_content_bytes = cJSON_IsString(content) ? strlen(content->valuestring) : 0;
+    resp->tool_call_count = cJSON_IsArray(native) ? cJSON_GetArraySize(native) : 0;
     if (native && !cJSON_IsNull(native) && !cJSON_IsArray(native)) {
         set_error(resp,"openai: malformed or empty tool_calls");cJSON_Delete(root);return -1;
     }
@@ -252,13 +257,12 @@ static int openai_chat(llm *llm, const llm_request *req, llm_response *resp) {
     } else if (resp->tool_actions_json) {
         resp->content=xstrdup("");
     } else {
-        /* Reasoning models (GLM/DeepSeek-R1 style) can exhaust the token
-         * budget while thinking and return an empty content with the
-         * answer text left in reasoning_content — use it as a fallback
-         * rather than surfacing "no content in response". */
+        /* Private reasoning is neither an answer nor executable tool input.
+         * In particular, never continue an output-limit response by sending
+         * its hidden reasoning back as if it were a partial final answer. */
         cJSON *reasoning = msg ? cJSON_GetObjectItemCaseSensitive(msg, "reasoning_content") : NULL;
         if (reasoning && cJSON_IsString(reasoning) && reasoning->valuestring[0]) {
-            resp->content = xstrdup(reasoning->valuestring);
+            set_error(resp, "openai: reasoning-only response; no visible content or tool calls");
         } else {
             cJSON *err_obj = cJSON_GetObjectItemCaseSensitive(root, "error");
             const char *em = err_obj && cJSON_IsObject(err_obj)

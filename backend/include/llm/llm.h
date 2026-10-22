@@ -39,6 +39,10 @@ typedef struct llm_response {
     char *content; /* full accumulated text (caller frees) */
     char *error;   /* NULL if ok (caller frees) */
     int truncated; /* provider stopped at its output-token limit */
+    int http_status; /* 0 when no HTTP response was received */
+    char stop_reason[64]; /* provider metadata only; never response text */
+    size_t visible_content_bytes; /* before native-call validation */
+    int tool_call_count; /* received blocks, including rejected/truncated ones */
     char *tool_actions_json; /* normalized native tool calls, caller frees */
 } llm_response;
 

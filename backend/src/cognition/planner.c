@@ -699,7 +699,7 @@ static char *native_tool_catalog(const tool_registry *tools, struct policy_engin
 
 static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_action **actions, int *n_actions,
                      char **raw_out, char **err_out, const char *attachments, int *truncated_out,
-                     int output_tokens, const tool_registry *tools, struct policy_engine *policy, int *native_end_out) {
+                     int output_tokens, const tool_registry *tools, struct policy_engine *policy, int *native_end_out, planner_model_diagnostic *diagnostic) {
     llm_request req = {0};
     if(native_end_out)*native_end_out=0;
     llm_response resp = {0};
@@ -813,6 +813,18 @@ static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_act
         native_system=strbuf_detach(&system);msgs[0].content=native_system;
     }
     rc = llm_chat(llm, &req, &resp);
+    if (diagnostic) {
+        memset(diagnostic, 0, sizeof(*diagnostic));
+        diagnostic->http_status = resp.http_status;
+        diagnostic->max_tokens = req.max_tokens;
+        diagnostic->truncated = resp.truncated;
+        diagnostic->has_content = resp.visible_content_bytes > 0 || (resp.content && *resp.content);
+        diagnostic->has_tool_calls = resp.tool_call_count > 0 || resp.tool_actions_json != NULL;
+        snprintf(diagnostic->stop_reason, sizeof(diagnostic->stop_reason), "%s", resp.stop_reason);
+        snprintf(diagnostic->stage, sizeof(diagnostic->stage), "%s",
+            rc == 0 ? "protocol" : resp.http_status == 0 ? "transport" :
+            resp.http_status != 200 ? "http" : "response");
+    }
     int using_native=native_tools!=NULL;
     free(native_tools);free(native_system);
     if(native_end_out)*native_end_out=0;
@@ -1034,21 +1046,21 @@ void planner_actions_free(planned_action *a, int n) {
 
 int planner_plan(llm *llm, const char *prompt, planned_action **actions, int *n_actions, char **raw_out,
                      char **err_out) {
-    return plan_with(llm, NULL, prompt, actions, n_actions, raw_out, err_out, NULL, NULL, 0, NULL, NULL, NULL);
+    return plan_with(llm, NULL, prompt, actions, n_actions, raw_out, err_out, NULL, NULL, 0, NULL, NULL, NULL, NULL);
 }
 
 int planner_plan_ex(llm *llm, const struct tool_registry *tools, struct skill_registry *skills,
                         struct policy_engine *policy, const char *prompt, planned_action **actions,
                         int *n_actions, char **raw_out, char **err_out) {
     char *sys = build_catalog_prompt(tools, skills, policy,planner_uses_native_tools(llm));
-    return plan_with(llm, sys, prompt, actions, n_actions, raw_out, err_out, NULL, NULL, 0, tools, policy, NULL);
+    return plan_with(llm, sys, prompt, actions, n_actions, raw_out, err_out, NULL, NULL, 0, tools, policy, NULL, NULL);
 }
 
 int planner_plan_attachments_ex(llm *llm, const struct tool_registry *tools, struct skill_registry *skills,
     struct policy_engine *policy, const char *prompt, planned_action **actions,
     int *n_actions, char **raw_out, char **err_out, const char *attachments, int *truncated_out) {
     return plan_with(llm, build_catalog_prompt(tools,skills,policy,planner_uses_native_tools(llm)), prompt, actions,
-        n_actions, raw_out, err_out, attachments, truncated_out, 0, tools, policy, NULL);
+        n_actions, raw_out, err_out, attachments, truncated_out, 0, tools, policy, NULL, NULL);
 }
 
 int planner_plan_attachments_ex_with_output(llm *llm, const struct tool_registry *tools,
@@ -1056,13 +1068,21 @@ int planner_plan_attachments_ex_with_output(llm *llm, const struct tool_registry
     planned_action **actions, int *n_actions, char **raw_out, char **err_out,
     const char *attachments, int *truncated_out, int output_tokens) {
     return plan_with(llm, build_catalog_prompt(tools,skills,policy,planner_uses_native_tools(llm)), prompt, actions,
-        n_actions, raw_out, err_out, attachments, truncated_out, output_tokens, tools, policy, NULL);
+        n_actions, raw_out, err_out, attachments, truncated_out, output_tokens, tools, policy, NULL, NULL);
+}
+
+int planner_plan_turn_diagnostic(llm *llm, const struct tool_registry *tools,
+    struct skill_registry *skills, struct policy_engine *policy, const char *prompt,
+    planned_action **actions, int *n_actions, char **raw_out, char **err_out,
+    const char *attachments, int *truncated_out, int output_tokens, int *native_end_out, planner_model_diagnostic *diagnostic) {
+    return plan_with(llm,build_catalog_prompt(tools,skills,policy,planner_uses_native_tools(llm)),prompt,actions,n_actions,
+        raw_out,err_out,attachments,truncated_out,output_tokens,tools,policy,native_end_out,diagnostic);
 }
 
 int planner_plan_turn(llm *llm, const struct tool_registry *tools,
     struct skill_registry *skills, struct policy_engine *policy, const char *prompt,
     planned_action **actions, int *n_actions, char **raw_out, char **err_out,
     const char *attachments, int *truncated_out, int output_tokens, int *native_end_out) {
-    return plan_with(llm,build_catalog_prompt(tools,skills,policy,planner_uses_native_tools(llm)),prompt,actions,n_actions,
-        raw_out,err_out,attachments,truncated_out,output_tokens,tools,policy,native_end_out);
+    return planner_plan_turn_diagnostic(llm,tools,skills,policy,prompt,actions,n_actions,
+        raw_out,err_out,attachments,truncated_out,output_tokens,native_end_out,NULL);
 }

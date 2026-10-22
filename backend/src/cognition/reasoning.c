@@ -291,6 +291,8 @@ struct reasoning {
     int planner_native_end_turn;
     int planner_output_escalated; /* one bounded 32K -> 64K retry after truncation */
     char last_model_error[1024];
+    planner_model_diagnostic last_model_failure;
+    int last_model_failure_call;
 
     /* per-model token ledger (borrowed; may be NULL). Deltas are computed
      * against the run-start snapshot of llm usage counters so per-round
@@ -564,6 +566,18 @@ static void progress_emit(reasoning *r, const char *stage) {
     cJSON_AddStringToObject(o, "activity", activity);
     cJSON_AddStringToObject(o, "model", model);
     if (r->last_model_error[0]) cJSON_AddStringToObject(o,"model_error",r->last_model_error);
+    if (r->last_model_failure_call) {
+        const planner_model_diagnostic *d = &r->last_model_failure;
+        cJSON *failure = cJSON_AddObjectToObject(o, "model_failure");
+        cJSON_AddNumberToObject(failure, "call", r->last_model_failure_call);
+        cJSON_AddStringToObject(failure, "stage", d->stage);
+        cJSON_AddNumberToObject(failure, "http_status", d->http_status);
+        cJSON_AddStringToObject(failure, "stop_reason", d->stop_reason);
+        cJSON_AddNumberToObject(failure, "max_tokens", d->max_tokens);
+        cJSON_AddBoolToObject(failure, "truncated", d->truncated);
+        cJSON_AddBoolToObject(failure, "has_content", d->has_content);
+        cJSON_AddBoolToObject(failure, "has_tool_calls", d->has_tool_calls);
+    }
     cJSON_AddBoolToObject(o, "thinking", r->thinking_mode);
     cJSON_AddNumberToObject(o, "seq", ++r->progress_seq);
     cJSON_AddNumberToObject(o, "applied_updates", r->applied_updates);
@@ -1982,10 +1996,11 @@ static int h_reason(state_machine *sm, void *ud, const char *input, char **out) 
     int64_t llm_span = trace_begin_task(r->trace, r->run_task ? r->run_task->id : r->trace_task_id, "llm.plan");
     r->planner_response_truncated=0;
     int output_override = r->planner_output_escalated ? 65536 : 0;
-    int rc = planner_plan_turn(r->llm, r->tools, r->skills, r->policy,
+    planner_model_diagnostic diagnostic = {0};
+    int rc = planner_plan_turn_diagnostic(r->llm, r->tools, r->skills, r->policy,
                                  aug ? aug : input, &r->actions, &r->n_actions,
                                  &raw, &plan_err, r->run_task ? r->run_task->attachments_json : NULL,
-                                 &r->planner_response_truncated, output_override, &r->planner_native_end_turn);
+                                 &r->planner_response_truncated, output_override, &r->planner_native_end_turn, &diagnostic);
     if (r->planner_response_truncated && !r->planner_output_escalated) {
         r->planner_output_escalated = 1;
         log_info("planner: response hit output limit; escalating subsequent requests to a bounded 64K ceiling");
@@ -1998,6 +2013,8 @@ static int h_reason(state_machine *sm, void *ud, const char *input, char **out) 
         progress_emit(r, r->n_actions ? "plan_ready" : "response_ready");
     free(aug);
     if (rc != 0 || !raw) {
+        r->last_model_failure = diagnostic;
+        r->last_model_failure_call = r->prog_llm_calls;
         free(raw);
         char *msg = plan_err ? xstrdup(plan_err)
                              : xstrdup("(LLM 调用失败：请先用「测试」按钮验证模型配置 provider/key/base_url/model)");
@@ -3865,6 +3882,7 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     r->prog_started_ms = time_now_ms();
     r->prog_tool[0] = 0;
     r->prog_tool_calls = r->prog_llm_calls = r->round_idx = r->prog_model_failures = 0;
+    r->last_model_failure_call=0;
     r->prog_llm_ms = r->prog_tool_ms = 0;
     r->last_model_error[0]=0;
     r->planner_output_escalated = 0;
@@ -4083,6 +4101,21 @@ restart_planning:
                 transport_fail_streak = 0;
             round_log_append(r, result && *result ? result : "(run failed)");
             obs_log_append(r, result && *result ? result : "(run failed)");
+            /* A token-limited native call (including complete_task) has no
+             * executable arguments. Regenerate the whole call, never append
+             * a JSON suffix or misdiagnose this as a failed tool operation.
+             * Empty reasoning-only responses need the same bounded recovery.
+             * This shares the existing two-continuation allowance. */
+            if (!r->had_plan && r->planner_response_truncated && !r->visual_request_failed) {
+                if (truncated_response_nudges >= 2 || r->round_idx >= r->max_rounds) {
+                    output_truncated_unresolved = fail_aborted = unfinished = 1;
+                    break;
+                }
+                truncated_response_nudges++;
+                round_log_append(r, "[system] The provider stopped at its output-token limit before returning a usable answer or complete tool arguments. No actions from this response executed. Regenerate a complete, concise response within the output budget; do not continue partial JSON or repeat completed tools. Use complete_task only when all requested work and verification are delivered. Hidden reasoning is not an answer. At most two regeneration requests are allowed.");
+                progress_emit(r, "reconnecting");
+                continue;
+            }
             if (r->visual_request_failed) {
                 final_text=xstrdup(result && *result ? result:"图片模型请求失败");
                 fail_aborted = 1;

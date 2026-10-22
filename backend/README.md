@@ -425,6 +425,21 @@ POST /v1/local/start             # body {"engine":"ollama"} 或 {"engine":"llama
 
 ## Tests
 
+Model failures expose safe `model_failure` metadata in task progress: the
+request number, HTTP status (0 if none), provider stop reason, requested output
+budget, truncation flag, visible-content/tool-call presence, and failure stage
+(`transport`, `http`, `response`, or `protocol`). The latest failure remains
+available after recovery; a new task resets it. These fields contain no model
+text, arguments or credentials. `model_error` remains the current error message.
+
+Token-limited native tool calls are not executed, including `complete_task`.
+They use the existing two-recovery allowance to regenerate a complete response;
+exhaustion fails the task without another summary request. OpenAI-compatible
+`reasoning_content` is private reasoning and is never used as a final answer or
+tool plan. This does not infer completion from successful files or task keywords.
+Run `python3 tests/test_model_finalization_e2e.py` for the local regression.
+Real provider latency and historical failures still require a real API replay.
+
 ```
 ./build/mock-llm-server 9000 &       # start the mock LLM server
 ./build/cognitive-os-agent-test                  # unit suite (util/core/coro/M:N/snapshot/llm/…)

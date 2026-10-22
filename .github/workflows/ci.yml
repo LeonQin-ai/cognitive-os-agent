@@ -29,6 +29,8 @@ jobs:
         run: ctest --test-dir build-macos --output-on-failure
       - name: Independent todo-cli acceptance verifier regression
         run: python3 tests/test_todo_cli_contract.py
+      - name: Source read completion API regressions
+        run: COA_BUILD_DIR=build-macos python3 tests/test_source_read_e2e.py
       - name: Adapter and end-to-end tests
         run: |
           ./build-macos/mock-llm-server 9000 &
@@ -51,6 +53,8 @@ jobs:
         run: COA_BUILD_DIR=build-macos python3 tests/test_model_capabilities_e2e.py
       - name: Native tool block continuation regression
         run: COA_BUILD_DIR=build-macos python3 tests/test_native_tool_loop.py
+      - name: Model finalization and provider diagnostics regression
+        run: COA_BUILD_DIR=build-macos python3 tests/test_model_finalization_e2e.py
       - name: Information answer completion regression
         run: COA_BUILD_DIR=build-macos python3 tests/test_information_answers_e2e.py
       - name: Reciprocal group discussion regression
@@ -80,6 +84,8 @@ jobs:
         run: ./build/cognitive-os-agent-test
       - name: Planner duplicate-read recovery regression
         run: make build/cognitive-os-agent-test-plan-cycle && ./build/cognitive-os-agent-test-plan-cycle
+      - name: Source read completion API regressions
+        run: python3 tests/test_source_read_e2e.py
       - name: Single-response repetition regression
         run: python3 tests/test_answer_repetition.py
       - name: Independent todo-cli acceptance verifier regression
@@ -98,6 +104,8 @@ jobs:
         run: python tests/test_model_capabilities_e2e.py
       - name: Native tool block continuation regression
         run: python tests/test_native_tool_loop.py
+      - name: Model finalization and provider diagnostics regression
+        run: python tests/test_model_finalization_e2e.py
       - name: Information answer completion regression
         run: python3 tests/test_information_answers_e2e.py
       - name: Reciprocal group discussion regression
@@ -184,6 +192,8 @@ jobs:
         run: python tests/test_model_capabilities_e2e.py
       - name: Native tool block continuation regression
         run: python tests/test_native_tool_loop.py
+      - name: Model finalization and provider diagnostics regression
+        run: python tests/test_model_finalization_e2e.py
       - name: Information answer completion regression
         run: python tests/test_information_answers_e2e.py
       - name: Visual provider timeout and recovery regression

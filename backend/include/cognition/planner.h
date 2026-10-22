@@ -10,6 +10,12 @@ extern "C" {
 #endif
 
 typedef struct llm llm;
+/* Safe metadata for the primary planner request; no text, arguments or keys. */
+typedef struct planner_model_diagnostic {
+    int http_status, max_tokens, truncated, has_content, has_tool_calls;
+    char stop_reason[64];
+    char stage[24]; /* transport, http, response, protocol */
+} planner_model_diagnostic;
 /* Native protocol decisions must not be overridden by prose heuristics. */
 int planner_uses_native_tools(const llm *l);
 struct tool_registry;  /* action/tools.h */
@@ -68,6 +74,11 @@ int planner_plan_turn(llm *llm, const struct tool_registry *tools,
     struct skill_registry *skills, struct policy_engine *policy, const char *prompt,
     planned_action **actions, int *n_actions, char **raw_out, char **err_out,
     const char *attachments, int *truncated_out, int output_tokens, int *native_end_out);
+int planner_plan_turn_diagnostic(llm *llm, const struct tool_registry *tools,
+    struct skill_registry *skills, struct policy_engine *policy, const char *prompt,
+    planned_action **actions, int *n_actions, char **raw_out, char **err_out,
+    const char *attachments, int *truncated_out, int output_tokens, int *native_end_out,
+    planner_model_diagnostic *diagnostic);
 
 void planner_actions_free(planned_action *a, int n);
 

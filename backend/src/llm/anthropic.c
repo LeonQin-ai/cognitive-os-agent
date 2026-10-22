@@ -170,6 +170,7 @@ static int anthropic_chat(llm *llm, const llm_request *req, llm_response *resp) 
         return -1;
     }
 
+    resp->http_status = r->status;
     if (r->status != 200) {
         char err[512];
         snprintf(err, sizeof(err), "anthropic http %d: %s", r->status, r->body && r->body[0] ? r->body : "(empty)");
@@ -188,14 +189,19 @@ static int anthropic_chat(llm *llm, const llm_request *req, llm_response *resp) 
     strbuf_init(&sb);
     cJSON *stop_reason=cJSON_GetObjectItemCaseSensitive(root,"stop_reason");
     resp->truncated=cJSON_IsString(stop_reason) && !strcmp(stop_reason->valuestring,"max_tokens");
+    snprintf(resp->stop_reason,sizeof(resp->stop_reason),"%s",cJSON_IsString(stop_reason) ? stop_reason->valuestring : "");
     accumulate_usage_obj(llm, cJSON_GetObjectItemCaseSensitive(root, "usage"), NULL);
     content = cJSON_GetObjectItemCaseSensitive(root, "content");
     if (content && cJSON_IsArray(content)) {
         cJSON *it;
         cJSON_ArrayForEach(it, content) {
             cJSON *text = cJSON_GetObjectItemCaseSensitive(it, "text");
-            if (text && cJSON_IsString(text))
+            if (text && cJSON_IsString(text)) {
                 strbuf_append(&sb, text->valuestring);
+                resp->visible_content_bytes += strlen(text->valuestring);
+            }
+            const char *type=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(it,"type"));
+            if (type && !strcmp(type,"tool_use")) resp->tool_call_count++;
         }
     }
 
