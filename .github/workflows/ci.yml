@@ -80,6 +80,8 @@ jobs:
         run: ./build/cognitive-os-agent-test
       - name: Planner duplicate-read recovery regression
         run: make build/cognitive-os-agent-test-plan-cycle && ./build/cognitive-os-agent-test-plan-cycle
+      - name: Single-response repetition regression
+        run: python3 tests/test_answer_repetition.py
       - name: Independent todo-cli acceptance verifier regression
         run: python3 tests/test_todo_cli_contract.py
       - name: Actual process crash recovery

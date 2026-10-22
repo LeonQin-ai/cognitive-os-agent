@@ -129,7 +129,9 @@ for provider_name in ('openai','anthropic'):
     else:answer='参数已校正并成功核对 schema-repaired。'
    elif case=='NATIVE_FAILED':
     if n==0:calls=[('file_read',{'path':'unresolved-missing.txt'})]
-    else:answer='模型声称成功，但实际文件读取仍然失败。'+'技术分析正文。'*2000+'SUMMARY_END_194'
+    # Keep the long-diagnostic preservation fixture nondegenerate (#202).
+    # All 2000 sections and the tail marker must still survive unchanged.
+    else:answer='模型声称成功，但实际文件读取仍然失败。'+''.join(f'技术分析正文。证据编号{i}，文件 src/module_{i}/store.c。\n' for i in range(2000))+'SUMMARY_END_194'
    elif case in ('NATIVE_RECOVERED','NATIVE_ALIAS'):
     path='recover.txt' if case=='NATIVE_RECOVERED' else (state/'alias'/'alias-recover.txt').as_posix()
     if n==0:calls=[('file_read',{'path':path})]

@@ -8812,7 +8812,13 @@ static void test_http_api(void) {
     {
         char prompt[5200], session[80], history_path[160];
         memcpy(prompt, "long-history-", 13);
-        memset(prompt + 13, 'x', 5000);
+        /* Exercise long history without asking the mock provider to echo a
+         * degenerate single-character cycle (#202). */
+        for (int i = 0; i < 100; i++) {
+            char section[64];
+            snprintf(section, sizeof(section), "evidence-section-%04d-value-%08d", i, i*i);
+            snprintf(prompt + 13 + i*50, 51, "%-50s", section);
+        }
         prompt[5013] = '\0';
         snprintf(session, sizeof session, "long-history-%lld", (long long)time_now_ms());
         int64_t long_id = scheduler_submit_tag(ctx.scheduler, 0, prompt, NULL, 0, session);

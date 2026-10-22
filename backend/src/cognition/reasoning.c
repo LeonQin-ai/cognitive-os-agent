@@ -3775,6 +3775,39 @@ int reasoning_run(reasoning *r, const char *prompt, char **answer) {
     return reasoning_run_ex(r, NULL, prompt, answer);
 }
 
+/* Detect sustained verbatim cycles inside one answer, independently of task
+ * wording and tool protocol. Require six cycles, 768 bytes and 40% of the
+ * answer so ordinary repeated headings, code idioms and short quotes pass.
+ * Hashes only select candidates; actual bytes must match. */
+static int answer_has_repetition(const char *text) {
+    size_t n = text ? strlen(text) : 0;
+    if (n < 768) return 0;
+    size_t *seen = (size_t *)calloc(8192, sizeof(*seen));
+    if (!seen) return 0;
+    for (size_t i = 0; i + 32 <= n; i++) {
+        unsigned hash = 2166136261u;
+        for (size_t k = 0; k < 32; k++)
+            hash = (hash ^ (unsigned char)text[i+k]) * 16777619u;
+        size_t slot = hash & 8191, prior = seen[slot];
+        seen[slot] = i + 1;
+        if (!prior) continue;
+        size_t start = prior - 1, period = i - start;
+        if (period > 8192 || memcmp(text + start, text + i, 32)) continue;
+        size_t end = i + 32;
+        while (end < n && text[end] == text[end-period]) end++;
+        size_t repeated = end - start;
+        if (repeated >= 768 && repeated / period >= 6 && repeated >= n - n*3/5) {
+            free(seen);
+            return 1;
+        }
+        /* A long quoted cycle below the answer-wide threshold must not
+         * cause the same suffix to be rescanned at every byte. */
+        if (repeated / period >= 6) i = end - 32;
+    }
+    free(seen);
+    return 0;
+}
+
 int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, char **answer) {
     char *safe_prompt;
     /* Router: pick a provider for this run (weighted round-robin). */
@@ -3953,6 +3986,7 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     int transport_fail_streak = 0;
     int fail_aborted = 0;
     int unfinished = 0; /* text described future work, or requested write never ran */
+    int output_repeated = 0;
     int search_only_rounds = 0;
     int artifact_read_nudged = 0;
     int failure_recovery_nudges = 0, truncated_response_nudges = 0;
@@ -4107,6 +4141,11 @@ restart_planning:
              * aloud, while the model stuck narrating 4 rounds in a row will
              * not recover. Exhaustion must report an incomplete task. */
             const char *txt = strip_nudge_echo(result);
+            if (answer_has_repetition(txt)) {
+                unfinished = 1;
+                final_text = xstrdup(txt);
+                break;
+            }
             if(r->planner_native_end_turn==2) {
                 unfinished=1;final_text=xstrdup(txt?txt:"");break;
             }
@@ -4374,6 +4413,15 @@ restart_planning:
          (required_pending_reads(r,completion_instruction(r,prompt)) || r->read_tracking_overflow ||
           answer_reports_required_unread(r,completion_instruction(r,prompt),final_text))))
         unfinished = 1;
+    /* Cover plain answers, native complete_task, continued/truncated output
+     * and fallback summaries with the same final delivery gate. Do not feed
+     * degraded output back to the model or initiate unbounded paid retries. */
+    if (answer_has_repetition(final_text)) {
+        unfinished = 1;
+        output_repeated = 1;
+        free(final_text);
+        final_text = xstrdup("模型答复出现持续重复，已停止交付退化内容；请恢复任务后重新生成答复。");
+    }
     if (unfinished)
         st = ST_FAILED;
     strbuf_init(&out);
@@ -4388,6 +4436,10 @@ restart_planning:
     } else if (unfinished) {
         strbuf_append(&out, "任务未完成：尚未完成请求的阅读、操作或验证，当前结果仅为部分进展。");
         int explained=0;
+        if (output_repeated) {
+            strbuf_append(&out,"\n原因：模型单次答复内部出现持续循环，无法作为有效的完成结果。");
+            explained=1;
+        }
         if(r->planner_native_end_turn==2) {
             strbuf_append(&out,"\n原因：模型通过结构化完成声明报告任务受阻，仍有未完成项。");explained=1;
         }
