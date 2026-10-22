@@ -39,7 +39,7 @@ const assert = require('node:assert/strict');
       switchPanel('skills');
       $('skill-search').value = 'fixture';
       await githubSearchOnline();
-      $('gh-online-catalog').closest('details').open = true;
+      for(let p=$('gh-online-catalog').parentElement;p;p=p.parentElement) if(p.tagName==='DETAILS')p.open=true;
     });
     await page.locator('#gh-online-catalog button').click();
     await page.waitForFunction(() => SKILL_INSTALL_PENDING.size === 1);
