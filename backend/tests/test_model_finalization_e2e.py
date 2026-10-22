@@ -146,6 +146,10 @@ def exercise(provider, mode):
                     assert not (state / 'must-not-execute.txt').exists()
                     assert len(Provider.requests) == 6, (mode, len(Provider.requests), task)
                     assert task['llm_calls'] == 6, task
+                    # Hidden-only exhaustion must not enlarge subsequent paid
+                    # requests; genuine partial native calls retain escalation.
+                    expected = [32768]*4 + ([65536]*2 if mode in ['recover','truncated','tool-limit'] else [32768]*2)
+                    assert [r['max_tokens'] for r in Provider.requests] == expected, (mode, [r['max_tokens'] for r in Provider.requests])
                     reported = 5 if mode in ['http-recover', 'json-recover'] else 6
                     assert task['tokens_in'] == 11*reported and task['tokens_out'] == 7*reported, task
                     assert SECRET_THINKING not in task['output'], task

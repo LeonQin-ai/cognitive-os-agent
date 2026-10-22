@@ -68,9 +68,14 @@ with tempfile.TemporaryDirectory(prefix='coa-live-suite-state-') as folder:
         body={'message':prompt,'session':session}
         if attachments:body['attachments']=attachments
         task_id=request('/v1/chat',body)['id']
-        started=time.monotonic();printed=-30
+        started=time.monotonic();printed=-30;last_seq=None
         while time.monotonic()-started<args.timeout:
             last_task=request('/v1/tasks/'+str(task_id))
+            if last_task.get('seq')!=last_seq:
+                last_seq=last_task.get('seq')
+                fields=('stage','activity','model','seq','round','model_call','llm_calls','tool_calls','model_failures','model_error','model_failure','usage_available','tokens_in','tokens_out','elapsed_ms')
+                with (active/'progress.jsonl').open('a',encoding='utf-8') as history:
+                    history.write(json.dumps({k:last_task.get(k) for k in fields if k in last_task},ensure_ascii=False)+'\n')
             if time.monotonic()-started-printed>=30:
                 print(json.dumps({'case':active.name,**task_summary(last_task)},ensure_ascii=False),flush=True)
                 printed=time.monotonic()-started

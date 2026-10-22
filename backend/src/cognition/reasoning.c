@@ -2003,7 +2003,10 @@ static int h_reason(state_machine *sm, void *ud, const char *input, char **out) 
                                  &raw, &plan_err, r->run_task ? r->run_task->attachments_json : NULL,
                                  &r->planner_response_truncated, output_override, &r->planner_native_end_turn, &diagnostic,
                                  r->completion_review_required);
-    if (r->planner_response_truncated && !r->planner_output_escalated) {
+    /* Only visible generation/tool arguments can benefit from more output
+     * room. An exhausted hidden-only response is not partial deliverable. */
+    if (r->planner_response_truncated && !r->planner_output_escalated &&
+        (diagnostic.has_content || diagnostic.has_tool_calls)) {
         r->planner_output_escalated = 1;
         log_info("planner: response hit output limit; escalating subsequent requests to a bounded 64K ceiling");
     }
