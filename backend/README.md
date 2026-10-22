@@ -425,6 +425,16 @@ POST /v1/local/start             # body {"engine":"ollama"} 或 {"engine":"llama
 
 ## Tests
 
+After a real provider uses tools, its first candidate final answer is reviewed
+against the original request and actual observations. In legacy text mode,
+subsequent turns must emit tool actions or a single JSON `complete_task`
+declaration (`status`, `requires_tools:false`, `answer`). Plain progress text
+cannot finish a reviewed task. Native mode uses its existing function schema.
+The review runs once per task; it can resume actual work without adding another
+review after every read. Ordinary zero-tool conversation needs no extra request.
+Run `python3 tests/test_completion_review_e2e.py` to verify delivery, premature
+stops, recovery, blocked work, round-budget exhaustion and persisted history.
+
 Model failures expose safe `model_failure` metadata in task progress: the
 request number, HTTP status (0 if none), provider stop reason, requested output
 budget, truncation flag, visible-content/tool-call presence, and failure stage

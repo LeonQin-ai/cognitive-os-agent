@@ -1,0 +1,13 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "issue_number", "title", "summary", "tests", "limitations"],
+  "properties": {
+    "status": {"type": "string", "enum": ["fixed", "blocked", "no_action"]},
+    "issue_number": {"type": "integer", "minimum": 0},
+    "title": {"type": "string"},
+    "summary": {"type": "string"},
+    "tests": {"type": "array", "items": {"type": "string"}},
+    "limitations": {"type": "array", "items": {"type": "string"}}
+  }
+}

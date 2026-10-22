@@ -699,7 +699,7 @@ static char *native_tool_catalog(const tool_registry *tools, struct policy_engin
 
 static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_action **actions, int *n_actions,
                      char **raw_out, char **err_out, const char *attachments, int *truncated_out,
-                     int output_tokens, const tool_registry *tools, struct policy_engine *policy, int *native_end_out, planner_model_diagnostic *diagnostic) {
+                     int output_tokens, const tool_registry *tools, struct policy_engine *policy, int *native_end_out, planner_model_diagnostic *diagnostic, int require_completion) {
     llm_request req = {0};
     if(native_end_out)*native_end_out=0;
     llm_response resp = {0};
@@ -812,7 +812,15 @@ static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_act
         strbuf_append(&system,"\nNATIVE TOOL PROTOCOL: When further operations are needed, emit native tool calls using the supplied function schemas. Any text alongside a tool call is commentary, never completion. After all operations and verification finish, call complete_task with status=complete, requires_tools=false, and the final answer. If blocked with no actionable tool recovery, use status=blocked. Plain text is commentary, never a completion declaration. Never set requires_tools=false when operations remain. Never call complete_task together with other tools. Tool errors are observations to diagnose and correct.\n");
         native_system=strbuf_detach(&system);msgs[0].content=native_system;
     }
+    char *review_system = NULL;
+    if (require_completion && !native_tools) {
+        strbuf system; strbuf_init(&system);
+        strbuf_append(&system, msgs[0].content ? msgs[0].content : "");
+        strbuf_append(&system, "\nCOMPLETION REVIEW PROTOCOL: Compare the candidate answer with the ORIGINAL request and actual tool evidence. A future-work announcement is not a delivered result. If work remains, return the next necessary tools as the usual JSON action array. Only when all requested work is delivered, return exactly [{\"tool\":\"complete_task\",\"args\":{\"status\":\"complete\",\"requires_tools\":false,\"answer\":\"full final answer\"}}]. If genuinely blocked, use status=blocked with an explanation. Never combine complete_task with other tools. Plain text is commentary and cannot end this reviewed task. Do not reread unchanged evidence merely to confirm completion.\n");
+        review_system = strbuf_detach(&system); msgs[0].content = review_system;
+    }
     rc = llm_chat(llm, &req, &resp);
+    free(review_system);
     if (diagnostic) {
         memset(diagnostic, 0, sizeof(*diagnostic));
         diagnostic->http_status = resp.http_status;
@@ -1030,6 +1038,35 @@ static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_act
         }
     }
 
+    if (require_completion && !using_native) {
+        /* A JSON repair may have replaced/freed the original plan. */
+        if (raw_out) plan = *raw_out;
+        int finish_count = 0;
+        for (int i=0; i<*n_actions; i++)
+            if (!strcmp((*actions)[i].tool,"complete_task")) finish_count++;
+        if (finish_count == 1 && *n_actions == 1 && !resp.truncated) {
+            cJSON *finish=cJSON_Parse((*actions)[0].args_json);
+            const char *status=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(finish,"status"));
+            const char *answer=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(finish,"answer"));
+            int valid=status && (!strcmp(status,"complete") || !strcmp(status,"blocked")) &&
+                cJSON_IsFalse(cJSON_GetObjectItemCaseSensitive(finish,"requires_tools")) && answer && *answer;
+            if (valid) {
+                if (native_end_out) *native_end_out=!strcmp(status,"blocked") ? 2 : 1;
+                char *final=xstrdup(answer);
+                planner_actions_free(*actions,*n_actions); *actions=NULL; *n_actions=0;
+                cJSON_Delete(finish);
+                if (raw_out) *raw_out=final; else free(final);
+                free(plan); return 0;
+            }
+            cJSON_Delete(finish);
+        }
+        if (finish_count || !*n_actions) {
+            planner_actions_free(*actions,*n_actions); *actions=NULL; *n_actions=0;
+            if (err_out) *err_out=xstrdup("completion review requires next tool actions or a valid complete_task declaration; commentary is not completion");
+            if (raw_out) *raw_out=NULL;
+            free(plan); return -1;
+        }
+    }
     if (!raw_out)
         free(plan);
     return 0;
@@ -1046,21 +1083,21 @@ void planner_actions_free(planned_action *a, int n) {
 
 int planner_plan(llm *llm, const char *prompt, planned_action **actions, int *n_actions, char **raw_out,
                      char **err_out) {
-    return plan_with(llm, NULL, prompt, actions, n_actions, raw_out, err_out, NULL, NULL, 0, NULL, NULL, NULL, NULL);
+    return plan_with(llm, NULL, prompt, actions, n_actions, raw_out, err_out, NULL, NULL, 0, NULL, NULL, NULL, NULL, 0);
 }
 
 int planner_plan_ex(llm *llm, const struct tool_registry *tools, struct skill_registry *skills,
                         struct policy_engine *policy, const char *prompt, planned_action **actions,
                         int *n_actions, char **raw_out, char **err_out) {
     char *sys = build_catalog_prompt(tools, skills, policy,planner_uses_native_tools(llm));
-    return plan_with(llm, sys, prompt, actions, n_actions, raw_out, err_out, NULL, NULL, 0, tools, policy, NULL, NULL);
+    return plan_with(llm, sys, prompt, actions, n_actions, raw_out, err_out, NULL, NULL, 0, tools, policy, NULL, NULL, 0);
 }
 
 int planner_plan_attachments_ex(llm *llm, const struct tool_registry *tools, struct skill_registry *skills,
     struct policy_engine *policy, const char *prompt, planned_action **actions,
     int *n_actions, char **raw_out, char **err_out, const char *attachments, int *truncated_out) {
     return plan_with(llm, build_catalog_prompt(tools,skills,policy,planner_uses_native_tools(llm)), prompt, actions,
-        n_actions, raw_out, err_out, attachments, truncated_out, 0, tools, policy, NULL, NULL);
+        n_actions, raw_out, err_out, attachments, truncated_out, 0, tools, policy, NULL, NULL, 0);
 }
 
 int planner_plan_attachments_ex_with_output(llm *llm, const struct tool_registry *tools,
@@ -1068,15 +1105,15 @@ int planner_plan_attachments_ex_with_output(llm *llm, const struct tool_registry
     planned_action **actions, int *n_actions, char **raw_out, char **err_out,
     const char *attachments, int *truncated_out, int output_tokens) {
     return plan_with(llm, build_catalog_prompt(tools,skills,policy,planner_uses_native_tools(llm)), prompt, actions,
-        n_actions, raw_out, err_out, attachments, truncated_out, output_tokens, tools, policy, NULL, NULL);
+        n_actions, raw_out, err_out, attachments, truncated_out, output_tokens, tools, policy, NULL, NULL, 0);
 }
 
 int planner_plan_turn_diagnostic(llm *llm, const struct tool_registry *tools,
     struct skill_registry *skills, struct policy_engine *policy, const char *prompt,
     planned_action **actions, int *n_actions, char **raw_out, char **err_out,
-    const char *attachments, int *truncated_out, int output_tokens, int *native_end_out, planner_model_diagnostic *diagnostic) {
+    const char *attachments, int *truncated_out, int output_tokens, int *native_end_out, planner_model_diagnostic *diagnostic, int require_completion) {
     return plan_with(llm,build_catalog_prompt(tools,skills,policy,planner_uses_native_tools(llm)),prompt,actions,n_actions,
-        raw_out,err_out,attachments,truncated_out,output_tokens,tools,policy,native_end_out,diagnostic);
+        raw_out,err_out,attachments,truncated_out,output_tokens,tools,policy,native_end_out,diagnostic,require_completion);
 }
 
 int planner_plan_turn(llm *llm, const struct tool_registry *tools,
@@ -1084,5 +1121,5 @@ int planner_plan_turn(llm *llm, const struct tool_registry *tools,
     planned_action **actions, int *n_actions, char **raw_out, char **err_out,
     const char *attachments, int *truncated_out, int output_tokens, int *native_end_out) {
     return planner_plan_turn_diagnostic(llm,tools,skills,policy,prompt,actions,n_actions,
-        raw_out,err_out,attachments,truncated_out,output_tokens,native_end_out,NULL);
+        raw_out,err_out,attachments,truncated_out,output_tokens,native_end_out,NULL,0);
 }

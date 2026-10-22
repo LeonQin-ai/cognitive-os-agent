@@ -2,6 +2,7 @@
 import json, socket, subprocess, tempfile, threading, time, urllib.request, re
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from fixture_completion import reviewed_answer
 counts={}; errors=[]; artifact=None
 page=bytearray(b'x'*18000)
 page[9000:9000+len(b'MIDDLE_BROWSER_PROOF')]=b'MIDDLE_BROWSER_PROOF'
@@ -42,6 +43,7 @@ class Provider(BaseHTTPRequestHandler):
                     answer='页面完整读取，已核对 MIDDLE_BROWSER_PROOF 和 END_BROWSER_PROOF。'
             except Exception as e:
                 errors.append(str(e)); answer='浏览器测试未完成。'
+            answer=reviewed_answer(body,answer)
             data=json.dumps({'choices':[{'message':{'content':answer}}]}).encode()
         self.send_response(200); self.send_header('Content-Type','application/json')
         self.send_header('Content-Length',str(len(data))); self.end_headers(); self.wfile.write(data)

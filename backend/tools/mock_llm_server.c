@@ -184,6 +184,25 @@ static void scan_message(cJSON *msg, const char **content, int *saw_image) {
     }
 }
 
+/* The offline fixture explicitly confirms its chosen finished answer when
+ * the runtime requests a structured legacy completion review. */
+static char *reviewed_plan(cJSON *root, char *plan) {
+    cJSON *messages=cJSON_GetObjectItemCaseSensitive(root,"messages");
+    const char *system=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(root,"system"));
+    if (!system && cJSON_IsArray(messages))
+        system=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(cJSON_GetArrayItem(messages,0),"content"));
+    if (!system || !strstr(system,"COMPLETION REVIEW PROTOCOL:") || !plan || plan[0]=='[') return plan;
+    cJSON *calls=cJSON_CreateArray(), *call=cJSON_CreateObject(), *args=cJSON_CreateObject();
+    cJSON_AddStringToObject(call,"tool","complete_task");
+    cJSON_AddStringToObject(args,"status","complete");
+    cJSON_AddBoolToObject(args,"requires_tools",0);
+    cJSON_AddStringToObject(args,"answer",plan);
+    cJSON_AddItemToObject(call,"args",args); cJSON_AddItemToArray(calls,call);
+    char *result=cJSON_PrintUnformatted(calls); cJSON_Delete(calls);
+    if (result) { free(plan); return result; }
+    return plan;
+}
+
 static int h_chat(const http_request *req, http_response *resp, void *ud) {
     (void)ud;
     char *b = body_str(req);
@@ -207,7 +226,7 @@ static int h_chat(const http_request *req, http_response *resp, void *ud) {
             if (content) last = content;
         }
     }
-    char *plan = plan_for(last);
+    char *plan = reviewed_plan(root, plan_for(last));
     cJSON_Delete(root);
     if (saw_image) {
         /* prove the image part reached the server over the wire */
@@ -276,7 +295,7 @@ static int h_messages(const http_request *req, http_response *resp, void *ud) {
             if (content) last = content;
         }
     }
-    char *plan = plan_for(last);
+    char *plan = reviewed_plan(root, plan_for(last));
     cJSON_Delete(root);
     if (saw_image) {
         char *with = (char *)malloc(strlen(plan) + 16);

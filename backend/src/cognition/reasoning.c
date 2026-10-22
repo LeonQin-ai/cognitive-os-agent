@@ -290,6 +290,7 @@ struct reasoning {
     int planner_response_truncated;
     int planner_native_end_turn;
     int planner_output_escalated; /* one bounded 32K -> 64K retry after truncation */
+    int completion_review_required; /* legacy review must make an explicit decision */
     char last_model_error[1024];
     planner_model_diagnostic last_model_failure;
     int last_model_failure_call;
@@ -2000,7 +2001,8 @@ static int h_reason(state_machine *sm, void *ud, const char *input, char **out) 
     int rc = planner_plan_turn_diagnostic(r->llm, r->tools, r->skills, r->policy,
                                  aug ? aug : input, &r->actions, &r->n_actions,
                                  &raw, &plan_err, r->run_task ? r->run_task->attachments_json : NULL,
-                                 &r->planner_response_truncated, output_override, &r->planner_native_end_turn, &diagnostic);
+                                 &r->planner_response_truncated, output_override, &r->planner_native_end_turn, &diagnostic,
+                                 r->completion_review_required);
     if (r->planner_response_truncated && !r->planner_output_escalated) {
         r->planner_output_escalated = 1;
         log_info("planner: response hit output limit; escalating subsequent requests to a bounded 64K ceiling");
@@ -3883,6 +3885,7 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     r->prog_tool[0] = 0;
     r->prog_tool_calls = r->prog_llm_calls = r->round_idx = r->prog_model_failures = 0;
     r->last_model_failure_call=0;
+    r->completion_review_required=0;
     r->prog_llm_ms = r->prog_tool_ms = 0;
     r->last_model_error[0]=0;
     r->planner_output_escalated = 0;
@@ -4292,7 +4295,10 @@ restart_planning:
              * delivery. Review once per run, like a bounded
              * stop hook. Never classify answer prose or recursively review
              * the review itself; ordinary zero-tool conversation needs no extra call. */
-            if (r->planner_native_end_turn == 1 && r->run_successful_tools > 0 &&
+            int real_provider = r->llm && r->llm->provider &&
+                (!strcmp(r->llm->provider,"openai") || !strcmp(r->llm->provider,"anthropic"));
+            if ((r->planner_native_end_turn == 1 || (!planner_uses_native_tools(r->llm) && real_provider)) &&
+                r->run_successful_tools > 0 &&
                 !completion_reviewed) {
                 if (r->round_idx >= r->max_rounds) {
                     unfinished = 1;
@@ -4300,6 +4306,7 @@ restart_planning:
                     break;
                 }
                 completion_reviewed = 1;
+                r->completion_review_required = !planner_uses_native_tools(r->llm);
                 round_log_append(r, txt ? txt : "");
                 round_log_append(r, "[system] Completion review: compare the proposed answer against the ORIGINAL user request and actual tool evidence. "
                                     "A completion declaration alone is not evidence. If any requested analysis, operation, artifact or verification is still missing, "

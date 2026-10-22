@@ -9,6 +9,7 @@ import threading
 import time
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from fixture_completion import reviewed_answer
 
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8')
@@ -63,6 +64,7 @@ class Provider(BaseHTTPRequestHandler):
                 answer='任务未完成。'
         except Exception as error:
             errors.append(str(error)); answer='测试规划失败。'
+        answer=reviewed_answer(body,answer)
         data=json.dumps({'choices':[{'message':{'role':'assistant','content':answer},'finish_reason':'stop'}]}).encode()
         self.send_response(200); self.send_header('Content-Type','application/json')
         self.send_header('Content-Length',str(len(data))); self.end_headers(); self.wfile.write(data)

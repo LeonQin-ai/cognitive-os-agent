@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 # Existing fixtures exercise the explicitly supported legacy text protocol.
 env:
@@ -31,6 +32,8 @@ jobs:
         run: python3 tests/test_todo_cli_contract.py
       - name: Source read completion API regressions
         run: COA_BUILD_DIR=build-macos python3 tests/test_source_read_e2e.py
+      - name: Completion review delivery regression
+        run: COA_BUILD_DIR=build-macos python3 tests/test_completion_review_e2e.py
       - name: Adapter and end-to-end tests
         run: |
           ./build-macos/mock-llm-server 9000 &
@@ -74,6 +77,8 @@ jobs:
         working-directory: backend
     steps:
       - uses: actions/checkout@v5
+      - name: Scheduled issue repair plumbing
+        run: node ../.github/scripts/issue-autofix.test.cjs
       - name: Build
         run: make -j"$(nproc)"
       - name: Start mock LLM server (needed by adapters + e2e)
@@ -86,6 +91,8 @@ jobs:
         run: make build/cognitive-os-agent-test-plan-cycle && ./build/cognitive-os-agent-test-plan-cycle
       - name: Source read completion API regressions
         run: python3 tests/test_source_read_e2e.py
+      - name: Completion review delivery regression
+        run: python3 tests/test_completion_review_e2e.py
       - name: Single-response repetition regression
         run: python3 tests/test_answer_repetition.py
       - name: Independent todo-cli acceptance verifier regression
@@ -136,6 +143,8 @@ jobs:
           LD_PRELOAD=$(gcc -print-file-name=libasan.so) ASAN_OPTIONS=detect_leaks=0 ./build/cognitive-os-agent-test
       - name: Native tool block continuation under ASAN
         run: ASAN_OPTIONS=detect_leaks=0 python3 tests/test_native_tool_loop.py
+      - name: Legacy and native completion review under ASAN
+        run: ASAN_OPTIONS=detect_leaks=0 python3 tests/test_completion_review_e2e.py
 
   windows:
     name: Windows (zig cc)
@@ -172,6 +181,8 @@ jobs:
           python tests/test_ssh_password_e2e.py
       - name: Source read completion API regressions
         run: python tests/test_source_read_e2e.py
+      - name: Completion review delivery regression
+        run: python tests/test_completion_review_e2e.py
       - name: DSML tool-call execution regression
         run: python tests/test_dsml_e2e.py
       - name: Multi-agent dependency API regressions

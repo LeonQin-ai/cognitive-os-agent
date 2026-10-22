@@ -2,6 +2,7 @@
 import json, socket, subprocess, tempfile, threading, time, urllib.request
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from fixture_completion import reviewed_answer
 counts = {}; errors = []
 class Provider(BaseHTTPRequestHandler):
     def log_message(self, *args): pass
@@ -22,6 +23,7 @@ class Provider(BaseHTTPRequestHandler):
             else: answer = '文件已生成，两个技能已注册。'
         except Exception as e:
             errors.append(str(e)); answer = '测试未完成。'
+        answer = reviewed_answer(body, answer)
         data = json.dumps({'usage':{'input_tokens':11,'output_tokens':7,'output_tokens_details':{'reasoning_tokens':2}},'choices':[{'message':{'content':answer}}]}).encode()
         self.send_response(200); self.send_header('Content-Type','application/json')
         self.send_header('Content-Length',str(len(data))); self.end_headers(); self.wfile.write(data)
@@ -68,9 +70,9 @@ with tempfile.TemporaryDirectory(prefix='coa-skill-runtime-') as folder:
             assert (state/'skill-result.txt').read_text()=='SKILL_EXECUTED'
             persisted = json.loads((state/'skills.json').read_text())
             assert {'live-skill','second-skill'} <= {x['name'] for x in persisted}
-            assert counts['calls']==4, counts
+            assert counts['calls']==5, counts
             usage = request('/v1/usage')
-            assert usage['usage_available'] is True and usage['total']=={'prompt':44,'completion':20,'reasoning':8}, usage
+            assert usage['usage_available'] is True and usage['total']=={'prompt':55,'completion':25,'reasoning':10}, usage
             print('PASS: copy after startup -> automatic catalogue -> direct registration -> prompt instructions -> real file -> DONE')
         finally:
             process.terminate()

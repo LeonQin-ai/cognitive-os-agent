@@ -10,6 +10,7 @@ import threading
 import time
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from fixture_completion import reviewed_answer
 
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8')
@@ -116,6 +117,7 @@ class Provider(BaseHTTPRequestHandler):
         else:
             tool='list_dir' if '目录读取回归测试' in current else 'file_read'
             answer=json.dumps([{'tool':tool, 'args':{'path':'.' if tool=='list_dir' else 'readme.txt'}}])
+        answer=reviewed_answer(body,answer)
         data=json.dumps({'choices':[{'message':{'role':'assistant','content':answer},
                      'finish_reason':'stop'}]}).encode()
         self.send_response(200); self.send_header('Content-Type','application/json')
@@ -206,13 +208,13 @@ with tempfile.TemporaryDirectory(prefix='coa-source-read-') as directory:
                     saved=request('/v1/chat/history?session=read-test-7')
                     assert saved['turns'][-1]['a']==NON_SSH_TEXT
                 if index == 11:
-                    assert task['tool_calls']==5 and task['llm_calls']==4, task
+                    assert task['tool_calls']==5 and task['llm_calls']==5, task
                     assert sum(json.loads(step['args']).get('path')=='fragment.c' for step in task['steps'])==1
                     assert sum(step['tool']=='file_read' and json.loads(step['args']).get('path')=='generated.py' for step in task['steps'])==1
                 if index == 12:
                     assert 'fragment.c：offset_bytes=' not in task['output'], task
                 if index == 13:
-                    assert task['tool_calls']==2 and task['llm_calls']==3, task
+                    assert task['tool_calls']==2 and task['llm_calls']==4, task
                 print('PASS:', expected, message, flush=True)
             history=request('/v1/chat/history?session=read-test-4')
             assert history['turns'][-1]['a']==long_output, 'Chat history truncated the answer'

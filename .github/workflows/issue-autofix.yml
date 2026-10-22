@@ -1,0 +1,89 @@
+name: Half-hourly issue review and repair
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: issue-autofix
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: write
+      issues: read
+      pull-requests: write
+      actions: write
+    steps:
+      - name: Check configured model access
+        id: credentials
+        env:
+          ISSUE_REPAIR_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          if [ -n "$ISSUE_REPAIR_API_KEY" ]; then
+            echo 'ready=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'ready=false' >> "$GITHUB_OUTPUT"
+            echo '::notice::Issue repair is not active: configure repository Actions secret OPENAI_API_KEY. No model request was made.'
+          fi
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Inspect open issues and newest comments
+        id: issues
+        uses: actions/github-script@v7
+        with:
+          script: await require('./.github/scripts/issue-autofix.cjs').collect({github, context, core})
+      - name: Reproduce and repair one actionable issue
+        id: codex
+        if: steps.credentials.outputs.ready == 'true' && steps.issues.outputs.actionable == 'true'
+        timeout-minutes: 15
+        uses: openai/codex-action@1d82a3dba7c7988ec71ecae1ed5b8e8db96495c5 # v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          permission-profile: ':workspace'
+          safety-strategy: drop-sudo
+          prompt-file: .github/prompts/issue-autofix.md
+          output-schema-file: .github/prompts/issue-autofix.schema.json
+          output-file: backend/build/issue-autofix/result.json
+      - name: Verify trusted workflow code was not changed
+        if: steps.codex.outcome == 'success'
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          git diff --exit-code "$EXPECTED_SHA" -- .github
+      - name: Record actual outcome and limitations
+        id: result
+        if: steps.codex.outcome == 'success'
+        uses: actions/github-script@v7
+        with:
+          script: await require('./.github/scripts/issue-autofix.cjs').report({core})
+      - name: Independently build and validate the patch
+        if: steps.result.outputs.fixed == 'true'
+        env:
+          COA_TOOL_PROTOCOL: legacy
+        working-directory: backend
+        run: |
+          make -j3
+          ./build/cognitive-os-agent-test
+          ./build/cognitive-os-agent-scenario
+          ./build/cognitive-os-agent-bench --mock
+          python3 tests/test_source_read_e2e.py
+          python3 tests/test_completion_review_e2e.py
+          python3 tests/test_model_finalization_e2e.py
+          python3 tests/test_answer_repetition.py
+      - name: Publish a repair PR and dispatch full CI
+        if: steps.result.outputs.fixed == 'true'
+        uses: actions/github-script@v7
+        env:
+          GH_TOKEN: ${{ github.token }}
+        with:
+          script: await require('./.github/scripts/issue-autofix.cjs').publish({github, context, core})

@@ -8,6 +8,7 @@ import threading
 import time
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from fixture_completion import reviewed_answer
 
 BACKEND = Path(__file__).resolve().parents[1]
 calls = []
@@ -39,6 +40,7 @@ class Provider(BaseHTTPRequestHandler):
         else:
             assert 'SOURCE_EVIDENCE_DSML' in text, text
             answer = 'Completed tools; note.txt contains hello. Source: SOURCE_EVIDENCE_DSML.'
+        answer = reviewed_answer(body, answer)
         data = json.dumps({'choices': [{'message': {'role': 'assistant', 'content': answer},
                                        'finish_reason': 'stop'}]}).encode()
         self.send_response(200)
@@ -99,7 +101,7 @@ def main():
                     assert all(step['ok'] for step in task['steps']), task
                     assert [s['tool'] for s in task['steps']] == ['list_dir', 'file_read', 'file_write'], task
                     assert (state / 'note.txt').read_text() == 'hello'
-                    assert len(calls) == 2, len(calls)
+                    assert len(calls) == 3, len(calls)
                     print('PASS: prose-prefixed DSML batch -> real tools -> source evidence -> exact file -> DONE')
                 finally:
                     process.terminate()

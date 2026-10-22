@@ -2,6 +2,7 @@
 import json, socket, subprocess, tempfile, threading, time, urllib.request
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from fixture_completion import reviewed_answer
 counts={}
 class Provider(BaseHTTPRequestHandler):
     def log_message(self,*args): pass
@@ -70,6 +71,7 @@ class Provider(BaseHTTPRequestHandler):
             elif counts.get('recover'):
                 assert 'EOF_DIAGNOSTIC' in text; answer='完整读取完成，已核对 EOF_DIAGNOSTIC。'
             else: answer='全部阅读完成。'
+        answer=reviewed_answer(body,answer)
         data=json.dumps({'choices':[{'message':{'content':answer}}]}).encode()
         self.send_response(200); self.send_header('Content-Type','application/json')
         self.send_header('Content-Length',str(len(data))); self.end_headers(); self.wfile.write(data)
@@ -106,13 +108,13 @@ with tempfile.TemporaryDirectory(prefix='coa-completion-recovery-') as folder:
                     assert time.monotonic()<deadline,t
                     time.sleep(.05)
             repaired=finished(request('/v1/tasks',{'prompt':'生成HTML文档 MALFORMED180'})['id'])
-            assert repaired['status']=='DONE' and counts['bad180']==4,repaired
+            assert repaired['status']=='DONE' and counts['bad180']==5,repaired
             assert [st['tool'] for st in repaired['steps']]==['file_write','file_read'],repaired
             print('PASS: malformed tagged identifier never dispatches; corrected write/read completes without phantom failure')
             (state/'include/context').mkdir(parents=True)
             (state/'include/context/example.h').write_text('HEADER178',encoding='utf-8')
             header=finished(request('/v1/tasks',{'prompt':'分析头文件 HEADER178'})['id'])
-            assert header['status']=='DONE' and counts['header178']==4,header
+            assert header['status']=='DONE' and counts['header178']==5,header
             print('PASS: missing src header scope is retained; verified same-repository include read recovers')
             (state/'other/include/context').mkdir(parents=True)
             (state/'other/include/context/example.h').write_text('unrelated repository',encoding='utf-8')
@@ -120,15 +122,15 @@ with tempfile.TemporaryDirectory(prefix='coa-completion-recovery-') as folder:
             assert header_bad['status']=='FAILED',header_bad
             print('PASS: same header basename in a different repository does not clear failed reads')
             artifact=finished(request('/v1/tasks',{'prompt':'输出一个html的报告文档，整理对应的架构和流程图 HTML177'})['id'])
-            assert artifact['status']=='DONE' and counts['html177']==4 and (state/'report177.html').exists(),artifact
+            assert artifact['status']=='DONE' and counts['html177']==5 and (state/'report177.html').exists(),artifact
             false_report=finished(request('/v1/tasks',{'prompt':'输出一个html的报告文档 HTML_FALSE177'})['id'])
             assert false_report['status']=='FAILED',false_report
             print('PASS: issue177 requires an actual HTML artifact; no-write completion is rejected')
             tool_needed=finished(request('/v1/tasks',{'prompt':'分析当前架构 USE_TOOLS176'})['id'])
-            assert tool_needed['status']=='DONE' and counts['tools176']==4,tool_needed
+            assert tool_needed['status']=='DONE' and counts['tools176']==5,tool_needed
             print('PASS: explicit remaining tool need after observations continues tool execution')
             html=finished(request('/v1/tasks',{'prompt':'输出一个html报告并检查内容 HTML_RECOVERY'})['id'])
-            assert html['status']=='DONE' and counts.get('html')==5,html
+            assert html['status']=='DONE' and counts.get('html')==6,html
             assert (state/'report.html').exists()
             assert any(step.get('tool')=='file_read' for step in html.get('steps',[])),html
             print('PASS: HTML write followed by two narration rounds recovers to actual read and final delivery')
@@ -139,7 +141,7 @@ with tempfile.TemporaryDirectory(prefix='coa-completion-recovery-') as folder:
             assert no_action['status']=='FAILED' and 'skill_manage' in no_action['output'],no_action
             (state/'partial.txt').write_text('x'*7500+'EOF_DIAGNOSTIC',encoding='utf-8')
             analysis=finished(request('/v1/tasks',{'prompt':'分析代码中的上下文工程怎么实现 ANALYSIS_175'})['id'])
-            assert analysis['status']=='DONE' and counts['analysis175']==4,analysis
+            assert analysis['status']=='DONE' and counts['analysis175']==5,analysis
             assert 'EOF_DIAGNOSTIC' in analysis['output'] and '让我读取' not in analysis['output'],analysis
             print('PASS: issue175 progress preamble is not final analysis; remaining read and actual answer execute')
             started=request('/v1/tasks',{'prompt':'完整读取文件 partial.txt READ_DIAGNOSTIC'})
@@ -154,7 +156,7 @@ with tempfile.TemporaryDirectory(prefix='coa-completion-recovery-') as folder:
             assert encoded['status']=='DONE',encoded
             steps=encoded.get('steps',[])
             assert steps and 'NORMAL_UNICODE_正常中文' in steps[0].get('out','') and 'EOF_UTF8_DIAGNOSTIC' in steps[0].get('out',''),steps
-            assert counts.get('utf8')==3,counts
+            assert counts.get('utf8')==4,counts
             print('PASS: invalid UTF-8 tool output remains valid task/progress JSON; valid Chinese survives')
             print('PASS: missing registration operation and unread file have actionable causes; resumed read reaches EOF and DONE')
         finally:
