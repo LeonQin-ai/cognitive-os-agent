@@ -25,7 +25,11 @@ with tempfile.TemporaryDirectory(prefix='coa-trace-commands-',ignore_cleanup_err
   p=subprocess.Popen([str(build/('cognitive-os-agent.exe' if os.name=='nt' else 'cognitive-os-agent')),'--state',folder,'--workspace',folder,'serve',str(port)],cwd=backend,stdout=log,stderr=log,env={**os.environ,'COA_TOOL_PROTOCOL':'native'},creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
   for _ in range(100):
    try:request('/v1/scheduler');return p
-   except OSError:assert p.poll() is None;time.sleep(.1)
+   except OSError:
+    if p.poll() is not None:
+     log.flush()
+     raise AssertionError('Agent startup failed: '+(build/'trace-commands.log').read_text(encoding='utf-8',errors='replace')[-4000:])
+    time.sleep(.1)
   raise AssertionError('startup failed')
  def check(spans):
   spans=[s for s in spans if s['name']=='tool.shell'];assert len(spans)==4
@@ -51,6 +55,8 @@ with tempfile.TemporaryDirectory(prefix='coa-trace-commands-',ignore_cleanup_err
     assert time.monotonic()<deadline;time.sleep(.05)
    check(history[0]['spans'])
   finally:p.terminate();p.wait(timeout=5)
+  # Persistence concerns state, not immediate POSIX listener rebinding.
+  with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
   p=start(log)
   try:check(request('/v1/trace/history?task_id='+str(task['id']))[0]['spans'])
   finally:p.terminate();p.wait(timeout=5);server.shutdown();server.server_close()
