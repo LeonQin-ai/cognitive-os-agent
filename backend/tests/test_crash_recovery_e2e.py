@@ -2,6 +2,7 @@
 import json, os, socket, subprocess, tempfile, threading, time, urllib.request
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from fixture_completion import reviewed_answer
 entered=threading.Event(); release=threading.Event(); counts={}; writes=[]
 class Provider(BaseHTTPRequestHandler):
     def log_message(self,*args): pass
@@ -22,6 +23,7 @@ class Provider(BaseHTTPRequestHandler):
             elif n==2:
                 writes.append('COMPLETE_STAGE'); answer=json.dumps([{'tool':'file_write','args':{'path':'recover.txt','content':'COMPLETE_STAGE'}}])
             else: answer='文件已生成。'
+        answer=reviewed_answer(body,answer)
         data=json.dumps({'choices':[{'message':{'content':answer}}]}).encode()
         try:
             self.send_response(200); self.send_header('Content-Type','application/json')
