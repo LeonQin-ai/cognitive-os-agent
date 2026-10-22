@@ -506,6 +506,45 @@ static void resolve_failed_tool(reasoning *r, const char *tool_name, const char 
     }
 }
 
+/* A model may stop probing a guessed, nonessential source path after proving
+ * absence. This decision is structured, not inferred from answer wording.
+ * It cannot waive writes, commands, existing unread files or unrelated scopes. */
+static void resolve_optional_missing_reads(reasoning *r, const char *completion_json) {
+    cJSON *decision=cJSON_Parse(completion_json?completion_json:"{}");
+    const char *status=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(decision,"status"));
+    cJSON *entries=cJSON_GetObjectItemCaseSensitive(decision,"unavailable_optional_reads"), *entry;
+    if(!status || strcmp(status,"complete") || !cJSON_IsFalse(cJSON_GetObjectItemCaseSensitive(decision,"requires_tools"))) {
+        cJSON_Delete(decision);return;
+    }
+    if(!cJSON_IsArray(entries)){cJSON_Delete(decision);return;}
+    cJSON_ArrayForEach(entry,entries) {
+        const char *path=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(entry,"path"));
+        const char *reason=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(entry,"reason"));
+        cJSON *evidence=cJSON_GetObjectItemCaseSensitive(entry,"evidence_step_id");
+        if(!path || !reason || !*reason || !cJSON_IsNumber(evidence) || evidence->valueint<=0 ||
+            evidence->valuedouble!=(double)evidence->valueint)continue;
+        char target[2048],parent[2048]; normalized_evidence_path(r,path,target,sizeof(target));
+        if(!*target || fs_exists(target))continue;
+        snprintf(parent,sizeof(parent),"%s",target);char *slash=strrchr(parent,'/');
+        if(!slash)continue;*slash=0;
+        unsigned failed_id=0; int verified=0;
+        for(int s=0;s<r->n_steps;s++) {
+            struct run_step *step=&r->steps[s];char scope[2048];
+            failure_scope(r,step->tool,step->args,scope,sizeof(scope));
+            if(!strcmp(step->tool,"file_read") && step->ok==0 && !strcmp(scope,target)){failed_id=step->id;verified=0;}
+            if(step->id==(unsigned)evidence->valuedouble && failed_id && step->id>failed_id &&
+                step->ok==1 && !strcmp(step->tool,"list_dir") && !strcmp(scope,parent))verified=1;
+        }
+        if(!verified)continue;
+        /* Reuse exact-scope removal; no successful tool record is fabricated. */
+        cJSON *args=cJSON_CreateObject();cJSON_AddStringToObject(args,"path",target);
+        char *json=cJSON_PrintUnformatted(args);cJSON_Delete(args);
+        resolve_failed_tool(r,"file_read",json);free(json);
+        log_info("completion: verified optional missing read resolved by directory evidence step %u",(unsigned)evidence->valuedouble);
+    }
+    cJSON_Delete(decision);
+}
+
 /* Only the worker constructs snapshots. Readers copy immutable JSON. */
 static void usage_book_round(reasoning *r) {
         /* per-round token accounting into the global per-model ledger
@@ -1926,6 +1965,7 @@ static char *build_context(reasoning *r, const char *prompt) {
         cJSON_AddNumberToObject(state,"attempted_steps",r->n_steps);
         if(r->n_steps){
             const struct run_step *last=&r->steps[r->n_steps-1];cJSON *attempt=cJSON_CreateObject();
+            cJSON_AddNumberToObject(attempt,"id",last->id);
             cJSON_AddStringToObject(attempt,"tool",last->tool);cJSON_AddNumberToObject(attempt,"ok",last->ok);
             cJSON_AddStringToObject(attempt,"target",last->target);cJSON_AddItemToObject(state,"last_attempt",attempt);
         }
@@ -2002,11 +2042,14 @@ static int h_reason(state_machine *sm, void *ud, const char *input, char **out) 
     r->planner_response_truncated=0;
     int output_override = r->planner_output_escalated ? 65536 : 0;
     planner_model_diagnostic diagnostic = {0};
+    char *completion_json=NULL;
     int rc = planner_plan_turn_diagnostic(r->llm, r->tools, r->skills, r->policy,
                                  aug ? aug : input, &r->actions, &r->n_actions,
                                  &raw, &plan_err, r->run_task ? r->run_task->attachments_json : NULL,
                                  &r->planner_response_truncated, output_override, &r->planner_native_end_turn, &diagnostic,
-                                 r->completion_review_required);
+                                 r->completion_review_required,&completion_json);
+    if(rc==0 && completion_json)resolve_optional_missing_reads(r,completion_json);
+    free(completion_json);
     /* Only visible generation/tool arguments can benefit from more output
      * room. An exhausted hidden-only response is not partial deliverable. */
     if (r->planner_response_truncated && !r->planner_output_escalated &&

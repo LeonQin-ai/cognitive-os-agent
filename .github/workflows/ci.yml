@@ -59,7 +59,9 @@ jobs:
       - name: Model finalization and provider diagnostics regression
         run: COA_BUILD_DIR=build-macos python3 tests/test_model_finalization_e2e.py
       - name: Command execution Trace and persistence
-        run: COA_BUILD_DIR=build-macos python3 tests/test_trace_commands_e2e.py
+        run: |
+          COA_BUILD_DIR=build-macos python3 tests/test_trace_commands_e2e.py
+          COA_BUILD_DIR=build-macos python3 tests/test_optional_missing_read_e2e.py
       - name: Model-sized observation retention
         run: COA_BUILD_DIR=build-macos python3 tests/test_observation_budget_e2e.py
       - name: Information answer completion regression
@@ -120,7 +122,9 @@ jobs:
       - name: Model finalization and provider diagnostics regression
         run: python tests/test_model_finalization_e2e.py
       - name: Command execution Trace and persistence
-        run: python tests/test_trace_commands_e2e.py
+        run: |
+          python tests/test_trace_commands_e2e.py
+          python tests/test_optional_missing_read_e2e.py
       - name: Model-sized observation retention
         run: python tests/test_observation_budget_e2e.py
       - name: Information answer completion regression
@@ -216,7 +220,9 @@ jobs:
       - name: Model finalization and provider diagnostics regression
         run: python tests/test_model_finalization_e2e.py
       - name: Command execution Trace and persistence
-        run: python tests/test_trace_commands_e2e.py
+        run: |
+          python tests/test_trace_commands_e2e.py
+          python tests/test_optional_missing_read_e2e.py
       - name: Model-sized observation retention
         run: python tests/test_observation_budget_e2e.py
       - name: Information answer completion regression

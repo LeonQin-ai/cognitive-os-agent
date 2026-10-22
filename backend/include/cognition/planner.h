@@ -74,11 +74,13 @@ int planner_plan_turn(llm *llm, const struct tool_registry *tools,
     struct skill_registry *skills, struct policy_engine *policy, const char *prompt,
     planned_action **actions, int *n_actions, char **raw_out, char **err_out,
     const char *attachments, int *truncated_out, int output_tokens, int *native_end_out);
+/* completion_out optionally receives the validated structured finish object;
+ * caller owns the JSON string. It is never derived from answer prose. */
 int planner_plan_turn_diagnostic(llm *llm, const struct tool_registry *tools,
     struct skill_registry *skills, struct policy_engine *policy, const char *prompt,
     planned_action **actions, int *n_actions, char **raw_out, char **err_out,
     const char *attachments, int *truncated_out, int output_tokens, int *native_end_out,
-    planner_model_diagnostic *diagnostic, int require_completion);
+    planner_model_diagnostic *diagnostic, int require_completion, char **completion_out);
 
 void planner_actions_free(planned_action *a, int n);
 

@@ -128,6 +128,7 @@ static char *build_catalog_prompt(const tool_registry *tools, struct skill_regis
         return NULL;
     strbuf_init(&b);
     strbuf_append(&b, native ? SYS_NATIVE_HEAD:SYS_PROMPT_HEAD);
+    strbuf_append(&b,"\nFor a guessed exploratory file_read path that does not exist and is not required for the requested result, verify absence with list_dir of its exact parent after the failure. Then complete_task may include unavailable_optional_reads:[{path,reason,evidence_step_id}], using the successful directory step ID from Current execution state. Explain the omitted source and base conclusions on sources actually read. Do not retry an absent path indefinitely. Never use this for required source/deliverable reads, existing unread files, failed writes or commands.\n");
     for (size_t i = 0; i < (size_t)tool_registry_count(tools); i++) {
         const tool *t = tool_registry_get(tools, i);
         if (!t || !t->name)
@@ -693,13 +694,21 @@ static char *native_tool_catalog(const tool_registry *tools, struct policy_engin
         cJSON_AddItemToObject(fn,"parameters",schema);cJSON_AddItemToArray(list,entry);
     }
     cJSON *finish=cJSON_Parse("{\"type\":\"function\",\"function\":{\"name\":\"complete_task\",\"description\":\"End this task only when no further tool operations are required. Report complete or blocked and the final answer. If tools are needed, call those tools instead.\",\"parameters\":{\"type\":\"object\",\"properties\":{\"status\":{\"type\":\"string\",\"enum\":[\"complete\",\"blocked\"]},\"requires_tools\":{\"type\":\"boolean\"},\"answer\":{\"type\":\"string\"}},\"required\":[\"status\",\"requires_tools\",\"answer\"]}}}");
-    if(finish)cJSON_AddItemToArray(list,finish);
+    if(finish){
+        cJSON *properties=cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(
+            cJSON_GetObjectItemCaseSensitive(finish,"function"),"parameters"),"properties");
+        cJSON *optional=cJSON_Parse("{\"type\":\"array\",\"description\":\"Only for absent exploratory file_read paths that are not required deliverables: cite a later successful list_dir of the exact parent to verify absence. Never waive required reads or failed writes/commands.\",\"items\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"reason\":{\"type\":\"string\"},\"evidence_step_id\":{\"type\":\"integer\"}},\"required\":[\"path\",\"reason\",\"evidence_step_id\"]}}");
+        if(properties && optional)cJSON_AddItemToObject(properties,"unavailable_optional_reads",optional);
+        else cJSON_Delete(optional);
+        cJSON_AddItemToArray(list,finish);
+    }
     char *result=cJSON_GetArraySize(list)?cJSON_PrintUnformatted(list):NULL;cJSON_Delete(list);return result;
 }
 
 static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_action **actions, int *n_actions,
                      char **raw_out, char **err_out, const char *attachments, int *truncated_out,
-                     int output_tokens, const tool_registry *tools, struct policy_engine *policy, int *native_end_out, planner_model_diagnostic *diagnostic, int require_completion) {
+                     int output_tokens, const tool_registry *tools, struct policy_engine *policy, int *native_end_out, planner_model_diagnostic *diagnostic, int require_completion, char **completion_out) {
+    if(completion_out)*completion_out=NULL;
     llm_request req = {0};
     if(native_end_out)*native_end_out=0;
     llm_response resp = {0};
@@ -899,6 +908,7 @@ static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_act
                 cJSON_IsFalse(needs) && answer && *answer;
             if(valid) {
                 log_info("planner: native completion status=%s requires_tools=false",status);
+                if(completion_out)*completion_out=cJSON_PrintUnformatted(finish);
                 if(native_end_out)*native_end_out=!strcmp(status,"blocked")?2:1;
                 if(raw_out)*raw_out=xstrdup(answer);
                 free(resp.content);free(resp.tool_actions_json);free(resp.error);
@@ -1052,6 +1062,7 @@ static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_act
                 cJSON_IsFalse(cJSON_GetObjectItemCaseSensitive(finish,"requires_tools")) && answer && *answer;
             if (valid) {
                 if (native_end_out) *native_end_out=!strcmp(status,"blocked") ? 2 : 1;
+                if(completion_out)*completion_out=cJSON_PrintUnformatted(finish);
                 char *final=xstrdup(answer);
                 planner_actions_free(*actions,*n_actions); *actions=NULL; *n_actions=0;
                 cJSON_Delete(finish);
@@ -1083,21 +1094,21 @@ void planner_actions_free(planned_action *a, int n) {
 
 int planner_plan(llm *llm, const char *prompt, planned_action **actions, int *n_actions, char **raw_out,
                      char **err_out) {
-    return plan_with(llm, NULL, prompt, actions, n_actions, raw_out, err_out, NULL, NULL, 0, NULL, NULL, NULL, NULL, 0);
+    return plan_with(llm, NULL, prompt, actions, n_actions, raw_out, err_out, NULL, NULL, 0, NULL, NULL, NULL, NULL, 0, NULL);
 }
 
 int planner_plan_ex(llm *llm, const struct tool_registry *tools, struct skill_registry *skills,
                         struct policy_engine *policy, const char *prompt, planned_action **actions,
                         int *n_actions, char **raw_out, char **err_out) {
     char *sys = build_catalog_prompt(tools, skills, policy,planner_uses_native_tools(llm));
-    return plan_with(llm, sys, prompt, actions, n_actions, raw_out, err_out, NULL, NULL, 0, tools, policy, NULL, NULL, 0);
+    return plan_with(llm, sys, prompt, actions, n_actions, raw_out, err_out, NULL, NULL, 0, tools, policy, NULL, NULL, 0, NULL);
 }
 
 int planner_plan_attachments_ex(llm *llm, const struct tool_registry *tools, struct skill_registry *skills,
     struct policy_engine *policy, const char *prompt, planned_action **actions,
     int *n_actions, char **raw_out, char **err_out, const char *attachments, int *truncated_out) {
     return plan_with(llm, build_catalog_prompt(tools,skills,policy,planner_uses_native_tools(llm)), prompt, actions,
-        n_actions, raw_out, err_out, attachments, truncated_out, 0, tools, policy, NULL, NULL, 0);
+        n_actions, raw_out, err_out, attachments, truncated_out, 0, tools, policy, NULL, NULL, 0, NULL);
 }
 
 int planner_plan_attachments_ex_with_output(llm *llm, const struct tool_registry *tools,
@@ -1105,15 +1116,15 @@ int planner_plan_attachments_ex_with_output(llm *llm, const struct tool_registry
     planned_action **actions, int *n_actions, char **raw_out, char **err_out,
     const char *attachments, int *truncated_out, int output_tokens) {
     return plan_with(llm, build_catalog_prompt(tools,skills,policy,planner_uses_native_tools(llm)), prompt, actions,
-        n_actions, raw_out, err_out, attachments, truncated_out, output_tokens, tools, policy, NULL, NULL, 0);
+        n_actions, raw_out, err_out, attachments, truncated_out, output_tokens, tools, policy, NULL, NULL, 0, NULL);
 }
 
 int planner_plan_turn_diagnostic(llm *llm, const struct tool_registry *tools,
     struct skill_registry *skills, struct policy_engine *policy, const char *prompt,
     planned_action **actions, int *n_actions, char **raw_out, char **err_out,
-    const char *attachments, int *truncated_out, int output_tokens, int *native_end_out, planner_model_diagnostic *diagnostic, int require_completion) {
+    const char *attachments, int *truncated_out, int output_tokens, int *native_end_out, planner_model_diagnostic *diagnostic, int require_completion, char **completion_out) {
     return plan_with(llm,build_catalog_prompt(tools,skills,policy,planner_uses_native_tools(llm)),prompt,actions,n_actions,
-        raw_out,err_out,attachments,truncated_out,output_tokens,tools,policy,native_end_out,diagnostic,require_completion);
+        raw_out,err_out,attachments,truncated_out,output_tokens,tools,policy,native_end_out,diagnostic,require_completion,completion_out);
 }
 
 int planner_plan_turn(llm *llm, const struct tool_registry *tools,
@@ -1121,5 +1132,5 @@ int planner_plan_turn(llm *llm, const struct tool_registry *tools,
     planned_action **actions, int *n_actions, char **raw_out, char **err_out,
     const char *attachments, int *truncated_out, int output_tokens, int *native_end_out) {
     return planner_plan_turn_diagnostic(llm,tools,skills,policy,prompt,actions,n_actions,
-        raw_out,err_out,attachments,truncated_out,output_tokens,native_end_out,NULL,0);
+        raw_out,err_out,attachments,truncated_out,output_tokens,native_end_out,NULL,0,NULL);
 }

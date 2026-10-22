@@ -38,7 +38,7 @@ config.update({'reasoning.max_rounds':-1,'llm.routing':'fixed','scheduler.worker
 report_path=output/'report.json'
 report=json.loads(report_path.read_text(encoding='utf-8')) if report_path.exists() else {'model':config.get('llm.model'),'protocol':args.protocol,'cases':{},'attempts':[]}
 selected=args.cases.split(',')
-assert all(c in ('source','ppt','image','ocr','diagram_ocr','analysis','html','header_recovery','search_discovery','capabilities','quoted_read','translation','howto','missing_recovery','ipc_analysis','creative_write','unrelated_write_failure','git_diagnostic','external_recovery','rename_story','shell_artifact','powershell_contract') for c in selected)
+assert all(c in ('source','ppt','image','ocr','diagram_ocr','analysis','html','header_recovery','search_discovery','capabilities','quoted_read','translation','howto','missing_recovery','ipc_analysis','creative_write','unrelated_write_failure','git_diagnostic','external_recovery','rename_story','shell_artifact','powershell_contract','optional_read') for c in selected)
 source_files=[(backend/p).as_posix() for p in ('include/context/mmu.h','src/retrieval/context_builder.c','src/cognition/reasoning.c')]
 active=None
 last_task={}
@@ -105,7 +105,13 @@ with tempfile.TemporaryDirectory(prefix='coa-live-suite-state-') as folder:
                 try:
                     prefix=f'这是实际交付任务，不要只描述计划。项目源码仅供查阅，不要改动项目文件。写入限定在 {active.as_posix()}。已有结果足够后直接交付，不重复未变化的检查；工具失败按真实错误纠正并重新验证。'
                     attached=None
-                    if case=='capabilities':
+                    if case=='optional_read':
+                        marker='SOURCE_'+secrets.token_hex(8)
+                        (active/'query.ts').write_text('export const proof="'+marker+'";\nexport function shouldContinue(blocks) { return blocks.some(b => b.type === "tool_use"); }\n',encoding='utf-8')
+                        prompt=(f'分析 {active.as_posix()} 的 query.ts 中 Agent 如何决定继续调用工具或结束。'
+                            f'先用 file_read 尝试探查 {active.as_posix()}/transitions.ts，之后读取 query.ts。transitions.ts 是猜测的可选辅助文件，缺失时核实其父目录后使用真实存在的源码完成分析，不创建它，不要求用户修复它。'
+                            '请写约1800个中文字的技术解释，包含源码 proof 值、实际缺失的文件说明和工具循环原理，直接在回答交付。')
+                    elif case=='capabilities':
                         prompt='你有什么特殊功能'
                     elif case=='quoted_read':
                         prompt='解释“完整阅读全部源代码”这句话的含义。这里只讨论概念，不要调用工具或读取文件。'
@@ -261,6 +267,13 @@ with tempfile.TemporaryDirectory(prefix='coa-live-suite-state-') as folder:
                         assert all(any(name in st['args'] for st in reads) for name in ('client.c','server.c','ipc.h')),reads
                         assert str(opcode) in text and 'handle' in text and 'request' in text and len(text)>200,text
                         result['checks']={'client_server_and_ipc_read':True,'hidden_opcode_matched':True,'answer_characters':len(text)}
+                    elif case=='optional_read':
+                        steps=task.get('steps',[])
+                        assert any(s['tool']=='file_read' and not s['ok'] and 'transitions.ts' in s['args'] for s in steps)
+                        assert any(s['tool']=='list_dir' and s['ok'] for s in steps)
+                        assert marker in task['output'] and len(task['output'].encode())>4095
+                        assert any(row.get('output')==task['output'] for row in request('/v1/tasks/journal'))
+                        result['checks']={'optional_absence_verified':True,'source_marker':True,'full_durable_answer_bytes':len(task['output'].encode())}
                     elif case=='source':
                         path=active/'source-overview.md';text=path.read_text(encoding='utf-8');result['artifacts']['overview']=str(path)
                         result['checks']={'characters':len(text),'source_references':sum(p in text for p in ('mmu.h','context_builder.c','reasoning.c'))}
