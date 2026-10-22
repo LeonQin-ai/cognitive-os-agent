@@ -4745,6 +4745,9 @@ static void test_agent_loop(void) {
         cfg.http_port = 0;
         runtime_ctx ctx;
         if (init(&ctx, &cfg) != 0) { CHECK(0); return; }
+        /* This fixture specifically requires folding. Select a small model
+         * window rather than assuming all models fold at a fixed 64KB. */
+        ctx.llm->context_window_tokens = 65536;
         char *ans = NULL;
         CHECK(reasoning_run(ctx.reasoning, "折叠后重读回归测试：分析资料后给出答案", &ans) == 0);
         CHECK(ans && strstr(ans, "重读完成") != NULL);

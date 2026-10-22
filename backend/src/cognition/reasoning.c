@@ -266,6 +266,7 @@ struct reasoning {
     int opaque_seen_n;
     uint64_t observation_seen[2048];
     int observation_seen_n, round_new_observations, round_repeat_reads;
+    size_t observation_budget_bytes; /* selected model input budget, not a fixed window */
     int progress_cycle_warning_active;
     struct { char *path; unsigned long long next; uint64_t version; } pending_reads[128];
     int pending_reads_n;
@@ -1312,11 +1313,8 @@ static int reasoning_is_rate_limited(const char *error) {
 static int reasoning_is_transport_failure(const char *error) {
     return error && strstr(error, "http request failed") != NULL;
 }
-/* Tail-keep cap for accumulated round results. 16K was too small for long
- * agent runs: one file_read of a source file easily produces 5-15K, so a
- * multi-round SWE-style task overflowed within 2-3 reads and the halving
- * eviction silently discarded the code read earlier — the model then
- * re-read files or planned against half-missing observations. */
+/* Startup fallback only. Active runs size their observation partition from
+ * the selected model input budget in build_context. */
 #define ROUND_LOG_CAP 65536
 /* Per-entry cap: an action result larger than this is truncated head+tail
  * (middle elided) BEFORE appending, so one huge output cannot evict many
@@ -1325,10 +1323,10 @@ static int reasoning_is_transport_failure(const char *error) {
 #define ROUND_LOG_HEAD_KEEP 4096
 #define ROUND_LOG_TAIL_KEEP 1536
 
-/* Append text to a growable log buffer, tail-keeping: once past ROUND_LOG_CAP
+/* Append text to a growable log buffer, tail-keeping: once past its budget
  * the oldest half is dropped so recent action results always stay available.
  * Returns 1 when old observations were folded away. */
-static int log_append(char **buf, size_t *blen, size_t *bcap, const char *text) {
+static int log_append(char **buf, size_t *blen, size_t *bcap, const char *text, size_t budget) {
     const char *add = text;
     char *elided = NULL;
     size_t len;
@@ -1378,7 +1376,7 @@ static int log_append(char **buf, size_t *blen, size_t *bcap, const char *text) 
     memcpy(*buf + *blen, add, len + 1);
     *blen += len;
     free(elided);
-    if (*blen > ROUND_LOG_CAP) {
+    if (*blen > budget) {
         size_t half = *blen / 2;
         /* Keep a complete observation when possible and never start with a
          * UTF-8 continuation byte (long Chinese tool outputs hit this path). */
@@ -1408,6 +1406,7 @@ static int log_append(char **buf, size_t *blen, size_t *bcap, const char *text) 
 /* Bound individual tool observations, not an entire batch of file reads. */
 static int log_append_entries(reasoning *r, char **buf, size_t *len, size_t *cap, const char *text) {
     int folded = 0;
+    size_t budget = r->observation_budget_bytes ? r->observation_budget_bytes : ROUND_LOG_CAP;
     const char *start = text;
     if (!text) return 0;
     for (const char *p = text; *p; ++p) {
@@ -1421,10 +1420,10 @@ static int log_append_entries(reasoning *r, char **buf, size_t *len, size_t *cap
         char *entry = malloc(n+1);
         if (!entry) break;
         memcpy(entry, start, n); entry[n] = 0;
-        folded |= log_append(buf, len, cap, entry);
+        folded |= log_append(buf, len, cap, entry, budget);
         free(entry); start = p;
     }
-    return folded | log_append(buf, len, cap, start);
+    return folded | log_append(buf, len, cap, start, budget);
 }
 
 static void pending_reads_clear(reasoning *r) {
@@ -1649,6 +1648,11 @@ static char *build_context(reasoning *r, const char *prompt) {
     strbuf b;
     size_t input_budget = planner_input_budget_bytes_with_output(r->llm, r->tools, r->skills,
         r->policy, r->planner_output_escalated ? 65536 : 0);
+    /* Keep the evidence that can actually fit in the model-facing recent
+     * observation partition; folding at a fixed 64KB caused reread loops
+     * even when the selected model had ample available context. */
+    r->observation_budget_bytes = input_budget / 2;
+    if (!r->observation_budget_bytes) r->observation_budget_bytes = 1;
     size_t warm_used = 0;
     size_t hot_mark;
     size_t cold_mark;
