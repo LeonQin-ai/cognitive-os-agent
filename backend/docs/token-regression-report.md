@@ -414,3 +414,12 @@ shell=powershell接收原始脚本文本。此前传入完整powershell -Command
 扩展已有test_model_finalization_e2e.py：OpenAI/Anthropic共14个场景验证实际HTTP请求预算。thinking-limit始终32768；真实partial tool调用在第一次截断后升级65536；同时检查错误恢复、无效工具不执行、隐藏推理不作为答案、诊断和精确usage。所有场景通过。真实回归额外保存progress.jsonl逐状态记录模型错误诊断和token用量。
 
 先前隔离真实API证据build/live-api-suite-20261021-202847/：PowerShell契约恢复DONE，6请求/3工具，0模型失败，31283输入+1880输出=33163 tokens、19.574秒。同步远端后重新验证build/live-api-suite-20261022-221537/：同场景DONE，5请求/3工具，25809+1639=27448 tokens、16.478秒。不能把两个不同运行当作统计性降本证明。此前失败回归的64411已报告tokens及在途未知计费仍保留，不从成本扣掉。旧超时响应未完整保存，无法证明错误预算扩张是原任务唯一根因。
+
+
+### #202 交付复核的真实模型兼容协议回归
+
+复用远端c7ebce8的轮内重复检测及aa5eeb8的结构化Completion Review，不再叠加新的任务关键词/答复词规则。已有test_answer_repetition.py在两协议14场景通过，test_completion_review_e2e.py覆盖两协议的继续读取、进度旁白、卡住、阻塞、预算、普通聊天等场景并通过。同步后的本地完整单元4478 passed/0 failed。
+
+真实API harness新增--protocol native|legacy（默认native），允许实际验证原生及兼容协议而不是只测默认。deepseek-v4.1-flash：native IPC源码分析DONE，6请求/7工具，35588+5238=40826 tokens、28.439秒，读取客户端、服务端和接口，给出3321/3683字符量级完整分析且匹配输入中的随机操作码；legacy同场景DONE，6请求/6工具，22748+4099=26847 tokens、30.569秒，含1次已恢复模型失败，成本包含其中，不能拆分故障单轮成本。证据分别build/live-api-suite-20261022-221537/ipc_analysis-221554/与build/live-api-suite-20261022-222233/ipc_analysis-222233/。
+
+同批真正的项目源码上下文分析出现旧页重复补读，34请求/88工具、727276 tokens后取消，整个场景FAILED，不隐瞒为通过；另记#203处理固定64KB日志折叠，不把技术分析短例完成宣称为全部长任务通过。原issue环境的maas-glm-5.1-zhipu及外部UBSE路径未在本机复跑，模型/项目差异明确保留。

@@ -22,6 +22,7 @@ if hasattr(sys.stdout,"reconfigure"): sys.stdout.reconfigure(encoding="utf-8")
 
 parser=argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--config',type=Path,required=True)
+parser.add_argument('--protocol',choices=('native','legacy'),default='native',help='Exercise the installed native or compatibility completion protocol')
 parser.add_argument('--cases',default='source,ppt,image,ocr,diagram_ocr')
 parser.add_argument('--output',type=Path)
 parser.add_argument('--timeout',type=int,default=900,help='Per-test wall deadline; no production token/round cap')
@@ -35,7 +36,7 @@ if config.get('llm.provider') in (None,'mock') or not config.get('llm.api_key'):
     raise SystemExit('A configured real API is required')
 config.update({'reasoning.max_rounds':-1,'llm.routing':'fixed','scheduler.workers':1})
 report_path=output/'report.json'
-report=json.loads(report_path.read_text(encoding='utf-8')) if report_path.exists() else {'model':config.get('llm.model'),'cases':{},'attempts':[]}
+report=json.loads(report_path.read_text(encoding='utf-8')) if report_path.exists() else {'model':config.get('llm.model'),'protocol':args.protocol,'cases':{},'attempts':[]}
 selected=args.cases.split(',')
 assert all(c in ('source','ppt','image','ocr','diagram_ocr','analysis','html','header_recovery','search_discovery','capabilities','quoted_read','translation','howto','missing_recovery','ipc_analysis','creative_write','unrelated_write_failure','git_diagnostic','external_recovery','rename_story','shell_artifact','powershell_contract') for c in selected)
 source_files=[(backend/p).as_posix() for p in ('include/context/mmu.h','src/retrieval/context_builder.c','src/cognition/reasoning.c')]
@@ -87,7 +88,7 @@ with tempfile.TemporaryDirectory(prefix='coa-live-suite-state-') as folder:
         raise TimeoutError('Test deadline exceeded; isolated process must stop before further paid tasks')
     with (output/'server.log').open('w',encoding='utf-8') as log:
         process=subprocess.Popen([str(backend/'build'/('cognitive-os-agent.exe' if os.name=='nt' else 'cognitive-os-agent')),
-            '--state',str(state),'--workspace',str(output),'serve',str(port)],cwd=backend,stdout=log,stderr=log,env={**os.environ,'COA_TOOL_PROTOCOL':'native'},
+            '--state',str(state),'--workspace',str(output),'serve',str(port)],cwd=backend,stdout=log,stderr=log,env={**os.environ,'COA_TOOL_PROTOCOL':args.protocol},
             creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
         try:
             for _ in range(100):
