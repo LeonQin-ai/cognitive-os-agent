@@ -13,6 +13,7 @@ import threading
 import time
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from fixture_completion import reviewed_answer
 
 
 class Model(BaseHTTPRequestHandler):
@@ -36,6 +37,7 @@ class Model(BaseHTTPRequestHandler):
                 'timeout_ms': 15000}}])
         else:
             content = '你好，任务已完成。'
+        content = reviewed_answer(request, content)
         body = json.dumps({'choices': [{'message': {'role': 'assistant', 'content': content},
                                       'finish_reason': 'stop'}],
                            'usage': {'prompt_tokens': 20, 'completion_tokens': 10}}).encode()

@@ -93,6 +93,8 @@ jobs:
         run: python3 tests/test_source_read_e2e.py
       - name: Completion review delivery regression
         run: python3 tests/test_completion_review_e2e.py
+      - name: Progress, cancellation and steering regression
+        run: python3 tests/test_progress.py build/cognitive-os-agent
       - name: Single-response repetition regression
         run: python3 tests/test_answer_repetition.py
       - name: Independent todo-cli acceptance verifier regression
