@@ -7490,6 +7490,21 @@ static void test_tasklog(void) {
     j = tasklog_json(tl, 1);
     CHECK(j && strstr(j, "\"spans\"") != NULL && strstr(j, "task.run") != NULL);
     free(j);
+    strbuf long_answer; strbuf_init(&long_answer);
+    for(int i=0;i<5000;i++)strbuf_append(&long_answer,"中文回答");
+    strbuf_append(&long_answer,"\nANSWER_END");
+    tasklog_record(tl, 123, "DONE", "long", "analysis", long_answer.buf, NULL, NULL);
+    tasklog_free(tl); tl=tasklog_new("state-test/tlog");
+    output=NULL;
+    CHECK(tasklog_find(tl,123,NULL,NULL,NULL,&output)==1);
+    CHECK(output && !strcmp(output,long_answer.buf));
+    free(output); strbuf_free(&long_answer);
+    FILE *old=fopen("state-test/tlog/journal/tasks.jsonl","ab");
+    CHECK(old!=NULL);
+    if(old){fputs("{\"id\":124,\"status\":\"DONE\",\"output\":\"legacy-\xe4\"}\n",old);fclose(old);}
+    j=tasklog_json(tl,1);char *valid_j=str_utf8_sanitize(j?j:"");
+    CHECK(j && valid_j && !strcmp(j,valid_j) && strstr(j,"legacy-"));
+    free(valid_j);free(j);
     tasklog_free(tl);
     fs_remove("state-test/tlog/journal/tasks.jsonl");
 }
@@ -9538,6 +9553,9 @@ int main(int argc, char **argv) {
     if (argc==2 && !strcmp(argv[1],"--usage")) {
         test_usage(); test_usage_concurrent_agents(); test_llm_adapters_http();
         printf("\n%d passed, %d failed\n", g_pass, g_fail); return g_fail ? 1 : 0;
+    }
+    if(argc==2 && !strcmp(argv[1],"--journal")) {
+        test_tasklog(); printf("%d passed, %d failed\n",g_pass,g_fail); return g_fail?1:0;
     }
     if(argc==2 && !strcmp(argv[1],"--trace")) {
         test_trace();

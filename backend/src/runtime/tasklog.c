@@ -10,7 +10,6 @@
 #include <time.h>
 #include "cJSON.h"
 
-#define TASKLOG_OUT_CAP 4096   /* per-record output head cap */
 #define TASKLOG_TRACE_CAP 65536 /* bounded terminal execution timeline */
 #define TASKLOG_SPANS_CAP 65536 /* newest spans for one terminal task */
 #define TASKLOG_FILE_MAX 32u * 1024 * 1024
@@ -62,9 +61,12 @@ void tasklog_record(tasklog *tl, int64_t id, const char *status, const char *ses
     cJSON_AddStringToObject(o, "session", session && *session ? session : "");
     cJSON_AddStringToObject(o, "input", input ? input : "");
     if (output && *output) {
-        char head[TASKLOG_OUT_CAP];
-        snprintf(head, sizeof(head), "%s", output);
-        cJSON_AddStringToObject(o, "output", head);
+        /* This is the durable answer, not an input-context preview. Cutting
+         * here silently destroys the result after navigation/restart and can
+         * split a UTF-8 codepoint. Context packing has its own budgets. */
+        char *safe = str_utf8_sanitize(output);
+        cJSON_AddStringToObject(o, "output", safe ? safe : "");
+        free(safe);
     }
     if (trace_json && *trace_json && strlen(trace_json) <= TASKLOG_TRACE_CAP) {
         cJSON *trace = cJSON_Parse(trace_json);
@@ -129,6 +131,11 @@ static cJSON *journal_parse(const char *path, int limit, int64_t pick_id) {
     size_t rd = fread(buf, 1, (size_t)len, f);
     fclose(f);
     buf[rd] = '\0';
+    /* Older journal versions cut answers in the middle of UTF-8 sequences.
+     * Keep those records readable by strict JSON clients as well. */
+    char *valid = str_utf8_sanitize(buf);
+    free(buf); buf=valid;
+    if(!buf)return NULL;
 
     arr = cJSON_CreateArray();
     if (!arr) {
