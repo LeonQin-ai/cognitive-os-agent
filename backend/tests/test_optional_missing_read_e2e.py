@@ -5,6 +5,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 root=Path(__file__).resolve().parents[1]
 build=root/os.environ.get('COA_BUILD_DIR','build')
 binary=build/('cognitive-os-agent.exe' if os.name=='nt' else 'cognitive-os-agent')
+ANSWER='\n'.join(f'源代码观察 {i}: result_{i*i+7}' for i in range(3500))+'\nANSWER_END'
 class Provider(BaseHTTPRequestHandler):
     calls=0; mode=''; workspace=None
     def log_message(self,*args): pass
@@ -16,7 +17,7 @@ class Provider(BaseHTTPRequestHandler):
         elif n==1:
             call=('file_read',{'path':missing}) if mode=='early-evidence' else ('file_write',{'path':missing,'content':'now exists'}) if mode=='exists' else ('list_dir',{'path':str(Provider.workspace/'other') if mode=='wrong-parent' else str(Provider.workspace)})
         else:
-            answer='\n'.join(f'源代码观察 {i}: result_{i*i+7}' for i in range(500))+'\nANSWER_END'
+            answer=ANSWER
             args={'status':'complete','requires_tools':False,'answer':answer}
             if mode!='no-decision':args['unavailable_optional_reads']=[{'path':str(Provider.workspace/'other') if mode=='mutation' else missing,'reason':'Optional guessed source; analysis uses observed source instead.','evidence_step_id':1 if mode=='early-evidence' else 999 if mode=='bad-id' else 2}]
             call=('complete_task',args)
@@ -52,15 +53,30 @@ try:
                         assert time.monotonic()<deadline;time.sleep(.02)
                     assert task['status']==('DONE' if mode=='verified' else 'FAILED'),(mode,task['status'])
                     assert Provider.calls<=9,(mode,Provider.calls)
+                    # Failed/partial conclusions are just as durable as success.
+                    assert ANSWER in task['output'] and len(ANSWER.encode())>65536
+                    expected=task['output'];deadline=time.monotonic()+3
+                    while not any(row.get('output')==expected for row in request('/v1/tasks/journal')):
+                        assert time.monotonic()<deadline;time.sleep(.02)
                     if mode=='verified':
                         assert task['output'].endswith('ANSWER_END') and len(task['output'].encode())>4095
-                        expected=task['output'];deadline=time.monotonic()+3
-                        while not any(row.get('output')==expected for row in request('/v1/tasks/journal')):
-                            assert time.monotonic()<deadline;time.sleep(.02)
                 finally:p.terminate();p.wait(timeout=5)
                 if mode=='verified':
-                    current=port();p=start()
-                    try:assert any(row.get('output')==expected for row in request('/v1/tasks/journal'))
-                    finally:p.terminate();p.wait(timeout=5)
+                    # A historical turn beyond the former 4 MiB loader boundary.
+                    large='历史结论'*400000+'HISTORY_END'
+                    with (state/'chat'/'negative-read.jsonl').open('a',encoding='utf-8') as history:
+                        history.write(json.dumps({'q':'large historical conclusion','a':large},ensure_ascii=False)+'\n')
+                current=port();p=start()
+                try:
+                    assert any(row.get('output')==expected for row in request('/v1/tasks/journal'))
+                    if mode=='verified':
+                        def strings(value):
+                            if isinstance(value,str):yield value
+                            elif isinstance(value,list):
+                                for v in value:yield from strings(v)
+                            elif isinstance(value,dict):
+                                for v in value.values():yield from strings(v)
+                        assert large in list(strings(request('/v1/chat/history?session=negative-read')))
+                finally:p.terminate();p.wait(timeout=5)
             print('PASS:',mode,flush=True)
 finally:provider.shutdown();provider.server_close()

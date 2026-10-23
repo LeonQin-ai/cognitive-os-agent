@@ -1207,7 +1207,8 @@ static void session_load_persisted(reasoning *r, struct session *s) {
     f = fopen(fpath, "rb");
     if (!f)
         return;
-    /* slurp (bounded: 4 MB) */
+    /* Durable chat text is not model context. Never silently stop halfway
+     * through a long answer; model context packing has separate budgets. */
     cap = 4096;
     buf = (char *)malloc(cap);
     if (!buf) {
@@ -1216,12 +1217,10 @@ static void session_load_persisted(reasoning *r, struct session *s) {
     }
     while ((ch = fgetc(f)) != EOF) {
         if (len + 2 > cap - 1) {
-            if (cap >= 4u * 1024 * 1024)
-                break;
+            if (cap > SIZE_MAX / 2) { free(buf); fclose(f); return; }
             size_t ncap = cap * 2;
             char *nb = (char *)realloc(buf, ncap);
-            if (!nb)
-                break;
+            if (!nb) { free(buf); fclose(f); return; }
             buf = nb;
             cap = ncap;
         }

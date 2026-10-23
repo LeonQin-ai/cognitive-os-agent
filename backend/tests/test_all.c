@@ -7505,6 +7505,17 @@ static void test_tasklog(void) {
     j=tasklog_json(tl,1);char *valid_j=str_utf8_sanitize(j?j:"");
     CHECK(j && valid_j && !strcmp(j,valid_j) && strstr(j,"legacy-"));
     free(valid_j);free(j);
+    /* Growing beyond 32 MiB must not make the whole journal disappear. */
+    FILE *large_log=fopen("state-test/tlog/journal/tasks.jsonl","ab");
+    CHECK(large_log!=NULL);
+    if(large_log){
+        char padding[4096];memset(padding,'\n',sizeof(padding));
+        for(int i=0;i<8193;i++)fwrite(padding,1,sizeof(padding),large_log);
+        fputs("{\"id\":125,\"status\":\"DONE\",\"output\":\"LARGE_JOURNAL_END\"}\n",large_log);
+        fclose(large_log);
+    }
+    j=tasklog_json(tl,1);CHECK(j && strstr(j,"LARGE_JOURNAL_END"));free(j);
+    int64_t restored_next=0;CHECK(tasklog_recover(tl,&restored_next)==0 && restored_next==126);
     tasklog_free(tl);
     fs_remove("state-test/tlog/journal/tasks.jsonl");
 }

@@ -12,7 +12,6 @@
 
 #define TASKLOG_TRACE_CAP 65536 /* bounded terminal execution timeline */
 #define TASKLOG_SPANS_CAP 65536 /* newest spans for one terminal task */
-#define TASKLOG_FILE_MAX 32u * 1024 * 1024
 
 struct tasklog {
     mutex_t mtx;
@@ -108,70 +107,39 @@ void tasklog_record(tasklog *tl, int64_t id, const char *status, const char *ses
 /* Parse up to `limit` (0 = all) newest records; returns a cJSON array or
  * NULL. `pick` (optional) filters by task id (any status). */
 static cJSON *journal_parse(const char *path, int limit, int64_t pick_id) {
-    FILE *f;
-    cJSON *arr;
-    char *buf;
-    long len;
-
-    f = fopen(path, "rb");
-    if (!f)
-        return NULL;
-    fseek(f, 0, SEEK_END);
-    len = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    if (len <= 0 || len > (long)TASKLOG_FILE_MAX) {
-        fclose(f);
-        return NULL;
-    }
-    buf = (char *)malloc((size_t)len + 1);
-    if (!buf) {
-        fclose(f);
-        return NULL;
-    }
-    size_t rd = fread(buf, 1, (size_t)len, f);
-    fclose(f);
-    buf[rd] = '\0';
-    /* Older journal versions cut answers in the middle of UTF-8 sequences.
-     * Keep those records readable by strict JSON clients as well. */
-    char *valid = str_utf8_sanitize(buf);
-    free(buf); buf=valid;
-    if(!buf)return NULL;
-
-    arr = cJSON_CreateArray();
-    if (!arr) {
-        free(buf);
-        return NULL;
-    }
-    /* manual '\n' split: strtok_r is not declared under strict -std=c11 on
-     * glibc (implicit decl truncates the returned pointer) */
-    char *line = buf;
-    while (line && *line) {
-        char *nl = strchr(line, '\n');
-        if (nl)
-            *nl = '\0';
-        cJSON *o = cJSON_Parse(line);
-        line = nl ? nl + 1 : NULL;
-        if (!o)
-            continue;
-        if (pick_id != INT64_MIN) {
-            cJSON *id = cJSON_GetObjectItemCaseSensitive(o, "id");
-            if (!id || !cJSON_IsNumber(id) || (int64_t)id->valuedouble != pick_id) {
-                cJSON_Delete(o);
-                continue;
+    FILE *f=fopen(path,"rb");
+    if(!f)return NULL;
+    cJSON *arr=cJSON_CreateArray();
+    size_t cap=4096,used=0; char *buf=malloc(cap);
+    if(!arr || !buf){free(buf);cJSON_Delete(arr);fclose(f);return NULL;}
+    /* Stream complete records; file growth must not hide all historical answers.
+     * Limit the number of records retained, never the text within a record. */
+    int ch;
+    do {
+        ch=fgetc(f);
+        if(ch!='\n' && ch!=EOF){
+            if(used+1>=cap){
+                if(cap>SIZE_MAX/2){free(buf);cJSON_Delete(arr);fclose(f);return NULL;}
+                size_t next=cap*2;char *grown=realloc(buf,next);
+                if(!grown){free(buf);cJSON_Delete(arr);fclose(f);return NULL;}
+                buf=grown;cap=next;
             }
+            buf[used++]=(char)ch;continue;
         }
-        cJSON_AddItemToArray(arr, o);
-    }
-    free(buf);
-
-    if (limit > 0 && cJSON_GetArraySize(arr) > limit) {
-        /* keep the newest `limit` */
-        int total = cJSON_GetArraySize(arr);
-        for (int i = 0; i < total - limit; i++) {
-            cJSON *victim = cJSON_DetachItemFromArray(arr, 0);
-            cJSON_Delete(victim);
+        if(!used)continue;
+        buf[used]=0;used=0;
+        /* Old versions could cut a UTF-8 sequence inside an answer. */
+        char *valid=str_utf8_sanitize(buf);
+        cJSON *o=valid?cJSON_Parse(valid):NULL;free(valid);
+        if(!o)continue;
+        if(pick_id!=INT64_MIN){
+            cJSON *id=cJSON_GetObjectItemCaseSensitive(o,"id");
+            if(!cJSON_IsNumber(id) || (int64_t)id->valuedouble!=pick_id){cJSON_Delete(o);continue;}
         }
-    }
+        cJSON_AddItemToArray(arr,o);
+        if(limit>0 && cJSON_GetArraySize(arr)>limit)cJSON_Delete(cJSON_DetachItemFromArray(arr,0));
+    }while(ch!=EOF);
+    free(buf);fclose(f);
     return arr;
 }
 
@@ -241,10 +209,10 @@ static int compare_recovery(const void *a,const void *b) {
 int tasklog_recover(tasklog *tl,int64_t *next_id) {
     if(next_id) *next_id=0;
     if(!tl) return -1;
-    if(fs_file_size(tl->path)>(long long)TASKLOG_FILE_MAX) return -1; /* do not silently reuse IDs */
     mutex_lock(&tl->mtx); cJSON *arr=journal_parse(tl->path,0,INT64_MIN); mutex_unlock(&tl->mtx);
-    if(!arr) return 0;
+    if(!arr) return fs_file_size(tl->path)>0 ? -1 : 0; /* never reuse IDs after a read/allocation failure */
     size_t count=(size_t)cJSON_GetArraySize(arr),n=0,order=0;
+    if(!count && fs_file_size(tl->path)>0){cJSON_Delete(arr);return -1;} /* corrupt journal is not an empty history */
     recovery_record *records=calloc(count ? count:1,sizeof(*records));
     if(!records) { cJSON_Delete(arr); return -1; }
     cJSON *it;
