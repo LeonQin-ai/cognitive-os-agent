@@ -1485,7 +1485,7 @@ panels.im = `
         </div>
         <div class="im-input-row">
           <input id="im-input" type="text" placeholder="发送话题，让 Agent 相互讨论；Enter 发送">
-          <button onclick="imSend()">Send</button>
+          <button id="im-send" onclick="imSend()">Send</button>
         </div>
       </div>
     </div>
@@ -2784,6 +2784,8 @@ let IM_CHANNELS = [];
 let IM_AGENTS = [], IM_SESSIONS = [], IM_EDITING = null;
 const IM_RUN_STATE = new Map();
 const IM_SESSION_TASK = new Map(), IM_RUN_POLL = new Set();
+const IM_THREAD_LOADS=new Map(), IM_SEND_PENDING=new Set();
+function imSendButton(){const b=$('im-send');if(b){b.disabled=IM_SEND_PENDING.has(IM_ACTIVE);b.setAttribute('aria-busy',String(b.disabled));}}
 
 function imRenderRunStatus(){
   const el=$('im-run-status'), stop=$('im-stop'); if(!el) return;
@@ -3005,6 +3007,7 @@ function channelSendTest(name){
 
 function imSelect(id){
   IM_ACTIVE = id;
+  imSendButton();
   imRenderRunStatus();
   document.querySelectorAll('.im-session').forEach(s => s.classList.toggle('on', s.dataset.id === String(id)));
   renderImThread();
@@ -3035,14 +3038,33 @@ async function renderImThread(){
     t.innerHTML = '<span class="muted" style="font-size:12px">选择一个会话开始聊天</span>';
     return;
   }
-  t.innerHTML = '<span class="muted"><span class="spin"></span> 加载中…</span>';
   const session=IM_ACTIVE;
-  const r = await call('GET', '/v1/im/sessions/' + session + '/messages');
-  if(IM_ACTIVE!==session||!t.isConnected) return;
-  t.innerHTML = '';
-  if(Array.isArray(r.obj)){
-    r.obj.forEach(m => appendImMessage(m));
-  }
+  const pending=IM_THREAD_LOADS.get(session);
+  if(pending&&pending.element===t){pending.dirty=true;return pending.promise;}
+  if(t.dataset.session!==String(session)){t.replaceChildren();t.dataset.session=String(session);}
+  if(!t.querySelector('.im-msg'))t.innerHTML='<span class="muted im-thread-loading"><span class="spin"></span> 加载中…</span>';
+  t.setAttribute('aria-busy','true');
+  const state={dirty:false,promise:null,element:t};IM_THREAD_LOADS.set(session,state);
+  state.promise=(async()=>{
+    try{
+      do{
+        state.dirty=false;
+        const r=await call('GET','/v1/im/sessions/'+session+'/messages');
+        if(IM_ACTIVE!==session||!t.isConnected)return;
+        if(r.status!==200||!Array.isArray(r.obj)){
+          t.querySelectorAll('.im-thread-loading,.im-thread-error').forEach(e=>e.remove());
+          const error=document.createElement('div');error.className='im-thread-error';error.setAttribute('role','alert');
+          error.textContent='消息加载失败：'+(r.obj?.error || 'HTTP '+r.status)+' ';
+          const retry=document.createElement('button');retry.className='sec sm';retry.textContent='重试';retry.onclick=()=>renderImThread();error.append(retry);t.append(error);return;
+        }
+        t.replaceChildren();r.obj.forEach(m=>appendImMessage(m));
+      }while(state.dirty&&IM_ACTIVE===session);
+    }finally{
+      if(IM_THREAD_LOADS.get(session)===state)IM_THREAD_LOADS.delete(session);
+      if(IM_ACTIVE===session)t.setAttribute('aria-busy','false');
+    }
+  })();
+  return state.promise;
 }
 
 async function renderIm(){
@@ -3118,16 +3140,19 @@ async function renderIm(){
 async function imSend(){
   const input = $('im-input');
   let content = input.value.trim();
-  if(!content || IM_ACTIVE === null) return;
+  if(!content || IM_ACTIVE === null || IM_SEND_PENDING.has(IM_ACTIVE)) return;
   const sender = 'me';
   const session=IM_ACTIVE;
+  IM_SEND_PENDING.add(session);imSendButton();
+  try{
   const r=await call('POST', '/v1/im/sessions/' + session + '/messages', {role:'user', content, sender});
-  if(!r.obj || !r.obj.ok){ $('im-run-status').textContent=(r.obj && r.obj.error)||'消息发送失败，请重试'; return; }
+  if(r.status<200||r.status>=300||!r.obj || !r.obj.ok){if(IM_ACTIVE===session)$('im-run-status').textContent=(r.obj && r.obj.error)||'消息发送失败，请重试'; return; }
   if(Number.isInteger(r.obj.task_id)&&r.obj.task_id>=0){
     const room=IM_SESSIONS.find(s=>s.id===session);
     imRunUpdate({task_id:r.obj.task_id,session_id:session,status:'queued',discussion_round:0,discussion_rounds:room?.discussion_rounds||3});
   }
   if(IM_ACTIVE===session){ if(input.value.trim()===content) input.value=''; renderImThread(); }
+  }finally{IM_SEND_PENDING.delete(session);imSendButton();}
 }
 
 async function imSearch(){
@@ -3159,6 +3184,7 @@ function wsConnect(){
         if(m.type === 'im.message'){
           if(current === 'im' && IM_ACTIVE === m.session_id){
             appendImMessage(m);
+            const pending=IM_THREAD_LOADS.get(m.session_id);if(pending)pending.dirty=true;
           } else {
             toast('📩 新消息: ' + ((m.role === 'user') ? '用户' : '助手'));
           }

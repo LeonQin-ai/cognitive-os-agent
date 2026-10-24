@@ -246,6 +246,7 @@ jobs:
           node tests/test_model_capabilities_ui.cjs
           NODE_PATH="$PWD/webarena/node_modules" node tests/test_issue_ui.cjs
           NODE_PATH="$PWD/webarena/node_modules" node tests/test_im_members_ui.cjs
+          NODE_PATH="$PWD/webarena/node_modules" node tests/test_im_loading_ui.cjs
           NODE_PATH="$PWD/webarena/node_modules" node tests/test_flow_resume_ui.cjs
           NODE_PATH="$PWD/webarena/node_modules" node tests/test_image_chat_ui.cjs
           NODE_PATH="$PWD/webarena/node_modules" node tests/test_plugin_install_ui.cjs
