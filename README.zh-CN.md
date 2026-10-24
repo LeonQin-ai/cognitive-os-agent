@@ -69,7 +69,7 @@ Cognitive OS 把这些职责**从提示词里搬进运行时**：
 
 下表为完整 agent 循环评测，后面的 Runtime 指标采用本地确定性负载，两者分别统计。纯净分数表：[`backend/docs/BENCHMARK_RESULTS.md`](backend/docs/BENCHMARK_RESULTS.md) · 方法论与失败归因详录：[`backend/docs/benchmark-report.md`](backend/docs/benchmark-report.md)。
 
-Token 与完成判定回归：真实模型定向用例已能自然结束，**5 次请求 / 14,534 输入 token**（此前 8 次 / 24,463 且失败）。长任务产物在恢复修复后通过独立验证；中止、失败和所有 API 成本均见[回归报告](backend/docs/token-regression-report.md)，不作为通用节省比例。
+Token 与完成判定回归：真实模型定向用例已能自然结束，**5 次请求 / 14,534 输入 token**（此前 8 次 / 24,463 且失败）。长任务产物在恢复修复后通过独立验证；中止、失败和所有 API 成本均见[回归报告](https://github.com/LeonQin-ai/cognitive-os-agent/blob/v1.0.0/backend/docs/token-regression-report.md)，不作为通用节省比例。
 
 最新多任务真实 API 回归：源码概要、16 页 PPT、PNG 生成、文字图片识别及架构图识别 **5/5 通过**，合计 **590,674 tokens**；失败诊断成本与修复见上述报告。PNG 通过 Agent 绘图工具生成，未验证原生图片生成接口。
 

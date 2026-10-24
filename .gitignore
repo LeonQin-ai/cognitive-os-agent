@@ -78,3 +78,10 @@ code.lnk
 backend/tools/zig/
 backend/tools/.zig-bootstrap-*/
 backend/tools/.zig-backup-*/
+
+# Local investigation notes, personal presentation material and unpublished draft
+/backend/docs/task68-completion-regression.md
+/backend/docs/token-regression-report.md
+/backend/docs/interview-guide.zh-CN.md
+/backend/docs/releases/v0.8.4.md
+/backend/docs/local/

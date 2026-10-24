@@ -69,7 +69,7 @@ The goal is not another prompt framework — it is the **runtime substrate under
 
 The agent-quality results below use full-agent-loop tasks. Clean scorecard: [`backend/docs/BENCHMARK_RESULTS.md`](backend/docs/BENCHMARK_RESULTS.md) · methodology & failure attribution: [`backend/docs/benchmark-report.md`](backend/docs/benchmark-report.md).
 
-Token/completion regression: a real-model targeted case now finishes naturally in **5 requests / 14,534 input tokens** (previously 8 / 24,463 and failed). Long-task artifacts were independently verified after a recovery fix; interrupted/failed attempts and all API costs are included in the [regression report](backend/docs/token-regression-report.md). This is not a universal token-savings claim.
+Token/completion regression: a real-model targeted case now finishes naturally in **5 requests / 14,534 input tokens** (previously 8 / 24,463 and failed). Long-task artifacts were independently verified after a recovery fix; interrupted/failed attempts and all API costs are included in the [regression report](https://github.com/LeonQin-ai/cognitive-os-agent/blob/v1.0.0/backend/docs/token-regression-report.md). This is not a universal token-savings claim.
 
 Latest real-API suite: source overview, 16-slide PPT, tool-generated PNG, text-image OCR and diagram recognition **5/5 passed**, totaling **590,674 tokens**. The report also records failed diagnostic costs and fixes. Native model image generation was not exercised.
 
