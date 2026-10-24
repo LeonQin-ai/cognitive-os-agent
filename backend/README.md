@@ -11,6 +11,64 @@ The design follows the principle that the LLM is a *cognitive accelerator*, not 
 control center: every model call goes through the same policy-checked, transactional
 pipeline as any other action.
 
+## Terminal client (development branch)
+
+The `chat` subcommand connects to a running Cognitive OS server and reuses its
+configured model, durable sessions, tools, and task journal. It does not start a
+second Runtime or call the provider directly. The existing local `run` and
+interactive modes remain available.
+
+```bash
+# Terminal 1: start the server, or use the running desktop application.
+./build/cognitive-os-agent --workspace /path/to/project serve 18300
+
+# Terminal 2: interactive client.
+./build/cognitive-os-agent chat
+./build/cognitive-os-agent chat --connect http://127.0.0.1:18300 --session SESSION_ID
+
+# Script mode: final answer on stdout; progress and tool details on stderr.
+./build/cognitive-os-agent chat -p "Read README.md and explain the project" > answer.md
+```
+
+On Windows use `cognitive-os-agent.exe`. For an authenticated Runtime set
+`COA_CLIENT_TOKEN` to its API bearer token in the environment; this is the Runtime
+token, not the model provider API key. Avoid sending credentials over untrusted
+plain HTTP connections.
+
+| Command | Action |
+|---|---|
+| `/new` | Create a durable conversation, preserving the selected workspace |
+| `/sessions` | List the server's current session page |
+| `/session ID` | Select a conversation for subsequent messages |
+| `/workspace PATH` | Register a server-side directory and select it for future tasks |
+| `/resume ID` | Explicitly resubmit the recorded task through the Runtime resume API |
+| `/help`, `/exit` | Show commands or leave the client |
+| Ctrl+C during execution | Request cancellation of the active task; retain server records |
+
+The client prints changed model/tool milestones, command arguments, results,
+status, duration, and reported token totals. Missing usage is labeled unavailable.
+Final answers are printed completely, including failed-task partial results.
+One-shot failures return a nonzero exit code. A lost connection does not
+automatically resubmit the task; its ID is printed for inspection.
+
+This first client uses line-based input and task polling. It does not yet offer
+a full-screen TUI, arrow-key history, image attachment commands, or token-by-token
+model streaming. Workspace paths belong to the server machine, and workspace
+selection is not a sandbox. Model routes are managed through the existing console.
+
+Regression checks after building the CLI:
+
+```bash
+python tests/test_cli_client.py
+python tests/test_workspaces_e2e.py
+# Opt-in: consumes the configured real model API; starts an isolated Runtime.
+python tests/test_live_cli_client.py --config /path/to/cognitive-os-agent.json
+```
+
+The opt-in test verifies an actual read → write → read task and saves usage and
+artifact verification to `build/cli-live-report.json`. It does not change the
+installed application's state or model settings.
+
 ## Architecture
 
 ```

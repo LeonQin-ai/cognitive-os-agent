@@ -52,6 +52,8 @@ try:
                     t=req('/v1/tasks/'+str(tid))
                     if t['status'] not in ('RUNNING','QUEUED'):break
                     assert time.monotonic()<deadline;time.sleep(.03)
+                if t['status']!='DONE':
+                    (build/'workspaces-e2e-failure.json').write_text(json.dumps(t,ensure_ascii=False,indent=2),encoding='utf-8')
                 assert t['status']=='DONE',t['output'];assert Path(t['workspace'])==path
                 assert any(marker in s['out'] for s in t['steps'])
                 cwd=next(s['out'] for s in t['steps'] if s['tool']=='shell');assert str(path).replace('\\','/') in cwd.replace('\\','/')
@@ -63,6 +65,11 @@ try:
         try:
             assert len(req('/v1/workspaces')['workspaces'])==2
             sessions=req('/v1/chat/sessions');assert Path(next(s for s in sessions if s['id']==sa)['workspace'])==b
+            client=subprocess.run([str(build/('cognitive-os-agent.exe' if os.name=='nt' else 'cognitive-os-agent')),
+                'chat','--connect',f'http://127.0.0.1:{port}','--session',sa,'-p','Report the workspace verification result'],
+                capture_output=True,text=True,encoding='utf-8',timeout=20)
+            assert client.returncode==0,client.stderr
+            assert 'Verified workspace' in client.stdout and str(b).replace('\\','/') in client.stdout.replace('\\','/'),client.stdout
         finally:p.terminate();p.wait(timeout=5)
     print('PASS: workspace registration, invalid paths, concurrent relative reads/writes/cwd, immutable selection, resume and restart')
 finally:model.shutdown();model.server_close()

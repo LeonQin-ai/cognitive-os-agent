@@ -79,6 +79,11 @@ Choose execution and state directories explicitly for CLI deployments:
 **Development preview:** `dev-master` adds saved workspace folders, per-chat workspace selection, and task-local execution directories. These changes are not yet merged into `main`. Workspace selection chooses the execution root; it is not a security sandbox.
 
 ## See the work as it happens
+**Terminal preview (`dev-master`):** run `cognitive-os-agent chat` to connect to the
+desktop/server Runtime, continue durable conversations, inspect tool execution,
+and cancel with Ctrl+C. Use `chat -p "your task"` for scripts. See the
+[terminal client guide](backend/README.md#terminal-client-development-branch).
+
 
 Persistent conversations, image attachments, model selection, task steering, and execution history share one console. Tool details expose commands, results, status, and duration so you can investigate the run.
 

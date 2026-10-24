@@ -22,12 +22,14 @@
 #include "snapshot/snapshot.h"
 #include "infra/config.h"
 #include "cJSON.h"
+#include "client.h"
 
 #define STATE_ROOT "state"
 
 static void print_usage(void) {
     printf("cognitive-os-agent %s — Cognitive OS Runtime\n", version());
     printf("usage:\n");
+    printf("  cognitive-os-agent [--workspace DIR] chat [--connect URL] [--session ID] [-p PROMPT]\n");
     printf("  cognitive-os-agent [--config FILE] [--workspace DIR] [--state DIR]\n");
     printf("                                            interactive chat; type a task directly\n");
     printf("  cognitive-os-agent [options] run <prompt>  run one task\n");
@@ -296,6 +298,8 @@ int main(int argc, char **argv) {
         }
         break;
     }
+    if (arg < argc && strcmp(argv[arg], "chat") == 0)
+        return cli_client_main(argc-arg-1,argv+arg+1,workspace);
     if (config_file) {
         if (strlen(config_file) >= 600) {
             fprintf(stderr, "config path is too long\n");

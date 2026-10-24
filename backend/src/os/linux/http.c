@@ -49,6 +49,7 @@ typedef int CURLcode;
 #define CURLOPT_ERRORBUFFER 10010L
 #define CURLOPT_HEADERDATA 10029L
 #define CURLOPT_POSTFIELDS 10015L
+#define CURLOPT_CUSTOMREQUEST 10036L
 #define CURLOPT_HTTPHEADER 10023L
 #define CURLOPT_ACCEPT_ENCODING 10102L
 #define CURLOPT_WRITEFUNCTION 20011L
@@ -236,6 +237,8 @@ static http_stream *curl_open(const char *base_url, const char *method, const ch
         cu.easy_setopt(h, (int)CURLOPT_POST, 1L);
         cu.easy_setopt(h, (int)CURLOPT_POSTFIELDS, body ? body : "");
         cu.easy_setopt(h, (int)CURLOPT_POSTFIELDSIZE, (long)(body ? strlen(body) : 0));
+    } else if (method && strcmp(method, "GET") != 0) {
+        cu.easy_setopt(h, (int)CURLOPT_CUSTOMREQUEST, method);
     }
 
     if (hdrs)
