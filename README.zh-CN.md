@@ -1,624 +1,195 @@
 <div align="center">
 
-# Cognitive OS（认知操作系统）
+# Cognitive OS · 认知操作系统
 
-**C 原生的自主智能体运行时 —— LLM 是加速器，不是操作系统。**
+### 让 AI 从回答问题，走向执行任务。
 
-[![Language](https://img.shields.io/badge/language-C11-blue.svg)](https://en.wikipedia.org/wiki/C11_(C_standard_revision))
-[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)](#快速开始)
-[![Dependencies](https://img.shields.io/badge/external%20deps-0-green.svg)](#项目结构)
+用 C11 构建智能体运行时，把工具执行、多 Agent 协作与过程追踪放进一个本地应用。
+
 [![CI](https://github.com/LeonQin-ai/cognitive-os-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/LeonQin-ai/cognitive-os-agent/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/LeonQin-ai/cognitive-os-agent)](https://github.com/LeonQin-ai/cognitive-os-agent/releases/latest)
+[![C11](https://img.shields.io/badge/core-C11-blue.svg)](#架构与设计)
+[![Platforms](https://img.shields.io/badge/platforms-Windows%20%C2%B7%20Linux%20%C2%B7%20macOS-lightgrey.svg)](#快速开始)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-**[English](README.md)**
+**[下载体验](https://github.com/LeonQin-ai/cognitive-os-agent/releases/latest) · [快速开始](#快速开始) · [开发文档](backend/README.md) · [English](README.md)**
 
 </div>
 
----
+![Cognitive OS 聊天控制台](screenshots/ui.png)
 
-Cognitive OS 是一个用 **C11** 编写的本地 Agent 运行时，提供桌面 / Web 控制台与 HTTP API。它把任务调度、工具执行、记忆、上下文预算和恢复记录放进可检查的系统，让你能追踪一个 Agent 从接到请求到交付文件的过程。
+**Cognitive OS 是一个本地优先、模型无关的智能体运行时。** 你可以把它作为桌面助手、命令行工具，或通过 HTTP 接入自己的应用。连接模型、赋予工具，再从记录中查看它调用了什么、修改了什么、最终交付了什么。
 
-**[下载最新版本](https://github.com/LeonQin-ai/cognitive-os-agent/releases/latest) · [完成第一个任务](GETTING_STARTED.md) · [观看运行录像](backend/docs/runtime-demo.mp4) · [阅读 8 篇源码文章](https://leonqin-ai.github.io/) · [参与贡献](CONTRIBUTING.md)**
+核心采用 C11，应用内嵌 Web 控制台。预编译版本无需先搭建 Node.js 或 Python 应用环境；浏览器自动化、Python 技能等扩展则需要各自的运行环境。
 
-![Cognitive OS 执行控制台：查看步骤、工具与结果](screenshots/execution.png)
+## 你可以用它做什么？
 
-## 从这里开始
+| 场景 | 工作方式 |
+|---|---|
+| **理解一个代码仓库** | 搜索源码、分段阅读、运行命令，输出有文件依据的分析。 |
+| **制作文档与可视化报告** | 配合已安装的文档、Python 或 shell 工具生成文件，并检查实际产物。 |
+| **组织多个专业 Agent** | 用 Flow DAG 串联审核、实现、测试，或让不同角色围绕同一话题相互讨论。 |
+| **处理周期性工作** | 设置定时任务，在同一控制台查看执行结果。 |
+| **为自己的应用加入 Agent** | 通过 HTTP 提交任务，读取状态、工具步骤、输出和指标。 |
 
-| 你的目标 | 入口 |
-| --- | --- |
-| 直接体验 | [Windows x64 安装器](https://github.com/LeonQin-ai/cognitive-os-agent/releases/latest/download/cognitive-os-agent-setup.exe) |
-| 在 Linux 运行 | [Linux x64 便携包](https://github.com/LeonQin-ai/cognitive-os-agent/releases/latest/download/cognitive-os-agent-linux-x64.tar.gz) |
-| 在 macOS 运行 | [Apple Silicon](https://github.com/LeonQin-ai/cognitive-os-agent/releases/latest/download/cognitive-os-agent-macos-arm64.zip) / [Intel](https://github.com/LeonQin-ai/cognitive-os-agent/releases/latest/download/cognitive-os-agent-macos-x64.zip) |
-| 验证下载文件 | [SHA256SUMS](https://github.com/LeonQin-ai/cognitive-os-agent/releases/latest/download/SHA256SUMS) |
-| 理解实现 | [架构与 API](backend/README.md) · [源码文章](https://leonqin-ai.github.io/) |
+文档生成、浏览器操作和多模态任务取决于所选模型及已安装工具。
 
-适合希望研究或扩展 Agent 执行基础设施的开发者，也适合想在本地观察多轮工具任务与多角色协作的人。连接真实模型需要配置提供方和凭据；离线 mock 用于确定性测试。录像使用本地确定性模型 fixture，Runtime 和文件工具实际执行。
-
-## 为什么需要 Cognitive OS？
-
-当 Agent 开始读写文件、运行命令和协调多个角色，就需要明确的执行边界：谁安排任务、谁决定动作能否执行、发生中断后保留哪些事实。
-
-| 你遇到的问题 | 对应的 Runtime 能力 | 可以核对的结果 |
-| --- | --- | --- |
-| 不知道任务停在哪一步 | 状态机、执行记录与控制台 | 模型 / 工具阶段、输出与终态 |
-| 多个角色有先后依赖 | Flow DAG 与分层执行 | 上游结果、下游等待与失败阻断 |
-| 历史与文档不断增长 | Memory Service 与 Context MMU | 记录来源、加载表示与预算 |
-| 工具改变了本地文件 | 策略、快照与事务路径 | 动作结果、文件变化与恢复记录 |
-| 需要不同模型或本地模型 | OpenAI / Anthropic 适配与路由 | 配置及协议回归 |
-
-项目的核心是让这些行为能落到代码与证据中。具体保障取决于工具与执行器；任意外部副作用不具备通用自动回滚或 exactly-once 保证。
+**[首次任务指南](GETTING_STARTED.md) · [贡献指南](CONTRIBUTING.md) · [项目分享素材](SHARE.md)**
 
 ## 快速开始
 
-首次体验推荐使用上面的发布包，按 [首次任务指南](GETTING_STARTED.md) 配置模型与工作区，再创建并核对一个文件。
+### 1. 下载或构建
 
-从源码构建，先克隆仓库并进入 `backend`：
+从 **[Releases](https://github.com/LeonQin-ai/cognitive-os-agent/releases/latest)** 下载 Windows 安装包、Linux 便携包或 macOS 应用包。打开桌面应用；Linux 便携包解压后可运行：
+
+```bash
+./cognitive-os-agent serve 18300
+```
+
+希望从源码构建？
 
 ```bash
 git clone https://github.com/LeonQin-ai/cognitive-os-agent.git
 cd cognitive-os-agent/backend
 ```
 
-**Linux / macOS**（macOS 需要 Xcode Command Line Tools）：
-
-```bash
-make
-./build/cognitive-os-agent serve 18300
-```
-
-**Windows PowerShell**（构建脚本使用捆绑的 Zig 工具链）：
-
-```powershell
-.\build.ps1 all
-.\build\cognitive-os-agent.exe serve 18300
-```
-
-打开 `http://localhost:18300/`，配置模型后输入“在当前工作区创建 note.txt，内容为 hello”。检查任务步骤和实际文件。桌面应用与独立服务器默认使用相同端口，避免同时启动。
-
-完整的配置、API、认证、模型接入和本地模型说明见 [开发文档](backend/README.md)。无需密钥的确定性测试见 [测试与验证](#测试与验证)。
-
-## 基准评测
-
-<details>
-<summary>评测方法、历史结果与运行条件</summary>
-
-下表为完整 agent 循环评测，后面的 Runtime 指标采用本地确定性负载，两者分别统计。纯净分数表：[`backend/docs/BENCHMARK_RESULTS.md`](backend/docs/BENCHMARK_RESULTS.md) · 方法论与失败归因详录：[`backend/docs/benchmark-report.md`](backend/docs/benchmark-report.md)。
-
-Token 与完成判定回归：真实模型定向用例已能自然结束，**5 次请求 / 14,534 输入 token**（此前 8 次 / 24,463 且失败）。长任务产物在恢复修复后通过独立验证；中止、失败和所有 API 成本均见[回归报告](https://github.com/LeonQin-ai/cognitive-os-agent/blob/v1.0.0/backend/docs/token-regression-report.md)，不作为通用节省比例。
-
-最新多任务真实 API 回归：源码概要、16 页 PPT、PNG 生成、文字图片识别及架构图识别 **5/5 通过**，合计 **590,674 tokens**；失败诊断成本与修复见上述报告。PNG 通过 Agent 绘图工具生成，未验证原生图片生成接口。
-
-工具循环已改为原生工具块及结构化完成声明驱动，默认不靠答复关键词决定是否继续。最终真实 API：HTML、源码分析、错误路径恢复 **3/3 通过**；失败、取消及全部迭代成本见上述报告。
-
-新增回归：文件名发现命中即停止，HTML 报告 **36,938 字符**正常交付；搜索实际执行一次，模型仍有三次缓存复用请求，失败与冗余均记录在回归报告。
-
-会话回归：后端真实创建 **100万个持久化会话**，创建阶段17.496秒，重启后完整枚举；真实REST/浏览器翻页及两条配置模型请求通过（9,518 tokens）。此项测量元数据创建，不是百万次HTTP/模型请求或百万个DOM节点。
-
-原生完成回归新增 OpenAI/Anthropic 各14类普通问答，并覆盖片段读取、持续研究和失败恢复；4项配置真实API问答均1次请求、0工具完成，合计21,187 tokens。
-
-| 评测 | 分数 | 模型 |
+| 平台 | 构建命令 | 环境要求 |
 |---|---|---|
-| GAIA 2023 validation（官方 165 题） | **78.79%**（L1 84.91 / L2 81.40 / L3 57.69） | GLM-5.3-flash |
-| SWE-bench_Verified mini（11 题，官方 resolved 标准） | **8/11 = 72.7%** | GLM-5.3-flash |
-| BFCL 风格函数调用（22 例，AST 严格判分） | **~94%**（20-22/22） | deepseek-chat |
-| GAIA 风格 mini（17 题） | **17/17 = 100%** + 视觉 1/1 | GLM-5.3-flash |
-| WebArena 风格浏览器任务（6 题） | **6/6 = 100%** | GLM-5.3-flash |
-| 策略遵循（违规请求） | **裸 LLM 0/4 → 运行时策略引擎 4/4** | deepseek-chat |
+| Linux | `make` | C 编译器和 Make |
+| macOS | `make` | Xcode Command Line Tools |
+| Windows / Git Bash | `bash build.sh cli` | Git Bash；脚本定位或引导安装固定版本 Zig |
+| Windows / PowerShell | `.\build.ps1 -Target cli` | PowerShell；脚本定位或引导安装固定版本 Zig |
 
-这些结果适用于表中模型、数据集与测试条件。Mini / 风格化用例与官方数据集分别标注；4 条策略用例验证的是已配置规则，不能据此推导通用安全保证或基准成绩的因果来源。
+在 `backend` 目录执行 `./build/cognitive-os-agent serve 18300`；Windows 执行 `./build/cognitive-os-agent.exe serve 18300`。
 
-## Runtime 实测（2026-10-14）
+### 2. 连接模型
 
-测试机器：Windows 11 build 26200、Intel Family 6 Model 142、约8 GiB RAM，Zig cc 0.14.1 `-O1`。实际运行 Scheduler、AgentPool、Context MMU及文件恢复；调度任务为本地确定性负载，不包含生产模型推理。Agent数表示注册角色数，不是并发进程数；8个工作Worker，每任务64次Context读取，聚合Context为8 MiB，另有8个空闲Runtime Worker。规模数据取3轮中位数，峰值RSS取该组最大值。
+打开 **http://localhost:18300/**，在 **Models** 页面配置 provider、base URL、模型名称和 API key。支持 OpenAI 兼容接口、Anthropic 与本地模型服务；离线开发可使用 mock provider。
 
-| 注册 Agent | 完成任务 | 总耗时 ms | 任务/秒 | 排队 P50 / P95 / P99 ms | 峰值 RSS MiB |
-| --- | --- | --- | --- | --- | --- |
-| 100 | 10,000 | 579.370 | 17,260 | 0.114 / 0.254 / 0.364 | 16.95 |
-| 1,000 | 10,000 | 578.199 | 17,295 | 0.114 / 0.258 / 0.392 | 17.09 |
-| 100 | 100,000 | 5748.495 | 17,396 | 0.113 / 0.262 / 0.422 | 22.48 |
-| 1,000 | 100,000 | 5771.132 | 17,328 | 0.113 / 0.257 / 0.376 | 22.57 |
-| 100 | 1,000,000 | 65971.943 | 15,158 | 0.131 / 0.313 / 2.039 | 78.65 |
-| 1,000 | 1,000,000 | 72279.054 | 13,835 | 0.144 / 0.346 / 14.790 | 77.92 |
+桌面应用同样使用 `18300` 端口，另起服务前请先关闭桌面应用。API key 留在本地配置中，不要提交到仓库。
 
-所有任务均接收并完成，失败/拒绝为0，结束时活动任务和队列归零；完成历史最多保留64条。RSS包含基准用例的完整性校验数组，不能将其全部算为任务历史内存。内存/队列每2048次提交采样，队列峰值是采样观察值。
+### 3. 从一个可验证的任务开始
 
-百万任务扩展实际共执行600万任务（100/1000 Agent各3轮）；耗时范围分别为58.743–74.076秒及71.629–73.305秒。1000 Agent下，吞吐相比已有10万任务基准约下降20%，排队P99增至14.790 ms，采样队列突增最高6201个任务；不能据此声称线性扩展或延迟SLO。[独立百万任务JSON](backend/docs/runtime-million-2026-10-14.json)保留六轮结果及逐阶段内存/队列采样。
+试试：**“阅读这个仓库，将源码概要写入 overview.md，并标明你实际阅读的文件。”** 查看工具记录，再打开文件核对结果。
 
-![Runtime 规模与排队延迟](backend/docs/runtime-scale-2026-10-14.svg)
-
-![代表轮次的内存与队列采样](backend/docs/runtime-memory-2026-10-14.svg)
-
-独立积压测试在提交10万任务后才放行Worker，实际排队99,992个任务，39.942秒排空，峰值59.07 MiB；其延迟包含人为等待，不能与正常吞吐混算。
-
-**Context压力：每种布局1轮。** 规范正文先晋升HOT，再驱逐、生成WARM概述、重新晋升HOT，最后重新打开磁盘存储并核对全部原文长度及哈希。L1概述有损，规范存储保留完整内容；不是无损压缩。生成的ASCII记录不是生产会话，没有把GiB级prompt发给模型。RSS包含正文缓存与JSON序列化，MMU的token预算不是整个进程的RAM上限。
-
-| Context布局 MiB | 峰值 RSS MiB | 驱逐 recall ms | WARM缓存 bytes | HOT恢复 ms | 磁盘重载 ms | 全文校验 |
-| --- | --- | --- | --- | --- | --- | --- |
-| 512 / 128 / 10 | 2860.61 | 306.725 | 3,900 | 7330.594 | 1144.853 | 通过 |
-| 768 / 128 / 128 | 3197.01 | 887.189 | 3,900 | 15020.763 | 2014.049 | 通过 |
-
-原始JSON保留操作次数及P50/P95/P99；各大内存案例仅3次驱逐，不能据此建立尾延迟SLO。
-
-**真实崩溃恢复：** RUNNING任务及AVAILABLE快照→强制终止整个Runtime进程→重启识别INTERRUPTED→核对快照恢复内容→显式重放至DONE→后续任务继续。检测511.031 ms、快照恢复18.285 ms、显式重放54.946 ms、崩溃到DONE为591.759 ms。Windows用TerminateProcess，POSIX测试用SIGKILL；不是仅某个线程Worker崩溃。测试重放幂等文件替换，不自动重放外部操作，不承诺exactly-once或断电恢复。
-
-[完整报告](backend/docs/runtime-benchmark-expanded.md) · [技术白皮书及3张架构图](backend/docs/runtime-whitepaper.md) · [5分钟真实运行录像](backend/docs/runtime-demo.mp4)。
-
-原速连续录制 Web 控制台操作，中文字幕、无配音：真实文件读写、源码分页、双 Agent 群聊、10 万任务调度、Context 恢复及回归命令。模型采用**本地确定性测试 fixture**，Runtime 与工具实际执行。[录像验证数据](backend/docs/runtime-demo-evidence.json)。
+CLI 部署可以显式指定执行目录和状态存储位置：
 
 ```bash
-cd backend
-python tests/run_runtime_measurements.py --full --output docs
-python tests/run_runtime_measurements.py --million --compiler "实际编译器/版本/参数" --output docs
+./build/cognitive-os-agent --workspace /path/to/project --state /path/to/state serve 18300
 ```
 
-`--full`重测1万/10万任务及650 MiB/1 GiB Context；`--million`仅测100/1000 Agent各3轮百万任务，独立保存JSON，不覆盖旧规模或Context结果。
+**开发预览：** `dev-master` 新增工作区文件夹、会话工作区选择和任务独立执行目录，尚未合并到 `main`。工作区选择决定执行根目录，不等同于安全沙箱。
 
-</details>
+## 看见任务是怎么完成的
 
-## 技术博客系列
+控制台集中展示持久化会话、图片附件、模型选择、执行中补充要求与任务历史。工具详情包含命令、结果、状态和耗时，便于从实际记录中排查问题。
 
-[8 篇中文技术博客](https://leonqin-ai.github.io/)从源码与实测介绍 C11 Runtime、Agent 相互讨论、Flow 依赖、Memory/Context、工具协议、故障恢复、百万任务基准和上手实验。文章与博客首页在[独立 GitHub Pages 仓库](https://github.com/LeonQin-ai/LeonQin-ai.github.io)维护。
+![Agent 执行过程与 Trace](screenshots/execution.png)
 
-## Web 控制台
-
-内嵌控制台支持持久化会话、可观测的 Agent 执行过程、执行中补充要求、多 Agent Flow、定时任务，以及本地 Skills/MCP/插件管理。
-以下截图使用本地演示配置和 mock 执行任务。
-
-群聊支持 Agent 之间相互讨论：注册不同角色、选择群成员后发送话题，各角色会读取其他成员的最新发言，进行追问、回应和完善。默认讨论 3 轮，可设置 1–5 轮；左侧显示当前角色与轮次，并可停止讨论。新用户消息会接管旧讨论，全员明确同意结束时可提前停止。详见[群聊 API](backend/README.md#im-bridge-and-agent-groups)。
-
-![当前聊天界面](screenshots/ui.png)
-
-执行历史展示模型与工具阶段、修改的文件、耗时和可展开的动作详情；Skills 与插件页面支持搜索、发现和已安装项管理。
-
-![Agent 执行历史](screenshots/execution.png)
+多 Agent Flow 用 DAG 表达任务依赖；群聊让注册角色在可配置的轮次内阅读并回应其他成员。Skills、MCP 和插件提供扩展入口。
 
 <details>
-<summary>查看 Skills 与插件界面</summary>
+<summary>展开查看 Skills 与插件管理界面</summary>
 
-![Skills](screenshots/skills.png)
+![技能管理](screenshots/skills.png)
 
-![插件](screenshots/plugins.png)
+![插件管理](screenshots/plugins.png)
+
 </details>
 
-## 架构
+截图使用本地演示配置与 mock 执行，不作为真实模型任务能力的证明。
+
+## 架构与设计
 
 ```mermaid
-flowchart TB
-    USER["用户 / 应用"]
-
-    subgraph UI["接口层"]
-        CLI["CLI"]
-        WEB["Web 控制台"]
-        API["REST / WebSocket"]
-        IM["IM / 聊天"]
-    end
-
-    subgraph CORE["认知运行时"]
-        EVENT["事件总线"]
-        SCHED["M:N 协程调度器"]
-        STATE["状态机"]
-        AGENT["Agent 运行时"]
-        POLICY["策略引擎"]
-        HOOK["Hook 系统"]
-        OBS["可观测性"]
-    end
-
-    subgraph COG["认知引擎"]
-        REASON["推理"]
-        PLAN["规划器"]
-        EVAL["评估器"]
-        BOARD["黑板"]
-    end
-
-    subgraph MEMORY["Memory OS"]
-        WORK["工作记忆"]
-        EPI["情景记忆"]
-        SEM["语义记忆"]
-        PROC["程序记忆"]
-        STORE["KV / 向量 / 图 / 文档存储"]
-    end
-
-    subgraph CONTEXT["Context MMU"]
-        HOT["HOT"]
-        WARM["WARM"]
-        COLD["COLD"]
-        BUDGET["上下文预算"]
-    end
-
-    subgraph EXEC["Execution OS"]
-        TX["事务管理器"]
-        SNAP["COW 快照"]
-        LOCAL["本地执行器"]
-        SANDBOX["沙箱 / FileTracker"]
-        REMOTE["WSL / 远程 (SSH)"]
-    end
-
-    subgraph LLM["LLM 桥接"]
-        ROUTER["模型路由"]
-        LM["本地模型"]
-        CLOUD["云端 API"]
-    end
-
-    subgraph TOOLS["工具与扩展"]
-        BUILTIN["内置工具"]
-        MCP["MCP"]
-        SKILLS["技能"]
-        PLUGIN["插件 (原生 / WASM)"]
-    end
-
-    USER --> UI --> EVENT --> SCHED --> STATE --> AGENT
-    AGENT --> COG & MEMORY & CONTEXT & EXEC & LLM
-    STATE <--> POLICY
-    HOOK -.-> STATE
-    OBS -.-> EVENT
-    MEMORY --> CONTEXT --> LLM
-    COG --> LLM
-    TOOLS --> EXEC
+flowchart TD
+    UI[桌面 / Web / CLI / HTTP] --> R[任务生命周期与调度]
+    R --> C[原生工具循环与完成判定]
+    C <--> L[模型接口]
+    C <--> M[Memory 与 Context MMU]
+    C --> P[策略检查与执行]
+    P --> T[文件 / Shell / MCP / Skills / 插件]
+    T --> E[工具证据与验证]
+    E --> C
+    R --> J[任务日志 / Trace / 指标]
 ```
 
-## 认知循环
-
-Agent 不是一次聊天补全。Cognitive OS 把 Agent 建模为**由运行时驱动的有状态控制循环**：
-
-```
-RECEIVE → UNDERSTAND → RECALL → REASON → PLAN → POLICY CHECK
-      → SNAPSHOT → ACT → VERIFY → COMMIT / ROLLBACK → LEARN
-                                                      │
-                                      └──→ 下一轮循环
-```
-
-确定性的状态机负责生命周期、重试、超时、调度、策略执行、工具分发、事务边界与失败处理；LLM 只负责语义理解、规划、推理、任务分解与泛化——真正需要模型的部分。
-
-这使系统远不那么依赖"模型在上下文窗口里维持整个控制流"的能力。
-
-## 认知运行时
-
-类内核的核心：Agent 生命周期、状态机、事件总线、**M:N 协程调度器**（Linux 用 ucontext，Windows 用 Fiber）、Agent 池、策略引擎、Hook 系统、能力系统与可观测性。
-
-Agent 负载天然异步。协程调度器让大量廉价的 Agent 任务跑在少量线程之上，而不是把每个操作绑死一个 OS 线程——为异步 I/O、分布式调度、Agent 隔离与资源配额打下地基。
-
-## Memory OS
-
-记忆不是向量数据库，而是**有生命周期的子系统**：
-
-```
-ENCODE → STORE → RECALL → CONSOLIDATE → REINFORCE → DECAY → ARCHIVE
-```
-
-| 类型 | 用途 |
+| 运行时服务 | 提供的能力 |
 |---|---|
-| 工作记忆 | 当前任务状态与短期推理 |
-| 情景记忆 | Agent 的既往经历 |
-| 语义记忆 | 事实、知识与学到的问题解决方案 |
-| 程序记忆 | 技能、工作流与成功的动作序列 |
+| **任务生命周期** | 调度、取消、状态记录，以及中断任务的显式恢复。 |
+| **原生工具循环** | 使用结构化 `tool_calls` / `tool_use` 和完成声明，不用答复关键词猜测是否继续。 |
+| **记忆与上下文** | 记忆生命周期服务，以及带预算的 hot/warm/cold 上下文分层。 |
+| **执行与策略** | 动作检查、文件快照、验证，以及支持范围内的回滚。 |
+| **多 Agent 协作** | 角色注册、Flow 依赖执行和群组讨论。 |
+| **可观测性** | 模型与工具阶段、可获得的 token 统计、持久化任务记录和指标。 |
 
-存储抽象在 **Memory Service 接口（vtable）**之后——KV、向量、图、文档存储皆可替换，运行时从不依赖某个具体数据库。
+文件回滚不能撤销任意网络或 shell 副作用；工作区选择不是进程隔离；恢复不保证 exactly-once 执行。分布式调度和企业多租户仍属后续方向。实现状态与缺口见[详细设计](backend/docs/COGNITIVE_OS_DETAILED_DESIGN_V3.1.md)。
 
-## Context MMU
+## 用证据说明能力
 
-上下文窗口被当作**受管内存资源**，而不是可以无限膨胀的 prompt：
+以下是**项目历史运行记录**，不是每个新版本重新评测的成绩。模型、工具、样本数量与运行波动都会影响结果。
 
-| 层级 | 内容 |
-|---|---|
-| **HOT** | 当前目标、计划、活跃工具调用、最新结果、错误 |
-| **WARM** | 近期观察、相关记忆、历史工具结果、代码片段 |
-| **COLD** | 历史任务、文档、大型仓库、归档知识 |
-
-Context MMU 决定加载什么、挡在外面什么、晋升什么、淘汰什么、预算还剩多少——Agent 因此可以在大知识库上工作，而不用把一切都塞进 prompt。
-
-模型路由可设置“上下文 tokens”。每轮规划先从该窗口扣除系统工具目录、预留输出和安全空间，再按剩余容量装载最近动作及相关已读文件页；切换路由后立即重新计算。模型窗口未知时按 32K tokens 保守处理，可在路由表单中填写供应商公布的实际容量。原始读取内容保留在文件页缓存和磁盘中，不随 prompt 裁剪而丢失。
-
-RAG 是这条流水线的一部分（不是外挂的聊天功能）：分块 → 嵌入 → **混合检索**（向量 + 关键词）→ **重排** → 上下文构建 → Context MMU → LLM，冷层查询支持可选 **HyDE**。
-
-## 事务化执行
-
-Agent 会修改真实世界，所以执行需要**事务语义**：
-
-```
-BEGIN → SNAPSHOT → EXECUTE → VERIFY
-                        ├── 成功 → COMMIT
-                        └── 失败 → ROLLBACK（文件级撤销）
-```
-
-- 写时复制（COW）快照引擎（运行时原生——git 可以*辅助*它，但 git 不是事务机制）
-- 单文件 64 MB 捕获上限（可配置），git 工作区感知
-- 适用于任意文件、临时工作区、生成代码、构建产物、沙箱与远程执行
-
-## Execution OS
-
-执行抽象在执行器接口之后：`execute(command, capability, policy, environment)` ——运行时选择后端。
-
-```
-Executor ── Local ── Linux / Windows
-         ├─ Sandbox ── WASM (wasm3) + FileTracker
-         ├─ WSL
-         └─ Remote ── SSH
-```
-
-FileTracker 在执行前快照文件系统、执行后做差分，把每一次读/写/删/执行记录为结构化证据。
-
-## 安全与策略
-
-安全不能只住在提示词里：
-
-```
-Agent 计划 → 策略引擎 → Hook 系统 → 能力检查 → 执行器 → 审计
-```
-
-策略决策为 **ALLOW / DENY / ASK** 加风险评分，作用于工具、命令、路径、网络、插件、Agent 与执行环境。规则在任何副作用发生前**硬拦截**——LLM 无法用话术绕过。
-
-Hook 提供第二层横向拦截（`agent.before_run`、`exec.before_execute`、`llm.before_request`、`memory.before_write`……），可以观察、修改或**否决**一个操作。
-
-## 多智能体运行时
-
-多个 Agent 表现为**隔离的运行时实例**——各自拥有记忆、上下文、工具与策略——而不是共享一份全局聊天记录的多个提示词：
-
-```
-Supervisor → 任务编译为 Flow DAG
-   ├── Analyze   (第 0 层)
-   ├── Search    (第 0 层)     ← 无依赖节点并行执行
-   └── Inspect   (第 0 层)
-        └── Merge → Execute → Verify   （依赖层）
-```
-
-Flow 编译器校验 DAG（Kahn 算法：判环 + 分层），层内并行执行，支持 `{{node-id}}` 引用让下游节点消费上游结果。
-
-## LLM 桥接
-
-刻意做到模型无关。统一接口同时讲 **OpenAI 兼容与 Anthropic** 两种协议（均支持 SSE 流式）——DeepSeek、Claude、GPT、Qwen、**Ollama / llama.cpp**（控制台一键启动）或离线 mock。模型路由按轮询、成本、延迟或能力标签均衡。同一套运行时可以离线跑、本地 GPU 跑、云端 API 跑或远程推理集群跑。
-
-## 工具与扩展系统
-
-统一的能力模型：内置工具（file / shell / git / glob / grep）、**MCP**（stdio + HTTP）、技能市场、生成工具（成功的工具序列被**蒸馏为可复用技能**——自进化闭环）、原生 C 插件与 **WASM 插件**（wasm3 沙箱 + 能力令牌）。AI 插件生成器走 分析 → 架构 → 代码生成 → **安全审计** → 测试 → 注册；是否允许生成的能力执行，仍由运行时决定。
-
-## 可观测性
-
-一切重要操作皆可观测：认知循环每个阶段都向总线发布事件；JSONL 审计轨迹；Prometheus 风格指标；WebSocket 推送到控制台。一次 Agent 运行可以被完整重放——这对调试自主系统至关重要。
-
-## 一次典型的 Agent 运行
-
-> "找到内核回归并修复它。"
-
-```
-1. 理解请求
-2. 回忆既往调试经历                       （情景记忆）
-3. 检索相关源码 / 文档                     （RAG）
-4. 让 LLM 推理，生成执行计划               （规划器）
-5. 策略检查                               （策略引擎）
-6. 创建快照                               （COW 快照）
-7. 查看 → 修改 → 编译 → 跑回归测试
-8. 验证   ── 通过 ──→ 提交
-          └─ 失败 ──→ 回滚 → 重新规划 → 重试
-9. 学习：经历 → 情景记忆
-         → 巩固 → 语义 / 程序记忆
-```
-
-系统不是简单回答——它**执行、验证并从执行中学习**。
-
-## 设计原则
-
-1. **LLM 是加速器，不是操作系统。** 运行时拥有确定性控制流。
-2. **上下文是受管资源** —— 分配、预算、晋升、淘汰、持久化。
-3. **记忆有生命周期** —— 不只是向量库里的一堆 embedding。
-4. **副作用是事务化的** —— 执行 → 验证 → 提交，或回滚。
-5. **安全由运行时强制执行** —— 策略、能力、Hook、沙箱、审计。不是"请不要执行 `rm -rf`"。
-6. **核心抽象皆可替换** —— 存储、LLM 提供方、执行器、插件都通过稳定接口接入。
-7. **一切重要的东西皆可观测。**
-8. **C 是运行时基座。** 模型提供认知，运行时提供执行。
-
-## 项目结构
-
-```
-cognitive-os-agent/
-├── backend/
-│   ├── include/cognitive-os-agent/   公共头文件 —— 每模块一个，按层组织
-│   ├── src/
-│   │   ├── runtime/         事件总线 · M:N 调度器 · 状态机 · 策略 · Hook
-│   │   │                    Flow 编译器 (DAG) · 编排器 · 状态存储 · Agent 池
-│   │   ├── cognition/       推理（有界 agent 循环）· 规划器 · 评估器 · 黑板
-│   │   ├── memory/          Memory OS 门面 · KV/向量/图/情景存储 · 服务 vtable
-│   │   ├── retrieval/       知识索引 · 嵌入 · 重排 · 上下文构建 (MMU)
-│   │   ├── llm/             openai · anthropic 适配器 · SSE · 路由 · 能力
-│   │   ├── action/          工具 (file/shell/git/mcp/skill/glob/grep) · MCP 连接
-│   │   ├── execution/       执行器 vtable：本地 · WSL · 远程路由
-│   │   ├── tx/ + snapshot/  事务 + COW 快照引擎
-│   │   ├── plugin_runtime/  动态加载 · wasm3 沙箱 · 能力令牌 · filetracker
-│   │   ├── plugin_intelligence/  分析器 · 架构师 · 代码生成 · 安全审计
-│   │   ├── api/             HTTP/1.1 服务器 · REST · WebSocket (RFC6455) · 鉴权
-│   │   ├── im/              IM 渠道 · Telegram 桥
-│   │   ├── os/              线程 · 协程 · 套接字 · 进程 · 文件系统
-│   │   └── infra/           日志 · 配置 · 指标 · 审计 · 无锁 MPMC 环形缓冲
-│   ├── apps/web/            内嵌 Web 控制台（编译进二进制）
-│   ├── cli/                 交互式 CLI
-│   ├── tools/               mock-llm-server · 桌面壳 (WebView2) · 安装包素材
-│   ├── tests/               单元 · 场景 · e2e · 适配器 · BFCL 风格基准
-│   ├── docs/                架构 v3.0 · 详细设计 v3.1 · 密钥安全设计 · 基准报告
-│   └── third_party/         cJSON (MIT) · wasm3 (MIT) · webview (MIT)
-├── LICENSE
-└── README.md
-```
-
-架构刻意分层——每层暴露稳定接口，不向上一层泄漏实现细节：
-
-```
-应用 → Agent 运行时 → 认知/记忆/执行服务 → OS 抽象 → 操作系统
-```
-
-## 测试与验证
-
-质量门槛：CI 在 Windows（zig cc）、Linux（gcc 和 AddressSanitizer）、macOS Apple Silicon 与 macOS Intel 上构建和测试。
-
-```
-unit:      3331 passed, 0 failed   （2026-10-16 本地 Windows 验证）
-scenario:  91 checks, 0 failed     （HTTP 服务器、插件、MCP stdio、Flow）
-e2e:       E2E PASS                （真实 HTTP，双协议）
-adapters:  ADAPTER PASS            （chat + SSE 流式，openai + anthropic）
-bench:     BFCL 风格 22 条          （simple / multiple / parallel / irrelevance / policy）
-ASAN:      0 内存错误
-```
-
-最近问题验证：[CI 38563004101](https://github.com/LeonQin-ai/cognitive-os-agent/actions/runs/38563004101) 五个平台全部通过。新增图片请求端到端用例覆盖真实上传和模型负载、模型完全不返回、持续零碎返回、固定接收截止时间、失败后图片重试及文本请求；Windows、Linux和两个macOS架构均执行。图片请求失败不会自动重复发送或再发摘要请求。另有真实进程强制终止后的快照恢复/显式重放、Runtime规模/MMU/队列积压smoke，以及5个浏览器状态/详情回归检查。
-
-```bash
-python backend/tests/test_vision_wait_e2e.py
-python backend/tests/test_runtime_benchmark.py
-python backend/tests/test_crash_recovery_e2e.py
-```
-
-群聊讨论本地验证（2026-10-16，Windows）：**109 项专项 Native 检查、3331 项全量检查**通过；真实 HTTP 回归覆盖三轮互相引用、单轮兼容、全员/单方结束、角色失败、停止、新消息接管、设置校验及重启持久化；浏览器回归覆盖左侧状态、停止重试和 390px 窄屏。模型使用本地确定性 provider，验证实际 Runtime 控制流，不代表生产模型的讨论质量评测。
-
-```bash
-python backend/tests/test_im_discussion_e2e.py
-python backend/tests/test_im_members_e2e.py
-```
-
-### 自己动手跑测试
-
-所有测试套件自包含，**不需要 API key、不需要外网、不需要任何外部服务**（LLM 用 mock）。所有测试二进制失败时都以非零码退出。
-
-**Linux / macOS：**
-
-```bash
-cd backend
-make                # 构建全部测试二进制（或 make test / make scenario 构建并运行单项）
-make test           # 单元测试；输出当前通过数量
-make scenario       # 场景检查            → "SCENARIO PASS"
-./build/test-adapters            # 适配器检查          → "ADAPTER PASS"
-./build/cognitive-os-agent-bench --mock   # 基准 sanity（离线 mock）
-./build/mock-llm-server 9000 &    # e2e 需要先启动 mock LLM 服务器
-./build/cognitive-os-agent-e2e   #                      → "E2E PASS"
-```
-
-**Windows（MSYS2 / Git Bash，捆绑 Zig 工具链）：**
-
-```bash
-cd backend
-./build.sh                               # 全量构建
-./build/cognitive-os-agent-test.exe      # 单元测试
-./build/cognitive-os-agent-scenario.exe  # 场景检查
-./build/test-adapters.exe                # 适配器检查
-./build/cognitive-os-agent-bench.exe --mock
-./build/mock-llm-server.exe 9000 & ./build/cognitive-os-agent-e2e.exe
-```
-
-macOS 可运行 `bash package-macos.sh`，在 `dist/Cognitive OS.app` 生成原生 Cocoa/WebKit
-应用，并输出当前架构的 ZIP。设置 `MACOS_SIGN_IDENTITY` 可使用 Developer ID 签名；默认使用临时签名。
-
-| 套件 | 二进制 | 验证内容 |
+| 评测 | 记录结果 | 范围 |
 |---|---|---|
-| unit | `cognitive-os-agent-test` | 全部 43 个模块：状态机、事件总线、调度器、记忆生命周期、Context MMU、事务、策略、Hook、Flow…… |
-| scenario | `cognitive-os-agent-scenario` | 端到端场景：HTTP API、插件、MCP stdio、Flow、大文件快照保护 |
-| adapters | `test-adapters` | LLM 提供方协议：chat + SSE 流式（openai + anthropic，真实 HTTP） |
-| e2e | `cognitive-os-agent-e2e` | 对 mock LLM 服务器（`mock-llm-server 9000`）的完整 agent 运行 |
-| bench | `cognitive-os-agent-bench --mock` | BFCL 风格基准 harness 离线 sanity |
+| GAIA 2023 validation | **78.79%** | 165 题；GLM-5.3-flash；2026-09-11 |
+| SWE-bench Verified mini | **8/11** | 11 题样本；GLM-5.3-flash；2026-09-12 |
+| BFCL 风格函数调用 | **20–22/22** | 项目自建用例；deepseek-chat |
+| WebArena 风格浏览器任务 | **6/6** | 小规模自建用例；GLM-5.3-flash |
 
-> bench-real / bench-bfcl 用 `--mock` 也是离线的；`--real` 会通过 `COA_LLM_*` 环境变量（provider / base_url / model / api_key）访问真实 LLM——仅在你有 API key 时使用。
+SWE-bench 报告也记录了 Docker 隔离重跑 **5/11**。mini 与“风格”用例不代表完整官方基准成绩。比较前请阅读[成绩表](backend/docs/BENCHMARK_RESULTS.md)与[方法说明](backend/docs/benchmark-report.md)。
 
-**CI** 在每次 push 和 pull request 时运行 Windows、Linux、Linux AddressSanitizer、macOS Apple Silicon 和 macOS Intel 门禁。见 [`.github/workflows/ci.yml`](.github/workflows/ci.yml)。
+在报告所列 Windows 测试机上，本地确定性负载以 100 个注册角色、8 个 Worker 完成 **100 万个任务，耗时 65.972 秒，采样峰值 RSS 78.65 MiB**（耗时取三轮中位数）。这是调度与上下文读取负载，**不是百万次 LLM 请求**；注册角色数量也不是并发进程数量。
 
-基准评测纯净分数表：[`backend/docs/BENCHMARK_RESULTS.md`](backend/docs/BENCHMARK_RESULTS.md) · 方法论与真实 LLM 结果：[`backend/docs/benchmark-report.md`](backend/docs/benchmark-report.md)。
+![Runtime 规模实测](backend/docs/runtime-scale-2026-10-14.svg)
 
-## 文档
+[测试条件与限制](backend/docs/runtime-benchmark-expanded.md) · [百万任务原始数据](backend/docs/runtime-million-2026-10-14.json) · [内存与队列采样](backend/docs/runtime-memory-2026-10-14.svg)
 
-设计文档描述目标架构；是否已实现应参照详细设计中的实现状态章节。
+真实模型回归的失败尝试和 API 成本保留在[历史回归报告](https://github.com/LeonQin-ai/cognitive-os-agent/blob/v1.0.0/backend/docs/token-regression-report.md)。它们是定向验证，不代表所有任务都能完成或具有同样的 token 效率。
 
-| 文档 | 内容 |
+## 通过 HTTP 接入
+
+```bash
+# 提交任务，响应中包含任务 ID。
+curl -X POST http://localhost:18300/v1/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"message":"Create note.txt containing hello"}'
+
+# 将 0 替换为返回的任务 ID。
+curl http://localhost:18300/v1/tasks/0
+curl http://localhost:18300/v1/tasks/journal
+curl http://localhost:18300/metrics
+```
+
+认证、模型配置、本地 Skills、MCP 与完整 API 使用方式见 **[开发指南](backend/README.md)**。
+
+## 测试与参与贡献
+
+CI 覆盖 Windows、Linux、Linux AddressSanitizer、macOS Apple Silicon 和 macOS Intel。具体提交是否通过，请查看[当前工作流](https://github.com/LeonQin-ai/cognitive-os-agent/actions/workflows/ci.yml)。
+
+```bash
+cd backend
+COA_TOOL_PROTOCOL=legacy make test
+COA_TOOL_PROTOCOL=legacy make scenario
+```
+
+Windows 可用 `bash build.sh test` 构建单元测试，再执行 `./build/cognitive-os-agent-test.exe`。离线 fixture 验证运行时行为，无需付费模型调用；真实模型评测另行执行，需要 API 凭据。浏览器用例还需要 Playwright。完整命令和环境配置见 [CI](.github/workflows/ci.yml) 与[开发指南](backend/README.md)。
+
+欢迎贡献**可复现的任务失败、模型适配、工具恢复、上下文效率、界面可访问性和文档改进**。提交问题时请附版本或 commit、操作系统、模型与 provider、预期结果，以及脱敏后的执行记录，不要上传 API key 或未获授权的私有源码。
+
+**[反馈 Bug](https://github.com/LeonQin-ai/cognitive-os-agent/issues/new) · [寻找可参与的问题](https://github.com/LeonQin-ai/cognitive-os-agent/issues)**
+
+## 深入了解
+
+| 资料 | 内容 |
 |---|---|
-| [`backend/docs/COGNITIVE_OS_ARCHITECTURE_BASELINE_V3.0.md`](backend/docs/COGNITIVE_OS_ARCHITECTURE_BASELINE_V3.0.md) | 目标架构基线与组件边界 |
-| [`backend/docs/COGNITIVE_OS_DETAILED_DESIGN_V3.1.md`](backend/docs/COGNITIVE_OS_DETAILED_DESIGN_V3.1.md) | 详细设计、实现状态与剩余差距 |
-| [`backend/docs/COGNITIVE_OS_SECRET_SECURITY_DDD_V1.0.md`](backend/docs/COGNITIVE_OS_SECRET_SECURITY_DDD_V1.0.md) | 密钥安全设计与验收标准 |
-| [`backend/docs/BENCHMARK_RESULTS.md`](backend/docs/BENCHMARK_RESULTS.md) | 纯净基准分数表（GAIA / SWE-bench / BFCL / 策略遵循） |
-| [`backend/docs/benchmark-report.md`](backend/docs/benchmark-report.md) | Agent 基准评测方法与真实 LLM 结果（分数表背后的详细记录） |
-| [`backend/README.md`](backend/README.md) | 开发者文档：构建、并发模型、API、配置、市场、本地模型 |
-
-## 路线图
-
-项目从本地 Agent 运行时逐步演进为分布式智能体运行环境。
-
-**阶段 1 —— 认知运行时** ✅
-Agent 生命周期 · 事件总线 · M:N 协程运行时 · 状态机 · 策略 / Hook · Agent 编排
-
-**阶段 2 —— 认知记忆** ✅
-Memory OS 抽象 · 工作/情景/语义/程序记忆 · 检索 · Context MMU
-→ 记忆巩固 → 反思 → 长期程序学习
-
-**阶段 3 —— Execution OS** ✅
-本地执行 · 事务 / 快照 · 文件追踪 · WSL / 远程 (SSH) 执行器 · WASM 沙箱
-→ OS 级沙箱（job objects / namespaces）→ VM → 容器
-
-**阶段 4 —— 多智能体运行时** ✅
-Flow DAG 编排 · Agent 并行执行 · 逐 Agent 隔离
-→ 资源配额 → 能力隔离 → Agent 级调度
-
-**阶段 5 —— 分布式 Agent 运行时** 🔜
-分布式调度器 · 远程 Agent 节点 · 负载放置 · 节点健康管理 · 集中可观测性 · 节点调度（控制面拆分）
-
-**阶段 6 —— 企业级 Cognitive OS** 🔜
-多租户 · RBAC / ABAC · 集中策略 · 分布式记忆 · 企业模型路由 · 审计
-
-当前体验入口是**本地优先的运行时**。管理 Agent 节点集群的控制面属于后续演进方向；依赖分布式或企业能力前，请先核对实现状态。
-
-## 为什么用 C？
-
-不是因为"C 更快"，而是因为运行时**贴近操作系统**。C 对内存、线程、协程、调度、套接字、进程、文件系统、IPC、信号、资源所有权与 ABI 边界提供直接控制。一个 Agent 运行时越来越像 **OS + 数据库 + 调度器 + 沙箱 + AI 运行时** 的合体；模型本身不需要用 C 实现，运行时需要。
-
-## 我们有何不同？
-
-### 如何判断是否适合你的项目？
-
-- 想研究任务生命周期、调度、上下文预算和工具证据：可以从本项目的源码与回归实验开始。
-- 需要自己扩展执行器、工具或模型协议：先看 [开发文档](backend/README.md) 与 [贡献指南](CONTRIBUTING.md)。
-- 需要成熟的托管服务、分布式控制面或企业权限体系：先核对路线图与实现状态，这些方向不能当成已交付能力。
-
-### 架构边界
-
-Cognitive OS 不在提示词抽象上与其他 Agent 框架竞争——它的架构边界不同：
-
-```
-Agent 框架                  Cognitive OS
-───────────────             ─────────────────────────────────────
-LLM                         ┌───────────────────────────────────┐
-│                           │ 认知运行时                         │
-Prompt / Chain              │ 状态 / 调度 / 事件                 │
-│                           │ 策略 / Hook / 能力                 │
-工具                         │ Agent 生命周期 / 隔离              │
-│                           └──────────────┬────────────────────┘
-记忆                         Memory OS │ Context MMU │ Execution OS
-                                           │ LLM 桥接
-                                     本地 / 云端 / GPU
-```
-
-核心理念：**自主智能体需要的是一个操作系统环境，而不只是一条提示词循环。**
-
-## 项目状态
-
-一个活跃的研究 / 工程项目，持续演进：
-
-```
-单节点 Agent 运行时 → 多智能体运行时 → 沙箱化运行时
-→ 远程运行时 → 分布式运行时 → 企业智能体操作平台
-```
-
-当前实现优先建立运行时原语。
-
-## 参与贡献
-
-从 [贡献指南](CONTRIBUTING.md) 选择一个小而完整的改动。复现问题请使用 Issue 模板，附上版本、环境、脱敏输入及预期 / 实际结果。
-
-代码库刻意保持小而分层——新贡献者每次研读一层即可。尤其有价值的方向：调度器 / 协程 / 事件总线（运行时）、规划器 / 评估器 / 反思（认知）、记忆服务 / 检索 / Context MMU（记忆）、沙箱 / VM / 远程执行器 / 快照（执行）、多智能体 / DAG / 隔离（Agent）、可观测性 / 分布式控制面（基础设施）。
-
-欢迎 PR：选一个模块，遵守 C11 + 零依赖纪律，保持核心架构模块化、守住运行时边界，并让测试套件通过——本地运行方式见[测试与验证](#测试与验证)（无需 API key）。
+| [开发指南](backend/README.md) | 构建、配置、工具、API 和本地模型 |
+| [架构基线](backend/docs/COGNITIVE_OS_ARCHITECTURE_BASELINE_V3.0.md) | 模块边界与设计方向 |
+| [详细设计](backend/docs/COGNITIVE_OS_DETAILED_DESIGN_V3.1.md) | 实现状态与待完成工作 |
+| [Runtime 白皮书](backend/docs/runtime-whitepaper.md) | 调度、内存、执行与架构图 |
+| [密钥安全设计](backend/docs/COGNITIVE_OS_SECRET_SECURITY_DDD_V1.0.md) | 安全模型与验收标准 |
+| [技术博客](https://leonqin-ai.github.io/) | 8 篇关联源码与验证证据的工程文章 |
+| [5 分钟控制台录像](backend/docs/runtime-demo.mp4) | 确定性本地模型驱动的真实运行时与工具执行 |
 
 ## 许可证
 
-[Apache-2.0](LICENSE) —— 第三方 vendored 代码保留各自的 MIT 头（cJSON、wasm3、webview）。
-
----
-
-<div align="center">
-
-**构建自主智能之下的运行时。**
-
-*如果这个项目——一个用可移植 C 写成的完整认知操作系统——让你感兴趣，请给个 ⭐。*
-
-</div>
+采用 **[Apache License 2.0](LICENSE)**。归属与保留声明见 [NOTICE](NOTICE)，第三方组件保留各自许可证。早期 MIT 版本仍按原许可证提供。
