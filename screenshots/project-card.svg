@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" role="img" aria-labelledby="title desc">
+  <title id="title">Cognitive OS — an inspectable C11 agent runtime</title>
+  <desc id="desc">Task scheduling, tool execution, memory, context budgets and recovery. Windows, Linux and macOS. Apache-2.0 licensed.</desc>
+  <defs>
+    <linearGradient id="bg" x2="1" y2="1"><stop stop-color="#111324"/><stop offset="1" stop-color="#202038"/></linearGradient>
+    <linearGradient id="accent"><stop stop-color="#a79bff"/><stop offset="1" stop-color="#73e0c3"/></linearGradient>
+  </defs>
+  <rect width="1280" height="640" fill="url(#bg)"/>
+  <path d="M800 0v640M1020 0v640M0 160h1280M0 480h1280" stroke="#ffffff" stroke-opacity=".035"/>
+  <rect x="64" y="54" width="220" height="30" rx="15" fill="#8272ed" fill-opacity=".18" stroke="#a79bff" stroke-opacity=".35"/>
+  <g font-family="Segoe UI, Arial, sans-serif">
+    <text x="83" y="75" fill="#c6bfff" font-size="13" font-weight="700" letter-spacing="2">C11 AGENT RUNTIME</text>
+    <text x="62" y="186" fill="#fafaff" font-size="76" font-weight="700" letter-spacing="-3">Cognitive OS</text>
+    <text x="66" y="245" fill="#c0bed6" font-size="26">From tool calls to inspectable execution.</text>
+    <text x="66" y="292" fill="#9896b1" font-size="20">Scheduling · Memory · Context · Recovery</text>
+    <g transform="translate(66 355)">
+      <rect width="520" height="110" rx="14" fill="#121421" stroke="#66627e"/>
+      <text x="23" y="34" fill="#9b91cf" font-size="13" letter-spacing="2">EXECUTION YOU CAN FOLLOW</text>
+      <text x="23" y="76" fill="#f1efff" font-size="20">Request</text>
+      <path d="M108 68h32m-7-6 7 6-7 6" fill="none" stroke="#a79bff" stroke-width="2"/>
+      <text x="154" y="76" fill="#f1efff" font-size="20">Tools</text>
+      <path d="M213 68h32m-7-6 7 6-7 6" fill="none" stroke="#a79bff" stroke-width="2"/>
+      <text x="261" y="76" fill="#85e8cf" font-size="20">Evidence</text>
+      <path d="M355 68h32m-7-6 7 6-7 6" fill="none" stroke="#85e8cf" stroke-width="2"/>
+      <text x="403" y="76" fill="#f1efff" font-size="20">Result</text>
+    </g>
+    <g transform="translate(732 114)">
+      <rect width="480" height="380" rx="18" fill="#121421" stroke="#55516d"/>
+      <path d="M0 48h480" stroke="#39364e"/>
+      <circle cx="24" cy="24" r="5" fill="#8777e4"/><circle cx="42" cy="24" r="5" fill="#6f688d"/><circle cx="60" cy="24" r="5" fill="#514c68"/>
+      <text x="88" y="30" fill="#b0abc9" font-size="14">RUNTIME / CAPABILITIES</text>
+      <g fill="none" stroke="#4d465f"><path d="M33 93v208"/><path d="M33 93h24M33 158h24M33 223h24M33 288h24"/></g>
+      <g font-size="19" fill="#e8e5f6">
+        <text x="76" y="101">Task lifecycle &amp; scheduling</text>
+        <text x="76" y="166">Tools &amp; execution records</text>
+        <text x="76" y="231">Memory &amp; context budgets</text>
+        <text x="76" y="296">DAG-based agent workflows</text>
+      </g>
+      <g fill="#a79bff"><circle cx="33" cy="93" r="5"/><circle cx="33" cy="158" r="5"/><circle cx="33" cy="223" r="5"/><circle cx="33" cy="288" r="5"/></g>
+      <text x="26" y="350" fill="#85e8cf" font-size="14">LOCAL CONSOLE + HTTP API</text>
+    </g>
+    <path d="M66 521h1146" stroke="url(#accent)" stroke-opacity=".6"/>
+    <text x="66" y="568" fill="#dbd7f1" font-size="19">github.com/LeonQin-ai/cognitive-os-agent</text>
+    <text x="828" y="568" fill="#a39dbb" font-size="16">Windows / Linux / macOS · Apache-2.0</text>
+  </g>
+</svg>

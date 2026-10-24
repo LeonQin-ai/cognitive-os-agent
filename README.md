@@ -16,56 +16,71 @@
 
 ---
 
-Cognitive OS is a lightweight, model-agnostic **Agent Runtime / Cognitive Operating System** written in pure C11.
+Cognitive OS is a **C11 agent runtime** with a local desktop / web console and HTTP API. It manages task scheduling, tool execution, memory, context budgets and recovery records, so you can inspect how an agent moves from a request to a delivered artifact.
 
-Most agent systems are a prompt loop:
+**[Download](https://github.com/LeonQin-ai/cognitive-os-agent/releases/latest) · [Run your first task](GETTING_STARTED.md) · [Watch the demo](backend/docs/runtime-demo.mp4) · [Read the engineering series](https://leonqin-ai.github.io/) · [Contribute](CONTRIBUTING.md)**
 
-```
-User → Prompt → LLM → Tool → LLM → Tool → ...
-```
+![Cognitive OS execution console showing task stages, tools and results](screenshots/execution.png)
 
-Cognitive OS treats an agent as a **runtime-managed process**:
+## Start here
 
-```
-User / Application
-        │
-        ▼
-┌─────────────────────┐
-│    Cognitive OS     │
-│    Agent Runtime    │
-└──────────┬──────────┘
-           │
-   ┌───────┼────────┐
-   ▼       ▼        ▼
- Memory  Context  Execution
-  OS       MMU       OS
-   │       │        │
-   └───────┼────────┘
-           ▼
-      LLM / Tools
-```
+| Goal | Entry point |
+| --- | --- |
+| Try the desktop app | [Windows x64 installer](https://github.com/LeonQin-ai/cognitive-os-agent/releases/latest/download/cognitive-os-agent-setup.exe) |
+| Run on Linux | [Linux x64 archive](https://github.com/LeonQin-ai/cognitive-os-agent/releases/latest/download/cognitive-os-agent-linux-x64.tar.gz) |
+| Run on macOS | [Apple Silicon](https://github.com/LeonQin-ai/cognitive-os-agent/releases/latest/download/cognitive-os-agent-macos-arm64.zip) / [Intel](https://github.com/LeonQin-ai/cognitive-os-agent/releases/latest/download/cognitive-os-agent-macos-x64.zip) |
+| Verify a download | [SHA256SUMS](https://github.com/LeonQin-ai/cognitive-os-agent/releases/latest/download/SHA256SUMS) |
+| Explore the implementation | [Architecture and API](backend/README.md) · [Chinese engineering articles](https://leonqin-ai.github.io/) |
 
-The runtime owns **state, scheduling, memory, context, execution, security, isolation and observability**. The LLM is invoked only when generalization, reasoning or semantic understanding is required.
+Built for developers exploring agent infrastructure and people who want to inspect local tool tasks and multi-agent workflows. Real-model tasks require a configured provider and credentials. Offline mocks are deterministic test fixtures. The demo recording uses a deterministic model fixture with actual Runtime and file-tool execution.
 
 ## Why Cognitive OS?
 
-An autonomous agent eventually becomes a **systems problem**. It needs lifecycle management, asynchronous execution, scheduling, memory management, context management, process isolation, tool permissions, transactional side effects, rollback, multi-agent coordination, observability, resource management, sandboxing and remote execution.
+Once an agent reads files, runs commands and coordinates roles, it needs explicit execution boundaries: who schedules work, who checks an action, and what survives an interruption.
 
-Cognitive OS moves these responsibilities **out of the prompt and into the runtime**.
+| Problem | Runtime mechanism | What you can inspect |
+| --- | --- | --- |
+| Unclear task progress | State machine, execution records and console | Model / tool stages, outputs and final state |
+| Roles depend on earlier results | Flow DAG and layered execution | Upstream evidence, waiting and failure propagation |
+| Growing history and documents | Memory Service and Context MMU | Record sources, representations and budgets |
+| Tools modify local files | Policy, snapshots and transaction paths | Action results, file changes and recovery records |
+| Different model providers | OpenAI / Anthropic adapters and routing | Configuration and protocol regressions |
 
-| | Traditional agent framework | Cognitive OS |
-|---|---|---|
-| Control flow | LLM decides everything, every step | **State machine + rule engine drive; LLM fills the gaps** |
-| Memory | Chat log in a context window | **Memory OS with a real lifecycle: encode → consolidate → reinforce → decay → archive** |
-| Context | Stuff everything into the prompt | **Context MMU: hot/warm/cold tiers with budget, promotion and eviction** |
-| Safety | Prompt-level "please don't" | **Policy engine hard-intercepts actions before they happen** |
-| Side effects | Fire and forget | **Transactional: snapshot → execute → verify → commit / rollback** |
-| Concurrency | Sequential tool loop | **M:N coroutine scheduler, parallel DAG layers** |
-| Binary | node_modules + runtime | **A single static C binary with an embedded web console** |
+The focus is inspectable execution backed by code and evidence. Guarantees depend on the tool and executor; arbitrary external side effects do not have universal automatic rollback or exactly-once execution.
 
-The goal is not another prompt framework — it is the **runtime substrate underneath autonomous agents**.
+## Quick Start
+
+Use a release package above and follow the [first-task guide](GETTING_STARTED.md) to configure a model and workspace, create a file, and verify the result.
+
+To build from source, clone the repository and enter `backend`:
+
+```bash
+git clone https://github.com/LeonQin-ai/cognitive-os-agent.git
+cd cognitive-os-agent/backend
+```
+
+**Linux / macOS** (Xcode Command Line Tools required on macOS):
+
+```bash
+make
+./build/cognitive-os-agent serve 18300
+```
+
+**Windows PowerShell** (the build script uses the bundled Zig toolchain):
+
+```powershell
+.\build.ps1 all
+.\build\cognitive-os-agent.exe serve 18300
+```
+
+Open `http://localhost:18300/`, configure your model, and ask it to create `note.txt` with content `hello` in the current workspace. Inspect the task steps and verify the actual file. The desktop app and standalone server share the default port; run one at a time.
+
+See the [developer docs](backend/README.md) for configuration, authentication, HTTP APIs and local models, or [Testing](#testing) for deterministic keyless checks.
 
 ## Benchmarks
+
+<details>
+<summary>Benchmark methods, historical results and runtime measurements</summary>
 
 The agent-quality results below use full-agent-loop tasks. Clean scorecard: [`backend/docs/BENCHMARK_RESULTS.md`](backend/docs/BENCHMARK_RESULTS.md) · methodology & failure attribution: [`backend/docs/benchmark-report.md`](backend/docs/benchmark-report.md).
 
@@ -90,7 +105,7 @@ Native completion regressions now cover 14 ordinary-answer categories per OpenAI
 | WebArena-style browser tasks (6 tasks) | **6/6 = 100%** | GLM-5.3-flash |
 | Policy compliance (violating requests) | **bare LLM 0/4 → runtime policy engine 4/4** | deepseek-chat |
 
-Notable: the same runtime reaches **78.79% on GAIA** and **72.7% on SWE-bench mini** with a mid-tier GLM-5.3-flash — and policy compliance goes **0/4 → 4/4** when rules move from the prompt into the runtime policy engine. The LLM is the accelerator; the runtime provides the guarantees.
+These results apply to the named models, datasets and test conditions. Mini and style-based suites are identified separately from official datasets. The four policy cases demonstrate those configured rules, rather than universal safety or a causal explanation for benchmark scores.
 
 ### Runtime measurements — 2026-10-14
 
@@ -178,6 +193,8 @@ Raw measurements: [scale](backend/docs/runtime-scale-2026-10-14.json),
 [crash recovery](backend/docs/runtime-crash-recovery-2026-10-14.json).
 The previous [128 MiB baseline](backend/docs/runtime-benchmark.md) used a different
 per-task memory probe scheme and is retained as history, not a direct scaling comparator.
+
+</details>
 
 ## Technical blog series
 
@@ -479,66 +496,6 @@ The architecture is intentionally layered — each layer exposes stable interfac
 Application → Agent Runtime → Cognitive/Memory/Execution Services → OS Abstraction → Operating System
 ```
 
-## Quick Start
-
-```bash
-git clone https://github.com/LeonQin-ai/cognitive-os-agent.git
-cd cognitive-os-agent/backend
-
-# Linux
-make
-
-# macOS (Apple Silicon or Intel; Xcode command-line tools required)
-make
-bash package-macos.sh       # native .app + architecture-specific ZIP
-
-# Windows — bundled Zig toolchain, no system compiler needed
-.\build.ps1 all             # PowerShell
-# or: build.bat / ./build.sh
-
-# Run the interactive CLI
-./build/cognitive-os-agent
-
-# Start the web console
-./build/cognitive-os-agent serve 18300
-# → http://localhost:18300/
-```
-
-The embedded web console ships a ChatGPT-style dark UI: multi-session chat with
-**per-session history that survives restarts** (persisted as JSONL under the
-state root), structured live stages and tool steps, elapsed time and token usage.
-You can send another message while a task is running; the runtime accepts it as
-steering, updates the plan at the next safe checkpoint, and continues with the
-completed evidence intact. It also includes a model picker in the chat sidebar,
-scheduled jobs (cron, interval or daily) with visible run results, and a
-durable task journal with one-click **checkpoint resume** (`POST /v1/tasks/<id>/resume`).
-
-Drive it over HTTP:
-
-The Windows desktop app uses port `18300`. Run the standalone CLI server above
-only when the desktop app is closed, since both use the same port.
-
-```bash
-curl -X POST http://localhost:18300/v1/chat -H 'Content-Type: application/json' -d '{"message":"Create note.txt with content hello"}'
-curl http://localhost:18300/v1/tasks/0    # inspect a task; use the id returned above
-curl http://localhost:18300/v1/tasks/journal   # durable task history (checkpoint)
-curl http://localhost:18300/v1/cron       # scheduled jobs (interval / daily)
-curl http://localhost:18300/v1/tools      # registered tools
-curl http://localhost:18300/v1/memory     # Memory OS state
-curl http://localhost:18300/metrics       # gauges: context.bytes_*, memory.*, tx.*
-```
-
-Point it at a real LLM (or run fully offline with the mock provider):
-
-```json
-{
-  "llm.provider": "openai",
-  "llm.base_url": "https://api.deepseek.com/v1",
-  "llm.model": "deepseek-chat",
-  "llm.api_key": "sk-..."
-}
-```
-
 ## Testing
 
 Quality gate: CI builds and tests on Windows (zig cc), Linux (gcc and AddressSanitizer), macOS Apple Silicon, and macOS Intel.
@@ -652,7 +609,7 @@ Distributed scheduler · remote agent nodes · workload placement · node health
 **Phase 6 — Enterprise Cognitive OS** 🔜
 Multi-tenancy · RBAC / ABAC · centralized policy · distributed memory · enterprise model routing · audit
 
-The same runtime supports two deployment modes: **personal** (local-first, single binary) and **enterprise** (a control plane managing a fleet of agent nodes — the enterprise layer manages the fleet rather than replacing the runtime).
+The current entry point is a **local-first runtime**. A control plane for fleets of agent nodes is a roadmap direction; consult the implementation-status document before depending on distributed or enterprise capabilities.
 
 ## Why C?
 
@@ -660,25 +617,11 @@ Not because "C is faster" — because the runtime sits **close to the operating 
 
 ## What Makes This Different?
 
-### vs. Claude Code / Codex CLI / a DeepSeek harness
+### Is this a fit for your project?
 
-Claude Code and Codex are polished end-user agent products driven by frontier models; a DeepSeek harness (deepseek-chat + function calling) is a capable but bare prompt loop. Cognitive OS is not competing on product polish — it is the **runtime layer underneath**, and that changes where the guarantees live:
-
-| | Claude Code | Codex CLI | DeepSeek harness | **Cognitive OS** |
-|---|---|---|---|---|
-| What it is | agent CLI product | agent CLI product | model + tool-calling loop | **open agent runtime substrate** |
-| Stack | Node / TypeScript | Rust | Python / API | **pure C11 · zero external deps · one static binary** |
-| Control flow | model-driven loop | model-driven loop | model-driven loop | **runtime state machine + rule engine; LLM at decision points** |
-| Safety | permission prompts / modes | sandbox + approvals | none built in | **policy engine hard-intercepts (ALLOW/DENY/ASK) + hooks + capabilities + audit trail — measured bare LLM 0/4 → runtime 4/4** |
-| Side effects | best-effort, git checkpoints | sandboxed, no rollback | none | **transactional: snapshot → execute → verify → commit / rollback** |
-| Memory | markdown notes | session state | chat log | **Memory OS lifecycle (working/episodic/semantic/procedural) + Context MMU hot/warm/cold tiers with budget & eviction** |
-| Concurrency | sequential tool loop + subagents | sequential tool loop | sequential tool loop | **M:N coroutine scheduler, parallel DAG layers** |
-| Multi-agent | subagent tool | — | — | **Flow DAG compiler, per-agent isolation (own memory / context / tools / policy)** |
-| Extensions | MCP + plugins | MCP | function calling | **MCP + self-distilling skills (successful sequences become reusable) + native / WASM sandboxed plugins** |
-| Model lock-in | Anthropic | OpenAI | DeepSeek | **any OpenAI-compatible / Anthropic / local (Ollama) / offline mock** |
-| Verifiable offline | needs API access | needs API access | needs API access | **3331 unit + 91 scenario + e2e/adapter suites run keyless against the mock provider, ASAN-clean** |
-
-The point of the comparison is not "better product" — it is that **policy enforcement, transactions, memory lifecycle, scheduling and isolation are runtime services here, not prompt conventions or product features**. That is what lets the same runtime score 78.79% on GAIA and enforce policy 4/4 with a mid-tier model.
+- Explore task lifecycles, scheduling, context budgets and tool evidence through the source and regression experiments.
+- Extend executors, tools or model protocols using the [developer docs](backend/README.md) and [contribution guide](CONTRIBUTING.md).
+- Check the roadmap and implementation status before relying on hosted services, a distributed control plane or enterprise access controls; these directions are not a promise of shipped capabilities.
 
 ### Architectural boundary
 
@@ -712,6 +655,8 @@ Single-node Agent Runtime → Multi-Agent Runtime → Sandboxed Runtime
 The current implementation establishes the runtime primitives first.
 
 ## Contributing
+
+Start with the [contribution guide](CONTRIBUTING.md). For bugs, use an issue template and include the version, environment, redacted input, and expected versus actual results.
 
 The codebase is deliberately small and layered — a new contributor can read one layer per sitting. Particularly interesting areas: scheduler / coroutine / event bus (runtime), planner / evaluator / reflection (cognition), memory service / retrieval / Context MMU (memory), sandbox / VM / remote executor / snapshot (execution), multi-agent / DAG / isolation (agent), observability / distributed control plane (infrastructure).
 

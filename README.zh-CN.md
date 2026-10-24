@@ -16,56 +16,71 @@
 
 ---
 
-Cognitive OS 是一个用纯 C11 编写的轻量级、模型无关的**智能体运行时 / 认知操作系统**。
+Cognitive OS 是一个用 **C11** 编写的本地 Agent 运行时，提供桌面 / Web 控制台与 HTTP API。它把任务调度、工具执行、记忆、上下文预算和恢复记录放进可检查的系统，让你能追踪一个 Agent 从接到请求到交付文件的过程。
 
-大多数 Agent 系统本质是一条提示词循环：
+**[下载最新版本](https://github.com/LeonQin-ai/cognitive-os-agent/releases/latest) · [完成第一个任务](GETTING_STARTED.md) · [观看运行录像](backend/docs/runtime-demo.mp4) · [阅读 8 篇源码文章](https://leonqin-ai.github.io/) · [参与贡献](CONTRIBUTING.md)**
 
-```
-User → Prompt → LLM → Tool → LLM → Tool → ...
-```
+![Cognitive OS 执行控制台：查看步骤、工具与结果](screenshots/execution.png)
 
-Cognitive OS 把 Agent 当作**由运行时管理的进程**：
+## 从这里开始
 
-```
-用户 / 应用
-        │
-        ▼
-┌─────────────────────┐
-│    Cognitive OS     │
-│    Agent 运行时      │
-└──────────┬──────────┘
-           │
-   ┌───────┼────────┐
-   ▼       ▼        ▼
- Memory  Context  Execution
-  OS       MMU       OS
-   │       │        │
-   └───────┼────────┘
-           ▼
-      LLM / Tools
-```
+| 你的目标 | 入口 |
+| --- | --- |
+| 直接体验 | [Windows x64 安装器](https://github.com/LeonQin-ai/cognitive-os-agent/releases/latest/download/cognitive-os-agent-setup.exe) |
+| 在 Linux 运行 | [Linux x64 便携包](https://github.com/LeonQin-ai/cognitive-os-agent/releases/latest/download/cognitive-os-agent-linux-x64.tar.gz) |
+| 在 macOS 运行 | [Apple Silicon](https://github.com/LeonQin-ai/cognitive-os-agent/releases/latest/download/cognitive-os-agent-macos-arm64.zip) / [Intel](https://github.com/LeonQin-ai/cognitive-os-agent/releases/latest/download/cognitive-os-agent-macos-x64.zip) |
+| 验证下载文件 | [SHA256SUMS](https://github.com/LeonQin-ai/cognitive-os-agent/releases/latest/download/SHA256SUMS) |
+| 理解实现 | [架构与 API](backend/README.md) · [源码文章](https://leonqin-ai.github.io/) |
 
-运行时拥有**状态、调度、内存、上下文、执行、安全、隔离与可观测性**；只有当需要泛化、推理或语义理解时才调用 LLM。
+适合希望研究或扩展 Agent 执行基础设施的开发者，也适合想在本地观察多轮工具任务与多角色协作的人。连接真实模型需要配置提供方和凭据；离线 mock 用于确定性测试。录像使用本地确定性模型 fixture，Runtime 和文件工具实际执行。
 
 ## 为什么需要 Cognitive OS？
 
-一个自主 Agent 最终会变成**系统问题**：它需要生命周期管理、异步执行、调度、内存管理、上下文管理、进程隔离、工具权限、事务化副作用、回滚、多智能体协同、可观测性、资源管理、沙箱与远程执行。
+当 Agent 开始读写文件、运行命令和协调多个角色，就需要明确的执行边界：谁安排任务、谁决定动作能否执行、发生中断后保留哪些事实。
 
-Cognitive OS 把这些职责**从提示词里搬进运行时**：
+| 你遇到的问题 | 对应的 Runtime 能力 | 可以核对的结果 |
+| --- | --- | --- |
+| 不知道任务停在哪一步 | 状态机、执行记录与控制台 | 模型 / 工具阶段、输出与终态 |
+| 多个角色有先后依赖 | Flow DAG 与分层执行 | 上游结果、下游等待与失败阻断 |
+| 历史与文档不断增长 | Memory Service 与 Context MMU | 记录来源、加载表示与预算 |
+| 工具改变了本地文件 | 策略、快照与事务路径 | 动作结果、文件变化与恢复记录 |
+| 需要不同模型或本地模型 | OpenAI / Anthropic 适配与路由 | 配置及协议回归 |
 
-| | 传统 Agent 框架 | Cognitive OS |
-|---|---|---|
-| 控制流 | LLM 每一步决定一切 | **状态机 + 规则引擎驱动，LLM 只补空隙** |
-| 记忆 | 上下文窗口里的聊天记录 | **真正的记忆生命周期：编码→巩固→强化→衰减→归档** |
-| 上下文 | 全部塞进 prompt | **Context MMU：hot/warm/cold 三层预算、晋升与淘汰** |
-| 安全 | 提示词层面的"请不要" | **策略引擎在动作发生前硬拦截** |
-| 副作用 | 做完拉倒 | **事务化：快照→执行→验证→提交 / 回滚** |
-| 并发 | 顺序工具循环 | **M:N 协程调度器，DAG 分层并行** |
-| 产物 | node_modules + 运行时 | **单个静态 C 二进制，内嵌 Web 控制台** |
+项目的核心是让这些行为能落到代码与证据中。具体保障取决于工具与执行器；任意外部副作用不具备通用自动回滚或 exactly-once 保证。
 
-目标不是再造一个提示词框架，而是打造**自主智能体之下的运行时基座**。
+## 快速开始
+
+首次体验推荐使用上面的发布包，按 [首次任务指南](GETTING_STARTED.md) 配置模型与工作区，再创建并核对一个文件。
+
+从源码构建，先克隆仓库并进入 `backend`：
+
+```bash
+git clone https://github.com/LeonQin-ai/cognitive-os-agent.git
+cd cognitive-os-agent/backend
+```
+
+**Linux / macOS**（macOS 需要 Xcode Command Line Tools）：
+
+```bash
+make
+./build/cognitive-os-agent serve 18300
+```
+
+**Windows PowerShell**（构建脚本使用捆绑的 Zig 工具链）：
+
+```powershell
+.\build.ps1 all
+.\build\cognitive-os-agent.exe serve 18300
+```
+
+打开 `http://localhost:18300/`，配置模型后输入“在当前工作区创建 note.txt，内容为 hello”。检查任务步骤和实际文件。桌面应用与独立服务器默认使用相同端口，避免同时启动。
+
+完整的配置、API、认证、模型接入和本地模型说明见 [开发文档](backend/README.md)。无需密钥的确定性测试见 [测试与验证](#测试与验证)。
 
 ## 基准评测
+
+<details>
+<summary>评测方法、历史结果与运行条件</summary>
 
 下表为完整 agent 循环评测，后面的 Runtime 指标采用本地确定性负载，两者分别统计。纯净分数表：[`backend/docs/BENCHMARK_RESULTS.md`](backend/docs/BENCHMARK_RESULTS.md) · 方法论与失败归因详录：[`backend/docs/benchmark-report.md`](backend/docs/benchmark-report.md)。
 
@@ -90,7 +105,7 @@ Token 与完成判定回归：真实模型定向用例已能自然结束，**5 �
 | WebArena 风格浏览器任务（6 题） | **6/6 = 100%** | GLM-5.3-flash |
 | 策略遵循（违规请求） | **裸 LLM 0/4 → 运行时策略引擎 4/4** | deepseek-chat |
 
-值得注意：同一套运行时用中端模型 GLM-5.3-flash 即可达到 **GAIA 78.79%**、**SWE-bench mini 72.7%**；把规则从提示词移进运行时策略引擎后，策略遵循从 **0/4 变 4/4**。LLM 是加速器，运行时提供保证。
+这些结果适用于表中模型、数据集与测试条件。Mini / 风格化用例与官方数据集分别标注；4 条策略用例验证的是已配置规则，不能据此推导通用安全保证或基准成绩的因果来源。
 
 ## Runtime 实测（2026-10-14）
 
@@ -137,6 +152,8 @@ python tests/run_runtime_measurements.py --million --compiler "实际编译器/�
 ```
 
 `--full`重测1万/10万任务及650 MiB/1 GiB Context；`--million`仅测100/1000 Agent各3轮百万任务，独立保存JSON，不覆盖旧规模或Context结果。
+
+</details>
 
 ## 技术博客系列
 
@@ -427,63 +444,6 @@ cognitive-os-agent/
 应用 → Agent 运行时 → 认知/记忆/执行服务 → OS 抽象 → 操作系统
 ```
 
-## 快速开始
-
-```bash
-git clone https://github.com/LeonQin-ai/cognitive-os-agent.git
-cd cognitive-os-agent/backend
-
-# Linux
-make
-
-# macOS（Apple Silicon / Intel，需要 Xcode Command Line Tools）
-make
-bash package-macos.sh       # 生成原生 .app 与当前架构 ZIP
-
-# Windows——捆绑 Zig 工具链，无需系统编译器
-.\build.ps1 all             # PowerShell
-# 也可使用 build.bat / ./build.sh
-
-# 运行交互式 CLI
-./build/cognitive-os-agent
-
-# 启动 Web 控制台
-./build/cognitive-os-agent serve 18300
-# → http://localhost:18300/
-```
-
-内嵌 Web 控制台为 ChatGPT 风格暗色 UI：多会话聊天，**聊天记录按会话持久化、重启不丢**
-（JSONL 存于 state 目录）；执行时展示分析、规划、工具执行与总结阶段，以及步骤、耗时和 token。
-任务运行中仍可继续发送要求，运行时会在安全检查点接收新指令、重新规划，并保留已经完成的证据。
-控制台还支持随时切换模型、定时任务
-（间隔/每日 cron）执行结果直接展示，以及持久化任务日志支持一键**检查点恢复**
-（`POST /v1/tasks/<id>/resume`）。
-
-通过 HTTP 驱动：
-
-Windows 桌面版固定使用 `18300` 端口。若按上面的命令单独启动 CLI 服务，请先关闭桌面版，以免端口被占用。
-
-```bash
-curl -X POST http://localhost:18300/v1/chat -H 'Content-Type: application/json' -d '{"message":"创建 note.txt，内容为 hello"}'
-curl http://localhost:18300/v1/tasks/0    # 查看任务；将 0 换成上一步返回的 id
-curl http://localhost:18300/v1/tasks/journal   # 持久化任务历史（checkpoint）
-curl http://localhost:18300/v1/cron       # 定时任务（间隔 / 每日）
-curl http://localhost:18300/v1/tools      # 已注册工具
-curl http://localhost:18300/v1/memory     # Memory OS 状态
-curl http://localhost:18300/metrics       # 指标：context.bytes_*、memory.*、tx.*
-```
-
-接入真实 LLM（或用 mock 提供方完全离线运行）：
-
-```json
-{
-  "llm.provider": "openai",
-  "llm.base_url": "https://api.deepseek.com/v1",
-  "llm.model": "deepseek-chat",
-  "llm.api_key": "sk-..."
-}
-```
-
 ## 测试与验证
 
 质量门槛：CI 在 Windows（zig cc）、Linux（gcc 和 AddressSanitizer）、macOS Apple Silicon 与 macOS Intel 上构建和测试。
@@ -596,7 +556,7 @@ Flow DAG 编排 · Agent 并行执行 · 逐 Agent 隔离
 **阶段 6 —— 企业级 Cognitive OS** 🔜
 多租户 · RBAC / ABAC · 集中策略 · 分布式记忆 · 企业模型路由 · 审计
 
-同一套运行时支持两种部署形态：**个人版**（本地优先，单二进制）与**企业版**（一个管理 Agent 节点集群的控制面——企业层管理机群，而不是替换底层运行时）。
+当前体验入口是**本地优先的运行时**。管理 Agent 节点集群的控制面属于后续演进方向；依赖分布式或企业能力前，请先核对实现状态。
 
 ## 为什么用 C？
 
@@ -604,25 +564,11 @@ Flow DAG 编排 · Agent 并行执行 · 逐 Agent 隔离
 
 ## 我们有何不同？
 
-### 对比 Claude Code / Codex CLI / DeepSeek harness
+### 如何判断是否适合你的项目？
 
-Claude Code 与 Codex 是前沿模型驱动、打磨成熟的终端 Agent 产品；DeepSeek harness（deepseek-chat + 函数调用）是有力但赤裸的提示词循环。Cognitive OS 不在产品打磨上竞争——它是**下面的运行时层**，这改变了保证所在的层：
-
-| | Claude Code | Codex CLI | DeepSeek harness | **Cognitive OS** |
-|---|---|---|---|---|
-| 定位 | Agent CLI 产品 | Agent CLI 产品 | 模型 + 工具调用循环 | **开放的 Agent 运行时基座** |
-| 技术栈 | Node / TypeScript | Rust | Python / API | **纯 C11 · 0 外部依赖 · 单个静态二进制** |
-| 控制流 | 模型驱动循环 | 模型驱动循环 | 模型驱动循环 | **运行时状态机 + 规则引擎，LLM 只在决策点介入** |
-| 安全 | 权限提示 / 模式 | 沙箱 + 审批 | 无内置 | **策略引擎动作前硬拦截（ALLOW/DENY/ASK）+ Hook + 能力系统 + 审计——实测裸 LLM 0/4 → 运行时 4/4** |
-| 副作用 | 尽力而为，git 检查点 | 沙箱内执行，无回滚 | 无 | **事务化：快照→执行→验证→提交 / 回滚** |
-| 记忆 | Markdown 笔记 | 会话状态 | 聊天记录 | **Memory OS 生命周期（工作/情景/语义/程序）+ Context MMU 三层预算与淘汰** |
-| 并发 | 顺序工具循环 + 子 Agent | 顺序工具循环 | 顺序工具循环 | **M:N 协程调度器，DAG 分层并行** |
-| 多智能体 | 子 Agent 工具 | — | — | **Flow DAG 编译器，每 Agent 独立记忆/上下文/工具/策略** |
-| 扩展 | MCP + 插件 | MCP | 函数调用 | **MCP + 自蒸馏技能（成功动作序列沉淀复用）+ 原生 / WASM 沙箱插件** |
-| 模型绑定 | Anthropic | OpenAI | DeepSeek | **任意 OpenAI 兼容 / Anthropic / 本地（Ollama）/ 离线 mock** |
-| 离线可验证 | 需 API 访问 | 需 API 访问 | 需 API 访问 | **3331 单元 + 91 场景 + e2e/适配器测试免密钥对 mock 运行，ASAN 干净** |
-
-对比的重点不是"产品更好"，而是：**策略强制、事务、记忆生命周期、调度与隔离在这里是运行时服务，不是提示词约定或产品功能**。正因如此，同一套运行时用中端模型就能达到 GAIA 78.79%，并把策略遵循做成 4/4。
+- 想研究任务生命周期、调度、上下文预算和工具证据：可以从本项目的源码与回归实验开始。
+- 需要自己扩展执行器、工具或模型协议：先看 [开发文档](backend/README.md) 与 [贡献指南](CONTRIBUTING.md)。
+- 需要成熟的托管服务、分布式控制面或企业权限体系：先核对路线图与实现状态，这些方向不能当成已交付能力。
 
 ### 架构边界
 
@@ -656,6 +602,8 @@ Prompt / Chain              │ 状态 / 调度 / 事件                 │
 当前实现优先建立运行时原语。
 
 ## 参与贡献
+
+从 [贡献指南](CONTRIBUTING.md) 选择一个小而完整的改动。复现问题请使用 Issue 模板，附上版本、环境、脱敏输入及预期 / 实际结果。
 
 代码库刻意保持小而分层——新贡献者每次研读一层即可。尤其有价值的方向：调度器 / 协程 / 事件总线（运行时）、规划器 / 评估器 / 反思（认知）、记忆服务 / 检索 / Context MMU（记忆）、沙箱 / VM / 远程执行器 / 快照（执行）、多智能体 / DAG / 隔离（Agent）、可观测性 / 分布式控制面（基础设施）。
 

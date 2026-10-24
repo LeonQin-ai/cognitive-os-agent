@@ -1,0 +1,19 @@
+name: Feature request / 功能建议
+description: Describe a concrete task and the missing behavior / 描述具体使用场景
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What task are you trying to complete? / 希望完成什么任务？
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior and acceptance criteria / 建议行为与验收方式
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Current workaround and tradeoffs / 当前替代方式与取舍

@@ -1,0 +1,42 @@
+name: Bug report / 问题反馈
+description: Report a reproducible failure with its execution evidence / 提交可复现的问题
+body:
+  - type: markdown
+    attributes:
+      value: "Remove API keys, private files and credentials before posting. / 请先删除密钥、私有文件和凭据。"
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit / 版本或提交
+      placeholder: v1.0.1
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: OS, architecture and installation / 系统、架构与安装方式
+    validations:
+      required: true
+  - type: input
+    id: provider
+    attributes:
+      label: Provider protocol and model / 提供方协议与模型
+      description: Include whether a deterministic mock or a real model was used. Do not include keys.
+  - type: textarea
+    id: steps
+    attributes:
+      label: Minimal reproduction / 最小复现步骤
+      description: Include redacted input and relevant configuration.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected and actual behavior / 预期与实际结果
+      description: For artifact tasks, include the task state and whether the actual file exists and opens.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Redacted logs or screenshots / 脱敏日志或截图
