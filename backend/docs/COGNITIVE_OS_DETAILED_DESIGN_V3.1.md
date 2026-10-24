@@ -1922,7 +1922,7 @@ DeepSeek Harness describes itself as an open-source Agent Harness with an “eve
 - Excellent extensibility model.
 - Plugin-centric composition.
 - Strong fit for rapid Agent experimentation.
-- Open-source MIT project.
+- Open-source Apache-2.0 project; third-party components retain their respective licenses.
 - Web UI and modular runtime make it practical to extend. [1]
 
 ### Trade-offs

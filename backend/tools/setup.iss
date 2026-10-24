@@ -38,6 +38,8 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 
 [Files]
+Source: "..\..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\..\NOTICE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\build\cognitive-os-agent.exe";         DestDir: "{app}"; DestName: "cognitive-os-agent.exe";          Flags: ignoreversion
 Source: "..\build\cognitive-os-agent-desktop.exe"; DestDir: "{app}";                                   Flags: ignoreversion
 Source: "..\dist\cognitive-os-agent.ico";         DestDir: "{app}";                                   Flags: ignoreversion

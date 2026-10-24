@@ -8,7 +8,7 @@
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)](#快速开始)
 [![Dependencies](https://img.shields.io/badge/external%20deps-0-green.svg)](#项目结构)
 [![CI](https://github.com/LeonQin-ai/cognitive-os-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/LeonQin-ai/cognitive-os-agent/actions/workflows/ci.yml)
-[![License](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
 **[English](README.md)**
 
@@ -663,7 +663,7 @@ Prompt / Chain              │ 状态 / 调度 / 事件                 │
 
 ## 许可证
 
-[MIT](LICENSE) —— 第三方 vendored 代码保留各自的 MIT 头（cJSON、wasm3、webview）。
+[Apache-2.0](LICENSE) —— 第三方 vendored 代码保留各自的 MIT 头（cJSON、wasm3、webview）。
 
 ---
 
