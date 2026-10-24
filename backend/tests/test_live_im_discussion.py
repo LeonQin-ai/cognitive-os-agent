@@ -62,11 +62,17 @@ with tempfile.TemporaryDirectory(prefix='coa-live-im-') as folder:
                     raise AssertionError('Discussion exceeded 180 seconds; cancelled to bound API cost')
                 time.sleep(.3)
             messages = request('GET', f'/v1/im/sessions/{room}/messages')
+            report['runtime_usage'] = request('GET', '/v1/usage')
             report.update({k: task.get(k) for k in ('status', 'discussion_round', 'discussion_rounds',
                 'llm_calls', 'tool_calls', 'tokens_in', 'tokens_out', 'usage_available', 'model_failures')})
             report.update(elapsed_seconds=round(time.monotonic()-started, 3),
                 replies=sum(m.get('role') == 'assistant' for m in messages))
             assert task['status'] == 'DONE' and report['discussion_round'] == 5 and report['replies'] == 15, report
+            assert report['llm_calls'] >= report['replies'], report
+            usage = report['runtime_usage']
+            assert report['tokens_in'] == usage['total']['prompt'], report
+            assert report['tokens_out'] == usage['total']['completion'] + usage['total'].get('reasoning', 0), report
+            assert report['llm_calls'] == sum(m['calls'] for m in usage['models'].values()), report
         finally:
             (build / 'im-live-report.json').write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
             process.terminate()
