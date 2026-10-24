@@ -22,6 +22,7 @@ static void text_out(FILE *f,const char *s) {
     for(const unsigned char *p=(const unsigned char *)s;*p;p++)
         if(*p=='\n'||*p=='\t'||(*p>=32&&*p!=127)) fputc(*p,f);
 }
+#include "terminal_screen.h"
 static cJSON *request(const char *base,strmap *headers,const char *method,const char *path,cJSON *body) {
     char *encoded=body?cJSON_PrintUnformatted(body):NULL;
     http_response *r=NULL;
@@ -62,11 +63,11 @@ static int new_session(const char *base,strmap *headers,char **session,const cha
 }
 static int watch(const char *base,strmap *headers,long long id){
     signal(SIGINT,on_interrupt); /* Windows CRT resets the handler after delivery. */
-    char path[96],last[512]="";int shown=0,cancelled=0;snprintf(path,sizeof(path),"/v1/tasks/%lld",id);
+    char path[96],last[512]="";int shown=0,cancelled=0;unsigned generation=0;strbuf displayed={0};snprintf(path,sizeof(path),"/v1/tasks/%lld",id);
     fprintf(stderr,"Task #%lld\n",id);
     for(;;){
-        if(interrupted&&!cancelled){cJSON *o=request(base,headers,"DELETE",path,NULL);if(!o)return 1;cJSON_Delete(o);cancelled=1;fprintf(stderr,"Cancellation requested for task #%lld.\n",id);}
-        cJSON *o=request(base,headers,"GET",path,NULL);if(!o){if(interrupted&&!cancelled)continue;fprintf(stderr,"Task #%lld remains on the server; use /resume only after inspecting its state.\n",id);return 1;}
+        if(interrupted&&!cancelled){cJSON *o=request(base,headers,"DELETE",path,NULL);if(!o){strbuf_free(&displayed);return 1;}cJSON_Delete(o);cancelled=1;fprintf(stderr,"Cancellation requested for task #%lld.\n",id);}
+        cJSON *o=request(base,headers,"GET",path,NULL);if(!o){if(interrupted&&!cancelled)continue;fprintf(stderr,"Task #%lld remains on the server; use /resume only after inspecting its state.\n",id);strbuf_free(&displayed);return 1;}
         char label[512];snprintf(label,sizeof(label),"[%s] round %.0f | model %.0f | tools %.0f | %.1fs | %s",sval(o,"status"),nval(o,"round"),nval(o,"llm_calls"),nval(o,"tool_calls"),nval(o,"elapsed_ms")/1000,sval(o,"cur_tool"));
         /* Emit changed milestones, not a new line for every elapsed-time tick. */
         char key[512];snprintf(key,sizeof(key),"%s/%.0f/%.0f/%.0f/%s",sval(o,"status"),nval(o,"round"),nval(o,"llm_calls"),nval(o,"tool_calls"),sval(o,"cur_tool"));
@@ -74,8 +75,18 @@ static int watch(const char *base,strmap *headers,long long id){
         cJSON *steps=cJSON_GetObjectItemCaseSensitive(o,"steps");int count=cJSON_GetArraySize(steps);
         for(;shown<count;shown++){cJSON *step=cJSON_GetArrayItem(steps,shown);fprintf(stderr,"  tool: ");text_out(stderr,sval(step,"tool"));fprintf(stderr," | %s | %.0fms\n",nval(step,"ok")?"ok":"failed",nval(step,"ms"));text_out(stderr,sval(step,"args"));fputc('\n',stderr);text_out(stderr,sval(step,"out"));fputc('\n',stderr);}
         const char *status=sval(o,"status");
+        const char *preview=sval(o,"answer_preview");unsigned turn=(unsigned)nval(o,"preview_generation");
+        if(turn!=generation){if(displayed.len)fputc('\n',stdout);strbuf_free(&displayed);generation=turn;}
+        size_t bytes=strlen(preview);
+        if(bytes>displayed.len && (!displayed.len||!memcmp(preview,displayed.buf,displayed.len))){
+            if(!displayed.len)fputs("[Provisional answer — pending verification]\n",stderr);
+            text_out(stdout,preview+displayed.len);fflush(stdout);strbuf_append(&displayed,preview+displayed.len);
+        }
         if(strcmp(status,"RUNNING")&&strcmp(status,"QUEUED")){
-            text_out(stdout,sval(o,"output"));fputc('\n',stdout);
+            const char *answer=sval(o,"output");size_t size=strlen(answer);
+            if(displayed.len && size>=displayed.len && !memcmp(answer,displayed.buf,displayed.len))text_out(stdout,answer+displayed.len);
+            else {if(displayed.len)fputs("\n[Final recorded result]\n",stdout);text_out(stdout,answer);}
+            fputc('\n',stdout);strbuf_free(&displayed);
             if(cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(o,"usage_available")))fprintf(stderr,"Tokens: input %.0f / output %.0f\n",nval(o,"tokens_in"),nval(o,"tokens_out"));
             else fprintf(stderr,"Tokens: unavailable\n");
             int rc=!strcmp(status,"DONE")?0:1;cJSON_Delete(o);return rc;
@@ -84,22 +95,28 @@ static int watch(const char *base,strmap *headers,long long id){
     }
 }
 int cli_client_main(int argc,char **argv,const char *workspace){
-    const char *base="http://127.0.0.1:18300",*prompt=NULL;char *session=NULL,*changed_workspace=NULL;int rc=0;
+    const char *base="http://127.0.0.1:18300",*prompt=NULL;char *session=NULL,*changed_workspace=NULL;int rc=0,tui=1,force_tui=0,stream=1;
     for(int i=0;i<argc;i++){
-        if(!strcmp(argv[i],"--help")){puts("chat [--connect URL] [--session ID] [-p PROMPT]\nCommands: /new /sessions /session ID /workspace PATH /resume ID /help /exit\nCtrl+C cancels the active task. Authentication: COA_CLIENT_TOKEN environment variable.");return 0;}
-        if(i+1<argc&&!strcmp(argv[i],"--connect"))base=argv[++i];
+        if(!strcmp(argv[i],"--help")){puts("chat [--connect URL] [--session ID] [-p PROMPT] [--tui|--no-tui] [--no-stream]\nCommands: /new /sessions /session ID /workspace PATH /resume ID /help /exit\nInteractive terminals use an alternate-screen layout; pipes stay plain.\nNative OpenAI answers stream provisionally; completion still requires verification.\nCtrl+C cancels the active task. Authentication: COA_CLIENT_TOKEN environment variable.");return 0;}
+        if(!strcmp(argv[i],"--no-tui"))tui=0;
+        else if(!strcmp(argv[i],"--tui")){tui=1;force_tui=1;}
+        else if(!strcmp(argv[i],"--no-stream"))stream=0;
+        else if(i+1<argc&&!strcmp(argv[i],"--connect"))base=argv[++i];
         else if(i+1<argc&&!strcmp(argv[i],"-p"))prompt=argv[++i];
         else if(i+1<argc&&!strcmp(argv[i],"--session")){const char *s=argv[++i];if(!valid_session(s)){free(session);return 2;}free(session);session=malloc(strlen(s)+1);if(!session)return 1;strcpy(session,s);}
         else {fprintf(stderr,"Unknown or incomplete chat option: %s\n",argv[i]);free(session);return 2;}
     }
+    if(force_tui&&(prompt||!screen_available())){fprintf(stderr,"--tui requires an interactive terminal, without -p.\n");free(session);return 2;}
     if(sock_init()!=0){free(session);return 1;}
     strmap headers={0};const char *token=getenv("COA_CLIENT_TOKEN");
     if(token&&*token){char *auth=malloc(strlen(token)+8);if(!auth){free(session);return 1;}sprintf(auth,"Bearer %s",token);strmap_set(&headers,"Authorization",auth);free(auth);}
     void (*previous)(int)=signal(SIGINT,on_interrupt);interrupted=0;
+    if(tui&&!prompt)screen_start();
     if(!session&&new_session(base,&headers,&session,workspace)){rc=1;goto done;}
     fprintf(stderr,"Cognitive OS terminal client · ");text_out(stderr,base);fputs("\n/help for commands; Ctrl+C cancels a running task.\n",stderr);
     for(;;){
-        if(!prompt){printf("❯ ");fflush(stdout);}char *line=prompt?NULL:input_line();const char *p=prompt?prompt:line;
+        if(!prompt){screen_context(session,workspace);screen_prompt();}char *line=prompt?NULL:input_line();const char *p=prompt?prompt:line;
+        if(line)screen_submit(line);
         if(!p){free(line);break;}if(!*p){free(line);if(prompt){rc=2;break;}continue;}interrupted=0;
         if(!strcmp(p,"/exit")||!strcmp(p,"/quit")){free(line);break;}
         if(!strcmp(p,"/help"))puts("/new  /sessions  /session ID  /workspace PATH  /resume ID  /exit\nSend a task directly. Ctrl+C requests cancellation; the server keeps its records.");
@@ -111,12 +128,12 @@ int cli_client_main(int argc,char **argv,const char *workspace){
             if(change){snprintf(path,sizeof(path),"/v1/chat/sessions/%s/workspace",session);cJSON_AddStringToObject(body,"workspace",p+11);cJSON *reg=cJSON_CreateObject();cJSON_AddStringToObject(reg,"path",p+11);cJSON *saved=request(base,&headers,"POST","/v1/workspaces",reg);cJSON_Delete(reg);if(!saved){cJSON_Delete(body);free(line);if(prompt){rc=1;break;}continue;}cJSON_Delete(saved);}
             else if(resume){char *end;long long id=strtoll(p+8,&end,10);if(end==p+8||*end||id<0){fprintf(stderr,"Usage: /resume ID\n");cJSON_Delete(body);free(line);if(prompt){rc=2;break;}continue;}snprintf(path,sizeof(path),"/v1/tasks/%lld/resume",id);}
             else if(*p=='/'){fprintf(stderr,"Unknown command; use /help.\n");cJSON_Delete(body);free(line);if(prompt){rc=2;break;}continue;}
-            else {strcpy(path,"/v1/chat");cJSON_AddStringToObject(body,"session",session);cJSON_AddStringToObject(body,"message",p);}
+            else {strcpy(path,"/v1/chat");cJSON_AddStringToObject(body,"session",session);cJSON_AddStringToObject(body,"message",p);cJSON_AddBoolToObject(body,"stream",stream);}
             cJSON *o=request(base,&headers,"POST",path,body);cJSON_Delete(body);
             if(o){if(!change){cJSON *id=cJSON_GetObjectItemCaseSensitive(o,"id");rc=cJSON_IsNumber(id)?watch(base,&headers,(long long)id->valuedouble):1;}else {char *copy=malloc(strlen(p+11)+1);if(copy){strcpy(copy,p+11);free(changed_workspace);workspace=changed_workspace=copy;}puts("Workspace updated for future tasks.");}cJSON_Delete(o);}else rc=1;
         }
         free(line);if(prompt)break;
     }
 done:
-    signal(SIGINT,previous);strmap_free(&headers);free(session);free(changed_workspace);sock_cleanup();return rc;
+    screen_end();signal(SIGINT,previous);strmap_free(&headers);free(session);free(changed_workspace);sock_cleanup();return rc;
 }

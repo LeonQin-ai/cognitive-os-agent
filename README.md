@@ -81,7 +81,9 @@ Choose execution and state directories explicitly for CLI deployments:
 ## See the work as it happens
 **Terminal preview (`dev-master`):** run `cognitive-os-agent chat` to connect to the
 desktop/server Runtime, continue durable conversations, inspect tool execution,
-and cancel with Ctrl+C. Use `chat -p "your task"` for scripts. See the
+and cancel with Ctrl+C. Interactive terminals use a full-screen layout; native
+OpenAI-compatible answers arrive incrementally as provisional previews.
+Use `chat -p "your task"` for scripts. See the
 [terminal client guide](backend/README.md#terminal-client-development-branch).
 
 

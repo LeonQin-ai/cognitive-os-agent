@@ -81,6 +81,7 @@ CLI 部署可以显式指定执行目录和状态存储位置：
 ## 看见任务是怎么完成的
 **终端客户端预览（`dev-master`）：** 执行 `cognitive-os-agent chat` 连接桌面端或服务端 Runtime，
 继续持久化会话、查看工具执行，用 Ctrl+C 请求取消。脚本调用可用 `chat -p "你的任务"`。
+交互式终端采用全屏布局；OpenAI 兼容原生工具协议的答复支持增量预览，仍需通过完成验证。
 详见[终端客户端指南](backend/README.md#terminal-client-development-branch)。
 
 

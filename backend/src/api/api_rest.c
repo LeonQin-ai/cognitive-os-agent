@@ -308,6 +308,10 @@ static int h_task_get(const http_request *req, http_response *resp, void *ud) {
     cJSON_AddNumberToObject(o, "id", (double)t->id);
     cJSON_AddStringToObject(o, "status", task_status_str(t->status));
     cJSON_AddStringToObject(o,"workspace",t->workspace?t->workspace:(ctx->workspace?ctx->workspace:"."));
+    if(t->stream_preview){mutex_lock(&t->progress_mtx);
+        cJSON_AddNumberToObject(o,"preview_generation",t->preview_generation);
+        cJSON_AddStringToObject(o,"answer_preview",t->preview_text.buf?t->preview_text.buf:"");
+        cJSON_AddBoolToObject(o,"preview_provisional",1);mutex_unlock(&t->progress_mtx);}
     if (t->input)
         cJSON_AddStringToObject(o, "input", t->input);
     if (t->status >= TS_DONE && t->output)
@@ -599,7 +603,8 @@ static int h_chat(const http_request *req, http_response *resp, void *ud) {
         free(directory);free(safe_msg);free(attachments);cJSON_Delete(root);resp->status=400;
         http_resp_json(resp,"{\"error\":\"workspace must be registered, available and saved\"}");return 0;
     }
-    id = scheduler_submit_workspace(ctx->scheduler,0,safe_msg,NULL,0,session,thinking,attachments,directory);
+    id = scheduler_submit_preview(ctx->scheduler,0,safe_msg,NULL,0,session,thinking,attachments,directory,
+        cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(root,"stream")));
     if(id>=0)workspace_bind(ctx,NULL,directory,id);free(directory);
     if (id >= 0)
         reasoning_session_note_prompt(ctx->reasoning, session, safe_msg);

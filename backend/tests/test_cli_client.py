@@ -57,7 +57,32 @@ try:
     p=run(['--session','../bad','-p','x']);assert p.returncode==2
     p=run(['-p','/unknown']);assert p.returncode==2
     p=run(['-p','']);assert p.returncode==2
+    p=run(['--tui','-p','x']);assert p.returncode==2 and '\x1b' not in p.stdout
+    p=run(['--no-tui','-p','x']);assert p.returncode==0 and '\x1b' not in p.stdout
     if os.name!='nt':
+        import pty, select, fcntl, termios, struct
+        master,slave=pty.openpty();fcntl.ioctl(slave,termios.TIOCSWINSZ,struct.pack('HHHH',24,100,0,0))
+        proc=subprocess.Popen(args+['--tui'],stdin=slave,stdout=slave,stderr=slave,env={**env,'TERM':'xterm-256color'});os.close(slave)
+        screen=b'';deadline=time.monotonic()+8
+        try:
+            while b'\x1b[?1049h' not in screen:
+                assert time.monotonic()<deadline
+                if select.select([master],[],[],.1)[0]:screen+=os.read(master,65536)
+            os.write(master,b'/help\n/exit\n')
+            while proc.poll() is None:
+                assert time.monotonic()<deadline
+                if select.select([master],[],[],.1)[0]:
+                    try:screen+=os.read(master,65536)
+                    except OSError:break
+            proc.wait(timeout=3)
+            try:
+                while select.select([master],[],[],.1)[0]:screen+=os.read(master,65536)
+            except OSError:pass
+            assert proc.returncode==0 and b'\x1b[?1049l' in screen,'alternate screen not restored'
+            assert b'/workspace PATH' in screen and b'\x1b[2;21r' in screen,'missing fixed layout'
+        finally:
+            if proc.poll() is None:proc.kill();proc.wait()
+            os.close(master)
         running=True
         with subprocess.Popen(args+['-p','long task'],stdout=subprocess.PIPE,stderr=subprocess.PIPE,env=env) as proc:
             deadline=time.monotonic()+5;baseline=len(polls)

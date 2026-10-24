@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include "os/os_thread.h"
+#include "infra/util.h"
 #ifndef __cplusplus
 #include <stdatomic.h>
 #define TASK_ATOMIC(T) _Atomic(T)
@@ -39,6 +40,9 @@ typedef struct task {
     TASK_ATOMIC(task_status) status;
     char *attachments_json; /* owned immutable task snapshot; never in history */
     char *workspace; /* owned immutable execution directory, never process chdir */
+    int stream_preview;
+    unsigned preview_generation;
+    strbuf preview_text; /* provisional model text, guarded by progress_mtx */
     char *input;  /* task description / prompt */
     char *output; /* runner transfers ownership to scheduler; borrowed readers must not free */
     mutex_t progress_mtx;
@@ -60,6 +64,8 @@ typedef struct task {
 #undef TASK_ATOMIC
 
 typedef struct scheduler scheduler;
+int64_t scheduler_submit_preview(scheduler *s,int priority,const char *input,void *userdata,
+    int64_t timeout_ms,const char *tag,int thinking_mode,const char *attachments,const char *workspace,int stream_preview);
 
 /* Runs a task; t->output / t->status may be set by the runner. */
 typedef void (*task_runner)(task *t, scheduler *s, void *worker_ud);

@@ -64,6 +64,8 @@ jobs:
           COA_BUILD_DIR=build-macos python3 tests/test_optional_missing_read_e2e.py
           COA_BUILD_DIR=build-macos python3 tests/test_workspaces_e2e.py
           COA_BUILD_DIR=build-macos python3 tests/test_cli_client.py
+          COA_BUILD_DIR=build-macos python3 tests/test_native_preview_e2e.py
+          COA_HTTP_STREAM_TRANSPORT=curl COA_BUILD_DIR=build-macos python3 tests/test_native_preview_e2e.py
       - name: Model-sized observation retention
         run: COA_BUILD_DIR=build-macos python3 tests/test_observation_budget_e2e.py
       - name: Information answer completion regression
@@ -129,6 +131,8 @@ jobs:
           python tests/test_optional_missing_read_e2e.py
           python tests/test_workspaces_e2e.py
           python tests/test_cli_client.py
+          python tests/test_native_preview_e2e.py
+          COA_HTTP_STREAM_TRANSPORT=curl python tests/test_native_preview_e2e.py
       - name: Model-sized observation retention
         run: python tests/test_observation_budget_e2e.py
       - name: Information answer completion regression
@@ -229,6 +233,7 @@ jobs:
           python tests/test_optional_missing_read_e2e.py
           python tests/test_workspaces_e2e.py
           python tests/test_cli_client.py
+          python tests/test_native_preview_e2e.py
       - name: Model-sized observation retention
         run: python tests/test_observation_budget_e2e.py
       - name: Information answer completion regression

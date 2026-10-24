@@ -36,6 +36,9 @@ struct http_stream {
     chunk_state cstate;
     int64_t content_remaining; /* -1 = unknown */
     int status;
+    void *live_easy,*live_multi,*live_sink,*live_headers;
+    strbuf live_data;
+    int live_running;
 };
 
 /* ---------- libcurl backend (dlopen'd; HTTPS on POSIX) ---------- */
@@ -49,6 +52,7 @@ typedef int CURLcode;
 #define CURLOPT_ERRORBUFFER 10010L
 #define CURLOPT_HEADERDATA 10029L
 #define CURLOPT_POSTFIELDS 10015L
+#define CURLOPT_COPYPOSTFIELDS 10165L
 #define CURLOPT_CUSTOMREQUEST 10036L
 #define CURLOPT_HTTPHEADER 10023L
 #define CURLOPT_ACCEPT_ENCODING 10102L
@@ -74,6 +78,12 @@ static struct {
     void (*slist_free_all)(struct curl_slist *);
     CURLcode (*global_init)(long flags);
     int loaded; /* 1 = resolved, -1 = unavailable */
+    void *(*multi_init)(void);
+    int (*multi_add_handle)(void *,CURL *);
+    int (*multi_remove_handle)(void *,CURL *);
+    int (*multi_perform)(void *,int *);
+    int (*multi_wait)(void *,void *,unsigned int,int,int *);
+    int (*multi_cleanup)(void *);
 } cu;
 
 static pthread_once_t cu_once = PTHREAD_ONCE_INIT;
@@ -98,6 +108,12 @@ static void cu_load(void) {
     cu.easy_setopt = (CURLcode (*)(CURL *, int, ...))dlsym(cu.lib, "curl_easy_setopt");
     cu.easy_perform = (CURLcode (*)(CURL *))dlsym(cu.lib, "curl_easy_perform");
     cu.easy_getinfo = (CURLcode (*)(CURL *, int, ...))dlsym(cu.lib, "curl_easy_getinfo");
+    cu.multi_init=(void *(*)(void))dlsym(cu.lib,"curl_multi_init");
+    cu.multi_add_handle=(int (*)(void *,CURL *))dlsym(cu.lib,"curl_multi_add_handle");
+    cu.multi_remove_handle=(int (*)(void *,CURL *))dlsym(cu.lib,"curl_multi_remove_handle");
+    cu.multi_perform=(int (*)(void *,int *))dlsym(cu.lib,"curl_multi_perform");
+    cu.multi_wait=(int (*)(void *,void *,unsigned int,int,int *))dlsym(cu.lib,"curl_multi_wait");
+    cu.multi_cleanup=(int (*)(void *))dlsym(cu.lib,"curl_multi_cleanup");
     cu.slist_append = (struct curl_slist * (*)(struct curl_slist *, const char *)) dlsym(cu.lib, "curl_slist_append");
     cu.slist_free_all = (void (*)(struct curl_slist *))dlsym(cu.lib, "curl_slist_free_all");
     CURLcode (*global_init)(long) = (CURLcode (*)(long))dlsym(cu.lib, "curl_global_init");
@@ -121,12 +137,14 @@ typedef struct {
     strbuf body;
     strmap headers; /* only used by the full-response path */
     int want_headers;
+    http_stream *live;
 } cu_sink;
 
 static size_t cu_write_cb(const char *ptr, size_t size, size_t nmemb, void *ud) {
     size_t n = size * nmemb;
 
     cu_sink *s = (cu_sink *)ud;
+    if(s->live){strbuf_append_n(&s->live->live_data,ptr,n);return n;}
     strbuf_append_n(&s->body, ptr, n);
     return n;
 }
@@ -163,9 +181,18 @@ static size_t cu_header_cb(const char *ptr, size_t size, size_t nmemb, void *ud)
 
 /* Perform one full HTTPS request via libcurl. Returns a curl-backed stream
  * (whole body buffered) or NULL on failure. */
+static void curl_pump(http_stream *h){
+    while(h->live_running && h->live_data.len==h->c_pos){
+        int running=0;if(cu.multi_perform(h->live_multi,&running)!=0){h->read_failed=1;h->live_running=0;break;}
+        h->live_running=running;
+        long status=0;cu.easy_getinfo(h->live_easy,CURLINFO_RESPONSE_CODE,&status);h->status=(int)status;
+        if(h->live_data.len>h->c_pos||!running)break;
+        int events=0;cu.multi_wait(h->live_multi,NULL,0,100,&events);
+    }
+}
 static http_stream *curl_open(const char *base_url, const char *method, const char *path, const char *body,
                                   const char *content_type, strmap *extra_headers, int timeout_ms,
-                                  strmap *headers_out) {
+                                  strmap *headers_out,int live) {
     char url[2048];
     size_t bl;
     char errbuf[256] = {0};
@@ -244,6 +271,21 @@ static http_stream *curl_open(const char *base_url, const char *method, const ch
     if (hdrs)
         cu.easy_setopt(h, (int)CURLOPT_HTTPHEADER, hdrs);
 
+    if(live && cu.multi_init && cu.multi_perform && cu.multi_wait && cu.multi_add_handle && cu.multi_remove_handle && cu.multi_cleanup){
+        http_stream *stream=calloc(1,sizeof(*stream));cu_sink *owned=calloc(1,sizeof(*owned));
+        void *multi=stream?cu.multi_init():NULL;
+        if(stream&&owned&&multi){
+            owned->live=stream;stream->via_curl=2;stream->live_easy=h;stream->live_multi=multi;stream->live_sink=owned;stream->live_headers=hdrs;stream->live_running=1;
+            cu.easy_setopt(h,(int)CURLOPT_WRITEDATA,owned);cu.easy_setopt(h,(int)CURLOPT_HEADERDATA,owned);
+            /* No stack callback/error-buffer pointers may outlive this function. */
+            cu.easy_setopt(h,(int)CURLOPT_ERRORBUFFER,NULL);
+            if(is_post)cu.easy_setopt(h,(int)CURLOPT_COPYPOSTFIELDS,body?body:"");
+            if(cu.multi_add_handle(multi,h)==0){curl_pump(stream);return stream;}
+        }
+        if(multi)cu.multi_cleanup(multi);free(stream);free(owned);
+        if(hdrs&&cu.slist_free_all)cu.slist_free_all(hdrs);cu.easy_cleanup(h);return NULL;
+    }
+    if(live){if(hdrs&&cu.slist_free_all)cu.slist_free_all(hdrs);cu.easy_cleanup(h);http_set_last_error("libcurl multi streaming unavailable");return NULL;}
     CURLcode rc = cu.easy_perform(h);
     if (rc == 0)
         cu.easy_getinfo(h, (int)CURLINFO_RESPONSE_CODE, &status);
@@ -419,6 +461,11 @@ static int decode_getc(http_stream *h) {
 
 static int http_stream_read_line_impl(http_stream *h, char *out, size_t cap) {
     size_t n = 0;
+    if(h&&h->via_curl==2){
+        while(n+1<cap){if(h->c_pos==h->live_data.len){strbuf_free(&h->live_data);h->c_pos=0;curl_pump(h);if(!h->live_data.len){if(!n)return -1;break;}}
+            char c=h->live_data.buf[h->c_pos++];if(c=='\n')break;if(c!='\r')out[n++]=c;}
+        out[n]=0;return (int)n;
+    }
     if (h && h->via_curl) {
         /* replay from the buffered curl response, dropping \r like the
          * plain path does */
@@ -458,6 +505,11 @@ static int http_stream_read_line_impl(http_stream *h, char *out, size_t cap) {
 }
 
 static int http_stream_read_impl(http_stream *h, char *out, size_t cap) {
+    if(h&&h->via_curl==2){
+        if(h->c_pos==h->live_data.len){strbuf_free(&h->live_data);h->c_pos=0;curl_pump(h);}
+        size_t n=h->live_data.len-h->c_pos;if(n>cap)n=cap;
+        if(n){memcpy(out,h->live_data.buf+h->c_pos,n);h->c_pos+=n;}return (int)n;
+    }
     size_t n = 0;
 
     if (h && h->via_curl) {
@@ -625,6 +677,11 @@ static http_stream *http_open(const char *base_url, const char *method, const ch
 static void http_stream_close_impl(http_stream *h) {
     if (!h)
         return;
+    if(h->via_curl==2){
+        cu.multi_remove_handle(h->live_multi,h->live_easy);cu.multi_cleanup(h->live_multi);cu.easy_cleanup(h->live_easy);
+        if(h->live_headers&&cu.slist_free_all)cu.slist_free_all(h->live_headers);
+        free(h->live_sink);strbuf_free(&h->live_data);free(h);return;
+    }
     if (h->via_curl) {
         free(h->c_body);
         free(h);
@@ -650,7 +707,7 @@ static http_response *http_full(const char *base_url, const char *method, const 
          * through the same response shape as the plain backend */
         strmap headers;
         memset(&headers, 0, sizeof(headers));
-        http_stream *h = curl_open(base_url, method, path, body, content_type, extra_headers, timeout_ms, &headers);
+        http_stream *h = curl_open(base_url, method, path, body, content_type, extra_headers, timeout_ms, &headers,0);
         if (!h)
             return NULL;
         http_response *r = (http_response *)calloc(1, sizeof(http_response));
@@ -707,8 +764,9 @@ static http_response *http_get_impl(const char *base_url, const char *path, strm
 
 static http_stream *http_stream_open_impl(const char *base_url, const char *method, const char *path, const char *body,
                                       const char *content_type, strmap *extra_headers, int timeout_ms) {
-    if (strncmp(base_url, "https://", 8) == 0)
-        return curl_open(base_url, method, path, body, content_type, extra_headers, timeout_ms, NULL);
+    const char *transport=getenv("COA_HTTP_STREAM_TRANSPORT");
+    if (strncmp(base_url, "https://", 8) == 0 || (transport && !strcmp(transport,"curl")))
+        return curl_open(base_url, method, path, body, content_type, extra_headers, timeout_ms, NULL,1);
     return http_open(base_url, method, path, body, content_type, extra_headers, timeout_ms);
 }
 

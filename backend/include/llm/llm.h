@@ -11,6 +11,9 @@ extern "C" {
 #endif
 
 typedef struct llm llm;
+typedef void (*llm_stream_cb)(const char *delta, void *ud);
+/* Thread-local opt-in for native chat previews. NULL delta begins a new turn. */
+void llm_set_chat_preview(llm_stream_cb cb, void *ud);
 
 typedef struct llm_message {
     const char *role; /* "system" | "user" | "assistant" */
@@ -33,6 +36,8 @@ typedef struct llm_request {
     const char *tools_json; /* optional OpenAI-format native function catalog, borrowed */
     int stream;      /* set by the streaming entry points */
     long timeout_ms; /* HTTP timeout override; 0 = llm_timeout_ms() default */
+    llm_stream_cb preview;
+    void *preview_ud;
 } llm_request;
 
 typedef struct llm_response {
@@ -46,7 +51,6 @@ typedef struct llm_response {
     char *tool_actions_json; /* normalized native tool calls, caller frees */
 } llm_response;
 
-typedef void (*llm_stream_cb)(const char *delta, void *ud);
 
 typedef struct llm_vtable {
     void (*destroy)(llm *self);

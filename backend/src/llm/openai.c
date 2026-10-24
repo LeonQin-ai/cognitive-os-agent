@@ -3,6 +3,7 @@
 #include "llm/llm.h"
 #include "llm/sse.h"
 #include "os/http.h"
+#include "os/os_time.h"
 #include "infra/util.h"
 #include "infra/logging.h"
 
@@ -158,8 +159,9 @@ static char *normalize_base(const char *base, const char **path_out) {
     return xstrdup(base);
 }
 
+#include "native_preview.h"
 static int openai_chat(llm *llm, const llm_request *req, llm_response *resp) {
-    char *body = build_request_body(req, llm->model, 0);
+    char *body = build_request_body(req, llm->model, req->preview && req->tools_json);
     const char *path;
     char *base;
     strmap *hdrs = NULL;
@@ -182,7 +184,8 @@ static int openai_chat(llm *llm, const llm_request *req, llm_response *resp) {
         strmap_set(hdrs, "Authorization", auth);
     }
 
-    r = http_post(base, path, body, "application/json", hdrs, llm_req_timeout_ms(req));
+    r = req->preview && req->tools_json ? openai_native_stream(llm,req,base,path,body,hdrs) :
+        http_post(base, path, body, "application/json", hdrs, llm_req_timeout_ms(req));
     free(body);
     free(base);
     if (hdrs) {

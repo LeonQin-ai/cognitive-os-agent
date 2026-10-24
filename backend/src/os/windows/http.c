@@ -28,6 +28,9 @@ struct http_stream {
     size_t len;
     size_t pos;
     int status;
+    HINTERNET session,connection,request;
+    int64_t deadline;
+    int eof;
 };
 
 static wchar_t *to_wide(const char *s) {
@@ -88,7 +91,7 @@ static int parse_url(const char *url, char *host, size_t hostsz, int *port, char
 }
 
 static http_response *do_request(const char *method, const char *base_url, const char *path, const char *body,
-                                     const char *content_type, strmap *extra_headers, int timeout_ms) {
+                                     const char *content_type, strmap *extra_headers, int timeout_ms,http_stream **live) {
     int port;
     int https;
     /* final request path = base_url path + caller path (avoid // and /v1/v1) */
@@ -226,6 +229,12 @@ static http_response *do_request(const char *method, const char *base_url, const
 
     DWORD dwStatus = 0, dwSize = sizeof(dwStatus);
     WinHttpQueryHeaders(hReq, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, NULL, &dwStatus, &dwSize, NULL);
+    if(live){
+        http_stream *h=calloc(1,sizeof(*h));
+        if(h){h->session=hSess;h->connection=hConn;h->request=hReq;h->deadline=deadline;h->status=(int)dwStatus;*live=h;}
+        else {WinHttpCloseHandle(hReq);WinHttpCloseHandle(hConn);WinHttpCloseHandle(hSess);}
+        free(whost);free(wpath);free(wmethod);return NULL;
+    }
 
     strbuf_init(&body_buf);
     /* ReadData obeys the receive timeout configured above. QueryDataAvailable
@@ -269,7 +278,7 @@ static http_response *do_request(const char *method, const char *base_url, const
 
 static http_response *http_post_impl(const char *base_url, const char *path, const char *body, const char *content_type,
                                  strmap *extra_headers, int timeout_ms) {
-    return do_request("POST", base_url, path, body, content_type, extra_headers, timeout_ms);
+    return do_request("POST", base_url, path, body, content_type, extra_headers, timeout_ms,NULL);
 }
 
 static void http_response_free_impl(http_response *r) {
@@ -281,22 +290,13 @@ static void http_response_free_impl(http_response *r) {
 }
 
 static http_response *http_get_impl(const char *base_url, const char *path, strmap *extra_headers, int timeout_ms) {
-    return do_request("GET", base_url, path, NULL, NULL, extra_headers, timeout_ms);
+    return do_request("GET", base_url, path, NULL, NULL, extra_headers, timeout_ms,NULL);
 }
 
 static http_stream *http_stream_open_impl(const char *base_url, const char *method, const char *path, const char *body,
                                       const char *content_type, strmap *extra_headers, int timeout_ms) {
-    http_response *r = do_request(method, base_url, path, body, content_type, extra_headers, timeout_ms);
-    http_stream *h;
-
-    if (!r)
-        return NULL;
-    h = (http_stream *)calloc(1, sizeof(*h));
-    h->body = r->body; /* transfer ownership */
-    h->len = r->body_len;
-    h->pos = 0;
-    h->status = r->status;
-    free(r); /* free the wrapper, keep the body buffer */
+    http_stream *h=NULL;
+    do_request(method,base_url,path,body,content_type,extra_headers,timeout_ms,&h);
     return h;
 }
 
@@ -310,6 +310,18 @@ static int http_stream_read_impl(http_stream *h, char *out, size_t cap) {
 
     if (!h)
         return -1;
+    if(h->request){
+        if(h->eof)return 0;
+        int64_t remaining=h->deadline-time_now_ms();if(remaining<=0){http_set_last_error("WinHTTP stream deadline exceeded");return -1;}
+        DWORD timeout=(DWORD)remaining,downloaded=0;WinHttpSetOption(h->request,WINHTTP_OPTION_RECEIVE_TIMEOUT,&timeout,sizeof timeout);
+        /* Synchronous WinHTTP may fill a large requested buffer before
+         * returning. A one-byte read exposes a short SSE event immediately;
+         * WinHTTP itself retains the network buffer. Avoid QueryDataAvailable,
+         * which has previously outlived the configured receive deadline. */
+        if(!cap)return 0;
+        if(!WinHttpReadData(h->request,out,1,&downloaded)){record_winhttp_error("stream read",GetLastError());return -1;}
+        if(!downloaded)h->eof=1;return (int)downloaded;
+    }
     avail = h->len - h->pos;
     if (avail == 0)
         return 0;
@@ -324,6 +336,10 @@ static int http_stream_read_line_impl(http_stream *h, char *out, size_t cap) {
 
     if (!h)
         return -1;
+    if(h->request){
+        while(n+1<cap){char c;int got=http_stream_read_impl(h,&c,1);if(got<=0){if(!n)return -1;break;}if(c=='\n')break;if(c!='\r')out[n++]=c;}
+        out[n]=0;return (int)n;
+    }
     while (h->pos < h->len && n + 1 < cap) {
         char c = h->body[h->pos++];
         if (c == '\n')
@@ -340,6 +356,9 @@ static int http_stream_read_line_impl(http_stream *h, char *out, size_t cap) {
 static void http_stream_close_impl(http_stream *h) {
     if (!h)
         return;
+    if(h->request)WinHttpCloseHandle(h->request);
+    if(h->connection)WinHttpCloseHandle(h->connection);
+    if(h->session)WinHttpCloseHandle(h->session);
     free(h->body);
     free(h);
 }

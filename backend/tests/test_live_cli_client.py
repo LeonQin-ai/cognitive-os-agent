@@ -28,7 +28,7 @@ with tempfile.TemporaryDirectory(prefix='coa-cli-live-') as tmp:
             # This isolated fresh Runtime starts its first task at ID 0.
             task=get('/v1/tasks/0')
             report.update({k:task.get(k) for k in ('status','llm_calls','tool_calls','tokens_in','tokens_out','usage_available','model_failures')})
-            report.update(elapsed_seconds=round(time.monotonic()-start,3),client_exit=client.returncode)
+            report.update(elapsed_seconds=round(time.monotonic()-start,3),client_exit=client.returncode,preview_observed='Provisional answer' in client.stderr)
             report['artifact_verified']=(workspace/'cli-proof.txt').exists() and (workspace/'cli-proof.txt').read_text(encoding='utf-8')==proof
             (build/'cli-live-output.txt').write_text(client.stdout,encoding='utf-8')
             (build/'cli-live-trace.txt').write_text(client.stderr,encoding='utf-8')

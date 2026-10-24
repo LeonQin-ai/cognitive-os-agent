@@ -45,15 +45,30 @@ plain HTTP connections.
 | `/help`, `/exit` | Show commands or leave the client |
 | Ctrl+C during execution | Request cancellation of the active task; retain server records |
 
+Interactive terminals now use an alternate-screen layout with a fixed header,
+session/workspace context, input line and scrolling task body. `--no-tui` selects
+plain mode; `--tui` requires a real terminal. Pipes and `-p` never contain layout
+escape sequences, and the original terminal screen is restored on exit.
+
 The client prints changed model/tool milestones, command arguments, results,
 status, duration, and reported token totals. Missing usage is labeled unavailable.
 Final answers are printed completely, including failed-task partial results.
 One-shot failures return a nonzero exit code. A lost connection does not
 automatically resubmit the task; its ID is printed for inspection.
 
-This first client uses line-based input and task polling. It does not yet offer
-a full-screen TUI, arrow-key history, image attachment commands, or token-by-token
-model streaming. Workspace paths belong to the server machine, and workspace
+Native OpenAI-compatible task answers are decoded from actual provider SSE deltas
+and displayed incrementally through task previews (polled every 300 ms). A preview
+is explicitly provisional: incomplete tool arguments never execute, and the final
+recorded result still passes normal completion checks. Unicode escapes and
+surrogate pairs are kept intact, and long final answers are not clipped or replayed
+twice. `--no-stream` supports endpoints that cannot provide native SSE. Anthropic
+currently falls back to the complete recorded answer. The Runtime's WinHTTP and
+POSIX HTTPS transports now read live streams rather than replaying buffered bodies.
+On POSIX, `COA_HTTP_STREAM_TRANSPORT=curl` selects the same incremental libcurl
+path for plain HTTP gateways too; CI exercises this path against a local provider.
+
+Input remains line-based; arrow-key history and image attachment commands are not
+yet implemented. Workspace paths belong to the server machine, and workspace
 selection is not a sandbox. Model routes are managed through the existing console.
 
 Regression checks after building the CLI:
@@ -61,6 +76,7 @@ Regression checks after building the CLI:
 ```bash
 python tests/test_cli_client.py
 python tests/test_workspaces_e2e.py
+python tests/test_native_preview_e2e.py
 # Opt-in: consumes the configured real model API; starts an isolated Runtime.
 python tests/test_live_cli_client.py --config /path/to/cognitive-os-agent.json
 ```

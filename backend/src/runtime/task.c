@@ -26,6 +26,7 @@ void task_free(task *t) {
         return;
     free(t->attachments_json);
     free(t->workspace);
+    strbuf_free(&t->preview_text);
     free(t->input);
     free(t->output);
     free(t->tag);
