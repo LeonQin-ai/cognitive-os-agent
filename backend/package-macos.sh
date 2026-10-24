@@ -14,6 +14,7 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 python3 tools/gen_icon.py
 cp "$BACKEND_BINARY" "$APP/Contents/MacOS/cognitive-os-agent"
 cp dist/CognitiveOS.icns "$APP/Contents/Resources/CognitiveOS.icns"
+cp ../LICENSE ../NOTICE "$APP/Contents/Resources/"
 xcrun clang -fobjc-arc -Wall -Wextra -framework Cocoa -framework WebKit \
   tools/desktop_macos.m -o "$APP/Contents/MacOS/CognitiveOS"
 cat > "$APP/Contents/Info.plist" <<'PLIST'

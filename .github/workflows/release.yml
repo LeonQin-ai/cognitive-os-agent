@@ -23,6 +23,7 @@ jobs:
           mkdir -p release/cognitive-os-agent-linux-x64
           cp build/cognitive-os-agent release/cognitive-os-agent-linux-x64/
           cp README.md release/cognitive-os-agent-linux-x64/
+          cp ../LICENSE ../NOTICE release/cognitive-os-agent-linux-x64/
           tar -C release -czf cognitive-os-agent-linux-x64.tar.gz cognitive-os-agent-linux-x64
       - uses: actions/upload-artifact@v4
         with:

@@ -8,7 +8,7 @@
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)](#quick-start)
 [![Dependencies](https://img.shields.io/badge/external%20deps-0-green.svg)](#project-structure)
 [![CI](https://github.com/LeonQin-ai/cognitive-os-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/LeonQin-ai/cognitive-os-agent/actions/workflows/ci.yml)
-[![License](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
 **[中文文档](README.zh-CN.md)**
 
@@ -719,7 +719,7 @@ PRs welcome: pick a module, keep the C11 + zero-dependency discipline, keep the 
 
 ## License
 
-[MIT](LICENSE) — vendored third-party code keeps its own MIT headers (cJSON, wasm3, webview).
+[Apache-2.0](LICENSE) — vendored third-party code keeps its own MIT headers (cJSON, wasm3, webview).
 
 ---
 
