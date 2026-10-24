@@ -534,6 +534,22 @@
 .pillbar{border:1px solid var(--border);border-radius:22px!important;box-shadow:0 10px 30px #00000018;padding:12px!important;backdrop-filter:blur(14px)}
 .pillbar:focus-within{border-color:var(--accent-ring);box-shadow:0 0 0 3px var(--accent-soft)}
 #chat-input{font-size:14px;line-height:1.7;min-height:28px}
+.pillbar{display:grid!important;grid-template-columns:auto auto minmax(0,1fr) auto auto auto;align-items:center;gap:8px;border-radius:30px!important;padding:18px!important}
+.pillbar #chat-input{grid-column:1/-1;grid-row:1;min-height:62px;width:100%;padding:2px 0 10px;font-size:16px;border-radius:0;box-shadow:none!important;outline:none!important}
+.pillbar .pill-ic{grid-column:1;grid-row:2;font-size:26px}
+.composer-policy{grid-column:2;grid-row:2;color:#ed6b20;font-size:13px;white-space:nowrap}
+.pillbar #chat-model{grid-column:3;grid-row:2;justify-self:end;width:min(260px,100%);min-width:0;border:0;background:transparent;font-size:13px;padding:7px}
+.pillbar .thinking-toggle{grid-column:4;grid-row:2;border:0;background:transparent;padding:0 3px;font-weight:400}
+.composer-mic{grid-column:5;grid-row:2;border:0;background:none;color:var(--fg);font-size:23px;padding:5px}
+.pillbar #chat-send,.pillbar #chat-cancel{grid-column:6;grid-row:2;width:42px;height:42px;padding:0!important;border:0;border-radius:50%;background:#8953ef;color:white}
+#chat-resume{grid-column:1/-1;grid-row:3;justify-self:end}
+#chat-workspace{max-width:min(360px,45vw);font-size:12px;height:32px}
+.workspace-group{margin:8px 0}.workspace-group>summary{display:flex;align-items:center;gap:7px;cursor:pointer;padding:8px;color:var(--muted);font-size:13px;list-style:none}
+.workspace-group>summary span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}.workspace-group>summary button{background:none;border:0;color:inherit;padding:2px 5px}
+.workspace-group .side-recent-row{margin-left:12px}.workspace-group[open]>summary{color:var(--fg)}
+#workspace-dialog{max-width:min(540px,92vw);width:100%;padding:24px;border:1px solid var(--border);border-radius:18px;background:var(--card);color:var(--fg)}
+#workspace-dialog input{width:100%;margin:7px 0 15px}#workspace-dialog::backdrop{background:#0006}
+@media(max-width:640px){.pillbar{grid-template-columns:auto minmax(0,1fr) auto auto auto!important;gap:4px;padding:12px!important}.composer-policy{display:none}.pillbar #chat-model{grid-column:2}.pillbar .thinking-toggle{grid-column:3}.composer-mic{grid-column:4}.pillbar #chat-send,.pillbar #chat-cancel{grid-column:5}#chat-workspace{max-width:55vw}}
 .content.chat-content{display:flex;flex-direction:column;min-height:0;overflow-y:hidden}
 .chat-content .chat-wrap{min-height:0;flex:1;overflow:hidden}
 .chat-content #chat-hero{min-height:0}
@@ -911,8 +927,8 @@ panels.chat = `
         <span class="chat-toolbar-hint">在这里选择本次会话使用的模型</span>
       </div>
       <div class="chat-toolbar-actions">
-      <select id="chat-model" onchange="chatModelSwitch()" title="对话模型（点击切换）"
-              aria-label="对话模型"></select>
+      <select id="chat-workspace" aria-label="执行工作区" title="新任务执行目录；不会改变运行中的任务" onchange="workspaceSelect(this.value)"></select>
+      <button class="sec sm" onclick="workspaceDialog()" title="添加工作区">＋ 工作区</button>
       <button class="sec sm" onclick="chatToggleSettings()" title="会话设置（共享记忆）">会话设置</button>
       </div>
     </div>
@@ -961,13 +977,16 @@ panels.chat = `
     <div id="chat-attach" style="display:none;flex-wrap:wrap;gap:4px;margin:0 0 6px"></div>
     <div class="pillbar">
       <button class="pill-ic" onclick="$('chat-file').click()" title="上传文件（RAG）">＋</button>
-      <textarea id="chat-input" placeholder="描述目标，或在执行中补充要求…" aria-label="消息" rows="1"></textarea>
+      <textarea id="chat-input" placeholder="和 Cognitive OS 一起工作" aria-label="消息" rows="1"></textarea>
+      <span class="composer-policy" title="实际工具权限由现有策略引擎控制；工作区选择不是安全沙箱">♧ 工作区访问</span>
+      <select id="chat-model" onchange="chatModelSwitch()" title="对话模型（点击切换）" aria-label="对话模型"></select>
       <button class="thinking-toggle" id="chat-thinking-toggle" onclick="chatThinkingToggle(!chatThinkingEnabled())" aria-pressed="false" title="深度思考：允许额外规划轮次，适合复杂问题">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20v-8M10.7 5.2A4.4 4.4 0 0 0 4 9c0 .5.1 1 .3 1.5A3.8 3.8 0 0 0 6 17.6c.6 1.8 2.5 2.8 4.3 2.4M13.3 5.2A4.4 4.4 0 0 1 20 9c0 .5-.1 1-.3 1.5a3.8 3.8 0 0 1-1.7 7.1c-.6 1.8-2.5 2.8-4.3 2.4M7.2 8.2c.9.1 1.6.6 2 1.4M16.8 8.2c-.9.1-1.6.6-2 1.4M7.4 14c.8 0 1.5.4 1.9 1M16.6 14c-.8 0-1.5.4-1.9 1"/></svg>
         <span>深度思考</span><svg class="chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg>
       </button>
-      <button class="sec" id="chat-cancel" onclick="chatCancel()" style="display:none;padding:6px 10px" title="取消当前运行中的任务">取消</button>
+      <button class="sec" id="chat-cancel" onclick="chatCancel()" style="display:none;padding:6px 10px" aria-label="停止执行" title="停止当前任务">■</button>
       <button class="sec" id="chat-resume" onclick="chatResume()" style="display:none;padding:6px 10px" title="恢复：重跑本会话上一条输入">恢复</button>
+      <button class="composer-mic" onclick="chatDictate()" aria-label="语音输入" title="语音输入（需要浏览器支持）">♩</button>
       <button class="pill-send" id="chat-send" onclick="chatSend()" title="发送">↑</button>
       <input type="file" id="chat-file" accept="image/*,video/*,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt,.md,.csv" style="display:none" onchange="uploadFile(this)">
     </div>
@@ -3207,11 +3226,60 @@ function chatRedraw(toBottom = false){
   chatScroll(follow);
 }
 
+let CHAT_WORKSPACE = localStorage.getItem('coa.workspace') || '';
+let WORKSPACES = [], WORKSPACE_DEFAULT = '';
+const WORKSPACE_FOLDS = new Map();
+async function workspaceLoad(){
+  const r=await call('GET','/v1/workspaces');
+  if(r.status!==200 || !Array.isArray(r.obj?.workspaces))return;
+  WORKSPACES=r.obj.workspaces;WORKSPACE_DEFAULT=r.obj.default_workspace || '';
+  workspaceRender(CHAT_TABS_CACHE);sideRecent(CHAT_TABS_CACHE);
+}
+function workspaceRender(list){
+  const info=(list || []).find(s=>s.id===CHAT_SESSION) || (CHAT_SELECTED_INFO?.id===CHAT_SESSION?CHAT_SELECTED_INFO:null);
+  if(info?.workspace)CHAT_WORKSPACE=info.workspace;
+  if(!CHAT_WORKSPACE)CHAT_WORKSPACE=WORKSPACE_DEFAULT;
+  const select=$('chat-workspace');if(!select)return;select.replaceChildren();
+  const entries=[{path:WORKSPACE_DEFAULT,name:'默认工作区'},...WORKSPACES];
+  if(CHAT_WORKSPACE && !entries.some(w=>w.path===CHAT_WORKSPACE))entries.push({path:CHAT_WORKSPACE,name:CHAT_WORKSPACE.split(/[\\/]/).pop()});
+  const seen=new Set();entries.forEach(w=>{if(!w.path || seen.has(w.path))return;seen.add(w.path);const o=document.createElement('option');o.value=w.path;o.textContent=w.name || w.path;o.title=w.path;select.append(o);});
+  select.value=CHAT_WORKSPACE;select.title=CHAT_WORKSPACE || '执行工作区';
+}
+async function workspaceSelect(path){
+  const session=CHAT_SESSION;
+  const r=await call('POST','/v1/chat/sessions/'+encodeURIComponent(session)+'/workspace',{workspace:path});
+  if(r.status!==200){toast('切换工作区失败：'+(r.obj?.error || r.status));workspaceRender(CHAT_TABS_CACHE);return;}
+  CHAT_TABS_CACHE.forEach(s=>{if(s.id===session)s.workspace=path;});
+  if(CHAT_SELECTED_INFO?.id===session)CHAT_SELECTED_INFO.workspace=path;
+  if(CHAT_SESSION===session){CHAT_WORKSPACE=path;localStorage.setItem('coa.workspace',path);workspaceRender(CHAT_TABS_CACHE);sideRecent(CHAT_TABS_CACHE);}
+}
+function workspaceDialog(){
+  let dialog=$('workspace-dialog');
+  if(!dialog){dialog=document.createElement('dialog');dialog.id='workspace-dialog';dialog.innerHTML='<form onsubmit="event.preventDefault();workspaceAdd()"><h2>添加工作区</h2><label>名称（可选）<input id="workspace-name" placeholder="例如 cognitive-os"></label><label>本机文件夹路径<input id="workspace-path" required placeholder="D:/AI/code/cognitive-os" autocomplete="off"></label><p class="hint">任务以这个目录解析相对路径和运行命令。此选择不会创建安全沙箱。</p><div class="row"><span id="workspace-error" role="alert"></span><button type="button" class="sec" onclick="this.closest(\'dialog\').close()">取消</button><button type="submit">添加工作区</button></div></form>';document.body.append(dialog);}
+  $('workspace-error').textContent='';dialog.showModal();$('workspace-path').focus();
+}
+async function workspaceAdd(){
+  const path=$('workspace-path').value.trim(),name=$('workspace-name').value.trim();
+  const r=await call('POST','/v1/workspaces',{path,name});
+  if(r.status!==200){$('workspace-error').textContent=r.obj?.error || '保存失败';return;}
+  WORKSPACES=r.obj.workspaces;WORKSPACE_DEFAULT=r.obj.default_workspace;
+  const added=WORKSPACES.find(w=>w.path.replaceAll('\\','/').toLowerCase()===path.replaceAll('\\','/').toLowerCase());
+  $('workspace-dialog').close();await workspaceSelect(added?.path || path);
+}
+function chatDictate(){
+  const Recognition=window.SpeechRecognition || window.webkitSpeechRecognition;
+  if(!Recognition){toast('当前浏览器不支持语音输入，可使用系统输入法语音功能');return;}
+  const recognition=new Recognition();recognition.lang='zh-CN';
+  recognition.onresult=e=>{const input=$('chat-input');if(input)input.value+=(input.value?' ':'')+e.results[0][0].transcript;};
+  recognition.onerror=()=>toast('语音输入未完成，请检查麦克风权限');recognition.start();
+}
+
 async function loadChat(){
   const box = $('chat-box'); if(!box) return;
   if(CHAT_SESSION === 'default' && !CHAT_NEW_SESSION) await chatNewSession({ensure:true});
   renderChatTabs(CHAT_TABS_CACHE);
   if(CHAT_CACHE[CHAT_SESSION]?.length){ CHAT_MSGS = CHAT_CACHE[CHAT_SESSION]; chatRedraw(true); }
+  void workspaceLoad();
   void loadChatSessions();
   void chatLoadHistory();
   loadUploads();
@@ -3345,6 +3413,7 @@ function fmtDur(ms){
 let CHAT_TABS_CACHE = [];
 
 function renderChatTabs(list){
+  workspaceRender(list);
   const bar = $('chat-tabs');
   if(bar) bar.innerHTML = '';
   if(list.length) CHAT_TABS_CACHE = list;
@@ -3413,7 +3482,22 @@ function chatSessionTip(info, id){
 function sideRecent(list){
   const box = $('side-recent'); if(!box) return;
   const nav = $('nav'), scrollTop = nav?.scrollTop || 0;
+  box.querySelectorAll('.workspace-group').forEach(d=>WORKSPACE_FOLDS.set(d.dataset.path,d.open));
   box.innerHTML = '';
+  const add=document.createElement('button');add.className='sec sm';add.textContent='＋ 添加工作区';add.onclick=workspaceDialog;box.append(add);
+  const groups=new Map();
+  function group(path){
+    path=path || WORKSPACE_DEFAULT || '';
+    if(groups.has(path))return groups.get(path);
+    const details=document.createElement('details');details.className='workspace-group';details.dataset.path=path;
+    details.open=WORKSPACE_FOLDS.has(path)?WORKSPACE_FOLDS.get(path):true;
+    const summary=document.createElement('summary');summary.innerHTML='<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M3 7V5a2 2 0 0 1 2-2h5l3 3h6a2 2 0 0 1 2 2v2M3 8h18l-3 12H2z"/></svg>';
+    const label=document.createElement('span');label.textContent=WORKSPACES.find(w=>w.path===path)?.name || (path===WORKSPACE_DEFAULT?'默认工作区':path.split(/[\\/]/).pop()) || '默认工作区';summary.title=path;summary.append(label);
+    const create=document.createElement('button');create.textContent='＋';create.title='在此工作区新建聊天';create.setAttribute('aria-label','在 '+label.textContent+' 新建聊天');
+    create.onclick=async e=>{e.preventDefault();e.stopPropagation();CHAT_WORKSPACE=path;await chatNewSession();if(current!=='chat')switchPanel('chat');};
+    summary.append(create);details.append(summary);box.append(details);groups.set(path,details);return details;
+  }
+  WORKSPACES.forEach(w=>group(w.path));
   /* The API list preserves session creation order. Recent must reflect
    * activity, including conversations revisited after a newer one was made. */
   const ordered = [...list].sort((a,b) => {
@@ -3463,7 +3547,7 @@ function sideRecent(list){
     del.textContent = '🗑';
     del.onclick = async (e) => { e.stopPropagation(); await chatDeleteSession(id); };
     row.appendChild(del);
-    box.appendChild(row);
+    group(info?.workspace || WORKSPACE_DEFAULT).appendChild(row);
   });
   if(CHAT_SESSION_NEXT){
     const more=document.createElement('button');more.id='recent-older';more.textContent='更早会话';
@@ -3768,7 +3852,7 @@ async function chatNewSession(options={}){
   if(options?.discardCurrent !== true)
     chatCacheStore(); // 保存当前会话消息（切回时即时回放）；旧会话自动归档到「最近」
   /* Create a durable session before switching the visible conversation. */
-  const r = await call('POST', '/v1/chat/sessions');
+  const r = await call('POST', '/v1/chat/sessions', CHAT_WORKSPACE ? {workspace:CHAT_WORKSPACE} : {});
   const id = r.obj && r.obj.id;
   if(r.status < 200 || r.status >= 300 || typeof id !== 'string' || !id){
     const reason = r.obj && r.obj.error || (r.status === 0 ? '连接失败' : 'HTTP ' + r.status);
@@ -3777,12 +3861,12 @@ async function chatNewSession(options={}){
     toast('新建聊天失败：' + reason);
     return false;
   }
-  CHAT_SELECTED_INFO={id,turns:0,created_ms:Date.now()};
+  CHAT_SELECTED_INFO={id,workspace:r.obj.workspace,turns:0,created_ms:Date.now()};
   CHAT_SESSION = id;
   chatAttachActivate(CHAT_SESSION);
   if($('ssh-session-details')?.open) void sshSessionLoad();
   CHAT_NEW_SESSION = false; /* 后端已注册时无需等首条消息 */
-  CHAT_TABS_CACHE = [...CHAT_TABS_CACHE.filter(s => (s.id || 'default') !== id), {id, turns:0, created_ms:Date.now(), last_active_ms:Date.now()}];
+  CHAT_TABS_CACHE = [...CHAT_TABS_CACHE.filter(s => (s.id || 'default') !== id), {id, workspace:r.obj.workspace, turns:0, created_ms:Date.now(), last_active_ms:Date.now()}];
   CHAT_MSGS = [];
   renderChatTabs([]);
   const box = $('chat-box'); if(box) box.innerHTML = '';
@@ -3964,6 +4048,7 @@ function chatBusyUI(busy){
   const cancel = $('chat-cancel'), resume = $('chat-resume');
   const send = $('chat-send'); if(send) send.disabled = CHAT_SUBMITTING.has(CHAT_SESSION) || !!$('chat-input')?.disabled;
   if(cancel) cancel.style.display = (busy && CHAT_TASK_ID !== null) ? '' : 'none';
+  if(send) send.style.display = (busy && CHAT_TASK_ID !== null) ? 'none' : '';
   if(resume) resume.style.display = (!busy && CHAT_RESUME_OK) ? '' : 'none';
 }
 
@@ -5513,6 +5598,7 @@ async function chatPollTask(session,id,entry){
   } finally { CHAT_POLLERS.delete(id); }
 }
 async function chatSubmit(resume = false){
+  const executionWorkspace=CHAT_WORKSPACE;
   if(chatIsBusy()){
     if(!resume && !CHAT_SUBMITTING.has(CHAT_SESSION)) return chatSteer();
     toast('正在提交消息，请稍候'); return;
@@ -5543,7 +5629,7 @@ async function chatSubmit(resume = false){
   entry.pending = true; entry.progress = {stage:'submitting'};
   CHAT_CACHE[session] = CHAT_MSGS; renderChatEntry(entry);
   const r = await call('POST',resume ? '/v1/chat/sessions/' + encodeURIComponent(session) + '/resume' : '/v1/chat',
-    resume ? {thinking:chatThinkingEnabled()} : {message:full,session,thinking:chatThinkingEnabled(),attachments:attachments.map(a=>a.id)});
+    resume ? {thinking:chatThinkingEnabled()} : {message:full,session,workspace:executionWorkspace || undefined,thinking:chatThinkingEnabled(),attachments:attachments.map(a=>a.id)});
   CHAT_SUBMITTING.delete(session);
   if(!Number.isInteger(r.obj?.id)){
     entry.pending = false; entry.progress.stage = 'failed';

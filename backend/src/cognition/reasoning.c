@@ -172,6 +172,7 @@ struct reasoning {
     tx_manager *txm;
     evaluator *eval;
     char *workspace;
+    char *default_workspace;
     int use_transaction;
 
     /* Context MMU budgets (chars per prompt section, auto-degrading) */
@@ -665,7 +666,12 @@ void reasoning_set_observer(reasoning *r, reasoning_observer cb, void *ud) {
 }
 void reasoning_set_thinking_mode(reasoning *r, int enabled) { if (r) r->thinking_mode = enabled != 0; }
 void reasoning_set_abort_parent(reasoning *r, task *t) { if (r) r->abort_parent=t; }
-void reasoning_set_task(reasoning *r, task *t) { if (r) r->run_task = t; }
+void reasoning_set_task(reasoning *r, task *t) {
+    if(!r)return;
+    r->run_task=t;
+    char *directory=xstrdup(t && t->workspace ? t->workspace : (r->default_workspace ? r->default_workspace : "."));
+    if(directory){free(r->workspace);r->workspace=directory;}
+}
 void reasoning_set_completion_prompt(reasoning *r, const char *prompt) { if(r) r->completion_prompt=prompt; }
 static const char *completion_instruction(reasoning *r, const char *prompt) {
     return r->completion_prompt ? r->completion_prompt:prompt;
@@ -1958,6 +1964,7 @@ static char *build_context(reasoning *r, const char *prompt) {
      * model's input allowance. Keep the latest observations, constraints and
      * current request; the complete log remains on disk and in the UI. */
     char *continuation=NULL;
+    strbuf_appendf(&b,"\n## Execution workspace\n%s\nRelative tool paths and command working directories resolve here. This directory is fixed for this task.\n",r->workspace?r->workspace:".");
     if(planner_uses_native_tools(r->llm) && r->round_idx>1){
         cJSON *state=cJSON_CreateObject();
         cJSON_AddNumberToObject(state,"round",r->round_idx);
@@ -2918,6 +2925,7 @@ reasoning *reasoning_new(const reasoning_config *cfg) {
     r->metrics = cfg->metrics;
     r->trace = cfg->trace;
     r->workspace = cfg->workspace ? xstrdup(cfg->workspace) : NULL;
+    r->default_workspace = xstrdup(cfg->workspace ? cfg->workspace : ".");
     r->use_transaction = cfg->use_transaction;
     r->budget_hot = cfg->budget_hot > 0 ? cfg->budget_hot : HIST_BUDGET;
     r->budget_warm = cfg->budget_warm > 0 ? cfg->budget_warm : 3072;
@@ -2960,6 +2968,7 @@ void reasoning_free(reasoning *r) {
     clear_actions(r);
     free(r->last_prompt);
     free(r->workspace);
+    free(r->default_workspace);
     free(r->state_root);
     if (r->ss == &r->own_store_) {
         /* sessions/meta belong to this instance; an attached shared store is

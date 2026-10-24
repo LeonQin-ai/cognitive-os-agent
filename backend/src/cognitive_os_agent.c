@@ -691,6 +691,7 @@ int init(runtime_ctx *ctx, const config *cfg) {
         return -1;
     memset(ctx, 0, sizeof(*ctx));
     mutex_init(&ctx->run_lock);
+    mutex_init(&ctx->workspace_lock);
     mutex_init(&g_lane_sess_mtx);
     for (int i = 0; i < IM_ROOM_LOCKS; i++) {
         mutex_init(&g_im_room_mtx[i]); atomic_store(&g_im_active_tasks[i], -1);
@@ -1330,6 +1331,7 @@ void runtime_shutdown(runtime_ctx *ctx) {
     ctx->config = NULL;
 
     mutex_destroy(&ctx->run_lock);
+    mutex_destroy(&ctx->workspace_lock);
     free(ctx->state_root);
     free(ctx->workspace);
     free(ctx->provider);

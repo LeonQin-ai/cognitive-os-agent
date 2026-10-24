@@ -148,6 +148,85 @@ static int h_scheduler(const http_request *req, http_response *resp, void *ud) {
     return 0;
 }
 
+/* Workspace registry is separate from provider configuration. All mutations
+ * are atomic and protected independently from model execution locks. */
+static cJSON *workspace_load(runtime_ctx *ctx) {
+    char path[1024];path_join(path,sizeof(path),ctx->state_root,"workspaces.json");
+    char *text=fs_read_file(path);cJSON *o=text?cJSON_Parse(text):cJSON_CreateObject();free(text);
+    if(!cJSON_IsObject(o)){cJSON_Delete(o);return NULL;}
+    if(!cJSON_GetObjectItemCaseSensitive(o,"workspaces"))cJSON_AddArrayToObject(o,"workspaces");
+    if(!cJSON_GetObjectItemCaseSensitive(o,"sessions"))cJSON_AddObjectToObject(o,"sessions");
+    if(!cJSON_GetObjectItemCaseSensitive(o,"tasks"))cJSON_AddObjectToObject(o,"tasks");
+    if(!cJSON_IsArray(cJSON_GetObjectItemCaseSensitive(o,"workspaces")) ||
+       !cJSON_IsObject(cJSON_GetObjectItemCaseSensitive(o,"sessions")) ||
+       !cJSON_IsObject(cJSON_GetObjectItemCaseSensitive(o,"tasks"))){cJSON_Delete(o);return NULL;}
+    return o;
+}
+static int workspace_save(runtime_ctx *ctx,cJSON *o) {
+    char path[1024];path_join(path,sizeof(path),ctx->state_root,"workspaces.json");
+    char *text=cJSON_PrintUnformatted(o);config *cfg=config_new();
+    int rc=text && cfg && !config_apply_json(cfg,text)?config_save_file(cfg,path):-1;
+    config_free(cfg);free(text);return rc;
+}
+static void workspace_put(cJSON *map,const char *key,const char *value) {
+    cJSON_DeleteItemFromObjectCaseSensitive(map,key);cJSON_AddStringToObject(map,key,value);
+}
+static char *workspace_pick(runtime_ctx *ctx,cJSON *body,const char *sid) {
+    mutex_lock(&ctx->workspace_lock);cJSON *o=workspace_load(ctx);
+    cJSON *field=cJSON_GetObjectItemCaseSensitive(body,"workspace");
+    const char *selected=cJSON_GetStringValue(field);
+    if(field && (!selected || !*selected)){cJSON_Delete(o);mutex_unlock(&ctx->workspace_lock);return NULL;}
+    if(!selected)selected=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(o,"sessions"),sid?sid:"default"));
+    char *base=fs_absolute_path(ctx->workspace?ctx->workspace:".");
+    char *path=selected?fs_absolute_path(selected):xstrdup(base?base:".");
+    int registered=path && base && !strcmp(path,base);cJSON *entry;
+    cJSON_ArrayForEach(entry,cJSON_GetObjectItemCaseSensitive(o,"workspaces")) {
+        const char *p=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(entry,"path"));
+        if(path && p && !strcmp(p,path))registered=1;
+    }
+    if(!o || !registered || !fs_is_dir(path)){free(path);path=NULL;}
+    free(base);cJSON_Delete(o);mutex_unlock(&ctx->workspace_lock);return path;
+}
+static int workspace_bind(runtime_ctx *ctx,const char *sid,const char *path,int64_t task_id) {
+    mutex_lock(&ctx->workspace_lock);cJSON *o=workspace_load(ctx);
+    if(!o){mutex_unlock(&ctx->workspace_lock);return -1;}
+    if(sid)workspace_put(cJSON_GetObjectItemCaseSensitive(o,"sessions"),sid,path);
+    if(task_id>=0){char id[32];snprintf(id,sizeof(id),"%lld",(long long)task_id);workspace_put(cJSON_GetObjectItemCaseSensitive(o,"tasks"),id,path);}
+    int rc=workspace_save(ctx,o);cJSON_Delete(o);mutex_unlock(&ctx->workspace_lock);return rc;
+}
+static char *workspace_previous_task(runtime_ctx *ctx,int64_t task_id,const char *sid){
+    char id[32];snprintf(id,sizeof(id),"%lld",(long long)task_id);
+    mutex_lock(&ctx->workspace_lock);cJSON *o=workspace_load(ctx);
+    const char *path=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(o,"tasks"),id));
+    cJSON *body=cJSON_CreateObject();if(path)cJSON_AddStringToObject(body,"workspace",path);
+    cJSON_Delete(o);mutex_unlock(&ctx->workspace_lock);
+    char *selected=workspace_pick(ctx,body,sid);cJSON_Delete(body);return selected;
+}
+static int h_workspaces(const http_request *req,http_response *resp,void *ud) {
+    runtime_ctx *ctx=ud;if(!authz_ok(ctx,req,resp))return 0;
+    char *text=body_str(req);cJSON *body=text?cJSON_Parse(text):NULL;free(text);
+    const char *requested=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(body,"path"));
+    char *path=requested && *requested?fs_absolute_path(requested):NULL;
+    if(strcmp(req->method,"GET") && (!path || !fs_is_dir(path))){resp->status=400;http_resp_json(resp,"{\"error\":\"choose an existing workspace directory\"}");free(path);cJSON_Delete(body);return 0;}
+    mutex_lock(&ctx->workspace_lock);cJSON *o=workspace_load(ctx);
+    if(!o){resp->status=500;http_resp_json(resp,"{\"error\":\"workspace registry is unreadable\"}");goto done;}
+    cJSON *items=cJSON_GetObjectItemCaseSensitive(o,"workspaces");
+    if(!strcmp(req->method,"POST")) {
+        cJSON *existing=NULL,*entry;cJSON_ArrayForEach(entry,items){const char *p=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(entry,"path"));if(p && !strcmp(p,path))existing=entry;}
+        if(!existing){existing=cJSON_CreateObject();cJSON_AddStringToObject(existing,"path",path);cJSON_AddItemToArray(items,existing);}
+        const char *name=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(body,"name"));
+        const char *tail=strrchr(path,'/');if(!tail)tail=strrchr(path,'\\');
+        workspace_put(existing,"name",name && *name?name:tail && tail[1]?tail+1:path);
+        if(workspace_save(ctx,o)){resp->status=500;http_resp_json(resp,"{\"error\":\"cannot save workspace\"}");goto done;}
+    }
+    char *base=fs_absolute_path(ctx->workspace?ctx->workspace:".");
+    cJSON *result=cJSON_CreateObject();cJSON_AddStringToObject(result,"default_workspace",base?base:".");free(base);
+    cJSON_AddItemToObject(result,"workspaces",cJSON_Duplicate(items,1));
+    char *json=cJSON_PrintUnformatted(result);http_resp_json(resp,json?json:"{}");free(json);cJSON_Delete(result);
+done:
+    cJSON_Delete(o);mutex_unlock(&ctx->workspace_lock);free(path);cJSON_Delete(body);return 0;
+}
+
 static int h_task_create(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
     char *b;
@@ -183,7 +262,10 @@ static int h_task_create(const http_request *req, http_response *resp, void *ud)
         http_resp_json(resp, "{\"error\":\"SSH credential needs a host or saved environment and a working local vault\"}");
         return 0;
     }
-    id = scheduler_submit(ctx->scheduler, 0, safe_prompt, NULL, 0);
+    char *directory=workspace_pick(ctx,root,NULL);
+    if(!directory){free(safe_prompt);cJSON_Delete(root);resp->status=400;http_resp_json(resp,"{\"error\":\"workspace must be registered and available\"}");return 0;}
+    id = scheduler_submit_workspace(ctx->scheduler,0,safe_prompt,NULL,0,NULL,0,NULL,directory);
+    if(id>=0)workspace_bind(ctx,NULL,directory,id);free(directory);
     snprintf(prompt_copy, sizeof(prompt_copy), "%s", safe_prompt);
     free(safe_prompt);
     cJSON_Delete(root);
@@ -225,6 +307,7 @@ static int h_task_get(const http_request *req, http_response *resp, void *ud) {
     o = cJSON_CreateObject();
     cJSON_AddNumberToObject(o, "id", (double)t->id);
     cJSON_AddStringToObject(o, "status", task_status_str(t->status));
+    cJSON_AddStringToObject(o,"workspace",t->workspace?t->workspace:(ctx->workspace?ctx->workspace:"."));
     if (t->input)
         cJSON_AddStringToObject(o, "input", t->input);
     if (t->status >= TS_DONE && t->output)
@@ -422,7 +505,10 @@ static int h_task_resume(const http_request *req, http_response *resp, void *ud)
         free(output);
         return 0;
     }
-    int64_t nid = scheduler_submit_tag(ctx->scheduler, 0, input, NULL, 0, session);
+    char *directory=workspace_previous_task(ctx,id,session);
+    if(!directory){free(status);free(session);free(input);free(output);resp->status=400;http_resp_json(resp,"{\"error\":\"original workspace is unavailable\"}");return 0;}
+    int64_t nid = scheduler_submit_workspace(ctx->scheduler,0,input,NULL,0,session,0,NULL,directory);
+    if(nid>=0)workspace_bind(ctx,NULL,directory,nid);free(directory);
     if (nid < 0) {
         scheduler_submit_error(resp, nid);
     } else {
@@ -508,7 +594,13 @@ static int h_chat(const http_request *req, http_response *resp, void *ud) {
         http_resp_json(resp, "{\"error\":\"SSH credential needs a host or saved environment and a working local vault\"}");
         return 0;
     }
-    id = scheduler_submit_attachments(ctx->scheduler, 0, safe_msg, NULL, 0, session, thinking, attachments);
+    char *directory=workspace_pick(ctx,root,session);
+    if(!directory || workspace_bind(ctx,session?session:"default",directory,-1)){
+        free(directory);free(safe_msg);free(attachments);cJSON_Delete(root);resp->status=400;
+        http_resp_json(resp,"{\"error\":\"workspace must be registered, available and saved\"}");return 0;
+    }
+    id = scheduler_submit_workspace(ctx->scheduler,0,safe_msg,NULL,0,session,thinking,attachments,directory);
+    if(id>=0)workspace_bind(ctx,NULL,directory,id);free(directory);
     if (id >= 0)
         reasoning_session_note_prompt(ctx->reasoning, session, safe_msg);
     free(safe_msg);
@@ -538,7 +630,18 @@ static int h_chat_sessions(const http_request *req, http_response *resp, void *u
         query_param(req,"limit",limit_text,sizeof(limit_text));
         query_param(req,"cursor",cursor,sizeof(cursor));
         char *js = *limit_text ? reasoning_sessions_page_json(ctx->reasoning,cursor,(size_t)strtoul(limit_text,NULL,10)) : reasoning_sessions_json(ctx->reasoning);
-        http_resp_append(resp, js ? js : "[]");
+        cJSON *page=js?cJSON_Parse(js):NULL;
+        cJSON *rows=cJSON_IsArray(page)?page:cJSON_GetObjectItemCaseSensitive(page,"sessions");
+        mutex_lock(&ctx->workspace_lock);cJSON *registry=workspace_load(ctx),*row;
+        cJSON_ArrayForEach(row,rows){
+            const char *id=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(row,"id"));
+            const char *path=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(registry,"sessions"),id?id:"default"));
+            char *base=path?NULL:fs_absolute_path(ctx->workspace?ctx->workspace:".");
+            cJSON_AddStringToObject(row,"workspace",path?path:base?base:".");free(base);
+        }
+        cJSON_Delete(registry);mutex_unlock(&ctx->workspace_lock);
+        char *rendered=page?cJSON_PrintUnformatted(page):NULL;
+        http_resp_append(resp, rendered?rendered:js?js:"[]");free(rendered);cJSON_Delete(page);
         free(js);
         return 0;
     }
@@ -575,13 +678,19 @@ static int h_chat_session_post(const http_request *req, http_response *resp, voi
         return 0;
     if (strlen(path) <= plen + 1) {
         /* create */
+        char *text=body_str(req);cJSON *body=text?cJSON_Parse(text):NULL;free(text);
+        char *directory=workspace_pick(ctx,body,NULL);cJSON_Delete(body);
+        if(!directory){resp->status=400;http_resp_json(resp,"{\"error\":\"workspace must be registered and available\"}");return 0;}
         char *id = reasoning_session_new(ctx->reasoning);
         if (!id) {
+            free(directory);
             resp->status = 500;
             http_resp_json(resp, "{\"error\":\"session create failed\"}");
             return 0;
         }
-        http_resp_appendf(resp, "{\"id\":\"%s\"}", id);
+        if(workspace_bind(ctx,id,directory,-1)){reasoning_session_delete(ctx->reasoning,id);free(id);free(directory);resp->status=500;http_resp_json(resp,"{\"error\":\"cannot save workspace selection\"}");return 0;}
+        cJSON *result=cJSON_CreateObject();cJSON_AddStringToObject(result,"id",id);cJSON_AddStringToObject(result,"workspace",directory);free(directory);
+        char *json=cJSON_PrintUnformatted(result);http_resp_json(resp,json?json:"{}");free(json);cJSON_Delete(result);
         free(id);
         return 0;
     }
@@ -597,6 +706,15 @@ static int h_chat_session_post(const http_request *req, http_response *resp, voi
     }
     snprintf(sid, (size_t)(slash - rest) + 1, "%s", rest);
     const char *action = slash + 1;
+
+    if(!strcmp(action,"workspace")){
+        char *text=body_str(req);cJSON *body=text?cJSON_Parse(text):NULL;free(text);
+        char *directory=workspace_pick(ctx,body,sid);cJSON_Delete(body);
+        if(!directory){resp->status=400;http_resp_json(resp,"{\"error\":\"workspace must be registered and available\"}");return 0;}
+        if(workspace_bind(ctx,sid,directory,-1)){resp->status=500;http_resp_json(resp,"{\"error\":\"cannot save workspace selection\"}");}
+        else http_resp_json(resp,"{\"ok\":true}");
+        free(directory);return 0;
+    }
 
     if (strcmp(action, "shared") == 0) {
         char *b = body_str(req);
@@ -622,7 +740,10 @@ static int h_chat_session_post(const http_request *req, http_response *resp, voi
             http_resp_json(resp, "{\"error\":\"session has no recorded input to resume\"}");
             return 0;
         }
-        int64_t nid = scheduler_submit_tag(ctx->scheduler, 0, input, NULL, 0, sid);
+        char *directory=workspace_pick(ctx,NULL,sid);
+        if(!directory){free(input);resp->status=400;http_resp_json(resp,"{\"error\":\"workspace is unavailable\"}");return 0;}
+        int64_t nid = scheduler_submit_workspace(ctx->scheduler,0,input,NULL,0,sid,0,NULL,directory);
+        if(nid>=0)workspace_bind(ctx,NULL,directory,nid);free(directory);
         free(input);
         if (nid < 0) {
             scheduler_submit_error(resp, nid);
@@ -5395,6 +5516,8 @@ int api_attach(runtime_ctx *ctx) {
     http_server_route(ctx->http, "POST", "/v1/chat", h_chat, ctx);
     http_server_route(ctx->http, "GET", "/v1/chat/history", h_chat_history, ctx);
     http_server_route(ctx->http, "GET", "/v1/chat/sessions", h_chat_sessions, ctx);
+    http_server_route(ctx->http,"GET","/v1/workspaces",h_workspaces,ctx);
+    http_server_route(ctx->http,"POST","/v1/workspaces",h_workspaces,ctx);
     http_server_route(ctx->http, "POST", "/v1/chat/sessions", h_chat_session_post, ctx);
     http_server_route(ctx->http, "DELETE", "/v1/chat/sessions/", h_chat_sessions, ctx);
     http_server_route(ctx->http, "GET", "/v1/policy/rules", h_policy_rules, ctx);

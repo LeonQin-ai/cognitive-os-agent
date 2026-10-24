@@ -38,6 +38,7 @@ typedef struct task {
     int timed_out;            /* set when deadline passed */
     TASK_ATOMIC(task_status) status;
     char *attachments_json; /* owned immutable task snapshot; never in history */
+    char *workspace; /* owned immutable execution directory, never process chdir */
     char *input;  /* task description / prompt */
     char *output; /* runner transfers ownership to scheduler; borrowed readers must not free */
     mutex_t progress_mtx;
@@ -93,6 +94,8 @@ int64_t scheduler_submit_tag_mode(scheduler *s, int priority, const char *input,
 
 int64_t scheduler_submit_attachments(scheduler *s, int priority, const char *input, void *userdata,
     int64_t timeout_ms, const char *tag, int thinking_mode, const char *attachments);
+int64_t scheduler_submit_workspace(scheduler *s, int priority, const char *input, void *userdata,
+    int64_t timeout_ms, const char *tag, int thinking_mode, const char *attachments, const char *workspace);
 
 /* Look up a task by id (borrowed pointer, valid until scheduler_free). */
 task *scheduler_get(scheduler *s, int64_t id);
