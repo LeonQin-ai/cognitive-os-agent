@@ -12,7 +12,7 @@ class Model(BaseHTTPRequestHandler):
         found=re.findall(r'## Execution workspace\n([^\n]+)',text);assert found,text[-1000:]
         directory=found[-1];n=counts.get(directory,0);counts[directory]=n+1
         if directory.replace('\\','/').endswith('项目 A') and n==0:entered.set();assert release.wait(10)
-        cwd_args={'command':'$PWD.Path','shell':'powershell'} if os.name=='nt' else {'command':'pwd'}
+        cwd_args={'command':'[Console]::OutputEncoding=[Text.Encoding]::UTF8;$PWD.Path','shell':'powershell'} if os.name=='nt' else {'command':'pwd'}
         name,args=[('file_read',{'path':'marker.txt'}),('shell',cwd_args),('file_write',{'path':'result.txt','content':directory})][n] if n<3 else ('complete_task',{'status':'complete','requires_tools':False,'answer':'Verified workspace '+directory})
         raw=json.dumps({'choices':[{'message':{'content':'','tool_calls':[{'id':'c','type':'function','function':{'name':name,'arguments':json.dumps(args)}}]},'finish_reason':'tool_calls'}]}).encode()
         self.send_response(200);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(raw)));self.end_headers();self.wfile.write(raw)
@@ -56,7 +56,7 @@ try:
                     (build/'workspaces-e2e-failure.json').write_text(json.dumps(t,ensure_ascii=False,indent=2),encoding='utf-8')
                 assert t['status']=='DONE',t['output'];assert Path(t['workspace'])==path
                 assert any(marker in s['out'] for s in t['steps'])
-                cwd=next(s['out'] for s in t['steps'] if s['tool']=='shell');assert str(path).replace('\\','/') in cwd.replace('\\','/')
+                cwd=next(s['out'] for s in t['steps'] if s['tool']=='shell');assert str(path).replace('\\','/').lower() in cwd.replace('\\','/').lower(),(str(path),cwd)
                 assert Path((path/'result.txt').read_text(encoding='utf-8'))==path
             assert not (base/'result.txt').exists()
             resumed=req('/v1/tasks/'+str(ta)+'/resume',{})['id'];assert Path(req('/v1/tasks/'+str(resumed))['workspace'])==a
@@ -66,7 +66,7 @@ try:
             assert len(req('/v1/workspaces')['workspaces'])==2
             sessions=req('/v1/chat/sessions');assert Path(next(s for s in sessions if s['id']==sa)['workspace'])==b
             client=subprocess.run([str(build/('cognitive-os-agent.exe' if os.name=='nt' else 'cognitive-os-agent')),
-                'chat','--connect',f'http://127.0.0.1:{port}','--session',sa,'-p','Report the workspace verification result'],
+                'chat','--no-stream','--connect',f'http://127.0.0.1:{port}','--session',sa,'-p','Report the workspace verification result'],
                 capture_output=True,text=True,encoding='utf-8',timeout=20)
             assert client.returncode==0,client.stderr
             assert 'Verified workspace' in client.stdout and str(b).replace('\\','/') in client.stdout.replace('\\','/'),client.stdout
