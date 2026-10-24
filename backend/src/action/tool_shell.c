@@ -104,13 +104,17 @@ static int is_powershell_launcher(const char *command) {
  * reinterpretation for commands containing pipes, quotes or Unicode. */
 static char *powershell_command(const char *utf8) {
     static const char alphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    int n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, utf8, -1, NULL, 0);
-    if (n <= 0 || n > 12000) return NULL;
+    strbuf script;strbuf_init(&script);
+    strbuf_append(&script,"$ProgressPreference='SilentlyContinue';[Console]::OutputEncoding=[Text.Encoding]::UTF8;");
+    strbuf_append(&script,utf8);
+    int n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, script.buf, -1, NULL, 0);
+    if (n <= 0 || n > 12000) {strbuf_free(&script);return NULL;}
     wchar_t *wide = malloc((size_t)n * sizeof(*wide));
-    if (!wide) return NULL;
-    if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, utf8, -1, wide, n) != n) {
-        free(wide); return NULL;
+    if (!wide) {strbuf_free(&script);return NULL;}
+    if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, script.buf, -1, wide, n) != n) {
+        strbuf_free(&script);free(wide); return NULL;
     }
+    strbuf_free(&script);
     const unsigned char *bytes = (const unsigned char *)wide;
     size_t length = (size_t)(n - 1) * sizeof(*wide);
     size_t encoded_len = ((length + 2) / 3) * 4;
