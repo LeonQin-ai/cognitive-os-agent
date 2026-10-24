@@ -216,12 +216,26 @@ static void lane_sess_lock_release(lane_sess_lock *e) {
         mutex_unlock(&e->m);
 }
 
-typedef struct progress_binding { runtime_ctx *ctx; task *t; } progress_binding;
+typedef struct progress_binding { runtime_ctx *ctx; task *t; cJSON *prior; } progress_binding;
 static void chat_progress(const char *json, void *ud) {
     progress_binding *b = ud;
     cJSON *o = cJSON_Parse(json);
     if (!o) return;
     if (b->t->userdata == (void *)3) {
+        /* Role progress is cumulative within one invocation. Add the immutable
+         * preceding-role snapshot, never the most recent observer update. */
+        const char *counters[] = {"llm_calls", "model_call", "model_failures", "tool_calls",
+            "tokens_in", "tokens_out", "llm_ms", "tool_ms", "elapsed_ms", "round", "applied_updates"};
+        for (size_t i=0;i<sizeof(counters)/sizeof(counters[0]);++i) {
+            cJSON *value=cJSON_GetObjectItemCaseSensitive(o,counters[i]);
+            cJSON *prior=cJSON_GetObjectItemCaseSensitive(b->prior,counters[i]);
+            if(cJSON_IsNumber(value)&&cJSON_IsNumber(prior))
+                cJSON_SetNumberValue(value,value->valuedouble+prior->valuedouble);
+        }
+        if(cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(b->prior,"usage_available"))) {
+            cJSON_DeleteItemFromObject(o,"usage_available");
+            cJSON_AddBoolToObject(o,"usage_available",1);
+        }
         char *saved = task_progress_copy(b->t);
         cJSON *group = saved ? cJSON_Parse(saved) : NULL;
         const char *keys[] = {"im_session_id", "im_status", "discussion_round", "discussion_rounds", "agent", "reason"};
@@ -261,13 +275,19 @@ static int chat_lane_run(runtime_ctx *ctx, const char *session_id, int64_t task_
         lane = 0;
     }
     ctx->lane_task[lane] = task_id;
-    progress_binding binding = {ctx, scheduler_acquire(ctx->scheduler, task_id)};
+    progress_binding binding = {ctx, scheduler_acquire(ctx->scheduler, task_id), NULL};
+    if(binding.t && binding.t->userdata==(void *)3) {
+        char *prior=task_progress_copy(binding.t);
+        binding.prior=prior?cJSON_Parse(prior):NULL;
+        free(prior);
+    }
     reasoning_set_task(ctx->chat_lanes[lane], binding.t);
     reasoning_set_thinking_mode(ctx->chat_lanes[lane], thinking_mode);
     reasoning_set_observer(ctx->chat_lanes[lane], chat_progress, &binding);
     int rc = reasoning_run_ex(ctx->chat_lanes[lane], session_id, prompt, answer);
     reasoning_set_observer(ctx->chat_lanes[lane], NULL, NULL);
     reasoning_set_task(ctx->chat_lanes[lane], NULL);
+    cJSON_Delete(binding.prior);
     scheduler_release(ctx->scheduler, binding.t);
     ctx->lane_task[lane] = 0;
     mutex_unlock(&ctx->lane_mtx[lane]);

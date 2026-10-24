@@ -106,7 +106,7 @@ def make_provider(fixture):
             try:
                 body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
                 answer, status = fixture.answer(body['messages'][-1]['content'])
-                result = ({'choices': [{'message': {'role': 'assistant', 'content': answer},
+                result = ({'usage': {'prompt_tokens': 17, 'completion_tokens': 3}, 'choices': [{'message': {'role': 'assistant', 'content': answer},
                                        'finish_reason': 'stop'}]} if status == 200 else answer)
             except Exception as error:
                 with fixture.lock:
@@ -233,6 +233,9 @@ def main():
                     task = finished(send(discussion, 'DISCUSS'))
                     assert task['status'] == 'DONE', task
                     assert task['discussion_round'] == task['discussion_rounds'] == 3, task
+                    assert task['llm_calls'] == 6, task
+                    assert task['tokens_in'] == 6 * 17 and task['tokens_out'] == 6 * 3, task
+                    assert task['usage_available'] and task['model_failures'] == 0, task
                     expect_calls('DISCUSS', 3)
                     assert [m['sender'] for m in replies(discussion)] == ['alpha', 'beta'] * 3
                     print('PASS: two roles exchange proposals, questions and answers across three rounds', flush=True)
@@ -260,6 +263,8 @@ def main():
                     failing = room()
                     task = finished(send(failing, 'FAIL'))
                     assert task['status'] == 'FAILED', task
+                    assert task['llm_calls'] == len(fixture.calls_for('FAIL')), task
+                    assert task['model_failures'] > 0 and task['tokens_in'] == 17 and task['tokens_out'] == 3, task
                     assert task['discussion_round'] == 1, task
                     assert any(reply['sender'] == 'alpha' for reply in replies(failing)), messages(failing)
                     assert all(reply['sender'] != 'beta' for reply in replies(failing)), messages(failing)
