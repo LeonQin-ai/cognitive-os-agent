@@ -10,7 +10,7 @@
 ;   ISCC.exe tools/setup.iss
 
 #define MyAppName "cognitive-os-agent"
-#define MyAppVersion "1.0.1"
+#define MyAppVersion "1.0.2"
 #define MyAppPublisher "Cognitive OS"
 #define MyAppExeName "cognitive-os-agent-desktop.exe"
 
