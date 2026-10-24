@@ -12,14 +12,14 @@ class Model(BaseHTTPRequestHandler):
         found=re.findall(r'## Execution workspace\n([^\n]+)',text);assert found,text[-1000:]
         directory=found[-1];n=counts.get(directory,0);counts[directory]=n+1
         if directory.replace('\\','/').endswith('项目 A') and n==0:entered.set();assert release.wait(10)
-        python='python' if os.name=='nt' else 'python3'
-        name,args=[('file_read',{'path':'marker.txt'}),('shell',{'command':python+' -c "import os; print(os.getcwd())"'}),('file_write',{'path':'result.txt','content':directory})][n] if n<3 else ('complete_task',{'status':'complete','requires_tools':False,'answer':'Verified workspace '+directory})
+        cwd_args={'command':'$PWD.Path','shell':'powershell'} if os.name=='nt' else {'command':'pwd'}
+        name,args=[('file_read',{'path':'marker.txt'}),('shell',cwd_args),('file_write',{'path':'result.txt','content':directory})][n] if n<3 else ('complete_task',{'status':'complete','requires_tools':False,'answer':'Verified workspace '+directory})
         raw=json.dumps({'choices':[{'message':{'content':'','tool_calls':[{'id':'c','type':'function','function':{'name':name,'arguments':json.dumps(args)}}]},'finish_reason':'tool_calls'}]}).encode()
         self.send_response(200);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(raw)));self.end_headers();self.wfile.write(raw)
 model=ThreadingHTTPServer(('127.0.0.1',0),Model);threading.Thread(target=model.serve_forever,daemon=True).start()
 try:
  with tempfile.TemporaryDirectory(prefix='coa-workspaces-') as tmp:
-    base=Path(tmp);state=base/'state';state.mkdir();a=base/'项目 A';b=base/'project B';a.mkdir();b.mkdir()
+    base=Path(tmp).resolve();state=base/'state';state.mkdir();a=base/'项目 A';b=base/'project B';a.mkdir();b.mkdir()
     (a/'marker.txt').write_text('PROOF_A',encoding='utf-8');(b/'marker.txt').write_text('PROOF_B',encoding='utf-8')
     (state/'cognitive-os-agent.json').write_text(json.dumps({'llm.provider':'openai','llm.model':'fixture','llm.base_url':f'http://127.0.0.1:{model.server_port}','llm.api_key':'fixture','reasoning.max_rounds':12,'scheduler.workers':2}),encoding='utf-8')
     def new_port():
