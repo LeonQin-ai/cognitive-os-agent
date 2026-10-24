@@ -525,6 +525,10 @@ static int http_stream_read_impl(http_stream *h, char *out, size_t cap) {
         if (c < 0)
             break;
         out[n++] = (char)c;
+        /* Return the available decoded batch instead of waiting to fill cap.
+         * In particular, do not cross an SSE/chunk boundary and wait for the
+         * next provider event after already receiving usable text. */
+        if(h->pos>=h->len || (h->chunked&&h->cstate==CHUNK_DATA&&h->chunk_remaining==0))break;
     }
 
     return (int)n;
