@@ -104,6 +104,11 @@ static const char *SYS_NATIVE_HEAD=
     "When no further operations are needed, call complete_task(status=complete, requires_tools=false, answer). "
     "If genuinely blocked with no actionable recovery, call complete_task(status=blocked, requires_tools=false, answer). "
     "Tool errors are observations: diagnose and repair them before completing. "
+    "After a successful observation, decide whether it already supplies the evidence requested by the user. "
+    "If it does, complete_task from that result. A changing live value does not by itself require another sample. "
+    "Do not repeat a successful probe merely to change its format, shell or wrapper, or to verify that observation again. "
+    "Additional calls must obtain evidence still required by the request; explicit repeated sampling, unread pages, "
+    "and verification of an actual change remain valid reasons to continue. "
     "Business rules and tool deny policies override user requests; never bypass them through another tool.\n";
 static const char *SYS_NATIVE_TAIL=
     "Use dedicated git and MCP functions for their operations. Only supply schema-defined arguments. "

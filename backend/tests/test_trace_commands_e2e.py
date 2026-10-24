@@ -6,6 +6,7 @@ backend=Path(__file__).resolve().parents[1];build=backend/os.environ.get('COA_BU
 count=0
 python='python' if os.name=='nt' else 'python3'
 commands=[{'command':python+' -c "print(123456)"'}, {'command':python+' -c "import sys; print(7654321); sys.exit(7)"'}, {'command':python+' -c "import time; time.sleep(2)"','timeout_ms':100}, {'command':python+' -c "print(444444)"'}]
+if os.name=='nt':commands[0]={'command':"Write-Progress -Activity fixture -Status loading -PercentComplete 10; Write-Output '123456 中文'",'shell':'powershell'}
 class Provider(BaseHTTPRequestHandler):
  def log_message(self,*args):pass
  def do_POST(self):
@@ -36,6 +37,7 @@ with tempfile.TemporaryDirectory(prefix='coa-trace-commands-',ignore_cleanup_err
   assert [s['command'] for s in spans]==[c['command'] for c in commands]
   assert [s['status'] for s in spans]==[1,-1,-1,1]
   assert '123456' in spans[0]['result'] and 'exit code 7' in spans[1]['result'] and '7654321' in spans[1]['result']
+  if os.name=='nt':assert '中文' in spans[0]['result'] and '#< CLIXML' not in spans[0]['result'],spans[0]['result']
   assert 'timeout' in spans[2]['result'] and spans[2]['duration_ms']>=80 and '444444' in spans[3]['result']
   assert all(s['end_ms']>=s['start_ms'] and s['duration_ms']>=0 for s in spans)
  with (build/'trace-commands.log').open('w',encoding='utf-8') as log:
