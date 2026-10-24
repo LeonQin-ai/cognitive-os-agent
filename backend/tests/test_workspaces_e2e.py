@@ -72,4 +72,15 @@ try:
             assert 'Verified workspace' in client.stdout and str(b).replace('\\','/') in client.stdout.replace('\\','/'),client.stdout
         finally:p.terminate();p.wait(timeout=5)
     print('PASS: workspace registration, invalid paths, concurrent relative reads/writes/cwd, immutable selection, resume and restart')
-finally:model.shutdown();model.server_close()
+finally:
+    # A stuck fixture teardown must fail with Python thread evidence, rather
+    # than consume the entire platform job after printing PASS.
+    def stop_model():
+        model.shutdown()
+        model.server_close()
+    cleanup=threading.Thread(target=stop_model,daemon=True)
+    cleanup.start();cleanup.join(5)
+    if cleanup.is_alive():
+        import faulthandler
+        faulthandler.dump_traceback()
+        raise AssertionError('Workspace provider fixture teardown exceeded 5 seconds')
