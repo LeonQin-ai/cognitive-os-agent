@@ -298,7 +298,8 @@ for provider_name in ('openai','anthropic'):
     for catalog in catalogs:
      write=next(t.get('function',t) for t in catalog if t.get('function',t).get('name')=='file_write')
      schema=write.get('parameters',write.get('input_schema'))
-     assert schema['type']=='object' and set(schema['required'])=={'path','content'}
+     assert schema['type']=='object' and set(schema['required'])=={'path'}
+     assert schema['properties']['content']['type']=='string' and schema['properties']['copy_from']['type']=='string'
      assert 'format' not in schema['properties']['path']
     print('PROGRESS:',provider_name,{'spin_planning_calls':counts['NATIVE_VERIFY_SPIN'],'spin_summary_calls':summary_calls['NATIVE_VERIFY_SPIN'],'new_content_calls':counts['NATIVE_VERIFY_PROGRESS'],'new_evidence_calls':counts['NATIVE_FRESH_OBSERVATIONS'],'shell_artifact_calls':counts['NATIVE_VERIFY_SHELL_PROGRESS'],'touch_spin_calls':counts['NATIVE_VERIFY_TOUCH_SPIN'],'oscillate_spin_calls':counts['NATIVE_VERIFY_OSCILLATE_SPIN'],'many_artifact_calls':counts['NATIVE_VERIFY_MANY_ARTIFACTS']})
     print('PASS:',provider_name,f'{len(matrix)} ordinary answers + premature completion review, partial reading, 17-step research, recovered/real failures; fixture routing is out of band, no magic prompt tags')

@@ -3,6 +3,7 @@
 #include "os/os_fs.h"
 #include "infra/util.h"
 #include "os/os_thread.h"
+#include "runtime/policy_engine.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -381,21 +382,38 @@ static tool_result *file_write_exec(const tool *self, const tool_ctx *ctx, const
         return tool_result_new(0, "file_write: invalid args JSON");
     path_j = cJSON_GetObjectItemCaseSensitive(args, "path");
     content_j = cJSON_GetObjectItemCaseSensitive(args, "content");
+    cJSON *copy_j=cJSON_GetObjectItemCaseSensitive(args,"copy_from");
     if (!path_j || !cJSON_IsString(path_j)) {
         cJSON_Delete(args);
         return tool_result_new(0, "file_write: missing string arg 'path'");
     }
 
-    if (!cJSON_IsString(content_j)) {
+    if(copy_j && (!cJSON_IsString(copy_j)||!copy_j->valuestring[0]||content_j)){
+        cJSON_Delete(args);return tool_result_new(0,"file_write: provide exactly one of content or copy_from");
+    }
+    if (!copy_j && !cJSON_IsString(content_j)) {
         cJSON_Delete(args);
         return tool_result_new(0, "file_write: missing string arg 'content'; pass it as a separate JSON parameter (use an explicit empty string for an empty file)");
     }
-    const char *content = content_j->valuestring;
+    char *copied=NULL;size_t copied_len=0;
+    if(copy_j){
+        cJSON *read_args=cJSON_CreateObject();cJSON_AddStringToObject(read_args,"path",copy_j->valuestring);
+        char *read_json=cJSON_PrintUnformatted(read_args);cJSON_Delete(read_args);
+        int allowed=!ctx||!ctx->policy||policy_check(ctx->policy,"file_read",read_json,NULL)==POLICY_ALLOW;free(read_json);
+        if(!allowed){cJSON_Delete(args);return tool_result_new(0,"file_write: policy denies reading copy_from source");}
+        char *source=resolve_path(ctx,copy_j->valuestring);long long size=source?fs_file_size(source):-1;
+        if(size<0||size>64*1024*1024||fs_is_dir(source)){free(source);cJSON_Delete(args);return tool_result_new(0,"file_write: copy source must be a readable file of at most 64 MiB");}
+        uint64_t version=fs_file_version(source);int more=0;
+        copied=fs_read_file_slice(source,0,(size_t)size+1,&copied_len,&more);
+        int valid=copied && !more && copied_len==(size_t)size && version==fs_file_version(source);
+        free(source);if(!valid){free(copied);cJSON_Delete(args);return tool_result_new(0,"file_write: cannot obtain a stable complete source; destination unchanged");}
+    }
+    const char *content = copied?copied:content_j->valuestring;
 
     /* Models sometimes emit a literal "..." placeholder instead of the real
      * file body (it even overwrote a generated header once). Reject the
      * obvious cases so the loop retries with actual content. */
-    {
+    if(!copy_j) {
         size_t clen = strlen(content);
         int only_dots = clen > 0;
         for (size_t i = 0; i < clen && only_dots; i++)
@@ -411,6 +429,7 @@ static tool_result *file_write_exec(const tool *self, const tool_ctx *ctx, const
 
     rp = resolve_path(ctx, path_j->valuestring);
     /* ensure parent dir */
+    if(!rp){free(copied);cJSON_Delete(args);return tool_result_new(0,"file_write: cannot resolve destination path");}
     slash = strrchr(rp, '/');
 #if defined(_WIN32)
     char *bslash = strrchr(rp, '\\');
@@ -426,12 +445,16 @@ static tool_result *file_write_exec(const tool *self, const tool_ctx *ctx, const
         }
     }
 
-    content_len = strlen(content);
+    content_len = copied?copied_len:strlen(content);
     w = fs_write_file(rp, content, content_len);
+    if(w==0){size_t actual=0;int more=0;char *verify=fs_read_file_slice(rp,0,content_len+1,&actual,&more);
+        if(!verify||more||actual!=content_len||memcmp(verify,content,content_len))w=-1;
+        free(verify);}
+    free(copied);
     cJSON_Delete(args);
     if (w != 0) {
         char msg[1024];
-        snprintf(msg, sizeof(msg), "file_write: failed to write %s", rp);
+        snprintf(msg, sizeof(msg), "file_write: write or exact-byte verification failed for %s", rp);
         free(rp);
         return tool_result_new(0, msg);
     }
@@ -669,8 +692,8 @@ const tool *tool_file_read(void) {
 const tool *tool_file_write(void) {
     static const tool t = {
         "file_write",
-        "Write content to a file (creates parent directories).",
-        "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"format\":\"file-path\"},\"content\":{\"type\":\"string\"}},\"required\":[\"path\",\"content\"]}",
+        "Write literal content, or copy exact source bytes with copy_from (up to 64 MiB), including whitespace and binary data. Provide exactly one of content/copy_from. Verifies destination bytes after writing.",
+        "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"format\":\"file-path\"},\"content\":{\"type\":\"string\"},\"copy_from\":{\"type\":\"string\",\"description\":\"Source file for exact byte copying; do not also send content.\"}},\"required\":[\"path\"]}",
         1,
         file_write_exec,
         NULL,

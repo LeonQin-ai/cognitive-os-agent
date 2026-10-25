@@ -29,6 +29,8 @@ long long fs_file_size(const char *path);
 /* Stable per-file revision fingerprint (size + identity + high-resolution mtime);
  * returns 0 when the file cannot be stat'ed. */
 uint64_t fs_file_version(const char *path);
+/* Exact bounded binary comparison: 1 equal, 0 different, -1 unreadable/over limit. */
+int fs_files_equal(const char *left,const char *right,size_t max_bytes);
 /* Recursively create a directory path. 0 ok, -1 on error. */
 int fs_mkdirs(const char *path);
 /* Remove a file. 0 ok, -1 if missing/error. */

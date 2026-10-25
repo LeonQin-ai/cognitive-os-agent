@@ -649,3 +649,12 @@ The composer permission selector applies to each new chat task: **逐次批准**
 The microphone appends recognized speech to the draft without sending it. Supported browsers use SpeechRecognition, with recording/stop and permission-error states. Windows desktop hosts without that API can use installed Windows System.Speech recognizers for one utterance up to 15 seconds. Microphone access and an installed speech language are required; unsupported systems show an explicit error rather than pretend recognition succeeded. Audio recognition is not a Cognitive OS model API call.
 
 Flow execution now includes node cards showing agent, execution stage, elapsed time, model calls, tools and reported usage. Tool arguments/results remain expandable; missing usage is labeled unavailable. Existing tasks are not restarted by these UI changes.
+
+
+## Exact-byte file delivery
+
+For verbatim duplication, the native model can call `file_write` with `{"path":"proof.txt","copy_from":"marker.txt"}` instead of reconstructing `content` from a displayed read. Supply exactly one of `content` or `copy_from`. The source must be readable and no larger than 64 MiB; policy denies on source reads remain enforced. Copying preserves empty files, LF/CRLF, BOM, Unicode and binary bytes. Every successful built-in file write is read back against the bytes it was given.
+
+When final source/target equality is part of the requested acceptance criteria, the model declares `file_equalities:[{"source":"marker.txt","target":"proof.txt"}]` in `complete_task`. The Runtime compares the actual files, not the answer text or tool success labels. A mismatch prevents DONE and is returned to the model for correction. Previously declared comparisons remain enforced when subsequent model responses omit them or send an empty array; a new user instruction can revise the task requirements. At most 16 comparisons are accepted, each bounded to 64 MiB. Missing, denied, changing or over-limit files fail verification rather than silently pass. Tasks without equality requirements retain their normal completion path.
+
+Task progress exposes `file_equalities_checked` and `file_equalities_verified`; the latter is meaningful when the checked count is positive. `tests/test_copy_fidelity_e2e.py` includes successful writes with wrong content, omitted checks, recovery and byte-boundary cases. `tests/test_live_desktop_access.py --config <private-runtime-config>` runs the same task through the configured API and verifies the final bytes independently.

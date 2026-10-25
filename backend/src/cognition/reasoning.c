@@ -291,6 +291,9 @@ struct reasoning {
     int visual_request_failed; /* avoid silently repeating expensive image requests */
     int planner_response_truncated;
     int planner_native_end_turn;
+    cJSON *file_equalities; /* structured native completion obligations, sticky for this run */
+    int file_checks_failed, file_checks_invalid;
+    char file_check_error[600];
     int planner_output_escalated; /* one bounded 32K -> 64K retry after truncation */
     int completion_review_required; /* legacy review must make an explicit decision */
     char last_model_error[1024];
@@ -510,6 +513,42 @@ static void resolve_failed_tool(reasoning *r, const char *tool_name, const char 
 /* A model may stop probing a guessed, nonessential source path after proving
  * absence. This decision is structured, not inferred from answer wording.
  * It cannot waive writes, commands, existing unread files or unrelated scopes. */
+static void verify_completion_files(reasoning *r,const char *completion_json){
+    cJSON *decision=cJSON_Parse(completion_json?completion_json:"{}");
+    cJSON *checks=cJSON_GetObjectItemCaseSensitive(decision,"file_equalities");
+    if(checks){
+        if(!cJSON_IsArray(checks)||cJSON_GetArraySize(checks)>16)r->file_checks_invalid=1;
+        else{
+            r->file_checks_invalid=0;if(!r->file_equalities)r->file_equalities=cJSON_CreateArray();
+            if(!r->file_equalities){r->file_checks_failed=r->file_checks_invalid=1;snprintf(r->file_check_error,sizeof(r->file_check_error),"Cannot retain file equality obligations.");cJSON_Delete(decision);return;}
+            cJSON *entry;cJSON_ArrayForEach(entry,checks){
+                const char *a=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(entry,"source"));
+                const char *b=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(entry,"target"));
+                if(!a||!*a||!b||!*b||strlen(a)>1800||strlen(b)>1800){r->file_checks_invalid=1;continue;}
+                int found=0;cJSON *old;cJSON_ArrayForEach(old,r->file_equalities){
+                    if(!strcmp(a,cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(old,"source")))&&
+                       !strcmp(b,cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(old,"target"))))found=1;}
+                if(!found){if(cJSON_GetArraySize(r->file_equalities)>=16){r->file_checks_invalid=1;continue;}
+                    cJSON_AddItemToArray(r->file_equalities,cJSON_Duplicate(entry,1));}
+            }
+        }
+    }
+    r->file_checks_failed=r->file_checks_invalid;r->file_check_error[0]=0;
+    if(r->file_checks_invalid)snprintf(r->file_check_error,sizeof(r->file_check_error),"Invalid file_equalities: use up to 16 objects with source and target paths.");
+    cJSON *entry;cJSON_ArrayForEach(entry,r->file_equalities){
+        const char *a=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(entry,"source"));
+        const char *b=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(entry,"target"));
+        int denied=0;const char *paths[]={a,b};
+        for(int i=0;i<2;i++){cJSON *args=cJSON_CreateObject();cJSON_AddStringToObject(args,"path",paths[i]);char *json=cJSON_PrintUnformatted(args);
+            if(r->policy&&policy_check(r->policy,"file_read",json,NULL)!=POLICY_ALLOW)denied=1;
+            free(json);cJSON_Delete(args);}
+        char left[4096],right[4096];path_resolve(left,sizeof(left),r->workspace,a);path_resolve(right,sizeof(right),r->workspace,b);
+        int equal=denied?-1:fs_files_equal(left,right,64*1024*1024);
+        if(equal!=1){r->file_checks_failed=1;snprintf(r->file_check_error,sizeof(r->file_check_error),
+            "Runtime byte equality check failed: %.200s != %.200s (%s). Repair the artifact or report blocked; do not omit the declared check.",a,b,equal==0?"different bytes":"unreadable, denied, changed during verification, or over 64 MiB");break;}
+    }
+    cJSON_Delete(decision);
+}
 static void resolve_optional_missing_reads(reasoning *r, const char *completion_json) {
     cJSON *decision=cJSON_Parse(completion_json?completion_json:"{}");
     const char *status=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(decision,"status"));
@@ -640,6 +679,8 @@ static void progress_emit(reasoning *r, const char *stage) {
     cJSON_AddNumberToObject(o, "llm_calls", r->prog_llm_calls);
     cJSON_AddNumberToObject(o, "model_call", r->prog_llm_calls + (strcmp(stage, "planning") == 0 ? 1 : 0));
     cJSON_AddNumberToObject(o, "model_failures", r->prog_model_failures);
+    cJSON_AddNumberToObject(o,"file_equalities_checked",cJSON_GetArraySize(r->file_equalities));
+    cJSON_AddBoolToObject(o,"file_equalities_verified",r->file_equalities && cJSON_GetArraySize(r->file_equalities)>0 && !r->file_checks_failed);
     long long tin = 0, tout = 0;
     long long reports = 0;
     llm_usage_thread_totals(&tin, &tout, NULL, &reports);
@@ -2054,7 +2095,7 @@ static int h_reason(state_machine *sm, void *ud, const char *input, char **out) 
                                  &raw, &plan_err, r->run_task ? r->run_task->attachments_json : NULL,
                                  &r->planner_response_truncated, output_override, &r->planner_native_end_turn, &diagnostic,
                                  r->completion_review_required,&completion_json);
-    if(rc==0 && completion_json)resolve_optional_missing_reads(r,completion_json);
+    if(rc==0 && completion_json){resolve_optional_missing_reads(r,completion_json);verify_completion_files(r,completion_json);}
     free(completion_json);
     /* Only visible generation/tool arguments can benefit from more output
      * room. An exhausted hidden-only response is not partial deliverable. */
@@ -3006,6 +3047,7 @@ void reasoning_free(reasoning *r) {
     free(r->prev_plan);
     free(r->round_log);
     free(r->obs_log);
+    cJSON_Delete(r->file_equalities);
     attention_free(r->attention);
     state_machine_free(r->sm);
     evaluator_free(r->eval);
@@ -4075,6 +4117,7 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     memset(r->unresolved_failure_errors, 0, sizeof(r->unresolved_failure_errors));
     memset(r->unresolved_discovered_reads, 0, sizeof(r->unresolved_discovered_reads));
     r->unresolved_failed_tool_count = 0;
+    cJSON_Delete(r->file_equalities);r->file_equalities=NULL;r->file_checks_failed=r->file_checks_invalid=0;r->file_check_error[0]=0;
     r->unresolved_failed_tools_overflow = 0;
     r->tool_fail_aborted = 0;
     r->visual_request_failed = 0;
@@ -4119,6 +4162,9 @@ restart_planning:
             if (!updated) { free(messages); st = ST_FAILED; break; }
             snprintf(updated, size, "%s%s%s", prompt, separator, messages);
             free(messages); free(safe_prompt); safe_prompt = updated; prompt = updated;
+            /* Only a trusted user update can revise acceptance obligations;
+             * model retries/empty completion arrays must never erase them. */
+            cJSON_Delete(r->file_equalities);r->file_equalities=NULL;r->file_checks_failed=r->file_checks_invalid=0;r->file_check_error[0]=0;
             r->stall_nudged = r->intent_nudged = 0;
             r->invalid_args_n = 0;
             r->search_seen_n = r->versioned_seen_n = 0;
@@ -4272,6 +4318,11 @@ restart_planning:
             }
             if(r->planner_native_end_turn==2) {
                 unfinished=1;final_text=xstrdup(txt?txt:"");break;
+            }
+            if(r->file_checks_failed){
+                round_log_append(r,r->file_check_error);
+                if(r->round_idx>=r->max_rounds){unfinished=1;final_text=xstrdup(r->file_check_error);break;}
+                continue;
             }
             if ((r->unresolved_failed_tool_count > 0 || r->unresolved_failed_tools_overflow) &&
                 failure_recovery_nudges < 1 && r->round_idx < r->max_rounds) {
@@ -4531,12 +4582,13 @@ restart_planning:
     int cancelled = (r->run_task && r->run_task->cancel_flag) ||
                     (r->abort_parent && r->abort_parent->cancel_flag);
     int timed_out = !cancelled && run_aborted(r);
+    if(!cancelled&&!timed_out&&r->file_equalities)verify_completion_files(r,NULL);
     /* A read-only final round may exhaust the budget without ever reaching
      * the no-plan guard above. It is still incomplete if a write was asked. */
     if (!planner_uses_native_tools(r->llm) && prompt_requires_mutation(completion_instruction(r,prompt)) && !run_has_mutating_action(r))
         unfinished = 1;
     if (stalled || synthesized || fail_aborted || r->tool_fail_aborted ||
-        r->unresolved_failed_tool_count > 0 || r->unresolved_failed_tools_overflow ||
+        r->file_checks_failed || r->unresolved_failed_tool_count > 0 || r->unresolved_failed_tools_overflow ||
         (!planner_uses_native_tools(r->llm) && prompt_requires_full_read(completion_instruction(r,prompt)) &&
          (required_pending_reads(r,completion_instruction(r,prompt)) || r->read_tracking_overflow ||
           answer_reports_required_unread(r,completion_instruction(r,prompt),final_text))))
@@ -4564,6 +4616,7 @@ restart_planning:
     } else if (unfinished) {
         strbuf_append(&out, "任务未完成：尚未完成请求的阅读、操作或验证，当前结果仅为部分进展。");
         int explained=0;
+        if(r->file_checks_failed){strbuf_appendf(&out,"\n原因：%s",r->file_check_error);explained=1;}
         if (output_repeated) {
             strbuf_append(&out,"\n原因：模型单次答复内部出现持续循环，无法作为有效的完成结果。");
             explained=1;

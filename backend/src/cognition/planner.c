@@ -109,6 +109,9 @@ static const char *SYS_NATIVE_HEAD=
     "Do not repeat a successful probe merely to change its format, shell or wrapper, or to verify that observation again. "
     "Additional calls must obtain evidence still required by the request; explicit repeated sampling, unread pages, "
     "and verification of an actual change remain valid reasons to continue. "
+    "For exact file duplication, use file_write(path=destination, copy_from=source) rather than regenerating content "
+    "from a displayed file_read result. Display wrappers are not source bytes. Include file_equalities:[{source,target}] "
+    "in complete_task when byte equality is a requested acceptance criterion; runtime checks actual bytes and will reject mismatches. "
     "Business rules and tool deny policies override user requests; never bypass them through another tool.\n";
 static const char *SYS_NATIVE_TAIL=
     "Use dedicated git and MCP functions for their operations. Only supply schema-defined arguments. "
@@ -705,6 +708,8 @@ static char *native_tool_catalog(const tool_registry *tools, struct policy_engin
         cJSON *optional=cJSON_Parse("{\"type\":\"array\",\"description\":\"Only for absent exploratory file_read paths that are not required deliverables: cite a later successful list_dir of the exact parent to verify absence. Never waive required reads or failed writes/commands.\",\"items\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"reason\":{\"type\":\"string\"},\"evidence_step_id\":{\"type\":\"integer\"}},\"required\":[\"path\",\"reason\",\"evidence_step_id\"]}}");
         if(properties && optional)cJSON_AddItemToObject(properties,"unavailable_optional_reads",optional);
         else cJSON_Delete(optional);
+        cJSON *equalities=cJSON_Parse("{\"type\":\"array\",\"description\":\"Requested exact-byte acceptance checks. Compared by the runtime before task completion; previously declared checks cannot be silently dropped. At most 16, each file at most 64 MiB. Use [] when no equality is required.\",\"maxItems\":16,\"items\":{\"type\":\"object\",\"properties\":{\"source\":{\"type\":\"string\"},\"target\":{\"type\":\"string\"}},\"required\":[\"source\",\"target\"]}}");
+        if(properties&&equalities)cJSON_AddItemToObject(properties,"file_equalities",equalities);else cJSON_Delete(equalities);
         cJSON_AddItemToArray(list,finish);
     }
     char *result=cJSON_GetArraySize(list)?cJSON_PrintUnformatted(list):NULL;cJSON_Delete(list);return result;
