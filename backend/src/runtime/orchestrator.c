@@ -323,7 +323,14 @@ int orchestrate_task(runtime_ctx *ctx, const char *task,int64_t task_id, char **
         free(tasks);
         free(after);
         log_info("orchestrator: no multi-agent plan, running single-agent");
-        return run(ctx, task, answer);
+        struct task *parent=task_id>=0?scheduler_acquire(ctx->scheduler,task_id):NULL;
+        reasoning_config config={0};config.llm=ctx->llm;config.tools=ctx->tools;config.memory=ctx->memory;
+        config.policy=ctx->policy;config.bus=ctx->bus;config.metrics=ctx->metrics;config.trace=ctx->trace;
+        config.workspace=parent && parent->workspace?parent->workspace:ctx->workspace;
+        config.skills=ctx->skills;config.mcp=ctx->mcp;config.state_root=ctx->state_root;
+        config.max_rounds=ctx->config?(int)config_get_int(ctx->config,"reasoning.max_rounds",-1):-1;config.usage_acc=ctx->usage;
+        reasoning *r=reasoning_new(&config);if(r){reasoning_set_task(r,parent);rc=reasoning_run(r,task,answer);reasoning_free(r);}else rc=-1;
+        if(parent)scheduler_release(ctx->scheduler,parent);return rc;
     }
 
     dag = build_dag_json(agents, tasks, after, nsteps);

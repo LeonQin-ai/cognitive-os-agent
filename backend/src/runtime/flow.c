@@ -477,6 +477,7 @@ typedef struct flow_job {
     runtime_ctx *ctx;
     int64_t task_id;
     task *parent;
+    const char *workspace;
     flow_node *nd;
     char task[FLOW_MAX_TASKLEN]; /* after {{ref}} substitution */
     char *out;
@@ -484,7 +485,7 @@ typedef struct flow_job {
 } flow_job;
 
 /* Same isolation rules as the orchestrator's per-agent instances. */
-static reasoning *flow_reasoning_new(runtime_ctx *ctx) {
+static reasoning *flow_reasoning_new(runtime_ctx *ctx,const char *workspace) {
     reasoning_config rc;
     memset(&rc, 0, sizeof(rc));
     rc.llm = ctx->llm;
@@ -494,7 +495,7 @@ static reasoning *flow_reasoning_new(runtime_ctx *ctx) {
     rc.bus = ctx->bus;
     rc.metrics = ctx->metrics;
     rc.trace = ctx->trace;
-    rc.workspace = ctx->workspace;
+    rc.workspace = workspace?workspace:ctx->workspace;
     rc.skills = ctx->skills;
     rc.mcp = ctx->mcp;
     rc.state_root = ctx->state_root;
@@ -510,7 +511,7 @@ static void flow_worker(void *arg) {
     flow_job *j = (flow_job *)arg;
     flow_event(j->ctx, "execute", j->nd->id, j->nd->agent, j->task);
     flow_prog_node_mark(j->task_id, j->nd->id, FP_RUNNING);
-    r = flow_reasoning_new(j->ctx);
+    r = flow_reasoning_new(j->ctx,j->workspace);
     if (r) {
         char *prompt = agent_pool_task_prompt(j->ctx->agents, j->nd->agent, j->task);
         reasoning_set_trace_task_id(r, j->task_id);
@@ -519,7 +520,7 @@ static void flow_worker(void *arg) {
         flow_prog_node_attach(j->task_id, j->nd->id, r);
         j->rc = prompt ? reasoning_run(r, prompt, &j->out) : -1;
         if (j->rc == 0 && !agent_pool_deliverable_valid(j->ctx->agents, j->nd->agent,
-                                                           j->task, j->out, j->ctx->workspace)) {
+                                                           j->task, j->out, j->workspace)) {
             strbuf retry;
             strbuf_init(&retry);
             strbuf_appendf(&retry, "原任务：%s\n尚未交付可验证的 PPTX 文件。"
@@ -530,7 +531,7 @@ static void flow_worker(void *arg) {
             j->rc = retry_prompt ? reasoning_run(r, retry_prompt, &j->out) : -1;
             free(retry_prompt);
             if (j->rc == 0 && !agent_pool_deliverable_valid(j->ctx->agents, j->nd->agent,
-                                                               j->task, j->out, j->ctx->workspace)) {
+                                                               j->task, j->out, j->workspace)) {
                 free(j->out);
                 j->out = xstrdup("PPT 文件未生成，或最终回答未提供可验证的 .pptx 路径。");
                 j->rc = -1;
@@ -742,6 +743,7 @@ int flow_run(runtime_ctx *ctx, const char *dag_json, int64_t task_id, char **ans
                 tasks[i] = xstrdup(d->nodes[i].task);
             jobs[i].ctx = ctx;
             jobs[i].parent = parent;
+            jobs[i].workspace=parent && parent->workspace?parent->workspace:ctx->workspace;
             jobs[i].task_id = task_id;
             jobs[i].nd = &d->nodes[i];
             snprintf(jobs[i].task, FLOW_MAX_TASKLEN, "%s", tasks[i] ? tasks[i] : d->nodes[i].task);

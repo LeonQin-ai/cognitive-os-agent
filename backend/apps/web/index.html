@@ -1033,6 +1033,7 @@ panels.agents = `
   </div>
   <div class="card" id="flow-orchestrate">
     <h2>Flow 自动编排（LLM 生成 DAG）</h2>
+    <label>执行工作区 <select id="flow-workspace" aria-label="Flow 执行工作区" onchange="FLOW_WORKSPACE=this.value;localStorage.setItem('coa.flow-workspace',this.value)"></select></label>
     <div class="hint">输入一个总任务，LLM 自动分解成 Flow DAG（每个子任务分给一个 agent，并行执行）。生成后填入下方编辑器，可修改再执行；「自动执行」则一步完成 分解→执行→LLM 综合答案。需先在上方注册 agent。</div>
     <div id="flow-gen-status" class="muted flow-status-line" role="status" aria-live="polite"></div>
     <div class="row">
@@ -1075,7 +1076,7 @@ panels.agents = `
       <button class="sec sm" onclick="loadFlowTasks()">Refresh</button>
       <button class="sec sm" onclick="flowTasksResumeAll()">全部继续</button>
     </div>
-    <div class="hint">每次 Flow 执行都会记录到 state/flows.json：可继续（以原 DAG 重新提交为新任务）、取消（终止运行中的任务）、修改（名称/输入/DAG，仅非 RUNNING 可改）。重启后未完成任务标记为 INTERRUPTED，可一键继续。</div>
+    <div class="hint">每次 Flow 执行都会记录到 state/flows.json：可继续（手写 Flow 沿用 DAG，自动编排按原任务重新规划）、取消（终止运行中的任务）、修改（名称/输入/DAG，仅非 RUNNING 可改）。重启后未完成任务标记为 INTERRUPTED，可一键继续。</div>
     <div id="flow-tasks">加载中…</div>
   </div>`;
 
@@ -1248,7 +1249,7 @@ panels.flow = `
       <button class="sec sm" onclick="loadFlowTasks()">Refresh</button>
       <button class="sec sm" onclick="flowTasksResumeAll()">全部继续</button>
     </div>
-    <div class="hint">每次 Flow 执行都会记录到 state/flows.json：可继续（以原 DAG 重新提交为新任务）、取消（终止运行中的任务）、修改（名称/输入/DAG，仅非 RUNNING 可改）。重启后未完成任务标记为 INTERRUPTED，可一键继续。</div>
+    <div class="hint">每次 Flow 执行都会记录到 state/flows.json：可继续（手写 Flow 沿用 DAG，自动编排按原任务重新规划）、取消（终止运行中的任务）、修改（名称/输入/DAG，仅非 RUNNING 可改）。重启后未完成任务标记为 INTERRUPTED，可一键继续。</div>
     <div id="flow-tasks">加载中…</div>
   </div>`;
 
@@ -3256,6 +3257,7 @@ function chatRedraw(toBottom = false){
 
 let CHAT_WORKSPACE = localStorage.getItem('coa.workspace') || '';
 let WORKSPACES = [], WORKSPACE_DEFAULT = '';
+let FLOW_WORKSPACE=localStorage.getItem('coa.flow-workspace') || CHAT_WORKSPACE;
 const WORKSPACE_FOLDS = new Map();
 /* Registry insertion order is the creation-order fallback for pre-timestamp entries.
    Re-registering/renaming a workspace must never move it ahead of a newer one. */
@@ -3265,7 +3267,14 @@ async function workspaceLoad(){
   const r=await call('GET','/v1/workspaces');
   if(r.status!==200 || !Array.isArray(r.obj?.workspaces))return;
   WORKSPACES=r.obj.workspaces;WORKSPACE_DEFAULT=r.obj.default_workspace || '';
-  workspaceRender(CHAT_TABS_CACHE);sideRecent(CHAT_TABS_CACHE);
+  workspaceRender(CHAT_TABS_CACHE);flowWorkspaceRender();sideRecent(CHAT_TABS_CACHE);
+}
+function flowWorkspaceRender(){
+  const select=$('flow-workspace');if(!select)return;select.replaceChildren();
+  const seen=new Set();for(const w of [...orderedWorkspaces(),{path:WORKSPACE_DEFAULT}]){
+    if(!w.path || seen.has(w.path))continue;seen.add(w.path);const o=document.createElement('option');o.value=w.path;o.textContent=workspaceLabel(w.path);o.title=w.path;select.append(o);
+  }
+  if(!seen.has(FLOW_WORKSPACE))FLOW_WORKSPACE=WORKSPACE_DEFAULT;select.value=FLOW_WORKSPACE;select.title=FLOW_WORKSPACE;
 }
 function workspaceRender(list){
   const info=(list || []).find(s=>s.id===CHAT_SESSION) || (CHAT_SELECTED_INFO?.id===CHAT_SESSION?CHAT_SELECTED_INFO:null);
@@ -3294,7 +3303,7 @@ async function workspaceAdd(){
   const path=$('workspace-path').value.trim(),name=$('workspace-name').value.trim();
   const r=await call('POST','/v1/workspaces',{path,name});
   if(r.status!==200){$('workspace-error').textContent=r.obj?.error || '保存失败';return;}
-  WORKSPACES=r.obj.workspaces;WORKSPACE_DEFAULT=r.obj.default_workspace;
+  WORKSPACES=r.obj.workspaces;WORKSPACE_DEFAULT=r.obj.default_workspace;flowWorkspaceRender();
   const added=WORKSPACES.find(w=>w.path.replaceAll('\\','/').toLowerCase()===path.replaceAll('\\','/').toLowerCase());
   $('workspace-dialog').close();const previous=CHAT_WORKSPACE;CHAT_WORKSPACE=added?.path || path;sideRecent(CHAT_TABS_CACHE);if(await chatNewSession()===false)CHAT_WORKSPACE=previous;
 }
@@ -3583,11 +3592,13 @@ function sideRecent(list){
     const messages = CHAT_CACHE[id] || [];
     const latest = [...messages].reverse().find(m => m.role === 'bot' && m.progress);
     const active = chatTaskOf(id) !== null || info?.running === true;
-    const stage = latest?.progress?.stage;
+    const persisted=info?.last_run;
+    const usePersisted=persisted && (!latest || latest.taskId==null || Number(persisted.id)>=Number(latest.taskId));
+    const stage = usePersisted ? ({DONE:'completed',FAILED:'failed',CANCELLED:'cancelled',TIMEOUT:'timed_out',INTERRUPTED:'interrupted',RUNNING:'running',QUEUED:'running'})[persisted.status] : latest?.progress?.stage;
     const taskStatus = document.createElement('small'); taskStatus.className = 'recent-task-status';
     taskStatus.setAttribute('role','status');
     taskStatus.dataset.state = active ? 'running' : (stage || 'idle');
-    taskStatus.textContent = active ? '执行中' : stage === 'completed' ? '已完成' :
+    taskStatus.textContent = active || stage === 'running' ? '执行中' : stage === 'completed' ? '已完成' :
       stage === 'failed' ? '失败' : stage === 'timed_out' ? '超时' : stage === 'cancelled' ? '已取消' :
       stage === 'interrupted' ? '已中断' : '空闲';
     taskStatus.style.color = active ? 'var(--accent)' : stage === 'failed' ? 'var(--danger)' : 'var(--muted)';
@@ -4435,13 +4446,14 @@ async function flowAuto(){
   flowStatus('gen-status', '已提交（分解→执行→综合）…');
   FLOW_MIRROR.out = '';
   if(out) out.textContent = '';
-  const c = await call('POST', '/v1/orchestrate', {task});
+  const c = await call('POST', '/v1/orchestrate', {task,workspace:$('flow-workspace')?.value || FLOW_WORKSPACE});
   const id = c.obj && c.obj.id;
   if(id === undefined){
     flowStatus('gen-status', '提交失败: ' + (c.text || ('HTTP ' + c.status)));
     FLOW_BUSY = false;
     return;
   }
+  await loadFlowTasks();
   for(let i = 0; ; i++){
     const r = await call('GET', '/v1/tasks/' + id);
     if(r.status === 404){
@@ -4589,6 +4601,7 @@ async function loadFlowTasks(){
       '<span class="flow-task-title" title="' + esc(x.name || x.input || '') + '">' + esc(x.name || (x.input || '').slice(0, 60) || '(无名称)') + '</span>' +
       '<span class="flow-record-actions">' + resume + cancel + edit + '</span>' +
       '</div>' +
+      (x.workspace ? '<div class="muted" style="font-size:12px;overflow-wrap:anywhere">工作区：'+esc(x.workspace)+'</div>' : '') +
       (x.input ? '<div class="muted" style="font-size:11.5px;margin-top:4px;white-space:pre-wrap">' + esc(x.input).slice(0, 200) + '</div>' : '') +
       '<div class="muted" style="font-size:11px;margin-top:2px">创建: ' + new Date(x.created_ms).toLocaleString() + ' · 更新: ' + new Date(x.updated_ms).toLocaleString() + '</div>' +
       '<div class="flow-record-progress" role="status" aria-live="polite" style="white-space:pre-wrap;overflow-wrap:anywhere;margin-top:6px">' + (tid != null ? '正在读取执行进度…' : '历史执行记录；可点击继续开始新任务。') + '</div>' +
@@ -4676,7 +4689,7 @@ function flowTaskEdit(id){
     if(!x){ toast('记录不存在'); return; }
     box.innerHTML =
       '<textarea id="flow-task-input-' + id + '" style="width:100%;min-height:40px;font-size:12px;margin-top:6px" placeholder="任务描述">' + esc(x.input || '') + '</textarea>' +
-      '<textarea id="flow-task-dag-' + id + '" style="width:100%;min-height:120px;font-family:monospace;font-size:12px;margin-top:4px">' + esc(x.dag || '') + '</textarea>' +
+      (x.automatic ? '<p class="muted">自动编排任务：继续执行时会按任务描述重新生成 DAG。</p>' : '<textarea id="flow-task-dag-' + id + '" style="width:100%;min-height:120px;font-family:monospace;font-size:12px;margin-top:4px">' + esc(x.dag || '') + '</textarea>') +
       '<div class="row" style="margin-top:4px">' +
       '<input id="flow-task-name-' + id + '" type="text" placeholder="名称" style="flex:1;min-width:120px" value="' + esc(x.name || '') + '">' +
       '<button class="sm" onclick="flowTaskSave(' + id + ')">保存</button>' +
@@ -4786,13 +4799,14 @@ async function flowRun(){
   flowStatus('status', '提交中…');
   FLOW_MIRROR.out = '';
   if(out) out.textContent = '';
-  const c = await call('POST', '/v1/flows', dag);
+  const c = await call('POST', '/v1/flows', {flow:dag,input:$('flow-task')?.value || '',workspace:$('flow-workspace')?.value || FLOW_WORKSPACE});
   const id = c.obj && c.obj.id;
   if(id === undefined){
     flowStatus('status', '提交失败: ' + (c.obj && c.obj.error ? c.obj.error : (c.text || ('HTTP ' + c.status))));
     FLOW_BUSY = false;
     return;
   }
+  await loadFlowTasks();
   for(let i = 0; ; i++){
     const r = await call('GET', '/v1/tasks/' + id);
     const t = r.obj;
@@ -5258,7 +5272,7 @@ function switchPanel(p){
   content.innerHTML = panels[p];
   if(p === 'skills' || p === 'plugins') enhanceMarketAdvanced(content);
   load(p);
-  if(p === 'flow' || p === 'agents') flowRestoreState();
+  if(p === 'flow' || p === 'agents'){flowRestoreState();void workspaceLoad();}
   if(window.innerWidth < 900) toggleSidebar(false);
 }
 

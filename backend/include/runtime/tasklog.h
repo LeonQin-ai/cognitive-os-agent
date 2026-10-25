@@ -20,7 +20,7 @@ void tasklog_free(tasklog *tl);
 /* Startup: mark latest nonterminal records INTERRUPTED; compute a safe next ID. */
 int tasklog_recover(tasklog *tl, int64_t *next_id);
 
-/* Append a terminal record (output, trace and spans are capped). `trace_json`
+/* Append a terminal record (output/timeline retained; spans bounded). `trace_json`
  * is the sanitized progress timeline; `spans_json` contains execution timings.
  * Both are serialized only at completion. */
 void tasklog_record(tasklog *tl, int64_t id, const char *status, const char *session, const char *input,
@@ -31,6 +31,8 @@ int tasklog_permission_mode(tasklog *tl,int64_t id);
 
 /* Last `limit` records as a JSON array (caller frees). NULL tl → "[]". */
 char *tasklog_json(tasklog *tl, int limit);
+/* Compact latest status per session; cached after one journal scan. */
+char *tasklog_session_states_json(tasklog *tl);
 
 /* Find the newest record for `id`; sets *status, *session, *input, *output to
  * malloc'd strings when found (any may be NULL). Returns 1 on hit. */

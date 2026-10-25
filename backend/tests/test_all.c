@@ -7499,6 +7499,24 @@ static void test_tasklog(void) {
     CHECK(tasklog_find(tl,123,NULL,NULL,NULL,&output)==1);
     CHECK(output && !strcmp(output,long_answer.buf));
     free(output); strbuf_free(&long_answer);
+    strbuf long_trace;strbuf_init(&long_trace);strbuf_append(&long_trace,"[{\"stage\":\"failed\",\"elapsed_ms\":880000,\"steps\":[");
+    for(int i=0;i<100;i++){
+        if(i)strbuf_append(&long_trace,",");
+        strbuf_append(&long_trace,"{\"tool\":\"file_read\",\"ok\":0,\"target\":\"");
+        for(int k=0;k<800;k++)strbuf_append(&long_trace,"x");
+        strbuf_append(&long_trace,"\"}");
+    }
+    strbuf_append(&long_trace,"]}]");CHECK(long_trace.len>65536);
+    tasklog_record(tl,124,"FAILED","long-failure","inspect","failed evidence",long_trace.buf,NULL);
+    tasklog_free(tl);tl=tasklog_new("state-test/tlog");
+    j=tasklog_json(tl,1);cJSON *records=cJSON_Parse(j),*record=cJSON_GetArrayItem(records,0);
+    cJSON *timeline=cJSON_GetObjectItemCaseSensitive(record,"trace"),*event=cJSON_GetArrayItem(timeline,0);
+    CHECK(cJSON_GetArraySize(timeline)==1);CHECK(cJSON_GetArraySize(cJSON_GetObjectItemCaseSensitive(event,"steps"))==100);
+    free(j);cJSON_Delete(records);strbuf_free(&long_trace);
+    j=tasklog_session_states_json(tl);CHECK(j && strstr(j,"long-failure") && strstr(j,"FAILED"));free(j);
+    tasklog_record(tl,125,"DONE","long-failure","retry","verified",NULL,NULL);
+    j=tasklog_session_states_json(tl);records=cJSON_Parse(j);record=cJSON_GetObjectItemCaseSensitive(records,"long-failure");
+    CHECK_STR(cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(record,"status")),"DONE");free(j);cJSON_Delete(records);
     FILE *old=fopen("state-test/tlog/journal/tasks.jsonl","ab");
     CHECK(old!=NULL);
     if(old){fputs("{\"id\":124,\"status\":\"DONE\",\"output\":\"legacy-\xe4\"}\n",old);fclose(old);}

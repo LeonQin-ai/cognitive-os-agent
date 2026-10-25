@@ -16,11 +16,13 @@ typedef struct flow_store flow_store;
 typedef struct flow_record {
     int64_t id;         /* persistent record id (unique across restarts) */
     int64_t task_id;    /* scheduler task id of the latest run (-1 = none;
-                         * scheduler ids restart from 0 each process, so they
-                         * are NOT unique and never used as record key) */
+                         * legacy scheduler ids could restart from 0, so they
+                         * are never used as the persistent record key) */
     char *name;         /* optional label ("" = none) */
     char *input;        /* original task text ("" = none) */
     char *dag_json;     /* Flow DAG definition (serialized object) */
+    char *workspace;
+    int automatic; /* automatic orchestration re-decomposes input when resumed */
     char *status;       /* RUNNING|DONE|FAILED|CANCELLED|TIMEOUT|INTERRUPTED */
     long long created_ms;
     long long updated_ms;
@@ -38,6 +40,8 @@ int flow_store_init(flow_store *fs, const char *state_root);
  * mirroring; the record itself gets a fresh persistent id. Returns 0 ok,
  * -1 on bad args. */
 int flow_store_add(flow_store *fs, int64_t task_id, const char *name, const char *input, const char *dag_json);
+
+int flow_store_add_ex(flow_store *fs,int64_t task_id,const char *name,const char *input,const char *dag_json,const char *workspace,int automatic);
 
 /* Update the terminal status of a run by SCHEDULER task id (no-op if none). */
 void flow_store_mark(flow_store *fs, int64_t task_id, const char *status);

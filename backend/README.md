@@ -648,6 +648,10 @@ The composer permission selector applies to each new chat task: **逐次批准**
 
 The microphone appends recognized speech to the draft without sending it. Supported browsers use SpeechRecognition, with recording/stop and permission-error states. Windows desktop hosts without that API can use installed Windows System.Speech recognizers for one utterance up to 15 seconds. Microphone access and an installed speech language are required; unsupported systems show an explicit error rather than pretend recognition succeeded. Audio recognition is not a Cognitive OS model API call.
 
+The **执行工作区** selector applies to both automatic orchestration and explicit Flow DAGs. The chosen directory is captured before enqueueing and inherited by every node and artifact check; changing the selector does not move running tasks. New automatic runs also appear immediately in the persisted collaboration list. Continue preserves their directory (automatic runs re-decompose the stored request; explicit flows reuse their DAG). An unavailable saved directory is rejected instead of silently using the default.
+
+Recent conversations restore their latest task status from the journal after a restart, without relying on browser storage. The already bounded execution timeline is retained even when it exceeds 64 KB, so long failed runs no longer lose all their execution details during persistence.
+
 Flow execution now includes node cards showing agent, execution stage, elapsed time, model calls, tools and reported usage. Tool arguments/results remain expandable; missing usage is labeled unavailable. Existing tasks are not restarted by these UI changes.
 
 

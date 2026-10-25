@@ -720,6 +720,11 @@ static int h_chat_sessions(const http_request *req, http_response *resp, void *u
             cJSON_AddStringToObject(row,"workspace",path?path:base?base:".");free(base);
         }
         cJSON_Delete(registry);mutex_unlock(&ctx->workspace_lock);
+        char *states_text=tasklog_session_states_json(ctx->tasklog);cJSON *states=states_text?cJSON_Parse(states_text):NULL;free(states_text);
+        cJSON_ArrayForEach(row,rows){const char *sid=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(row,"id"));
+            cJSON *latest=cJSON_GetObjectItemCaseSensitive(states,sid?sid:"default");
+            if(latest)cJSON_AddItemToObject(row,"last_run",cJSON_Duplicate(latest,1));}
+        cJSON_Delete(states);
         char *rendered=page?cJSON_PrintUnformatted(page):NULL;
         http_resp_append(resp, rendered?rendered:js?js:"[]");free(rendered);cJSON_Delete(page);
         free(js);
@@ -866,6 +871,19 @@ static int h_chat_session_post(const http_request *req, http_response *resp, voi
  * decomposed across registered agents (blackboard + merge), executed async via
  * the scheduler. Poll /v1/tasks/<id> for the final answer; live progress comes
  * over WebSocket (source "orchestrator"); steps land on the blackboard "orch/". */
+/* A very fast task can finish between enqueue and registration. Mirror its
+ * terminal state after adding the durable record as well as in task_done. */
+static void flow_record_run(runtime_ctx *ctx,int64_t id,const char *name,const char *input,const char *dag,const char *workspace,int automatic){
+    if(!ctx->flowstore)return;
+    flow_store_add_ex(ctx->flowstore,id,name,input,dag,workspace,automatic);
+    task *t=scheduler_acquire(ctx->scheduler,id);
+    if(t){
+        if(t->status!=TS_RUNNING && t->status!=TS_QUEUED){
+            flow_store_mark(ctx->flowstore,id,t->status==TS_DONE?"DONE":t->status==TS_CANCELLED?"CANCELLED":t->status==TS_TIMEOUT?"TIMEOUT":"FAILED");
+        }
+        scheduler_release(ctx->scheduler,t);
+    }
+}
 static int h_orchestrate(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
     char *b;
@@ -901,8 +919,11 @@ static int h_orchestrate(const http_request *req, http_response *resp, void *ud)
         return 0;
     }
     /* userdata = marker so the task runner routes to orchestrate */
-    id = scheduler_submit(ctx->scheduler, 0, safe_task, (void *)1, 0);
-    free(safe_task);
+    char *directory=workspace_pick(ctx,root,NULL);
+    if(!directory){free(safe_task);cJSON_Delete(root);resp->status=400;http_resp_json(resp,"{\"error\":\"workspace must be registered and available\"}");return 0;}
+    id = scheduler_submit_access(ctx->scheduler,0,safe_task,(void *)1,0,"flow",0,NULL,directory,0,0);
+    if(id>=0){workspace_bind(ctx,NULL,directory,id);flow_record_run(ctx,id,"",safe_task,"{}",directory,1);}
+    free(directory);free(safe_task);
     cJSON_Delete(root);
     if (id < 0) {
         scheduler_submit_error(resp, id);
@@ -960,34 +981,37 @@ static int h_flow_run(const http_request *req, http_response *resp, void *ud) {
         return 0;
     }
 
+    char *directory=workspace_pick(ctx,root,NULL);
     dag_json = cJSON_PrintUnformatted(dag);
     cJSON_Delete(root);
+    if(!directory){free(dag_json);resp->status=400;http_resp_json(resp,"{\"error\":\"workspace must be registered and available\"}");return 0;}
     if (!dag_json) {
         resp->status = 500;
-        http_resp_json(resp, "{\"error\":\"serialize failed\"}");
+        http_resp_json(resp, "{\"error\":\"serialize failed\"}");free(directory);
         return 0;
     }
 
     if (flow_validate(dag_json, &verr) != 0) {
         http_resp_appendf(resp, "{\"error\":\"invalid flow: %s\"}", verr ? verr : "unknown");
         free(verr);
-        free(dag_json);
+        free(dag_json);free(directory);
         resp->status = 400;
         return 0;
     }
 
     free(verr);
     /* userdata marker 2 routes the task runner to flow_run */
-    id = scheduler_submit(ctx->scheduler, 0, dag_json, (void *)2, 0);
+    id = scheduler_submit_access(ctx->scheduler,0,dag_json,(void *)2,0,"flow",0,NULL,directory,0,0);
     if (id < 0) {
-        free(dag_json);
+        free(dag_json);free(directory);
         scheduler_submit_error(resp, id);
         return 0;
     }
     /* persist the collaboration task so it can be listed/继续/取消/修改,
      * and survives restarts (RUNNING → INTERRUPTED on load) */
-    if (ctx->flowstore)
-        flow_store_add(ctx->flowstore, id, name_buf, input_buf, dag_json);
+    workspace_bind(ctx,NULL,directory,id);
+    flow_record_run(ctx,id,name_buf,input_buf,dag_json,directory,0);
+    free(directory);
     free(dag_json);
 
     http_resp_appendf(resp, "{\"id\":%lld,\"status\":\"queued\"}", (long long)id);
@@ -1097,7 +1121,7 @@ static int h_flow_resume(const http_request *req, http_response *resp, void *ud)
     }
     char *dag_json = xstrdup(rec->dag_json);
     char *verr = NULL;
-    if (flow_validate(dag_json, &verr) != 0) {
+    if (!rec->automatic && flow_validate(dag_json, &verr) != 0) {
         http_resp_appendf(resp, "{\"error\":\"stored flow no longer valid: %s\"}", verr ? verr : "unknown");
         free(verr);
         free(dag_json);
@@ -1105,14 +1129,19 @@ static int h_flow_resume(const http_request *req, http_response *resp, void *ud)
         return 0;
     }
     free(verr);
-    id = scheduler_submit(ctx->scheduler, 0, dag_json, (void *)2, 0);
+    cJSON *selection=cJSON_CreateObject();if(rec->workspace && *rec->workspace)cJSON_AddStringToObject(selection,"workspace",rec->workspace);
+    char *directory=workspace_pick(ctx,selection,NULL);cJSON_Delete(selection);
+    if(!directory){free(dag_json);resp->status=400;http_resp_json(resp,"{\"error\":\"saved workspace is unavailable\"}");return 0;}
+    int automatic=rec->automatic;
+    char *name=xstrdup(rec->name),*input=xstrdup(rec->input);
+    id = scheduler_submit_access(ctx->scheduler,0,automatic?input:dag_json,automatic?(void *)1:(void *)2,0,"flow",0,NULL,directory,0,0);
     if (id < 0) {
         free(dag_json);
-        scheduler_submit_error(resp, id);
+        free(directory);free(name);free(input);scheduler_submit_error(resp, id);
         return 0;
     }
-    if (ctx->flowstore)
-        flow_store_add(ctx->flowstore, id, rec->name, rec->input, dag_json);
+    workspace_bind(ctx,NULL,directory,id);flow_record_run(ctx,id,name,input,dag_json,directory,automatic);
+    free(directory);free(name);free(input);
     free(dag_json);
     http_resp_appendf(resp, "{\"ok\":true,\"id\":%lld,\"resumed_from\":%lld}", (long long)id, (long long)old_id);
     return 0;

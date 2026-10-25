@@ -23,6 +23,7 @@ static void rec_clear(flow_record *r) {
     free(r->name);
     free(r->input);
     free(r->dag_json);
+    free(r->workspace);
     free(r->status);
     memset(r, 0, sizeof(*r));
 }
@@ -49,6 +50,8 @@ static void save_locked(flow_store *fs) {
         cJSON_AddStringToObject(o, "name", r->name ? r->name : "");
         cJSON_AddStringToObject(o, "input", r->input ? r->input : "");
         cJSON_AddStringToObject(o, "dag", r->dag_json ? r->dag_json : "");
+        cJSON_AddStringToObject(o,"workspace",r->workspace?r->workspace:"");
+        cJSON_AddBoolToObject(o,"automatic",r->automatic);
         cJSON_AddStringToObject(o, "status", r->status ? r->status : "?");
         cJSON_AddNumberToObject(o, "created_ms", (double)r->created_ms);
         cJSON_AddNumberToObject(o, "updated_ms", (double)r->updated_ms);
@@ -132,6 +135,9 @@ int flow_store_init(flow_store *fs, const char *state_root) {
         r.name = xstrdup(cJSON_IsString(jname) && jname->valuestring ? jname->valuestring : "");
         r.input = xstrdup(cJSON_IsString(jinput) && jinput->valuestring ? jinput->valuestring : "");
         r.dag_json = xstrdup(cJSON_IsString(jdag) && jdag->valuestring ? jdag->valuestring : "");
+        const char *workspace=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(it,"workspace"));
+        r.workspace=xstrdup(workspace?workspace:"");
+        r.automatic=cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(it,"automatic"));
         r.created_ms = cJSON_IsNumber(jcreated) ? (long long)jcreated->valuedouble : 0;
         r.updated_ms = cJSON_IsNumber(jupdated) ? (long long)jupdated->valuedouble : 0;
         /* a record still RUNNING when the process died never finished */
@@ -164,7 +170,10 @@ int flow_store_init(flow_store *fs, const char *state_root) {
     return restored;
 }
 
-int flow_store_add(flow_store *fs, int64_t task_id, const char *name, const char *input, const char *dag_json) {
+int flow_store_add(flow_store *fs,int64_t task_id,const char *name,const char *input,const char *dag_json){
+    return flow_store_add_ex(fs,task_id,name,input,dag_json,NULL,0);
+}
+int flow_store_add_ex(flow_store *fs,int64_t task_id,const char *name,const char *input,const char *dag_json,const char *workspace,int automatic){
     if (!fs || task_id < 0 || !dag_json || !*dag_json)
         return -1;
     mutex_lock(&fs->mtx);
@@ -185,6 +194,7 @@ int flow_store_add(flow_store *fs, int64_t task_id, const char *name, const char
     r->name = xstrdup(name ? name : "");
     r->input = xstrdup(input ? input : "");
     r->dag_json = xstrdup(dag_json);
+    r->workspace=xstrdup(workspace?workspace:"");r->automatic=automatic;
     r->status = xstrdup("RUNNING");
     r->created_ms = r->updated_ms = time_now_ms();
     save_locked(fs);
@@ -300,6 +310,8 @@ char *flow_store_json(flow_store *fs) {
         cJSON_AddStringToObject(o, "name", r->name ? r->name : "");
         cJSON_AddStringToObject(o, "input", r->input ? r->input : "");
         cJSON_AddStringToObject(o, "dag", r->dag_json ? r->dag_json : "");
+        cJSON_AddStringToObject(o,"workspace",r->workspace?r->workspace:"");
+        cJSON_AddBoolToObject(o,"automatic",r->automatic);
         cJSON_AddStringToObject(o, "status", r->status ? r->status : "?");
         cJSON_AddNumberToObject(o, "created_ms", (double)r->created_ms);
         cJSON_AddNumberToObject(o, "updated_ms", (double)r->updated_ms);

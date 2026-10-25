@@ -10,14 +10,19 @@
 #include <time.h>
 #include "cJSON.h"
 
-#define TASKLOG_TRACE_CAP 65536 /* bounded terminal execution timeline */
 #define TASKLOG_SPANS_CAP 65536 /* newest spans for one terminal task */
 
 struct tasklog {
     mutex_t mtx;
+    cJSON *session_states; /* initialized lazily; updated on append */
     char path[600]; /* <state_root>/tasks.jsonl */
 };
 
+static void session_state_set(tasklog *tl,int64_t id,const char *session,const char *status){
+    const char *key=session && *session?session:"default";
+    cJSON *o=cJSON_CreateObject();cJSON_AddNumberToObject(o,"id",(double)id);cJSON_AddStringToObject(o,"status",status?status:"?");
+    cJSON_DeleteItemFromObjectCaseSensitive(tl->session_states,key);cJSON_AddItemToObject(tl->session_states,key,o);
+}
 static void tasklog_path(char *out, size_t n, const char *state_root) {
     char dir[600];
 
@@ -39,6 +44,7 @@ tasklog *tasklog_new(const char *state_root) {
 void tasklog_free(tasklog *tl) {
     if (!tl)
         return;
+    cJSON_Delete(tl->session_states);
     mutex_destroy(&tl->mtx);
     free(tl);
 }
@@ -72,7 +78,9 @@ void tasklog_record_access(tasklog *tl,int64_t id,const char *status,const char 
         cJSON_AddStringToObject(o, "output", safe ? safe : "");
         free(safe);
     }
-    if (trace_json && *trace_json && strlen(trace_json) <= TASKLOG_TRACE_CAP) {
+    /* task_trace_add already bounds the timeline to 128 events. A byte cap
+     * here discarded the entire failed execution record for long tasks. */
+    if (trace_json && *trace_json) {
         cJSON *trace = cJSON_Parse(trace_json);
         if (trace && cJSON_IsArray(trace))
             cJSON_AddItemToObject(o, "trace", trace);
@@ -104,6 +112,7 @@ void tasklog_record_access(tasklog *tl,int64_t id,const char *status,const char 
         fputs(line, f);
         fputc('\n', f);
         fclose(f);
+        if(tl->session_states)session_state_set(tl,id,session,status);
     }
     mutex_unlock(&tl->mtx);
     free(line);
@@ -162,6 +171,17 @@ char *tasklog_json(tasklog *tl, int limit) {
     s = cJSON_PrintUnformatted(arr);
     cJSON_Delete(arr);
     return s ? s : xstrdup("[]");
+}
+
+char *tasklog_session_states_json(tasklog *tl){
+    if(!tl)return xstrdup("{}");mutex_lock(&tl->mtx);
+    if(!tl->session_states){
+        tl->session_states=cJSON_CreateObject();cJSON *records=journal_parse(tl->path,0,INT64_MIN),*it;
+        cJSON_ArrayForEach(it,records){cJSON *id=cJSON_GetObjectItemCaseSensitive(it,"id");
+            if(cJSON_IsNumber(id))session_state_set(tl,(int64_t)id->valuedouble,cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(it,"session")),cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(it,"status")));}
+        cJSON_Delete(records);
+    }
+    char *text=cJSON_PrintUnformatted(tl->session_states);mutex_unlock(&tl->mtx);return text;
 }
 
 int tasklog_permission_mode(tasklog *tl,int64_t id){
