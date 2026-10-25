@@ -15,7 +15,9 @@
 
 #include <windows.h>
 #include <winhttp.h>
+#ifdef _MSC_VER
 #pragma comment(lib, "winhttp.lib")
+#endif
 
 static void record_winhttp_error(const char *stage, DWORD code) {
     char message[160];
