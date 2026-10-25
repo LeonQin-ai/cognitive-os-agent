@@ -3257,6 +3257,9 @@ function chatRedraw(toBottom = false){
 let CHAT_WORKSPACE = localStorage.getItem('coa.workspace') || '';
 let WORKSPACES = [], WORKSPACE_DEFAULT = '';
 const WORKSPACE_FOLDS = new Map();
+/* Registry insertion order is the creation-order fallback for pre-timestamp entries.
+   Re-registering/renaming a workspace must never move it ahead of a newer one. */
+function orderedWorkspaces(){return WORKSPACES.map((w,i)=>({w,i})).sort((a,b)=>(Number(b.w.created_ms)||0)-(Number(a.w.created_ms)||0)||b.i-a.i).map(x=>x.w);}
 function workspaceLabel(path){return WORKSPACES.find(w=>w.path===path)?.name?.trim() || path?.replace(/[\\/]+$/,'').split(/[\\/]/).pop() || path || '默认工作区';}
 async function workspaceLoad(){
   const r=await call('GET','/v1/workspaces');
@@ -3269,7 +3272,7 @@ function workspaceRender(list){
   if(info?.workspace)CHAT_WORKSPACE=info.workspace;
   if(!CHAT_WORKSPACE)CHAT_WORKSPACE=WORKSPACE_DEFAULT;
   const select=$('chat-workspace');if(!select)return;select.replaceChildren();
-  const entries=[{path:WORKSPACE_DEFAULT,name:workspaceLabel(WORKSPACE_DEFAULT)},...WORKSPACES];
+  const entries=[{path:WORKSPACE_DEFAULT,name:workspaceLabel(WORKSPACE_DEFAULT)},...orderedWorkspaces()];
   if(CHAT_WORKSPACE && !entries.some(w=>w.path===CHAT_WORKSPACE))entries.push({path:CHAT_WORKSPACE,name:CHAT_WORKSPACE.split(/[\\/]/).pop()});
   const seen=new Set();entries.forEach(w=>{if(!w.path || seen.has(w.path))return;seen.add(w.path);const o=document.createElement('option');o.value=w.path;o.textContent=w.name || w.path;o.title=w.path;select.append(o);});
   select.value=CHAT_WORKSPACE;select.title=CHAT_WORKSPACE || '执行工作区';
@@ -3550,7 +3553,7 @@ function sideRecent(list){
     create.onclick=async e=>{e.preventDefault();e.stopPropagation();CHAT_WORKSPACE=path;await chatNewSession();if(current!=='chat')switchPanel('chat');};
     summary.append(create);details.append(summary);box.append(details);groups.set(path,details);return details;
   }
-  WORKSPACES.forEach(w=>group(w.path));
+  orderedWorkspaces().forEach(w=>group(w.path));
   /* The API list preserves session creation order. Recent must reflect
    * activity, including conversations revisited after a newer one was made. */
   const ordered = [...list].sort((a,b) => {

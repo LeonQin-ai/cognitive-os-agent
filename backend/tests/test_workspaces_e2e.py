@@ -39,6 +39,10 @@ try:
         try:
             for path in (a,b):req('/v1/workspaces',{'path':str(path)})
             assert len(req('/v1/workspaces')['workspaces'])==2
+            original=req('/v1/workspaces')['workspaces']
+            assert all(w['created_ms']>0 for w in original)
+            req('/v1/workspaces',{'path':str(a),'name':'renamed'})
+            assert req('/v1/workspaces')['workspaces'][0]['created_ms']==original[0]['created_ms'],'rename preserves creation time'
             for path in (base/'missing',base/'marker-file'):
                 try:req('/v1/workspaces',{'path':str(path)});raise AssertionError('invalid path accepted')
                 except urllib.error.HTTPError as error:assert error.code==400
@@ -67,8 +71,13 @@ try:
         finally:release.set();p.terminate();p.wait(timeout=5)
         port=new_port();p=start()
         try:
+            assert req('/v1/workspaces')['workspaces']==[{**original[0],'name':'renamed'},original[1]],'creation metadata survives restart'
             assert next(s for s in req('/v1/chat/sessions') if s['id']==sa)['title']=='自定义标题 <safe>'
             assert len(req('/v1/workspaces')['workspaces'])==2
+            original=req('/v1/workspaces')['workspaces']
+            assert all(w['created_ms']>0 for w in original)
+            req('/v1/workspaces',{'path':str(a),'name':'renamed'})
+            assert req('/v1/workspaces')['workspaces'][0]['created_ms']==original[0]['created_ms'],'rename preserves creation time'
             sessions=req('/v1/chat/sessions');assert Path(next(s for s in sessions if s['id']==sa)['workspace'])==b
             client=subprocess.run([str(build/('cognitive-os-agent.exe' if os.name=='nt' else 'cognitive-os-agent')),
                 'chat','--no-stream','--connect',f'http://127.0.0.1:{port}','--session',sa,'-p','Report the workspace verification result'],

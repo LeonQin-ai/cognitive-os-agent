@@ -4,13 +4,13 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
  const browser=await chromium.launch({headless:true,channel:process.env.UI_TEST_BROWSER||'msedge'});
  try{
   const page=await browser.newPage({viewport:{width:1280,height:900}}),errors=[],sessions=[],created=[];
-  const workspaces=[{path:'D:/项目 A',name:'项目 A'},{path:'D:/project B',name:'project B'}];
+  const workspaces=[{path:'D:/项目 A',name:'项目 A',created_ms:100},{path:'D:/project B',name:'project B',created_ms:200}];
   page.on('pageerror',e=>errors.push(e.message));
   await page.route('http://ui.test/**',async route=>{
    const r=route.request(),u=new URL(r.url());let obj=[],status=200;
    if(u.pathname==='/')return route.fulfill({contentType:'text/html',body:fs.readFileSync(path.join(__dirname,'../apps/web/index.html'),'utf8')});
    if(u.pathname==='/v1/workspaces'){
-    if(r.method()==='POST'){const b=r.postDataJSON();if(b.path==='missing'){status=400;obj={error:'directory unavailable'};}else workspaces.push({path:b.path,name:b.name});}
+    if(r.method()==='POST'){const b=r.postDataJSON();if(b.path==='missing'){status=400;obj={error:'directory unavailable'};}else workspaces.push({path:b.path,name:b.name,created_ms:300});}
     if(status===200)obj={default_workspace:'D:/default',workspaces};
    }else if(u.pathname==='/v1/chat/sessions'){
     if(r.method()==='POST'){const b=r.postDataJSON();obj={id:'session-'+(sessions.length+1),workspace:b.workspace||'D:/default',turns:0};sessions.push(obj);created.push(b);}else obj=sessions;
@@ -23,6 +23,9 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
   await page.goto('http://ui.test/');
   await page.waitForFunction(()=>CHAT_NEW_SESSION_REQUEST===null&&CHAT_SESSION!=='default');
   await page.waitForFunction(()=>WORKSPACES.length===2);
+  assert.deepEqual(await page.locator('.workspace-group').evaluateAll(es=>es.slice(0,2).map(e=>e.dataset.path)),['D:/project B','D:/项目 A'],'newest workspace first');
+  await page.evaluate(()=>{WORKSPACES.forEach(w=>delete w.created_ms);sideRecent(CHAT_TABS_CACHE);});
+  assert.deepEqual(await page.locator('.workspace-group').evaluateAll(es=>es.slice(0,2).map(e=>e.dataset.path)),['D:/project B','D:/项目 A'],'legacy registry uses reverse insertion order');
   await page.locator('#chat-workspace').selectOption('D:/项目 A');
   await page.waitForFunction(()=>CHAT_WORKSPACE==='D:/项目 A');
   await page.locator('#nav-newchat').click();
@@ -39,6 +42,7 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
   await page.locator('#workspace-dialog button[type=submit]').click();
   await page.waitForFunction(()=>CHAT_WORKSPACE==='D:/new folder');
   assert.equal(await page.locator('#chat-workspace option:checked').textContent(),'<project>','names render as text');
+  assert.equal(await page.locator('.workspace-group').first().getAttribute('data-path'),'D:/new folder','newly added workspace goes first');
   assert.equal(created.length,3,'adding workspace creates an independent chat');
   assert.equal(sessions[1].workspace,'D:/项目 A','adding workspace must not move the old chat');
   const header=page.locator('.workspace-group[data-path="D:/new folder"] > summary');

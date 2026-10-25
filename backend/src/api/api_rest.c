@@ -253,7 +253,7 @@ static int h_workspaces(const http_request *req,http_response *resp,void *ud) {
     cJSON *items=cJSON_GetObjectItemCaseSensitive(o,"workspaces");
     if(!strcmp(req->method,"POST")) {
         cJSON *existing=NULL,*entry;cJSON_ArrayForEach(entry,items){const char *p=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(entry,"path"));if(p && !strcmp(p,path))existing=entry;}
-        if(!existing){existing=cJSON_CreateObject();cJSON_AddStringToObject(existing,"path",path);cJSON_AddItemToArray(items,existing);}
+        if(!existing){existing=cJSON_CreateObject();cJSON_AddStringToObject(existing,"path",path);cJSON_AddNumberToObject(existing,"created_ms",(double)time_now_ms());cJSON_AddItemToArray(items,existing);}
         const char *name=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(body,"name"));
         const char *tail=strrchr(path,'/');if(!tail)tail=strrchr(path,'\\');
         workspace_put(existing,"name",name && *name?name:tail && tail[1]?tail+1:path);
