@@ -60,6 +60,7 @@ try:
             failed=execute('wrong-content','mismatch',b'correct')
             assert failed['status']=='FAILED' and 'equality check failed' in failed['output'],failed
             assert all(s['ok']==1 for s in failed['steps']),failed # successful tools are not proof of requested equality
+            assert failed['llm_calls']<=4,failed # no paid completion-only spin without new tool evidence
             fixed=execute('corrected-content','repair',b'correct\r\n')
             assert fixed['status']=='DONE' and (work/'target.bin').read_bytes()==b'correct\r\n',fixed
             assert any(json.loads(s['args']).get('copy_from')=='source.bin' for s in fixed['steps'])

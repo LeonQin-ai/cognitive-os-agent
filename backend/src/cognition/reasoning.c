@@ -293,6 +293,7 @@ struct reasoning {
     int planner_native_end_turn;
     cJSON *file_equalities; /* structured native completion obligations, sticky for this run */
     int file_checks_failed, file_checks_invalid, file_checks_running;
+    int file_check_rejections, file_check_at_tools;
     char file_check_error[600];
     int planner_output_escalated; /* one bounded 32K -> 64K retry after truncation */
     int completion_review_required; /* legacy review must make an explicit decision */
@@ -568,6 +569,7 @@ static void verify_completion_files(reasoning *r,const char *completion_json){
         if(equal!=1){r->file_checks_failed=1;snprintf(r->file_check_error,sizeof(r->file_check_error),
             "Runtime byte equality check failed: %.200s != %.200s (%s). Repair the artifact or report blocked; do not omit the declared check.",a,b,equal==0?"different bytes":"unreadable, denied, changed during verification, or over 64 MiB");break;}
     }
+    if(!r->file_checks_failed)r->file_check_rejections=0;
     r->file_checks_running=0;cJSON_Delete(decision);
 }
 static void resolve_optional_missing_reads(reasoning *r, const char *completion_json) {
@@ -4141,6 +4143,7 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     memset(r->unresolved_failure_errors, 0, sizeof(r->unresolved_failure_errors));
     memset(r->unresolved_discovered_reads, 0, sizeof(r->unresolved_discovered_reads));
     r->unresolved_failed_tool_count = 0;
+    r->file_check_rejections=r->file_check_at_tools=0;
     cJSON_Delete(r->file_equalities);r->file_equalities=NULL;r->file_checks_failed=r->file_checks_invalid=0;r->file_check_error[0]=0;
     r->unresolved_failed_tools_overflow = 0;
     r->tool_fail_aborted = 0;
@@ -4344,8 +4347,10 @@ restart_planning:
                 unfinished=1;final_text=xstrdup(txt?txt:"");break;
             }
             if(r->file_checks_failed){
+                r->file_check_rejections=r->file_check_at_tools==r->prog_tool_calls?r->file_check_rejections+1:1;
+                r->file_check_at_tools=r->prog_tool_calls;
                 round_log_append(r,r->file_check_error);
-                if(r->round_idx>=r->max_rounds){unfinished=1;final_text=xstrdup(r->file_check_error);break;}
+                if(r->file_check_rejections>=3||r->round_idx>=r->max_rounds){unfinished=1;final_text=xstrdup(r->file_check_error);break;}
                 continue;
             }
             if ((r->unresolved_failed_tool_count > 0 || r->unresolved_failed_tools_overflow) &&
