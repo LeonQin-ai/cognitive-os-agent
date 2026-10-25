@@ -539,17 +539,19 @@
 .pillbar .pill-ic{grid-column:1;grid-row:2;font-size:26px}
 .composer-policy{grid-column:2;grid-row:2;color:#ed6b20;font-size:13px;white-space:nowrap}
 .pillbar #chat-model{grid-column:3;grid-row:2;justify-self:end;width:min(260px,100%);min-width:0;border:0;background:transparent;font-size:13px;padding:7px}
+.pillbar .thinking-toggle.on{color:#6d28d9;background:var(--accent-soft);box-shadow:none}
 .pillbar .thinking-toggle{grid-column:4;grid-row:2;border:0;background:transparent;padding:0 3px;font-weight:400}
 .composer-mic{grid-column:5;grid-row:2;border:0;background:none;color:var(--fg);font-size:23px;padding:5px}
 .pillbar #chat-send,.pillbar #chat-cancel{grid-column:6;grid-row:2;width:42px;height:42px;padding:0!important;border:0;border-radius:50%;background:#8953ef;color:white}
 #chat-resume{grid-column:1/-1;grid-row:3;justify-self:end}
 #chat-workspace{max-width:min(360px,45vw);font-size:12px;height:32px}
 .workspace-group{margin:8px 0}.workspace-group>summary{display:flex;align-items:center;gap:7px;cursor:pointer;padding:8px;color:var(--muted);font-size:13px;list-style:none}
-.workspace-group>summary span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}.workspace-group>summary button{background:none;border:0;color:inherit;padding:2px 5px}
+.workspace-group>summary span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}#side-recent .workspace-group>summary button{flex:0 0 auto;width:auto;margin:0;background:none;border:0;color:inherit;padding:2px 5px}
 .workspace-group .side-recent-row{margin-left:12px}.workspace-group[open]>summary{color:var(--fg)}
 #workspace-dialog{max-width:min(540px,92vw);width:100%;padding:24px;border:1px solid var(--border);border-radius:18px;background:var(--card);color:var(--fg)}
 #workspace-dialog input{width:100%;margin:7px 0 15px}#workspace-dialog::backdrop{background:#0006}
-@media(max-width:640px){.pillbar{grid-template-columns:auto minmax(0,1fr) auto auto auto!important;gap:4px;padding:12px!important}.composer-policy{display:block;grid-column:1/-1;grid-row:3;max-width:100%;justify-self:start}.pillbar #chat-model{grid-column:2}.pillbar .thinking-toggle{grid-column:3}.composer-mic{grid-column:4}.pillbar #chat-send,.pillbar #chat-cancel{grid-column:5}#chat-workspace{max-width:55vw}}
+@media(max-width:640px){.pillbar{grid-template-columns:auto minmax(0,1fr) auto auto auto!important;gap:4px;padding:12px!important}.composer-policy{display:block;grid-column:1/-1;grid-row:3;max-width:100%;justify-self:start}.pillbar #chat-model{grid-column:2}.pillbar .thinking-toggle.on{color:#6d28d9;background:var(--accent-soft);box-shadow:none}
+.pillbar .thinking-toggle{grid-column:3}.composer-mic{grid-column:4}.pillbar #chat-send,.pillbar #chat-cancel{grid-column:5}#chat-workspace{max-width:55vw}}
 .content.chat-content{display:flex;flex-direction:column;min-height:0;overflow-y:hidden}
 .chat-content .chat-wrap{min-height:0;flex:1;overflow:hidden}
 .chat-content #chat-hero{min-height:0}
@@ -3255,6 +3257,7 @@ function chatRedraw(toBottom = false){
 let CHAT_WORKSPACE = localStorage.getItem('coa.workspace') || '';
 let WORKSPACES = [], WORKSPACE_DEFAULT = '';
 const WORKSPACE_FOLDS = new Map();
+function workspaceLabel(path){return WORKSPACES.find(w=>w.path===path)?.name?.trim() || path?.replace(/[\\/]+$/,'').split(/[\\/]/).pop() || path || '默认工作区';}
 async function workspaceLoad(){
   const r=await call('GET','/v1/workspaces');
   if(r.status!==200 || !Array.isArray(r.obj?.workspaces))return;
@@ -3266,7 +3269,7 @@ function workspaceRender(list){
   if(info?.workspace)CHAT_WORKSPACE=info.workspace;
   if(!CHAT_WORKSPACE)CHAT_WORKSPACE=WORKSPACE_DEFAULT;
   const select=$('chat-workspace');if(!select)return;select.replaceChildren();
-  const entries=[{path:WORKSPACE_DEFAULT,name:'默认工作区'},...WORKSPACES];
+  const entries=[{path:WORKSPACE_DEFAULT,name:workspaceLabel(WORKSPACE_DEFAULT)},...WORKSPACES];
   if(CHAT_WORKSPACE && !entries.some(w=>w.path===CHAT_WORKSPACE))entries.push({path:CHAT_WORKSPACE,name:CHAT_WORKSPACE.split(/[\\/]/).pop()});
   const seen=new Set();entries.forEach(w=>{if(!w.path || seen.has(w.path))return;seen.add(w.path);const o=document.createElement('option');o.value=w.path;o.textContent=w.name || w.path;o.title=w.path;select.append(o);});
   select.value=CHAT_WORKSPACE;select.title=CHAT_WORKSPACE || '执行工作区';
@@ -3290,7 +3293,7 @@ async function workspaceAdd(){
   if(r.status!==200){$('workspace-error').textContent=r.obj?.error || '保存失败';return;}
   WORKSPACES=r.obj.workspaces;WORKSPACE_DEFAULT=r.obj.default_workspace;
   const added=WORKSPACES.find(w=>w.path.replaceAll('\\','/').toLowerCase()===path.replaceAll('\\','/').toLowerCase());
-  $('workspace-dialog').close();await workspaceSelect(added?.path || path);
+  $('workspace-dialog').close();const previous=CHAT_WORKSPACE;CHAT_WORKSPACE=added?.path || path;sideRecent(CHAT_TABS_CACHE);if(await chatNewSession()===false)CHAT_WORKSPACE=previous;
 }
 let CHAT_RECOGNITION=null;
 function chatDictate(){
@@ -3304,8 +3307,11 @@ function chatDictate(){
   recognition.onstart=()=>state(true);
   recognition.onresult=e=>{const input=target;if(!input?.isConnected||CHAT_SESSION!==session)return;for(let i=e.resultIndex||0;i<e.results.length;i++)if(e.results[i].isFinal!==false)input.value+=(input.value?' ':'')+e.results[i][0].transcript;input.dispatchEvent(new Event('input',{bubbles:true}));};
   recognition.onend=()=>{if(CHAT_RECOGNITION!==recognition)return;CHAT_RECOGNITION=null;state(false);};
-  recognition.onerror=e=>{if(CHAT_RECOGNITION!==recognition)return;CHAT_RECOGNITION=null;state(false);toast(e.error==='not-allowed'?'麦克风权限被拒绝，请在系统或浏览器中允许访问':'语音输入未完成：'+(e.error||'请重试'));};
-  try{recognition.start();}catch(e){CHAT_RECOGNITION=null;state(false);toast('无法启动语音输入：'+e.message);}
+  recognition.onerror=e=>{if(CHAT_RECOGNITION!==recognition)return;CHAT_RECOGNITION=null;state(false);
+    if(['network','service-not-allowed','language-not-supported'].includes(e.error)){recognition.abort?.();toast('浏览器语音服务不可用，正在切换系统听写');void chatSystemDictate();return;}
+    const reasons={'not-allowed':'麦克风权限被拒绝，请在系统或浏览器中允许访问','audio-capture':'找不到可用麦克风，请检查输入设备','no-speech':'没有检测到语音，请靠近麦克风后重试','aborted':'听写已停止'};
+    toast(reasons[e.error] || ('语音服务错误：'+(e.error||'未知错误')));};
+  try{recognition.start();}catch(e){CHAT_RECOGNITION=null;state(false);if(e.name==='NotSupportedError'){void chatSystemDictate();return;}toast('无法启动语音输入：'+e.message);}
 }
 async function chatSystemDictate(){
   const target=$('chat-input'),session=CHAT_SESSION,b=$('chat-mic');
@@ -3500,6 +3506,7 @@ function renderChatTabs(list){
     rm.onclick = async (e) => { e.stopPropagation(); await chatDeleteSession(id); };
     tab.appendChild(rm);
     tab.onclick = () => chatSwitchSession(id);
+    b.oncontextmenu=e=>{e.preventDefault();chatSessionMenu(e,id,label);};
     bar.appendChild(tab);
   });
   if(bar){
@@ -3538,7 +3545,7 @@ function sideRecent(list){
     const details=document.createElement('details');details.className='workspace-group';details.dataset.path=path;
     details.open=WORKSPACE_FOLDS.has(path)?WORKSPACE_FOLDS.get(path):true;
     const summary=document.createElement('summary');summary.innerHTML='<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M3 7V5a2 2 0 0 1 2-2h5l3 3h6a2 2 0 0 1 2 2v2M3 8h18l-3 12H2z"/></svg>';
-    const label=document.createElement('span');label.textContent=WORKSPACES.find(w=>w.path===path)?.name || (path===WORKSPACE_DEFAULT?'默认工作区':path.split(/[\\/]/).pop()) || '默认工作区';summary.title=path;summary.append(label);
+    const label=document.createElement('span');label.textContent=workspaceLabel(path);summary.title=path;summary.append(label);
     const create=document.createElement('button');create.textContent='＋';create.title='在此工作区新建聊天';create.setAttribute('aria-label','在 '+label.textContent+' 新建聊天');
     create.onclick=async e=>{e.preventDefault();e.stopPropagation();CHAT_WORKSPACE=path;await chatNewSession();if(current!=='chat')switchPanel('chat');};
     summary.append(create);details.append(summary);box.append(details);groups.set(path,details);return details;
@@ -3585,6 +3592,7 @@ function sideRecent(list){
     b.append(taskStatus, title);
     b.title = chatSessionTip(info, id);
     b.onclick = () => chatSwitchSession(id);
+    b.oncontextmenu=e=>{e.preventDefault();chatSessionMenu(e,id,label);};
     row.appendChild(b);
     const del = document.createElement('button');
     del.className = 'side-recent-delete';
@@ -3720,6 +3728,26 @@ function syncChatSettings(){
   }
 }
 
+function chatSessionMenu(e,id,title){
+  document.getElementById('session-menu')?.remove();
+  const menu=document.createElement('div');menu.id='session-menu';menu.setAttribute('role','menu');
+  menu.style.cssText='position:fixed;z-index:200;background:var(--card);border:1px solid var(--border);border-radius:10px;padding:6px;box-shadow:0 8px 24px #0003';
+  const edit=document.createElement('button');edit.textContent='修改会话标题 / 简介';edit.setAttribute('role','menuitem');
+  edit.onclick=()=>{menu.remove();chatRenameSession(id,title);};menu.append(edit);document.body.append(menu);
+  menu.style.left=Math.min(e.clientX,innerWidth-menu.offsetWidth-8)+'px';menu.style.top=Math.min(e.clientY,innerHeight-menu.offsetHeight-8)+'px';edit.focus();
+  const close=event=>{if(!menu.contains(event.target)){menu.remove();document.removeEventListener('pointerdown',close);}};
+  document.addEventListener('pointerdown',close);menu.onkeydown=event=>{if(event.key==='Escape'){menu.remove();document.removeEventListener('pointerdown',close);}};
+}
+function chatRenameSession(id,title){
+  document.getElementById('session-rename')?.remove();const d=document.createElement('dialog');d.id='session-rename';
+  d.innerHTML='<form><h3>修改会话标题 / 简介</h3><input aria-label="会话标题" required maxlength="40"><p role="alert"></p><button type="button">取消</button> <button type="submit">保存</button></form>';
+  const input=d.querySelector('input');input.value=title;d.querySelector('button').onclick=()=>d.close();
+  d.querySelector('form').onsubmit=async e=>{e.preventDefault();const value=input.value.trim();if(!value)return;
+    const r=await call('POST','/v1/chat/sessions/'+encodeURIComponent(id)+'/title',{title:value});
+    if(r.status!==200){d.querySelector('p').textContent=r.obj?.error || '保存失败';return;}
+    CHAT_TABS_CACHE.forEach(s=>{if(s.id===id)s.title=value;});if(CHAT_SELECTED_INFO?.id===id)CHAT_SELECTED_INFO.title=value;sideRecent(CHAT_TABS_CACHE);d.close();};
+  d.onclose=()=>d.remove();document.body.append(d);d.showModal();input.select();
+}
 function chatThinkingEnabled(){
   try { return localStorage.getItem('cognitive-thinking-mode:' + CHAT_SESSION) === '1'; } catch(e) { return false; }
 }
@@ -3729,6 +3757,7 @@ function syncChatThinkingToggle(){
   const enabled = chatThinkingEnabled();
   btn.classList.toggle('on', enabled);
   btn.setAttribute('aria-pressed', String(enabled));
+  btn.querySelector('span').textContent=enabled?'深度思考 · 已开启':'深度思考';
   btn.title = enabled ? '深度思考已开启：允许额外规划轮次' : '深度思考：允许额外规划轮次，适合复杂问题';
 }
 function chatThinkingToggle(enabled){

@@ -43,6 +43,10 @@ try:
                 try:req('/v1/workspaces',{'path':str(path)});raise AssertionError('invalid path accepted')
                 except urllib.error.HTTPError as error:assert error.code==400
             sa=req('/v1/chat/sessions',{'workspace':str(a)})['id'];sb=req('/v1/chat/sessions',{'workspace':str(b)})['id']
+            req('/v1/chat/sessions/'+sa+'/title',{'title':'自定义标题 <safe>'})
+            assert next(s for s in req('/v1/chat/sessions') if s['id']==sa)['title']=='自定义标题 <safe>'
+            try:req('/v1/chat/sessions/'+sa+'/title',{'title':'中'*43});raise AssertionError('oversize title accepted')
+            except urllib.error.HTTPError as error:assert error.code==400
             ta=req('/v1/chat',{'message':'Inspect workspace A and write result.txt','session':sa})['id'];assert entered.wait(10)
             req('/v1/chat/sessions/'+sa+'/workspace',{'workspace':str(b)})
             tb=req('/v1/chat',{'message':'Inspect workspace B and write result.txt','session':sb})['id'];release.set()
@@ -63,6 +67,7 @@ try:
         finally:release.set();p.terminate();p.wait(timeout=5)
         port=new_port();p=start()
         try:
+            assert next(s for s in req('/v1/chat/sessions') if s['id']==sa)['title']=='自定义标题 <safe>'
             assert len(req('/v1/workspaces')['workspaces'])==2
             sessions=req('/v1/chat/sessions');assert Path(next(s for s in sessions if s['id']==sa)['workspace'])==b
             client=subprocess.run([str(build/('cognitive-os-agent.exe' if os.name=='nt' else 'cognitive-os-agent')),

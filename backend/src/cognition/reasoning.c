@@ -3783,6 +3783,20 @@ void reasoning_session_note_prompt(reasoning *r, const char *session_id, const c
     mutex_unlock(&r->ss->sess_mtx);
 }
 
+/* Rename sidebar metadata without changing conversation contents or tasks. */
+int reasoning_session_set_title(reasoning *r,const char *id,const char *title){
+    if(!r || !id || !title || !*title || strlen(title)>=128)return -1;
+    mutex_lock(&r->ss->sess_mtx);
+    struct sess_meta *m=meta_find(r->ss,id);
+    if(!m || m->deleted){mutex_unlock(&r->ss->sess_mtx);return -1;}
+    for(size_t i=0;i<r->ss->nsessions;i++){
+        struct session *s=r->ss->sessions[i];if(strcmp(s->id,id))continue;
+        mutex_lock(&s->mtx);snprintf(s->title,sizeof(s->title),"%s",title);mutex_unlock(&s->mtx);
+    }
+    snprintf(m->title,sizeof(m->title),"%s",title);meta_save_locked(r);
+    int rc=r->ss->meta_error?-2:0;mutex_unlock(&r->ss->sess_mtx);return rc;
+}
+
 /* Compatibility entry point: sharing is now a runtime-wide setting. */
 int reasoning_session_set_shared(reasoning *r, const char *session_id, int shared) {
     char path[700], dir[600];

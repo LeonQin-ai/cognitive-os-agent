@@ -3,14 +3,14 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
 (async()=>{
  const browser=await chromium.launch({headless:true,channel:process.env.UI_TEST_BROWSER||'msedge'});
  try{
-  const page=await browser.newPage(),errors=[],approvals=[];page.on('pageerror',e=>errors.push(e.message));
+  const page=await browser.newPage(),errors=[],approvals=[];let dictations=0;page.on('pageerror',e=>errors.push(e.message));
   await page.addInitScript(()=>{class Recognition{start(){window.rec=this;this.onstart?.();}stop(){this.onend?.();}}window.SpeechRecognition=Recognition;});
   await page.route('http://ui.test/**',async route=>{
    const req=route.request(),u=new URL(req.url());let obj=[];
    if(u.pathname==='/')return route.fulfill({contentType:'text/html',body:fs.readFileSync(path.join(__dirname,'../apps/web/index.html'),'utf8')});
    if(u.pathname==='/v1/workspaces')obj={default_workspace:'D:/default',workspaces:[]};
    if(u.pathname==='/v1/workspaces/browse')obj={path:'D:/项目 folder'};
-   if(u.pathname==='/v1/voice/dictate')obj={text:'系统语音'};
+   if(u.pathname==='/v1/voice/dictate'){dictations++;obj={text:'系统语音'};}
    if(u.pathname==='/v1/config/llm')obj={provider:'openai',model:'fixture',configured:true,api_key_set:true};
    if(u.pathname==='/v1/chat/sessions'&&req.method()==='POST')obj={id:'s',workspace:'D:/default'};
    if(u.pathname==='/v1/tasks/7/approval'){approvals.push(req.postDataJSON());obj={ok:true};}
@@ -26,8 +26,19 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
   await page.locator('#chat-mic').click();assert.equal(await page.locator('#chat-mic').getAttribute('aria-pressed'),'false');
   await page.locator('#chat-mic').click();await page.evaluate(()=>rec.onerror({error:'not-allowed'}));
   assert.equal(await page.locator('#chat-mic').getAttribute('aria-pressed'),'false');
-  await page.evaluate(()=>{window.SpeechRecognition=undefined;window.webkitSpeechRecognition=undefined;chatDictate();});
+  assert.equal(dictations,0,'permission denial must not bypass consent through native capture');
+  await page.locator('#chat-thinking-toggle').click();
+  assert.match(await page.locator('#chat-thinking-toggle').innerText(),/已开启/);
+  assert.notEqual(await page.locator('#chat-thinking-toggle').evaluate(e=>getComputedStyle(e).color),'rgb(255, 255, 255)','enabled control stays readable');
+  await page.locator('#chat-thinking-toggle').click();
+  assert.equal(await page.locator('#chat-thinking-toggle').getAttribute('aria-pressed'),'false');
+  await page.locator('#chat-mic').click();await page.evaluate(()=>rec.onerror({error:'network'}));
   await page.waitForFunction(()=>$('chat-input').value.endsWith('系统语音'));
+  await page.waitForFunction(()=>CHAT_RECOGNITION===null);
+  assert.equal(dictations,1,'browser service error falls back exactly once');
+  const before=await page.locator('#chat-input').inputValue();
+  await page.evaluate(()=>{window.SpeechRecognition=undefined;window.webkitSpeechRecognition=undefined;chatDictate();});
+  await page.waitForFunction(previous=>$('chat-input').value!==previous,before);
   await page.evaluate(()=>workspaceDialog());await page.locator('#workspace-browse').click();
   await page.waitForFunction(()=>$('workspace-path').value==='D:/项目 folder');
   await page.locator('#workspace-dialog button').filter({hasText:'取消'}).click();

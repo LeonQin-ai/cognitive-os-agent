@@ -14,6 +14,7 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
     if(status===200)obj={default_workspace:'D:/default',workspaces};
    }else if(u.pathname==='/v1/chat/sessions'){
     if(r.method()==='POST'){const b=r.postDataJSON();obj={id:'session-'+(sessions.length+1),workspace:b.workspace||'D:/default',turns:0};sessions.push(obj);created.push(b);}else obj=sessions;
+   }else if(u.pathname.endsWith('/title')){const b=r.postDataJSON();sessions.find(s=>s.id===u.pathname.split('/')[4]).title=b.title;obj={ok:true};
    }else if(u.pathname.endsWith('/workspace')){
     const b=r.postDataJSON();sessions.find(s=>s.id===u.pathname.split('/')[4]).workspace=b.workspace;obj={ok:true};
    }else if(u.pathname==='/v1/config/llm')obj={provider:'openai',model:'fixture',configured:true};
@@ -38,6 +39,17 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
   await page.locator('#workspace-dialog button[type=submit]').click();
   await page.waitForFunction(()=>CHAT_WORKSPACE==='D:/new folder');
   assert.equal(await page.locator('#chat-workspace option:checked').textContent(),'<project>','names render as text');
+  assert.equal(created.length,3,'adding workspace creates an independent chat');
+  assert.equal(sessions[1].workspace,'D:/项目 A','adding workspace must not move the old chat');
+  const header=page.locator('.workspace-group[data-path="D:/new folder"] > summary');
+  const dimensions=await header.locator('span').boundingBox();assert.ok(dimensions.width>80,'folder name has readable width, not squeezed by plus button');
+  assert.equal(await header.locator('span').innerText(),'<project>');
+  await page.locator('.side-recent-row > button.on').click({button:'right'});
+  await page.getByRole('menuitem',{name:'修改会话标题 / 简介'}).click();
+  await page.getByRole('textbox',{name:'会话标题'}).fill('自定义简介 <safe>');
+  await page.locator('#session-rename button[type=submit]').click();
+  await page.waitForFunction(()=>CHAT_TABS_CACHE.find(s=>s.id===CHAT_SESSION)?.title==='自定义简介 <safe>');
+  assert.equal(sessions[2].title,'自定义简介 <safe>');
   await page.evaluate(()=>{CHAT_TASK_ID=42;chatBusyUI(true);});
   assert.equal(await page.locator('#chat-cancel').isVisible(),true);assert.equal(await page.locator('#chat-send').isVisible(),false);
   await page.evaluate(()=>{CHAT_TASK_ID=null;chatBusyUI(false);});

@@ -207,11 +207,16 @@ static int h_voice_dictation(const http_request *req,http_response *resp,void *u
 #ifdef _WIN32
     static atomic_flag busy=ATOMIC_FLAG_INIT;
     if(atomic_flag_test_and_set(&busy)){resp->status=409;http_resp_json(resp,"{\"error\":\"dictation already active\"}");return 0;}
-    const char *command="powershell.exe -NoProfile -NonInteractive -Command \"$ErrorActionPreference='Stop';$ProgressPreference='SilentlyContinue';[Console]::OutputEncoding=[Text.Encoding]::UTF8;try{Add-Type -AssemblyName System.Speech;$all=[System.Speech.Recognition.SpeechRecognitionEngine]::InstalledRecognizers();$info=$all | Where-Object {$_.Culture.Name -eq 'zh-CN'} | Select-Object -First 1;if(-not $info){$info=$all | Select-Object -First 1};if(-not $info){exit 2};$e=New-Object System.Speech.Recognition.SpeechRecognitionEngine($info);try{$e.LoadGrammar((New-Object System.Speech.Recognition.DictationGrammar));$e.SetInputToDefaultAudioDevice();$r=$e.Recognize([TimeSpan]::FromSeconds(15));if($r){[Console]::Write($r.Text)}}finally{$e.Dispose()}}catch{exit 1}\"";
+    const char *command="powershell.exe -NoProfile -NonInteractive -Command \"$ErrorActionPreference='Stop';$ProgressPreference='SilentlyContinue';[Console]::OutputEncoding=[Text.Encoding]::UTF8;$stage=2;try{Add-Type -AssemblyName System.Speech;$all=[System.Speech.Recognition.SpeechRecognitionEngine]::InstalledRecognizers();$info=$all | Where-Object {$_.Culture.Name -eq 'zh-CN'} | Select-Object -First 1;if(-not $info){$info=$all | Select-Object -First 1};if(-not $info){exit 2};$e=New-Object System.Speech.Recognition.SpeechRecognitionEngine($info);try{$e.LoadGrammar((New-Object System.Speech.Recognition.DictationGrammar));$stage=3;$e.SetInputToDefaultAudioDevice();$stage=4;$r=$e.Recognize([TimeSpan]::FromSeconds(15));if($r){[Console]::Write($r.Text)}}finally{$e.Dispose()}}catch{exit $stage}\"";
     proc_result *r=proc_run_native_in(command,25000,NULL);atomic_flag_clear(&busy);
     cJSON *o=cJSON_CreateObject();
     if(r && r->exit_code==0)cJSON_AddStringToObject(o,"text",r->output?r->output:"");
-    else{resp->status=503;cJSON_AddStringToObject(o,"error","System dictation unavailable. Enable microphone access and install a Windows speech language, or use a browser with SpeechRecognition.");}
+    else{
+        resp->status=503;
+        const char *code=!r?"launch_failed":r->exit_code==2?"speech_language_unavailable":r->exit_code==3?"microphone_unavailable":"recognition_failed";
+        const char *message=!r?"无法启动系统听写，可按 Win+H 使用 Windows 语音输入。":r->exit_code==2?"系统语音识别组件或语言包不可用，请安装 Windows 中文语音包；也可按 Win+H 输入。":r->exit_code==3?"无法打开麦克风，请检查 Windows 麦克风权限和默认输入设备；也可按 Win+H 输入。":"系统听写失败或超时，请重试；也可按 Win+H 使用 Windows 语音输入。";
+        cJSON_AddStringToObject(o,"code",code);cJSON_AddStringToObject(o,"error",message);
+    }
     char *json=cJSON_PrintUnformatted(o);http_resp_json(resp,json?json:"{}");free(json);cJSON_Delete(o);proc_result_free(r);
 #else
     resp->status=501;http_resp_json(resp,"{\"error\":\"Use browser SpeechRecognition or system voice input on this platform.\"}");
@@ -781,6 +786,14 @@ static int h_chat_session_post(const http_request *req, http_response *resp, voi
     }
     snprintf(sid, (size_t)(slash - rest) + 1, "%s", rest);
     const char *action = slash + 1;
+
+    if(!strcmp(action,"title")){
+        char *text=body_str(req);cJSON *body=text?cJSON_Parse(text):NULL;free(text);
+        const char *title=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(body,"title"));
+        if(!title || !*title || strlen(title)>=128){resp->status=400;http_resp_json(resp,"{\"error\":\"title must contain 1-127 UTF-8 bytes\"}");}
+        else {int rc=reasoning_session_set_title(ctx->reasoning,sid,title);if(rc){resp->status=rc==-2?500:404;http_resp_json(resp,"{\"error\":\"cannot save session title\"}");}else http_resp_json(resp,"{\"ok\":true}");}
+        cJSON_Delete(body);return 0;
+    }
 
     if(!strcmp(action,"workspace")){
         char *text=body_str(req);cJSON *body=text?cJSON_Parse(text):NULL;free(text);

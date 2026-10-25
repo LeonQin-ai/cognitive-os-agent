@@ -164,6 +164,7 @@ char *reasoning_session_new(reasoning *r);
 void reasoning_session_note_prompt(reasoning *r, const char *session_id, const char *prompt);
 
 /* Compatibility setter: memory sharing is now a persisted global switch. */
+int reasoning_session_set_title(reasoning *r, const char *session_id, const char *title);
 int reasoning_session_set_shared(reasoning *r, const char *session_id, int shared);
 int reasoning_shared_memory_enabled(reasoning *r);
 
