@@ -366,9 +366,11 @@ static int h_task_get(const http_request *req, http_response *resp, void *ud) {
      * run per-node reasoning instances instead, so they report the flow
      * progress registry's per-node states rather than the unused main
      * engine counters (which would stay at 0 and mislead). */
-    if (t->userdata == (void *)2) {
-        char *stored=t->status!=TS_RUNNING ? task_progress_copy(t):NULL;
+    if (t->userdata == (void *)2 || t->userdata == (void *)1) {
+        char *stored=t->userdata==(void *)1||t->status!=TS_RUNNING ? task_progress_copy(t):NULL;
         cJSON *saved=stored ? cJSON_Parse(stored):NULL; free(stored);
+        const char *phase_keys[]={"stage","activity"};
+        for(size_t i=0;i<2;i++){cJSON *v=cJSON_GetObjectItemCaseSensitive(saved,phase_keys[i]);if(v)cJSON_AddItemToObject(o,phase_keys[i],cJSON_Duplicate(v,1));}
         cJSON *final_nodes=cJSON_GetObjectItemCaseSensitive(saved,"flow_nodes");
         if(cJSON_IsArray(final_nodes)) cJSON_AddItemToObject(o,"flow_nodes",cJSON_Duplicate(final_nodes,1));
         char *fnodes = !final_nodes ? flow_progress_json(t->id):NULL;

@@ -26,7 +26,9 @@ class Provider(BaseHTTPRequestHandler):
         current=text.split('## Current request\n',1)[-1]
         current=current.split('## 用户任务\n',1)[-1].split('\n## ',1)[0]
         try:
-            if 'FLOW_DECOMP_MIXED' in current:
+            if '综合各 agent' in body['messages'][0]['content']:
+                answer='三个节点的已验证结果已综合。'
+            elif 'FLOW_DECOMP_MIXED' in current:
                 answer=json.dumps([
                     {'agent':'alpha','task':'读取 evidence.c，完成 FLOW_WAIT_STEP1'},
                     {'agent':'alpha','task':'创建 api-step2.txt FLOW_CHILD 上游 {{step1}}'},
@@ -158,6 +160,18 @@ with tempfile.TemporaryDirectory(prefix='coa-flow-deps-') as folder:
             old=request('/v1/tasks/'+str(started['id']))
             assert {n['id'] for n in old['flow_nodes']}=={'a','b'},old
             print('PASS: auto-decomposed mixed dependencies execute strictly in order; terminal states persist')
+            counts['upstream']=0;counts['child']=0;counts['join']=0;entered.clear();release.clear()
+            (state/'api-step2.txt').unlink();(state/'api-step3.txt').unlink()
+            automatic=request('/v1/orchestrate',{'task':'FLOW_DECOMP_MIXED'})
+            assert entered.wait(10)
+            auto_live=request('/v1/tasks/'+str(automatic['id']))
+            assert auto_live['stage']=='executing' and auto_live['activity'],auto_live
+            auto_nodes={n['id']:n for n in auto_live['flow_nodes']}
+            assert auto_nodes['step1']['status']=='running' and auto_nodes['step2']['status']=='queued',auto_live
+            release.set();auto_done=finished(automatic['id'])
+            assert auto_done['status']=='DONE' and len(auto_done['flow_nodes'])==3,auto_done
+            assert auto_done['stage']=='completed',auto_done
+            print('PASS: automatic orchestration exposes live nodes under its real task ID and retains final progress')
             # Upstream verbs are context, not an extra write requirement for a summary.
             counts['child']=0
             dag={'nodes':[{'id':'writer','agent':'alpha','task':'创建 api-step2.txt FLOW_CHILD 上游 UPSTREAM_READY'},

@@ -269,7 +269,19 @@ int flow_decompose(runtime_ctx *ctx, const char *task, char **dag_json) {
     return *dag_json ? 0 : -1;
 }
 
-int orchestrate(runtime_ctx *ctx, const char *task, char **answer, char **trace_json) {
+static void orchestration_stage(runtime_ctx *ctx,int64_t id,const char *stage,const char *activity){
+    if(id<0)return;task *t=scheduler_acquire(ctx->scheduler,id);if(!t)return;
+    char *old=task_progress_copy(t);cJSON *o=old?cJSON_Parse(old):NULL;free(old);if(!o)o=cJSON_CreateObject();
+    cJSON_DeleteItemFromObject(o,"stage");cJSON_AddStringToObject(o,"stage",stage);
+    cJSON_DeleteItemFromObject(o,"activity");cJSON_AddStringToObject(o,"activity",activity);
+    char *nodes=flow_progress_json(id);cJSON *arr=nodes?cJSON_Parse(nodes):NULL;free(nodes);
+    if(arr){cJSON_DeleteItemFromObject(o,"flow_nodes");cJSON_AddItemToObject(o,"flow_nodes",arr);}
+    char *json=cJSON_PrintUnformatted(o);if(json)task_set_progress(t,json);free(json);cJSON_Delete(o);scheduler_release(ctx->scheduler,t);
+}
+int orchestrate(runtime_ctx *ctx,const char *task,char **answer,char **trace_json){
+    return orchestrate_task(ctx,task,-1,answer,trace_json);
+}
+int orchestrate_task(runtime_ctx *ctx, const char *task,int64_t task_id, char **answer, char **trace_json) {
     int nsteps;
     char *dag;
     /* ---- EXECUTE through the Flow engine (parallel, isolated per node) ---- */
@@ -297,6 +309,7 @@ int orchestrate(runtime_ctx *ctx, const char *task, char **answer, char **trace_
         return -1;
     }
 
+    orchestration_stage(ctx,task_id,"decomposing","正在分解任务并分配 Agent");
     nsteps = decompose_task(ctx, task, agents, tasks, after);
 
     if (nsteps < 0) {
@@ -320,7 +333,9 @@ int orchestrate(runtime_ctx *ctx, const char *task, char **answer, char **trace_
     if (!dag)
         return -1;
 
-    rc = flow_run(ctx, dag, -1, &flow_answer, &trace);
+    orchestration_stage(ctx,task_id,"executing","正在执行多 Agent 节点");
+    rc = flow_run(ctx, dag, task_id, &flow_answer, &trace);
+    orchestration_stage(ctx,task_id,rc?"failed":"merging",rc?"节点执行未完成":"正在综合各 Agent 的结果");
     free(dag);
     if (rc != 0) {
         *answer=flow_answer ? flow_answer : xstrdup("多 Agent 执行未完成。");
@@ -375,5 +390,6 @@ int orchestrate(runtime_ctx *ctx, const char *task, char **answer, char **trace_
     free(flow_answer);
 
     *answer = final;
+    orchestration_stage(ctx,task_id,final?"completed":"failed",final?"多 Agent 执行与综合已完成":"综合结果未完成");
     return final ? 0 : -1;
 }

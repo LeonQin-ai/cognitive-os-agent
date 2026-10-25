@@ -3303,8 +3303,8 @@ function chatDictate(){
   const state=active=>{const b=$('chat-mic');if(b){b.setAttribute('aria-pressed',String(active));b.title=active?'正在听写，点击停止':'语音转文字';b.style.color=active?'#dc2626':'';}};
   recognition.onstart=()=>state(true);
   recognition.onresult=e=>{const input=target;if(!input?.isConnected||CHAT_SESSION!==session)return;for(let i=e.resultIndex||0;i<e.results.length;i++)if(e.results[i].isFinal!==false)input.value+=(input.value?' ':'')+e.results[i][0].transcript;input.dispatchEvent(new Event('input',{bubbles:true}));};
-  recognition.onend=()=>{CHAT_RECOGNITION=null;state(false);};
-  recognition.onerror=e=>{CHAT_RECOGNITION=null;state(false);toast(e.error==='not-allowed'?'麦克风权限被拒绝，请在系统或浏览器中允许访问':'语音输入未完成：'+(e.error||'请重试'));};
+  recognition.onend=()=>{if(CHAT_RECOGNITION!==recognition)return;CHAT_RECOGNITION=null;state(false);};
+  recognition.onerror=e=>{if(CHAT_RECOGNITION!==recognition)return;CHAT_RECOGNITION=null;state(false);toast(e.error==='not-allowed'?'麦克风权限被拒绝，请在系统或浏览器中允许访问':'语音输入未完成：'+(e.error||'请重试'));};
   try{recognition.start();}catch(e){CHAT_RECOGNITION=null;state(false);toast('无法启动语音输入：'+e.message);}
 }
 async function chatSystemDictate(){
@@ -4158,7 +4158,7 @@ function flowLiveProgress(t){
   const expanded=new Map(Array.from(box.querySelectorAll('details[data-key]'),d=>[d.dataset.key,d.open]));
   box.replaceChildren();box.setAttribute('role','status');box.setAttribute('aria-live','polite');
   const title=document.createElement('strong');const nodes=Array.isArray(t.flow_nodes)?t.flow_nodes:[];
-  title.textContent='任务 #'+t.id+' · '+t.status+' · '+nodes.filter(n=>n.status==='ok').length+'/'+nodes.length+' 节点完成';box.append(title);
+  title.textContent='任务 #'+t.id+' · '+t.status+' · '+(t.activity||'')+' · '+nodes.filter(n=>n.status==='ok').length+'/'+nodes.length+' 节点完成';box.append(title);
   if(!nodes.length){const p=document.createElement('p');p.textContent='等待节点进度；连接正常时会自动更新。';box.append(p);return;}
   for(const n of nodes){const row=document.createElement('details');row.dataset.key=t.id+':'+n.id;row.open=expanded.has(row.dataset.key)?expanded.get(row.dataset.key):n.status==='running'||n.status==='error';
     const summary=document.createElement('summary');const token=n.usage_available!==false&&n.tokens_in!==undefined&&n.tokens_out!==undefined?(n.tokens_in+n.tokens_out):'未提供';

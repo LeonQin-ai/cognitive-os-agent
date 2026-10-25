@@ -604,7 +604,7 @@ static void sched_trampoline(task *t, scheduler *s, void *ud) {
             cJSON_Delete(arr); cJSON_Delete(saved);
         }
         else
-            run_rc = orchestrate(ctx, t->input, &answer, NULL);
+            run_rc = orchestrate_task(ctx, t->input,t->id, &answer, NULL);
     } else {
         run_rc = chat_lane_run(ctx, t->tag, t->id, t->thinking_mode, t->input, &answer);
     }

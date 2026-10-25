@@ -175,6 +175,7 @@ int64_t im_dispatch(runtime_ctx *ctx, int64_t session_id, int64_t message_id);
  * Degrades to a plain single-agent run when no agents are registered or the
  * plan is unparseable. */
 int orchestrate(runtime_ctx *ctx, const char *task, char **answer, char **trace_json);
+int orchestrate_task(runtime_ctx *ctx,const char *task,int64_t task_id,char **answer,char **trace_json);
 
 /* Decompose a task into a Flow DAG without executing it: the LLM plan is
  * compiled to {"nodes":[{id,agent,task}...],"edges":[]} (malloc'd, caller
