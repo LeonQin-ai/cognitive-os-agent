@@ -117,10 +117,11 @@ static int add_all(scheduler *s, task *t) {
 
 /* Scheduler lock stabilizes completion/output; progress has its own lock. */
 static size_t task_bytes(task *t) {
-    size_t bytes = sizeof(*t) + (t->attachments_json ? strlen(t->attachments_json) : 0) +
+    size_t bytes = sizeof(*t) + (t->workspace ? strlen(t->workspace) : 0) + (t->attachments_json ? strlen(t->attachments_json) : 0) +
         (t->input ? strlen(t->input) : 0) + (t->tag ? strlen(t->tag) : 0);
     if (t->completed && t->output) bytes += strlen(t->output);
     mutex_lock(&t->progress_mtx);
+    bytes+=t->preview_text.cap;
     if (t->progress_json) bytes += strlen(t->progress_json);
     if (t->trace_json) bytes += strlen(t->trace_json);
     mutex_unlock(&t->progress_mtx);
@@ -317,6 +318,8 @@ void scheduler_free(scheduler *s) {
         return;
     for (int i = 0; i < s->workers; i++) if (s->threads[i]) return; /* still owned by workers */
     for (size_t i = 0; i < s->alen; i++) {
+        free(s->all[i]->workspace);
+        strbuf_free(&s->all[i]->preview_text);
         free(s->all[i]->attachments_json);
         free(s->all[i]->input);
         free(s->all[i]->output);
@@ -353,6 +356,14 @@ int64_t scheduler_submit_tag_mode(scheduler *s, int priority, const char *input,
 }
 int64_t scheduler_submit_attachments(scheduler *s, int priority, const char *input, void *userdata,
     int64_t timeout_ms, const char *tag, int thinking_mode, const char *attachments) {
+    return scheduler_submit_workspace(s,priority,input,userdata,timeout_ms,tag,thinking_mode,attachments,NULL);
+}
+int64_t scheduler_submit_workspace(scheduler *s, int priority, const char *input, void *userdata,
+    int64_t timeout_ms, const char *tag, int thinking_mode, const char *attachments, const char *workspace) {
+    return scheduler_submit_preview(s,priority,input,userdata,timeout_ms,tag,thinking_mode,attachments,workspace,0);
+}
+int64_t scheduler_submit_preview(scheduler *s,int priority,const char *input,void *userdata,
+    int64_t timeout_ms,const char *tag,int thinking_mode,const char *attachments,const char *workspace,int stream_preview){
     task *t = calloc(1, sizeof(task));
     int64_t id;
 
@@ -381,18 +392,20 @@ int64_t scheduler_submit_attachments(scheduler *s, int priority, const char *inp
     t->input = input ? xstrdup(input) : xstrdup("");
     t->tag = tag ? xstrdup(tag) : NULL;
     t->attachments_json = attachments ? xstrdup(attachments) : NULL;
+    t->workspace = workspace ? xstrdup(workspace) : NULL;
+    t->stream_preview=stream_preview;
     t->thinking_mode = thinking_mode != 0;
     t->userdata = userdata;
     t->sched = s;
-    if (!t->input || (tag && !t->tag) || (attachments && !t->attachments_json) || add_all(s, t) != 0) {
+    if (!t->input || (tag && !t->tag) || (workspace && !t->workspace) || (attachments && !t->attachments_json) || add_all(s, t) != 0) {
         mutex_unlock(&s->mtx);
-        free(t->attachments_json); free(t->input); free(t->tag); mutex_destroy(&t->progress_mtx); free(t);
+        free(t->workspace); free(t->attachments_json); free(t->input); free(t->tag); mutex_destroy(&t->progress_mtx); free(t);
         return -1;
     }
     if (queue_insert(s, t) != 0) {
         s->alen--; /* the new task is still the last index entry */
         mutex_unlock(&s->mtx);
-        free(t->attachments_json); free(t->input); free(t->tag); mutex_destroy(&t->progress_mtx); free(t);
+        free(t->workspace); free(t->attachments_json); free(t->input); free(t->tag); mutex_destroy(&t->progress_mtx); free(t);
         return -1;
     }
     s->next_id++;

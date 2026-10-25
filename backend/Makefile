@@ -31,7 +31,7 @@ $(SRCS): | include/api/web_ui.h
 
 all: build/cognitive-os-agent build/cognitive-os-agent-test build/cognitive-os-agent-scenario build/mock-llm-server build/test-adapters build/cognitive-os-agent-e2e build/cognitive-os-agent-bench build/bench-runtime
 
-build/cognitive-os-agent: $(SRCS) cli/main.c
+build/cognitive-os-agent: $(SRCS) cli/main.c cli/client.h src/terminal_screen.h src/llm/native_preview.h
 	@mkdir -p build
 	$(CC) $(CFLAGS) -o $@ $(SRCS) cli/main.c $(LDLIBS)
 

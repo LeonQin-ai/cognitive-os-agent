@@ -112,6 +112,7 @@ typedef struct runtime_ctx {
     struct thread_t *hb_poller;       /* cluster heartbeat thread */
     volatile int hb_stop;               /* heartbeat stop flag */
     mutex_t run_lock;                 /* serializes reasoning runs (lane 0 legacy) */
+    mutex_t workspace_lock;           /* registry transactions, independent of running tasks */
     /* Chat lanes: parallel reasoning instances so concurrent chat tasks do
      * not block each other (并发聊天). All lanes share one sess_store (one
      * session registry) and borrow the ctx resources. lane_task[lane] holds

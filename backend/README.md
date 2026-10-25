@@ -11,6 +11,80 @@ The design follows the principle that the LLM is a *cognitive accelerator*, not 
 control center: every model call goes through the same policy-checked, transactional
 pipeline as any other action.
 
+## Terminal client (development branch)
+
+The `chat` subcommand connects to a running Cognitive OS server and reuses its
+configured model, durable sessions, tools, and task journal. It does not start a
+second Runtime or call the provider directly. The existing local `run` and
+interactive modes remain available.
+
+```bash
+# Terminal 1: start the server, or use the running desktop application.
+./build/cognitive-os-agent --workspace /path/to/project serve 18300
+
+# Terminal 2: interactive client.
+./build/cognitive-os-agent chat
+./build/cognitive-os-agent chat --connect http://127.0.0.1:18300 --session SESSION_ID
+
+# Script mode: final answer on stdout; progress and tool details on stderr.
+./build/cognitive-os-agent chat -p "Read README.md and explain the project" > answer.md
+```
+
+On Windows use `cognitive-os-agent.exe`. For an authenticated Runtime set
+`COA_CLIENT_TOKEN` to its API bearer token in the environment; this is the Runtime
+token, not the model provider API key. Avoid sending credentials over untrusted
+plain HTTP connections.
+
+| Command | Action |
+|---|---|
+| `/new` | Create a durable conversation, preserving the selected workspace |
+| `/sessions` | List the server's current session page |
+| `/session ID` | Select a conversation for subsequent messages |
+| `/workspace PATH` | Register a server-side directory and select it for future tasks |
+| `/resume ID` | Explicitly resubmit the recorded task through the Runtime resume API |
+| `/help`, `/exit` | Show commands or leave the client |
+| Ctrl+C during execution | Request cancellation of the active task; retain server records |
+
+Interactive terminals now use an alternate-screen layout with a fixed header,
+session/workspace context, input line and scrolling task body. `--no-tui` selects
+plain mode; `--tui` requires a real terminal. Pipes and `-p` never contain layout
+escape sequences, and the original terminal screen is restored on exit.
+
+The client prints changed model/tool milestones, command arguments, results,
+status, duration, and reported token totals. Missing usage is labeled unavailable.
+Final answers are printed completely, including failed-task partial results.
+One-shot failures return a nonzero exit code. A lost connection does not
+automatically resubmit the task; its ID is printed for inspection.
+
+Native OpenAI-compatible task answers are decoded from actual provider SSE deltas
+and displayed incrementally through task previews (polled every 300 ms). A preview
+is explicitly provisional: incomplete tool arguments never execute, and the final
+recorded result still passes normal completion checks. Unicode escapes and
+surrogate pairs are kept intact, and long final answers are not clipped or replayed
+twice. `--no-stream` supports endpoints that cannot provide native SSE. Anthropic
+currently falls back to the complete recorded answer. The Runtime's WinHTTP and
+POSIX HTTPS transports now read live streams rather than replaying buffered bodies.
+On POSIX, `COA_HTTP_STREAM_TRANSPORT=curl` selects the same incremental libcurl
+path for plain HTTP gateways too; CI exercises this path against a local provider.
+
+Input remains line-based; arrow-key history and image attachment commands are not
+yet implemented. Workspace paths belong to the server machine, and workspace
+selection is not a sandbox. Model routes are managed through the existing console.
+
+Regression checks after building the CLI:
+
+```bash
+python tests/test_cli_client.py
+python tests/test_workspaces_e2e.py
+python tests/test_native_preview_e2e.py
+# Opt-in: consumes the configured real model API; starts an isolated Runtime.
+python tests/test_live_cli_client.py --config /path/to/cognitive-os-agent.json
+```
+
+The opt-in test verifies an actual read → write → read task and saves usage and
+artifact verification to `build/cli-live-report.json`. It does not change the
+installed application's state or model settings.
+
 ## Architecture
 
 ```

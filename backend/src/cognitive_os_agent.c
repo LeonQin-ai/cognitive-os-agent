@@ -259,6 +259,13 @@ static void chat_progress(const char *json, void *ud) {
 
 /* Pick an idle chat lane (try-lock in order) and run the prompt on it; when
  * all lanes are busy, block on lane 0 (bounded concurrency, overflow waits). */
+static void chat_answer_preview(const char *delta,void *ud){
+    task *t=ud;if(!t)return;
+    mutex_lock(&t->progress_mtx);
+    if(!delta){strbuf_free(&t->preview_text);strbuf_init(&t->preview_text);t->preview_generation++;}
+    else strbuf_append(&t->preview_text,delta);
+    mutex_unlock(&t->progress_mtx);
+}
 static int chat_lane_run(runtime_ctx *ctx, const char *session_id, int64_t task_id, int thinking_mode, const char *prompt,
                           char **answer) {
     lane_sess_lock *se = lane_sess_lock_acquire(session_id);
@@ -284,7 +291,9 @@ static int chat_lane_run(runtime_ctx *ctx, const char *session_id, int64_t task_
     reasoning_set_task(ctx->chat_lanes[lane], binding.t);
     reasoning_set_thinking_mode(ctx->chat_lanes[lane], thinking_mode);
     reasoning_set_observer(ctx->chat_lanes[lane], chat_progress, &binding);
+    if(binding.t && binding.t->stream_preview)llm_set_chat_preview(chat_answer_preview,binding.t);
     int rc = reasoning_run_ex(ctx->chat_lanes[lane], session_id, prompt, answer);
+    llm_set_chat_preview(NULL,NULL);
     reasoning_set_observer(ctx->chat_lanes[lane], NULL, NULL);
     reasoning_set_task(ctx->chat_lanes[lane], NULL);
     cJSON_Delete(binding.prior);
@@ -711,6 +720,7 @@ int init(runtime_ctx *ctx, const config *cfg) {
         return -1;
     memset(ctx, 0, sizeof(*ctx));
     mutex_init(&ctx->run_lock);
+    mutex_init(&ctx->workspace_lock);
     mutex_init(&g_lane_sess_mtx);
     for (int i = 0; i < IM_ROOM_LOCKS; i++) {
         mutex_init(&g_im_room_mtx[i]); atomic_store(&g_im_active_tasks[i], -1);
@@ -1350,6 +1360,7 @@ void runtime_shutdown(runtime_ctx *ctx) {
     ctx->config = NULL;
 
     mutex_destroy(&ctx->run_lock);
+    mutex_destroy(&ctx->workspace_lock);
     free(ctx->state_root);
     free(ctx->workspace);
     free(ctx->provider);

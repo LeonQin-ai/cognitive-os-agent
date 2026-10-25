@@ -62,6 +62,10 @@ jobs:
         run: |
           COA_BUILD_DIR=build-macos python3 tests/test_trace_commands_e2e.py
           COA_BUILD_DIR=build-macos python3 tests/test_optional_missing_read_e2e.py
+          COA_BUILD_DIR=build-macos python3 tests/test_workspaces_e2e.py
+          COA_BUILD_DIR=build-macos python3 tests/test_cli_client.py
+          COA_BUILD_DIR=build-macos python3 tests/test_native_preview_e2e.py
+          COA_HTTP_STREAM_TRANSPORT=curl COA_BUILD_DIR=build-macos python3 tests/test_native_preview_e2e.py
       - name: Model-sized observation retention
         run: COA_BUILD_DIR=build-macos python3 tests/test_observation_budget_e2e.py
       - name: Information answer completion regression
@@ -125,6 +129,10 @@ jobs:
         run: |
           python tests/test_trace_commands_e2e.py
           python tests/test_optional_missing_read_e2e.py
+          python tests/test_workspaces_e2e.py
+          python tests/test_cli_client.py
+          python tests/test_native_preview_e2e.py
+          COA_HTTP_STREAM_TRANSPORT=curl python tests/test_native_preview_e2e.py
       - name: Model-sized observation retention
         run: python tests/test_observation_budget_e2e.py
       - name: Information answer completion regression
@@ -223,6 +231,9 @@ jobs:
         run: |
           python tests/test_trace_commands_e2e.py
           python tests/test_optional_missing_read_e2e.py
+          python tests/test_workspaces_e2e.py
+          python tests/test_cli_client.py
+          python tests/test_native_preview_e2e.py
       - name: Model-sized observation retention
         run: python tests/test_observation_budget_e2e.py
       - name: Information answer completion regression
@@ -251,5 +262,6 @@ jobs:
           NODE_PATH="$PWD/webarena/node_modules" node tests/test_image_chat_ui.cjs
           NODE_PATH="$PWD/webarena/node_modules" node tests/test_plugin_install_ui.cjs
           NODE_PATH="$PWD/webarena/node_modules" node tests/test_market_sections_ui.cjs
+          NODE_PATH="$PWD/webarena/node_modules" node tests/test_workspaces_ui.cjs
           python tests/test_image_preview.py
           COA_PAGING_BROWSER=1 NODE_PATH="$PWD/webarena/node_modules" python tests/test_session_paging_e2e.py

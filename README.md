@@ -78,9 +78,16 @@ Choose execution and state directories explicitly for CLI deployments:
 ./build/cognitive-os-agent --workspace /path/to/project --state /path/to/state serve 18300
 ```
 
-**Development preview:** `dev-master` adds saved workspace folders, per-chat workspace selection, and task-local execution directories. These changes are not yet merged into `main`. Workspace selection chooses the execution root; it is not a security sandbox.
+**Workspace support:** The main branch includes saved workspace folders, per-chat workspace selection, and task-local execution directories. These changes are now integrated into `main`. Workspace selection chooses the execution root; it is not a security sandbox.
 
 ## See the work as it happens
+**Terminal client:** run `cognitive-os-agent chat` to connect to the
+desktop/server Runtime, continue durable conversations, inspect tool execution,
+and cancel with Ctrl+C. Interactive terminals use a full-screen layout; native
+OpenAI-compatible answers arrive incrementally as provisional previews.
+Use `chat -p "your task"` for scripts. See the
+[terminal client guide](backend/README.md#terminal-client-development-branch).
+
 
 Persistent conversations, image attachments, model selection, task steering, and execution history share one console. Tool details expose commands, results, status, and duration so you can investigate the run.
 

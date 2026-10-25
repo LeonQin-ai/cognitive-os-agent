@@ -98,6 +98,9 @@ static llm_message *llm_redacted_messages(const llm_request *req) {
 }
 static void llm_redacted_messages_free(llm_message *m, size_t n) { if (m) { for(size_t i=0;i<n;i++) free((char *)m[i].content); free(m); } }
 
+static _Thread_local llm_stream_cb chat_preview;
+static _Thread_local void *chat_preview_ud;
+void llm_set_chat_preview(llm_stream_cb cb,void *ud){chat_preview=cb;chat_preview_ud=ud;}
 int llm_chat(llm *llm, const llm_request *req, llm_response *resp) {
     if (!llm || !llm->vt || !llm->vt->chat)
         return -1;
@@ -118,7 +121,15 @@ int llm_chat(llm *llm, const llm_request *req, llm_response *resp) {
             return -1;
         }
         safe_req.messages = safe;
+        void *preview_guard=NULL;
+        if(chat_preview && req->tools_json && !strcmp(llm->provider,"openai")){
+            chat_preview(NULL,chat_preview_ud);
+            preview_guard=secret_stream_guard_new(chat_preview,chat_preview_ud);
+            if(!preview_guard){llm_redacted_messages_free(safe,req->num_messages);return -1;}
+            safe_req.preview=secret_stream_guard_cb;safe_req.preview_ud=preview_guard;
+        }
         rc = llm->vt->chat(llm, &safe_req, resp);
+        if(preview_guard)secret_stream_guard_free(preview_guard);
         llm_redacted_messages_free(safe, req->num_messages);
         if (rc == 0 && resp) {
             secret_guard_llm_output(&resp->content);
