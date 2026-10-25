@@ -4192,6 +4192,7 @@ restart_planning:
             /* Only a trusted user update can revise acceptance obligations;
              * model retries/empty completion arrays must never erase them. */
             cJSON_Delete(r->file_equalities);r->file_equalities=NULL;r->file_checks_failed=r->file_checks_invalid=0;r->file_check_error[0]=0;
+            r->file_check_rejections=0;
             r->stall_nudged = r->intent_nudged = 0;
             r->invalid_args_n = 0;
             r->search_seen_n = r->versioned_seen_n = 0;
