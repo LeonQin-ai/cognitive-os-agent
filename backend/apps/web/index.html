@@ -549,7 +549,7 @@
 .workspace-group .side-recent-row{margin-left:12px}.workspace-group[open]>summary{color:var(--fg)}
 #workspace-dialog{max-width:min(540px,92vw);width:100%;padding:24px;border:1px solid var(--border);border-radius:18px;background:var(--card);color:var(--fg)}
 #workspace-dialog input{width:100%;margin:7px 0 15px}#workspace-dialog::backdrop{background:#0006}
-@media(max-width:640px){.pillbar{grid-template-columns:auto minmax(0,1fr) auto auto auto!important;gap:4px;padding:12px!important}.composer-policy{display:none}.pillbar #chat-model{grid-column:2}.pillbar .thinking-toggle{grid-column:3}.composer-mic{grid-column:4}.pillbar #chat-send,.pillbar #chat-cancel{grid-column:5}#chat-workspace{max-width:55vw}}
+@media(max-width:640px){.pillbar{grid-template-columns:auto minmax(0,1fr) auto auto auto!important;gap:4px;padding:12px!important}.composer-policy{display:block;grid-column:1/-1;grid-row:3;max-width:100%;justify-self:start}.pillbar #chat-model{grid-column:2}.pillbar .thinking-toggle{grid-column:3}.composer-mic{grid-column:4}.pillbar #chat-send,.pillbar #chat-cancel{grid-column:5}#chat-workspace{max-width:55vw}}
 .content.chat-content{display:flex;flex-direction:column;min-height:0;overflow-y:hidden}
 .chat-content .chat-wrap{min-height:0;flex:1;overflow:hidden}
 .chat-content #chat-hero{min-height:0}
@@ -978,7 +978,7 @@ panels.chat = `
     <div class="pillbar">
       <button class="pill-ic" onclick="$('chat-file').click()" title="上传文件（RAG）">＋</button>
       <textarea id="chat-input" placeholder="和 Cognitive OS 一起工作" aria-label="消息" rows="1"></textarea>
-      <span class="composer-policy" title="实际工具权限由现有策略引擎控制；工作区选择不是安全沙箱">♧ 工作区访问</span>
+      <select class="composer-policy" id="chat-permission" aria-label="执行权限" title="本轮任务权限；现有全局策略仍然生效" onchange="localStorage.setItem('chat-permission',this.value)"><option value="ask">逐次批准</option><option value="auto" selected>自动批准低风险</option><option value="full">完全访问</option></select>
       <select id="chat-model" onchange="chatModelSwitch()" title="对话模型（点击切换）" aria-label="对话模型"></select>
       <button class="thinking-toggle" id="chat-thinking-toggle" onclick="chatThinkingToggle(!chatThinkingEnabled())" aria-pressed="false" title="深度思考：允许额外规划轮次，适合复杂问题">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20v-8M10.7 5.2A4.4 4.4 0 0 0 4 9c0 .5.1 1 .3 1.5A3.8 3.8 0 0 0 6 17.6c.6 1.8 2.5 2.8 4.3 2.4M13.3 5.2A4.4 4.4 0 0 1 20 9c0 .5-.1 1-.3 1.5a3.8 3.8 0 0 1-1.7 7.1c-.6 1.8-2.5 2.8-4.3 2.4M7.2 8.2c.9.1 1.6.6 2 1.4M16.8 8.2c-.9.1-1.6.6-2 1.4M7.4 14c.8 0 1.5.4 1.9 1M16.6 14c-.8 0-1.5.4-1.9 1"/></svg>
@@ -986,7 +986,7 @@ panels.chat = `
       </button>
       <button class="sec" id="chat-cancel" onclick="chatCancel()" style="display:none;padding:6px 10px" aria-label="停止执行" title="停止当前任务">■</button>
       <button class="sec" id="chat-resume" onclick="chatResume()" style="display:none;padding:6px 10px" title="恢复：重跑本会话上一条输入">恢复</button>
-      <button class="composer-mic" onclick="chatDictate()" aria-label="语音输入" title="语音输入（需要浏览器支持）">♩</button>
+      <button class="composer-mic" id="chat-mic" onclick="chatDictate()" aria-label="语音输入" aria-pressed="false" title="语音转文字"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0014 0v-2M12 19v3m-4 0h8"/></svg></button>
       <button class="pill-send" id="chat-send" onclick="chatSend()" title="发送">↑</button>
       <input type="file" id="chat-file" accept="image/*,video/*,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt,.md,.csv" style="display:none" onchange="uploadFile(this)">
     </div>
@@ -3281,7 +3281,7 @@ async function workspaceSelect(path){
 }
 function workspaceDialog(){
   let dialog=$('workspace-dialog');
-  if(!dialog){dialog=document.createElement('dialog');dialog.id='workspace-dialog';dialog.innerHTML='<form onsubmit="event.preventDefault();workspaceAdd()"><h2>添加工作区</h2><label>名称（可选）<input id="workspace-name" placeholder="例如 cognitive-os"></label><label>本机文件夹路径<input id="workspace-path" required placeholder="D:/AI/code/cognitive-os" autocomplete="off"></label><p class="hint">任务以这个目录解析相对路径和运行命令。此选择不会创建安全沙箱。</p><div class="row"><span id="workspace-error" role="alert"></span><button type="button" class="sec" onclick="this.closest(\'dialog\').close()">取消</button><button type="submit">添加工作区</button></div></form>';document.body.append(dialog);}
+  if(!dialog){dialog=document.createElement('dialog');dialog.id='workspace-dialog';dialog.innerHTML='<form onsubmit="event.preventDefault();workspaceAdd()"><h2>添加工作区</h2><label>名称（可选）<input id="workspace-name" placeholder="例如 cognitive-os"></label><label>本机文件夹路径<input id="workspace-path" required placeholder="D:/AI/code/cognitive-os" autocomplete="off"></label><button type="button" id="workspace-browse" class="sec" onclick="workspaceBrowse()">从电脑选择文件夹…</button><p class="hint">任务以这个目录解析相对路径和运行命令。此选择不会创建安全沙箱。</p><div class="row"><span id="workspace-error" role="alert"></span><button type="button" class="sec" onclick="this.closest(\'dialog\').close()">取消</button><button type="submit">添加工作区</button></div></form>';document.body.append(dialog);}
   $('workspace-error').textContent='';dialog.showModal();$('workspace-path').focus();
 }
 async function workspaceAdd(){
@@ -3292,15 +3292,35 @@ async function workspaceAdd(){
   const added=WORKSPACES.find(w=>w.path.replaceAll('\\','/').toLowerCase()===path.replaceAll('\\','/').toLowerCase());
   $('workspace-dialog').close();await workspaceSelect(added?.path || path);
 }
+let CHAT_RECOGNITION=null;
 function chatDictate(){
+  if(CHAT_RECOGNITION){CHAT_RECOGNITION.stop();return;}
   const Recognition=window.SpeechRecognition || window.webkitSpeechRecognition;
-  if(!Recognition){toast('当前浏览器不支持语音输入，可使用系统输入法语音功能');return;}
-  const recognition=new Recognition();recognition.lang='zh-CN';
-  recognition.onresult=e=>{const input=$('chat-input');if(input)input.value+=(input.value?' ':'')+e.results[0][0].transcript;};
-  recognition.onerror=()=>toast('语音输入未完成，请检查麦克风权限');recognition.start();
+  if(!Recognition){void chatSystemDictate();return;}
+  const recognition=new Recognition();recognition.lang='zh-CN';recognition.interimResults=false;
+  const target=$('chat-input'),session=CHAT_SESSION;
+  CHAT_RECOGNITION=recognition;
+  const state=active=>{const b=$('chat-mic');if(b){b.setAttribute('aria-pressed',String(active));b.title=active?'正在听写，点击停止':'语音转文字';b.style.color=active?'#dc2626':'';}};
+  recognition.onstart=()=>state(true);
+  recognition.onresult=e=>{const input=target;if(!input?.isConnected||CHAT_SESSION!==session)return;for(let i=e.resultIndex||0;i<e.results.length;i++)if(e.results[i].isFinal!==false)input.value+=(input.value?' ':'')+e.results[i][0].transcript;input.dispatchEvent(new Event('input',{bubbles:true}));};
+  recognition.onend=()=>{CHAT_RECOGNITION=null;state(false);};
+  recognition.onerror=e=>{CHAT_RECOGNITION=null;state(false);toast(e.error==='not-allowed'?'麦克风权限被拒绝，请在系统或浏览器中允许访问':'语音输入未完成：'+(e.error||'请重试'));};
+  try{recognition.start();}catch(e){CHAT_RECOGNITION=null;state(false);toast('无法启动语音输入：'+e.message);}
 }
+async function chatSystemDictate(){
+  const target=$('chat-input'),session=CHAT_SESSION,b=$('chat-mic');
+  CHAT_RECOGNITION={stop:()=>toast('系统听写最长15秒，将自动结束')};if(b){b.setAttribute('aria-pressed','true');b.title='系统听写中，最长15秒';}
+  try{const r=await call('POST','/v1/voice/dictate',{},30000);if(r.status!==200){toast(r.obj?.error||'系统语音输入不可用');return;}if(target?.isConnected&&CHAT_SESSION===session&&r.obj?.text){target.value+=(target.value?' ':'')+r.obj.text;target.dispatchEvent(new Event('input',{bubbles:true}));}else if(!r.obj?.text)toast('没有识别到语音，请重试');}
+  finally{CHAT_RECOGNITION=null;if(b?.isConnected){b.setAttribute('aria-pressed','false');b.title='语音转文字';}}
+}
+async function workspaceBrowse(){const b=$('workspace-browse');if(b)b.disabled=true;try{const r=await call('POST','/v1/workspaces/browse',{},125000);if(r.obj?.path)$('workspace-path').value=r.obj.path;else if(!r.obj?.cancelled)$('workspace-error').textContent=r.obj?.error||'无法选择文件夹，请手动输入路径';}finally{if(b)b.disabled=false;}}
+function chatApproval(t,session){let box=$('chat-approval');if(!box){box=document.createElement('div');box.id='chat-approval';$('chat-status')?.after(box);}if(!box)return;const key=t.approval?session+':'+t.id+':'+t.approval.id:'';if(key&&box.dataset.key===key)return;box.dataset.key=key;box.replaceChildren();if(!t.approval)return;
+  box.setAttribute('role','alert');const title=document.createElement('strong');title.textContent='等待批准：'+t.approval.tool;box.append(title);
+  const args=document.createElement('pre');args.style.cssText='max-height:180px;overflow:auto;white-space:pre-wrap';args.textContent=t.approval.args;box.append(args);
+  for(const [label,allow] of [['批准本次',true],['拒绝',false]]){const b=document.createElement('button');b.textContent=label;b.onclick=async()=>{box.querySelectorAll('button').forEach(x=>x.disabled=true);const r=await call('POST','/v1/tasks/'+t.id+'/approval',{id:t.approval.id,session,allow});if(r.status!==200){toast(r.obj?.error||'审批失败');box.querySelectorAll('button').forEach(x=>x.disabled=false);}};box.append(b);}}
 
 async function loadChat(){
+  const permission=$('chat-permission');if(permission){const saved=localStorage.getItem('chat-permission');if(['ask','auto','full'].includes(saved))permission.value=saved;}
   const box = $('chat-box'); if(!box) return;
   if(CHAT_SESSION === 'default' && !CHAT_NEW_SESSION) await chatNewSession({ensure:true});
   renderChatTabs(CHAT_TABS_CACHE);
@@ -3835,6 +3855,7 @@ function chatHistoryEntries(turns, runs){
 }
 
 async function chatSwitchSession(id){
+  chatApproval({},id);
   if(id === CHAT_SESSION){ switchPanel('chat'); chatFocusComposer(id); return; }
   chatCacheStore(); // 保存当前会话消息，切回时即时回放
   CHAT_SELECTED_INFO=CHAT_TABS_CACHE.find(s=>s.id===id) || null;
@@ -3866,6 +3887,7 @@ function chatFocusComposer(session){
 
 let CHAT_NEW_SESSION_REQUEST = null;
 async function chatNewSession(options={}){
+  chatApproval({},CHAT_SESSION);
   /* Panel initialization may join an in-flight creation. An explicit New Chat
      click must create its own session, even while the previous creation is
      still loading configuration; queue it instead of selecting that session. */
@@ -4130,6 +4152,21 @@ function flowTaskStatus(t){
   const detail = taskProgressText(t);
   return '状态: ' + t.status + (detail ? (t.flow_nodes ? '\n' : ' · ') + detail : '');
 }
+function flowLiveProgress(t){
+  FLOW_MIRROR.live=t;
+  let box=$('flow-live');if(!box){box=document.createElement('div');box.id='flow-live';const anchor=$('flow-out');if(!anchor)return;anchor.before(box);}
+  const expanded=new Map(Array.from(box.querySelectorAll('details[data-key]'),d=>[d.dataset.key,d.open]));
+  box.replaceChildren();box.setAttribute('role','status');box.setAttribute('aria-live','polite');
+  const title=document.createElement('strong');const nodes=Array.isArray(t.flow_nodes)?t.flow_nodes:[];
+  title.textContent='任务 #'+t.id+' · '+t.status+' · '+nodes.filter(n=>n.status==='ok').length+'/'+nodes.length+' 节点完成';box.append(title);
+  if(!nodes.length){const p=document.createElement('p');p.textContent='等待节点进度；连接正常时会自动更新。';box.append(p);return;}
+  for(const n of nodes){const row=document.createElement('details');row.dataset.key=t.id+':'+n.id;row.open=expanded.has(row.dataset.key)?expanded.get(row.dataset.key):n.status==='running'||n.status==='error';
+    const summary=document.createElement('summary');const token=n.usage_available!==false&&n.tokens_in!==undefined&&n.tokens_out!==undefined?(n.tokens_in+n.tokens_out):'未提供';
+    const elapsed=n.elapsed_ms!==undefined?Math.floor(n.elapsed_ms/1000)+'秒':'未提供';
+    summary.textContent=(n.id||'?')+' · '+(n.agent||'Agent')+' · '+({running:'执行中',queued:'等待依赖',ok:'已完成',error:'失败',blocked:'已阻断',cancelled:'已取消',timeout:'超时'}[n.status]||n.status)+' · '+(n.activity||n.stage||'')+' · 耗时 '+elapsed+' · 模型请求 '+(n.llm_calls?? '未提供')+' · 工具 '+(n.tool_calls?? '未提供')+' · tokens '+token;row.append(summary);
+    if(n.model_error||n.reason){const p=document.createElement('p');p.textContent=n.model_error||n.reason;row.append(p);}
+    for(const [index,s] of (n.steps||[]).entries()){const detail=document.createElement('details');detail.dataset.key=row.dataset.key+':tool:'+index;detail.open=expanded.get(detail.dataset.key)||false;const label=document.createElement('summary');label.textContent=(s.tool||'工具')+' · '+(s.ok===1?'成功':'失败')+' · '+(s.ms??0)+'ms';detail.append(label);const pre=document.createElement('pre');pre.style.cssText='white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow:auto';pre.textContent=(s.args||'')+'\n'+(s.out||'');detail.append(pre);row.append(detail);}box.append(row);}
+}
 
 /* Claude-Code 风格步骤化执行显示：● Tool(args) + ⎿ 输出首行摘要（不刷屏）；
  * RUNNING 时末尾显示 ⏳ 思考中…；无步骤数据时回退到过程日志尾部。
@@ -4329,6 +4366,7 @@ function flowSaveState(){
 }
 
 function flowRestoreState(){
+  if(FLOW_MIRROR.live)flowLiveProgress(FLOW_MIRROR.live);
   const t = $('flow-task'), j = $('flow-json'), o = $('flow-out');
   if(t && FLOW_MIRROR.task) t.value = FLOW_MIRROR.task;
   if(j && FLOW_MIRROR.json) j.value = FLOW_MIRROR.json;
@@ -4381,6 +4419,7 @@ async function flowAuto(){
       return;
     }
     const t = r.obj;
+    if(t?.status)flowLiveProgress(t);
     if(t && t.status && t.status !== 'DONE')
       flowStatus('gen-status', flowTaskStatus(t));
     if(t && (t.status === 'DONE' || t.status === 'FAILED' || t.status === 'CANCELLED' || t.status === 'TIMEOUT')){
@@ -4678,6 +4717,7 @@ async function flowChat(promptPrefix, statusEl){
       await new Promise(res => setTimeout(res, 300));
       continue;
     }
+    if(t?.status)flowLiveProgress(t);
     if(t && t.status && t.status !== 'DONE')
       flowStatus(which, flowTaskStatus(t));
     if(t && (t.status === 'DONE' || t.status === 'FAILED' || t.status === 'CANCELLED' || t.status === 'TIMEOUT')){
@@ -4739,6 +4779,7 @@ async function flowRun(){
       await new Promise(res => setTimeout(res, 300));
       continue;
     }
+    if(t?.status)flowLiveProgress(t);
     flowStatus('status', (t && t.status && t.status !== 'DONE')
       ? flowTaskStatus(t) : '');
     if(t && (t.status === 'DONE' || t.status === 'FAILED' || t.status === 'CANCELLED' || t.status === 'TIMEOUT')){
@@ -5613,6 +5654,7 @@ async function chatPollTask(session,id,entry){
       }
       failures = 0;
       const t = r.obj;
+      if(CHAT_SESSION===session)chatApproval(t,session);
       chatApplyProgress(session,id,t);
       const final = {DONE:'completed',FAILED:'failed',CANCELLED:'cancelled',TIMEOUT:'timed_out'}[t.status];
       if(final){
@@ -5655,7 +5697,7 @@ async function chatSubmit(resume = false){
   entry.pending = true; entry.progress = {stage:'submitting'};
   CHAT_CACHE[session] = CHAT_MSGS; renderChatEntry(entry);
   const r = await call('POST',resume ? '/v1/chat/sessions/' + encodeURIComponent(session) + '/resume' : '/v1/chat',
-    resume ? {thinking:chatThinkingEnabled()} : {message:full,session,workspace:executionWorkspace || undefined,thinking:chatThinkingEnabled(),attachments:attachments.map(a=>a.id)});
+    resume ? {thinking:chatThinkingEnabled()} : {message:full,session,workspace:executionWorkspace || undefined,permission_mode:$('chat-permission')?.value||'auto',thinking:chatThinkingEnabled(),attachments:attachments.map(a=>a.id)});
   CHAT_SUBMITTING.delete(session);
   if(!Number.isInteger(r.obj?.id)){
     entry.pending = false; entry.progress.stage = 'failed';

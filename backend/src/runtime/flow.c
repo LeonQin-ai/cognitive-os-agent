@@ -360,6 +360,13 @@ static void flow_prog_node_mark(int64_t task_id, const char *id, int state) {
 static cJSON *flow_node_diagnostics(reasoning *rn) {
     cJSON *o=cJSON_CreateObject();
     if (!o) return NULL;
+    char *saved=reasoning_progress_snapshot(rn);cJSON *snapshot=saved?cJSON_Parse(saved):NULL;free(saved);
+    const char *keys[]={"stage","activity","model","usage_available","model_failures","model_error"};
+    for(size_t i=0;i<sizeof(keys)/sizeof(keys[0]);i++){
+        cJSON *field=cJSON_GetObjectItemCaseSensitive(snapshot,keys[i]);
+        if(field)cJSON_AddItemToObject(o,keys[i],cJSON_Duplicate(field,1));
+    }
+    cJSON_Delete(snapshot);
     long long elapsed=0,tin=0,tout=0,llm_ms=0,tool_ms=0;
     int round=0,tools=0,calls=0; const char *cur=NULL;
     reasoning_progress_ex(rn,&elapsed,&round,&tools,&cur,&tin,&tout,&llm_ms,&tool_ms,&calls);

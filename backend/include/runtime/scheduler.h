@@ -41,6 +41,10 @@ typedef struct task {
     char *attachments_json; /* owned immutable task snapshot; never in history */
     char *workspace; /* owned immutable execution directory, never process chdir */
     int stream_preview;
+    int permission_mode; /* 0 existing policy, 1 approve every tool, 2 approve risky tools */
+    unsigned approval_id;
+    int approval_pending, approval_decision;
+    const char *approval_tool, *approval_args; /* borrowed while worker waits; progress_mtx */
     unsigned preview_generation;
     strbuf preview_text; /* provisional model text, guarded by progress_mtx */
     char *input;  /* task description / prompt */
@@ -64,6 +68,8 @@ typedef struct task {
 #undef TASK_ATOMIC
 
 typedef struct scheduler scheduler;
+int64_t scheduler_submit_access(scheduler *s,int priority,const char *input,void *userdata,
+    int64_t timeout_ms,const char *tag,int thinking_mode,const char *attachments,const char *workspace,int stream_preview,int permission_mode);
 int64_t scheduler_submit_preview(scheduler *s,int priority,const char *input,void *userdata,
     int64_t timeout_ms,const char *tag,int thinking_mode,const char *attachments,const char *workspace,int stream_preview);
 

@@ -364,6 +364,11 @@ int64_t scheduler_submit_workspace(scheduler *s, int priority, const char *input
 }
 int64_t scheduler_submit_preview(scheduler *s,int priority,const char *input,void *userdata,
     int64_t timeout_ms,const char *tag,int thinking_mode,const char *attachments,const char *workspace,int stream_preview){
+    return scheduler_submit_access(s,priority,input,userdata,timeout_ms,tag,thinking_mode,attachments,workspace,stream_preview,0);
+}
+int64_t scheduler_submit_access(scheduler *s,int priority,const char *input,void *userdata,
+    int64_t timeout_ms,const char *tag,int thinking_mode,const char *attachments,const char *workspace,int stream_preview,int permission_mode){
+    if(permission_mode<0||permission_mode>2)return -1;
     task *t = calloc(1, sizeof(task));
     int64_t id;
 
@@ -394,6 +399,7 @@ int64_t scheduler_submit_preview(scheduler *s,int priority,const char *input,voi
     t->attachments_json = attachments ? xstrdup(attachments) : NULL;
     t->workspace = workspace ? xstrdup(workspace) : NULL;
     t->stream_preview=stream_preview;
+    t->permission_mode=permission_mode;
     t->thinking_mode = thinking_mode != 0;
     t->userdata = userdata;
     t->sched = s;

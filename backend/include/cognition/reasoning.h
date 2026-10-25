@@ -119,6 +119,7 @@ char *reasoning_session_json(reasoning *r);
  * the tool currently running ("" between runs) and cumulative LLM token
  * usage (0 when the provider never reported usage). Fields are polled
  * without a lock — display-grade accuracy, not exact accounting. */
+char *reasoning_progress_snapshot(reasoning *r); /* owned JSON copy; safe during execution */
 void reasoning_progress(reasoning *r, long long *elapsed_ms, int *round, int *tool_calls,
                         const char **cur_tool, long long *tokens_in, long long *tokens_out);
 

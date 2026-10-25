@@ -64,7 +64,7 @@ static void task_done(task *t, void *ud) {
     /* durable journal: append the terminal transition for checkpoint/resume */
     char *trace = task_trace_copy(t);
     char *spans = trace_json_task_limit(ctx->trace, t->id, 128);
-    tasklog_record(ctx->tasklog, t->id, st, t->tag, t->input, t->output, trace, spans);
+    tasklog_record_access(ctx->tasklog, t->id, st, t->tag, t->input, t->output, trace, spans,t->permission_mode);
     free(trace);
     free(spans);
     /* collaboration tasks: mirror terminal status into the persistent registry */
@@ -583,7 +583,7 @@ static void sched_trampoline(task *t, scheduler *s, void *ud) {
         return;
     }
 
-    tasklog_record(ctx->tasklog,t->id,"RUNNING",t->tag,t->input,NULL,NULL,NULL);
+    tasklog_record_access(ctx->tasklog,t->id,"RUNNING",t->tag,t->input,NULL,NULL,NULL,t->permission_mode);
     scheduler_yield(); /* cooperative fairness: let another task start first */
     if (t->userdata) {
         /* userdata marker (set by /v1/orchestrate = 1, /v1/flows = 2): run the

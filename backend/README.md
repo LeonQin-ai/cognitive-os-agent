@@ -11,7 +11,7 @@ The design follows the principle that the LLM is a *cognitive accelerator*, not 
 control center: every model call goes through the same policy-checked, transactional
 pipeline as any other action.
 
-## Terminal client (development branch)
+## Terminal client
 
 The `chat` subcommand connects to a running Cognitive OS server and reuses its
 configured model, durable sessions, tools, and task journal. It does not start a
@@ -638,3 +638,14 @@ python -m pip install -r tools/requirements-attachments.txt
 
 旧版 Office 与完整 Word/PPT 页面渲染需要 Word/PowerPoint 或 LibreOffice。
 上传结果会区分可读取、解析失败和不支持的状态；缺少转换器不会误报可分析。
+
+
+## Desktop workspace, permission and voice controls
+
+The workspace dialog offers **从电脑选择文件夹**. It opens the folder picker on the computer running the Runtime (Windows native folder dialog, macOS chooser, Linux zenity); manual paths remain available. Choosing a workspace sets the execution directory, not a filesystem sandbox.
+
+The composer permission selector applies to each new chat task: **逐次批准** waits before every tool, **自动批准低风险** approves low-risk observations and asks for other tools using the existing tool-risk score, and **完全访问** adds no interactive approval. Existing global deny policies still apply in every mode. Approval is for one action, belongs to its session, expires on cancellation, and is never a permanent tool grant. A pending request displays the tool parameters (SSH credentials redacted) and Approve/Reject buttons. Resuming an in-memory task retains its mode; persisted task modes survive restart, while legacy records retain their original global-policy behavior.
+
+The microphone appends recognized speech to the draft without sending it. Supported browsers use SpeechRecognition, with recording/stop and permission-error states. Windows desktop hosts without that API can use installed Windows System.Speech recognizers for one utterance up to 15 seconds. Microphone access and an installed speech language are required; unsupported systems show an explicit error rather than pretend recognition succeeded. Audio recognition is not a Cognitive OS model API call.
+
+Flow execution now includes node cards showing agent, execution stage, elapsed time, model calls, tools and reported usage. Tool arguments/results remain expandable; missing usage is labeled unavailable. Existing tasks are not restarted by these UI changes.

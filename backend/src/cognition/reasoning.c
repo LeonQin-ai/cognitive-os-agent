@@ -2467,9 +2467,28 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
          * Record the refusal and keep going — a policy refusal is a legitimate
          * outcome, not an infrastructure failure, so it must not fail the
          * pipeline (the planner sees the refusal in the next round). */
-        if (r->policy) {
+        int access_denied=0;
+        task *approval_task=r->run_task;
+        if(approval_task && (approval_task->permission_mode==1 ||
+            (approval_task->permission_mode==2 && policy_risk(r->actions[i].tool,r->actions[i].args_json)>=20))) {
+            mutex_lock(&approval_task->progress_mtx);
+            approval_task->approval_id++;approval_task->approval_pending=1;approval_task->approval_decision=0;
+            approval_task->approval_tool=r->actions[i].tool;approval_task->approval_args=r->actions[i].args_json;
+            mutex_unlock(&approval_task->progress_mtx);
+            int64_t deadline=time_now_ms()+300000;
+            for(;;){
+                mutex_lock(&approval_task->progress_mtx);int decision=approval_task->approval_decision;
+                mutex_unlock(&approval_task->progress_mtx);
+                if(decision || run_aborted(r) || time_now_ms()>=deadline){access_denied=decision!=1;break;}
+                time_sleep_ms(50);
+            }
+            mutex_lock(&approval_task->progress_mtx);approval_task->approval_pending=0;
+            approval_task->approval_tool=approval_task->approval_args=NULL;mutex_unlock(&approval_task->progress_mtx);
+            if(run_aborted(r))break;
+        }
+        if (r->policy || access_denied) {
             const char *preason = NULL;
-            if (policy_check(r->policy, r->actions[i].tool, r->actions[i].args_json, &preason) == POLICY_DENY) {
+            if (access_denied || policy_check(r->policy, r->actions[i].tool, r->actions[i].args_json, &preason) == POLICY_DENY) {
                 r->denied_actions++;
                 strbuf_appendf(&b, "[%s] denied by policy (%s)\n", r->actions[i].tool, preason ? preason : "rule");
                 char el[128];
@@ -4734,6 +4753,11 @@ restart_planning:
 /* Live progress snapshot of the current (or most recently finished) run.
  * Fields are read without a lock — display-grade accuracy only. tokens are
  * cumulative LLM usage on the active provider instance. */
+char *reasoning_progress_snapshot(reasoning *r){
+    if(!r)return NULL;mutex_lock(&r->progress_mtx);
+    char *snapshot=r->progress_json?xstrdup(r->progress_json):NULL;
+    mutex_unlock(&r->progress_mtx);return snapshot;
+}
 void reasoning_progress(reasoning *r, long long *elapsed_ms, int *round, int *tool_calls,
                         const char **cur_tool, long long *tokens_in, long long *tokens_out) {
     reasoning_progress_ex(r, elapsed_ms, round, tool_calls, cur_tool, tokens_in, tokens_out, NULL, NULL, NULL);

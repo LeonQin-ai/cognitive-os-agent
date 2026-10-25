@@ -25,6 +25,9 @@ int tasklog_recover(tasklog *tl, int64_t *next_id);
  * Both are serialized only at completion. */
 void tasklog_record(tasklog *tl, int64_t id, const char *status, const char *session, const char *input,
                     const char *output, const char *trace_json, const char *spans_json);
+void tasklog_record_access(tasklog *tl,int64_t id,const char *status,const char *session,const char *input,
+    const char *output,const char *trace_json,const char *spans_json,int permission_mode);
+int tasklog_permission_mode(tasklog *tl,int64_t id);
 
 /* Last `limit` records as a JSON array (caller frees). NULL tl → "[]". */
 char *tasklog_json(tasklog *tl, int limit);

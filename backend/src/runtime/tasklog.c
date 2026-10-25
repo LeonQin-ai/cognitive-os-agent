@@ -45,6 +45,10 @@ void tasklog_free(tasklog *tl) {
 
 void tasklog_record(tasklog *tl, int64_t id, const char *status, const char *session, const char *input,
                     const char *output, const char *trace_json, const char *spans_json) {
+    tasklog_record_access(tl,id,status,session,input,output,trace_json,spans_json,0);
+}
+void tasklog_record_access(tasklog *tl,int64_t id,const char *status,const char *session,const char *input,
+    const char *output,const char *trace_json,const char *spans_json,int permission_mode){
     cJSON *o;
     char *line;
     FILE *f;
@@ -57,6 +61,7 @@ void tasklog_record(tasklog *tl, int64_t id, const char *status, const char *ses
         return;
     cJSON_AddNumberToObject(o, "id", (double)id);
     cJSON_AddStringToObject(o, "status", status ? status : "?");
+    cJSON_AddNumberToObject(o,"permission_mode",permission_mode>=0&&permission_mode<=2?permission_mode:1);
     cJSON_AddStringToObject(o, "session", session && *session ? session : "");
     cJSON_AddStringToObject(o, "input", input ? input : "");
     if (output && *output) {
@@ -159,6 +164,13 @@ char *tasklog_json(tasklog *tl, int limit) {
     return s ? s : xstrdup("[]");
 }
 
+int tasklog_permission_mode(tasklog *tl,int64_t id){
+    if(!tl)return 1;mutex_lock(&tl->mtx);cJSON *arr=journal_parse(tl->path,0,id);mutex_unlock(&tl->mtx);
+    if(!arr)return 1;
+    int mode=0;cJSON *it;cJSON_ArrayForEach(it,arr){cJSON *v=cJSON_GetObjectItemCaseSensitive(it,"permission_mode");
+        if(v)mode=cJSON_IsNumber(v)&&v->valuedouble>=0&&v->valuedouble<=2&&(int)v->valuedouble==v->valuedouble?v->valueint:1;}
+    cJSON_Delete(arr);return mode;
+}
 int tasklog_find(tasklog *tl, int64_t id, char **status, char **session, char **input, char **output) {
     cJSON *arr = NULL, *hit = NULL, *it;
     int found = 0;
@@ -232,10 +244,12 @@ int tasklog_recover(tasklog *tl,int64_t *next_id) {
         cJSON *o=records[i].json;
         const char *status=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(o,"status"));
         if(status && (!strcmp(status,"RUNNING") || !strcmp(status,"QUEUED"))) {
-            tasklog_record(tl,records[i].id,"INTERRUPTED",
+            cJSON *access=cJSON_GetObjectItemCaseSensitive(o,"permission_mode");
+            tasklog_record_access(tl,records[i].id,"INTERRUPTED",
                 cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(o,"session")),
                 cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(o,"input")),
-                "Runtime restarted before task completion; inspect checkpoint and explicitly resume.",NULL,NULL);
+                "Runtime restarted before task completion; inspect checkpoint and explicitly resume.",NULL,NULL,
+                !access?0:(cJSON_IsNumber(access)&&access->valuedouble>=0&&access->valuedouble<=2&&access->valuedouble==access->valueint?access->valueint:1));
             interrupted++;
         }
     }

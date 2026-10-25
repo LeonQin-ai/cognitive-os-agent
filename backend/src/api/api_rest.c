@@ -202,6 +202,41 @@ static char *workspace_previous_task(runtime_ctx *ctx,int64_t task_id,const char
     cJSON_Delete(o);mutex_unlock(&ctx->workspace_lock);
     char *selected=workspace_pick(ctx,body,sid);cJSON_Delete(body);return selected;
 }
+static int h_voice_dictation(const http_request *req,http_response *resp,void *ud){
+    runtime_ctx *ctx=ud;if(!authz_ok(ctx,req,resp))return 0;
+#ifdef _WIN32
+    static atomic_flag busy=ATOMIC_FLAG_INIT;
+    if(atomic_flag_test_and_set(&busy)){resp->status=409;http_resp_json(resp,"{\"error\":\"dictation already active\"}");return 0;}
+    const char *command="powershell.exe -NoProfile -NonInteractive -Command \"$ErrorActionPreference='Stop';$ProgressPreference='SilentlyContinue';[Console]::OutputEncoding=[Text.Encoding]::UTF8;try{Add-Type -AssemblyName System.Speech;$all=[System.Speech.Recognition.SpeechRecognitionEngine]::InstalledRecognizers();$info=$all | Where-Object {$_.Culture.Name -eq 'zh-CN'} | Select-Object -First 1;if(-not $info){$info=$all | Select-Object -First 1};if(-not $info){exit 2};$e=New-Object System.Speech.Recognition.SpeechRecognitionEngine($info);try{$e.LoadGrammar((New-Object System.Speech.Recognition.DictationGrammar));$e.SetInputToDefaultAudioDevice();$r=$e.Recognize([TimeSpan]::FromSeconds(15));if($r){[Console]::Write($r.Text)}}finally{$e.Dispose()}}catch{exit 1}\"";
+    proc_result *r=proc_run_native_in(command,25000,NULL);atomic_flag_clear(&busy);
+    cJSON *o=cJSON_CreateObject();
+    if(r && r->exit_code==0)cJSON_AddStringToObject(o,"text",r->output?r->output:"");
+    else{resp->status=503;cJSON_AddStringToObject(o,"error","System dictation unavailable. Enable microphone access and install a Windows speech language, or use a browser with SpeechRecognition.");}
+    char *json=cJSON_PrintUnformatted(o);http_resp_json(resp,json?json:"{}");free(json);cJSON_Delete(o);proc_result_free(r);
+#else
+    resp->status=501;http_resp_json(resp,"{\"error\":\"Use browser SpeechRecognition or system voice input on this platform.\"}");
+#endif
+    return 0;
+}
+static int h_workspace_browse(const http_request *req,http_response *resp,void *ud){
+    runtime_ctx *ctx=ud;if(!authz_ok(ctx,req,resp))return 0;
+    static atomic_flag busy=ATOMIC_FLAG_INIT;
+    if(atomic_flag_test_and_set(&busy)){resp->status=409;http_resp_json(resp,"{\"error\":\"folder picker already open\"}");return 0;}
+#ifdef _WIN32
+    const char *command="powershell.exe -NoProfile -NonInteractive -STA -Command \"$ProgressPreference='SilentlyContinue';[Console]::OutputEncoding=[Text.Encoding]::UTF8;Add-Type -AssemblyName System.Windows.Forms;$d=New-Object System.Windows.Forms.FolderBrowserDialog;$d.Description='Select Cognitive OS workspace';if($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK){[Console]::Write($d.SelectedPath)};$d.Dispose()\"";
+#elif defined(__APPLE__)
+    const char *command="osascript -e 'POSIX path of (choose folder with prompt \"Select Cognitive OS workspace\")'";
+#else
+    const char *command="zenity --file-selection --directory --title='Select Cognitive OS workspace'";
+#endif
+    proc_result *result=proc_run_native_in(command,120000,NULL);
+    atomic_flag_clear(&busy);
+    cJSON *o=cJSON_CreateObject();
+    if(result && result->exit_code==0){char *path=result->output;while(path && *path && (path[strlen(path)-1]=='\n'||path[strlen(path)-1]=='\r'))path[strlen(path)-1]=0;
+        if(path && *path)cJSON_AddStringToObject(o,"path",path);else cJSON_AddBoolToObject(o,"cancelled",1);
+    }else{resp->status=503;cJSON_AddStringToObject(o,"error","Folder selection cancelled or unavailable; enter the folder path manually.");}
+    char *json=cJSON_PrintUnformatted(o);http_resp_json(resp,json?json:"{}");free(json);cJSON_Delete(o);proc_result_free(result);return 0;
+}
 static int h_workspaces(const http_request *req,http_response *resp,void *ud) {
     runtime_ctx *ctx=ud;if(!authz_ok(ctx,req,resp))return 0;
     char *text=body_str(req);cJSON *body=text?cJSON_Parse(text):NULL;free(text);
@@ -307,6 +342,15 @@ static int h_task_get(const http_request *req, http_response *resp, void *ud) {
     o = cJSON_CreateObject();
     cJSON_AddNumberToObject(o, "id", (double)t->id);
     cJSON_AddStringToObject(o, "status", task_status_str(t->status));
+    cJSON_AddNumberToObject(o,"permission_mode",t->permission_mode);
+    mutex_lock(&t->progress_mtx);
+    if(t->approval_pending){cJSON *a=cJSON_AddObjectToObject(o,"approval");
+        cJSON_AddNumberToObject(a,"id",t->approval_id);
+        cJSON_AddStringToObject(a,"tool",t->approval_tool?t->approval_tool:"");
+        const char *args=t->approval_args?t->approval_args:"{}";
+        char *safe=secret_redact_ssh_passwords(args,strlen(args),NULL);
+        cJSON_AddStringToObject(a,"args",safe?safe:"[parameters unavailable]");free(safe);}
+    mutex_unlock(&t->progress_mtx);
     cJSON_AddStringToObject(o,"workspace",t->workspace?t->workspace:(ctx->workspace?ctx->workspace:"."));
     if(t->stream_preview){mutex_lock(&t->progress_mtx);
         cJSON_AddNumberToObject(o,"preview_generation",t->preview_generation);
@@ -462,7 +506,24 @@ static int h_task_journal(const http_request *req, http_response *resp, void *ud
 /* POST /v1/tasks/<id>/resume — re-submit a terminal task's original input as
  * a new task (checkpoint resume). Reads the newest journal record for the id;
  * only DONE/FAILED/CANCELLED/TIMEOUT tasks are resumable. */
+static int h_task_approval(const http_request *req,http_response *resp,void *ud){
+    runtime_ctx *ctx=ud;if(!authz_ok(ctx,req,resp))return 0;
+    char *end=NULL;long long id=strtoll(req->path+strlen("/v1/tasks/"),&end,10);
+    if(id<0||!end||strcmp(end,"/approval")){resp->status=400;http_resp_json(resp,"{\"error\":\"invalid approval route\"}");return 0;}
+    char *body=body_str(req);cJSON *root=body?cJSON_Parse(body):NULL;free(body);
+    cJSON *seq=cJSON_GetObjectItemCaseSensitive(root,"id"),*allow=cJSON_GetObjectItemCaseSensitive(root,"allow");
+    const char *session=root?json_str(root,"session"):NULL;
+    task *t=scheduler_acquire(ctx->scheduler,id);int ok=0;
+    if(t){mutex_lock(&t->progress_mtx);
+        if(t->status==TS_RUNNING && t->approval_pending && !t->approval_decision && cJSON_IsNumber(seq) &&
+           seq->valuedouble==t->approval_id && cJSON_IsBool(allow) && session && !strcmp(session,t->tag?t->tag:"default")){
+            t->approval_decision=cJSON_IsTrue(allow)?1:-1;ok=1;}
+        mutex_unlock(&t->progress_mtx);}
+    scheduler_release(ctx->scheduler,t);cJSON_Delete(root);resp->status=ok?200:409;
+    http_resp_json(resp,ok?"{\"ok\":true}":"{\"error\":\"approval expired or belongs to another session\"}");return 0;
+}
 static int h_task_resume(const http_request *req, http_response *resp, void *ud) {
+    if(strstr(req->path,"/approval"))return h_task_approval(req,resp,ud);
     if (strstr(req->path, "/messages")) return h_task_message(req, resp, ud);
     runtime_ctx *ctx = (runtime_ctx *)ud;
     const char *suffix;
@@ -511,7 +572,10 @@ static int h_task_resume(const http_request *req, http_response *resp, void *ud)
     }
     char *directory=workspace_previous_task(ctx,id,session);
     if(!directory){free(status);free(session);free(input);free(output);resp->status=400;http_resp_json(resp,"{\"error\":\"original workspace is unavailable\"}");return 0;}
-    int64_t nid = scheduler_submit_workspace(ctx->scheduler,0,input,NULL,0,session,0,NULL,directory);
+    task *previous=scheduler_acquire(ctx->scheduler,id);
+    int access_mode=previous?previous->permission_mode:tasklog_permission_mode(ctx->tasklog,id);
+    scheduler_release(ctx->scheduler,previous);
+    int64_t nid = scheduler_submit_access(ctx->scheduler,0,input,NULL,0,session,0,NULL,directory,0,access_mode);
     if(nid>=0)workspace_bind(ctx,NULL,directory,nid);free(directory);
     if (nid < 0) {
         scheduler_submit_error(resp, nid);
@@ -603,8 +667,12 @@ static int h_chat(const http_request *req, http_response *resp, void *ud) {
         free(directory);free(safe_msg);free(attachments);cJSON_Delete(root);resp->status=400;
         http_resp_json(resp,"{\"error\":\"workspace must be registered, available and saved\"}");return 0;
     }
-    id = scheduler_submit_preview(ctx->scheduler,0,safe_msg,NULL,0,session,thinking,attachments,directory,
-        cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(root,"stream")));
+    const char *access=json_str(root,"permission_mode");int mode=0;
+    if(cJSON_GetObjectItemCaseSensitive(root,"permission_mode") && !access){free(directory);free(safe_msg);free(attachments);cJSON_Delete(root);resp->status=400;http_resp_json(resp,"{\"error\":\"permission mode must be a string\"}");return 0;}
+    if(access){if(!strcmp(access,"ask"))mode=1;else if(!strcmp(access,"auto"))mode=2;
+        else if(strcmp(access,"full")){free(directory);free(safe_msg);free(attachments);cJSON_Delete(root);resp->status=400;http_resp_json(resp,"{\"error\":\"invalid permission mode\"}");return 0;}}
+    id = scheduler_submit_access(ctx->scheduler,0,safe_msg,NULL,0,session,thinking,attachments,directory,
+        cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(root,"stream")),mode);
     if(id>=0)workspace_bind(ctx,NULL,directory,id);free(directory);
     if (id >= 0)
         reasoning_session_note_prompt(ctx->reasoning, session, safe_msg);
@@ -747,7 +815,7 @@ static int h_chat_session_post(const http_request *req, http_response *resp, voi
         }
         char *directory=workspace_pick(ctx,NULL,sid);
         if(!directory){free(input);resp->status=400;http_resp_json(resp,"{\"error\":\"workspace is unavailable\"}");return 0;}
-        int64_t nid = scheduler_submit_workspace(ctx->scheduler,0,input,NULL,0,sid,0,NULL,directory);
+        int64_t nid = scheduler_submit_access(ctx->scheduler,0,input,NULL,0,sid,0,NULL,directory,0,1);
         if(nid>=0)workspace_bind(ctx,NULL,directory,nid);free(directory);
         free(input);
         if (nid < 0) {
@@ -5521,6 +5589,8 @@ int api_attach(runtime_ctx *ctx) {
     http_server_route(ctx->http, "POST", "/v1/chat", h_chat, ctx);
     http_server_route(ctx->http, "GET", "/v1/chat/history", h_chat_history, ctx);
     http_server_route(ctx->http, "GET", "/v1/chat/sessions", h_chat_sessions, ctx);
+    http_server_route_concurrent(ctx->http,"POST","/v1/voice/dictate",h_voice_dictation,ctx);
+    http_server_route_concurrent(ctx->http,"POST","/v1/workspaces/browse",h_workspace_browse,ctx);
     http_server_route(ctx->http,"GET","/v1/workspaces",h_workspaces,ctx);
     http_server_route(ctx->http,"POST","/v1/workspaces",h_workspaces,ctx);
     http_server_route(ctx->http, "POST", "/v1/chat/sessions", h_chat_session_post, ctx);

@@ -112,6 +112,8 @@ with tempfile.TemporaryDirectory(prefix='coa-flow-deps-') as folder:
             live=request('/v1/tasks/'+str(started['id']))
             nodes={n['id']:n for n in live['flow_nodes']}
             assert nodes['a']['status']=='running' and nodes['b']['status']=='queued',live
+            assert nodes['a']['stage']=='planning' and nodes['a']['activity'],live
+            assert nodes['a']['model'] and nodes['a']['usage_available'] is False,live
             assert counts.get('child',0)==0 and not (state/'api-step2.txt').exists()
             release.set()
             task=finished(started['id'])
