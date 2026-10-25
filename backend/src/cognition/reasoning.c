@@ -292,7 +292,7 @@ struct reasoning {
     int planner_response_truncated;
     int planner_native_end_turn;
     cJSON *file_equalities; /* structured native completion obligations, sticky for this run */
-    int file_checks_failed, file_checks_invalid;
+    int file_checks_failed, file_checks_invalid, file_checks_running;
     char file_check_error[600];
     int planner_output_escalated; /* one bounded 32K -> 64K retry after truncation */
     int completion_review_required; /* legacy review must make an explicit decision */
@@ -513,6 +513,24 @@ static void resolve_failed_tool(reasoning *r, const char *tool_name, const char 
 /* A model may stop probing a guessed, nonessential source path after proving
  * absence. This decision is structured, not inferred from answer wording.
  * It cannot waive writes, commands, existing unread files or unrelated scopes. */
+static void progress_emit(reasoning *r,const char *stage);
+static int completion_file_read_allowed(reasoning *r,const char *path){
+    if(!r->run_task||r->run_task->permission_mode!=1)return 1;
+    char wanted[2048];normalized_evidence_path(r,path,wanted,sizeof(wanted));
+    for(int i=0;i<r->n_steps;i++){
+        struct run_step *step=&r->steps[i];
+        if(step->ok!=1 || (strcmp(step->tool,"file_read")&&strcmp(step->tool,"file_write")&&strcmp(step->tool,"file_edit")))continue;
+        cJSON *args=cJSON_Parse(step->args?step->args:"{}");const char *keys[]={"path","copy_from"};
+        for(int k=0;k<2;k++){
+            if(k && strcmp(step->tool,"file_write"))continue;
+            const char *value=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(args,keys[k]));
+            if(value){char observed[2048];normalized_evidence_path(r,value,observed,sizeof(observed));
+                if(!strcmp(wanted,observed)){cJSON_Delete(args);return 1;}}
+        }
+        cJSON_Delete(args);
+    }
+    return 0;
+}
 static void verify_completion_files(reasoning *r,const char *completion_json){
     cJSON *decision=cJSON_Parse(completion_json?completion_json:"{}");
     cJSON *checks=cJSON_GetObjectItemCaseSensitive(decision,"file_equalities");
@@ -529,25 +547,28 @@ static void verify_completion_files(reasoning *r,const char *completion_json){
                     if(!strcmp(a,cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(old,"source")))&&
                        !strcmp(b,cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(old,"target"))))found=1;}
                 if(!found){if(cJSON_GetArraySize(r->file_equalities)>=16){r->file_checks_invalid=1;continue;}
-                    cJSON_AddItemToArray(r->file_equalities,cJSON_Duplicate(entry,1));}
+                    cJSON *copy=cJSON_Duplicate(entry,1);
+                    if(!copy||!cJSON_AddItemToArray(r->file_equalities,copy)){cJSON_Delete(copy);r->file_checks_invalid=1;}}
             }
         }
     }
     r->file_checks_failed=r->file_checks_invalid;r->file_check_error[0]=0;
     if(r->file_checks_invalid)snprintf(r->file_check_error,sizeof(r->file_check_error),"Invalid file_equalities: use up to 16 objects with source and target paths.");
+    r->file_checks_running=1;
+    if(cJSON_GetArraySize(r->file_equalities)>0)progress_emit(r,"verifying_files");
     cJSON *entry;cJSON_ArrayForEach(entry,r->file_equalities){
         const char *a=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(entry,"source"));
         const char *b=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(entry,"target"));
         int denied=0;const char *paths[]={a,b};
         for(int i=0;i<2;i++){cJSON *args=cJSON_CreateObject();cJSON_AddStringToObject(args,"path",paths[i]);char *json=cJSON_PrintUnformatted(args);
-            if(r->policy&&policy_check(r->policy,"file_read",json,NULL)!=POLICY_ALLOW)denied=1;
+            if(!json || !completion_file_read_allowed(r,paths[i]) || (r->policy&&policy_check(r->policy,"file_read",json,NULL)!=POLICY_ALLOW))denied=1;
             free(json);cJSON_Delete(args);}
         char left[4096],right[4096];path_resolve(left,sizeof(left),r->workspace,a);path_resolve(right,sizeof(right),r->workspace,b);
         int equal=denied?-1:fs_files_equal(left,right,64*1024*1024);
         if(equal!=1){r->file_checks_failed=1;snprintf(r->file_check_error,sizeof(r->file_check_error),
             "Runtime byte equality check failed: %.200s != %.200s (%s). Repair the artifact or report blocked; do not omit the declared check.",a,b,equal==0?"different bytes":"unreadable, denied, changed during verification, or over 64 MiB");break;}
     }
-    cJSON_Delete(decision);
+    r->file_checks_running=0;cJSON_Delete(decision);
 }
 static void resolve_optional_missing_reads(reasoning *r, const char *completion_json) {
     cJSON *decision=cJSON_Parse(completion_json?completion_json:"{}");
@@ -633,6 +654,8 @@ static void progress_emit(reasoning *r, const char *stage) {
         snprintf(activity, sizeof(activity), "本轮操作失败，事务内的文件修改已回滚");
     else if (strcmp(stage, "preparing_context") == 0)
         snprintf(activity, sizeof(activity), "正在整理会话上下文、已完成工作和可用工具");
+    else if (strcmp(stage,"verifying_files")==0)
+        snprintf(activity,sizeof(activity),"正在核对文件原始字节");
     else if (strcmp(stage, "executing") == 0 && r->prog_tool[0])
         snprintf(activity, sizeof(activity), "正在执行工具 %s", r->prog_tool);
     else if (strcmp(stage, "summarizing") == 0)
@@ -680,7 +703,7 @@ static void progress_emit(reasoning *r, const char *stage) {
     cJSON_AddNumberToObject(o, "model_call", r->prog_llm_calls + (strcmp(stage, "planning") == 0 ? 1 : 0));
     cJSON_AddNumberToObject(o, "model_failures", r->prog_model_failures);
     cJSON_AddNumberToObject(o,"file_equalities_checked",cJSON_GetArraySize(r->file_equalities));
-    cJSON_AddBoolToObject(o,"file_equalities_verified",r->file_equalities && cJSON_GetArraySize(r->file_equalities)>0 && !r->file_checks_failed);
+    cJSON_AddBoolToObject(o,"file_equalities_verified",r->file_equalities && cJSON_GetArraySize(r->file_equalities)>0 && !r->file_checks_failed && !r->file_checks_running);
     long long tin = 0, tout = 0;
     long long reports = 0;
     llm_usage_thread_totals(&tin, &tout, NULL, &reports);
@@ -2095,8 +2118,7 @@ static int h_reason(state_machine *sm, void *ud, const char *input, char **out) 
                                  &raw, &plan_err, r->run_task ? r->run_task->attachments_json : NULL,
                                  &r->planner_response_truncated, output_override, &r->planner_native_end_turn, &diagnostic,
                                  r->completion_review_required,&completion_json);
-    if(rc==0 && completion_json){resolve_optional_missing_reads(r,completion_json);verify_completion_files(r,completion_json);}
-    free(completion_json);
+    if(rc==0 && completion_json)resolve_optional_missing_reads(r,completion_json);
     /* Only visible generation/tool arguments can benefit from more output
      * room. An exhausted hidden-only response is not partial deliverable. */
     if (r->planner_response_truncated && !r->planner_output_escalated &&
@@ -2108,6 +2130,8 @@ static int h_reason(state_machine *sm, void *ud, const char *input, char **out) 
     trace_end(r->trace, llm_span, rc == 0 && raw ? 1 : -1);
     r->prog_llm_ms += time_now_ms() - t_llm0;
     r->prog_llm_calls++;
+    if(rc==0 && completion_json)verify_completion_files(r,completion_json);
+    free(completion_json);
     if (rc == 0 && raw)
         progress_emit(r, r->n_actions ? "plan_ready" : "response_ready");
     free(aug);

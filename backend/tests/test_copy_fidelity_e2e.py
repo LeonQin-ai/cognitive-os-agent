@@ -10,7 +10,8 @@ class Model(BaseHTTPRequestHandler):
         body=json.loads(self.rfile.read(int(self.headers['Content-Length'])))
         n=Model.calls;Model.calls+=1
         if n==0:
-            name='file_write';args={'path':'target.bin','copy_from':'source.bin'} if Model.mode=='copy' else {'path':'target.bin','content':'WRONG\n'}
+            name='file_write';args={'path':'target.bin','copy_from':'source.bin'} if Model.mode in ('copy','ask-copy') else {'path':'target.bin','content':'WRONG\n'}
+            if Model.mode=='read-guard':name='complete_task';args={'status':'complete','requires_tools':False,'answer':'Equal.','file_equalities':[{'source':'source.bin','target':'target.bin'}]}
             if Model.mode=='missing':args={'path':'target.bin','copy_from':'absent.bin'}
             if Model.mode=='ambiguous':args={'path':'target.bin','copy_from':'source.bin','content':'ambiguous'}
         elif Model.mode=='repair' and n==2:
@@ -35,10 +36,14 @@ try:
     def execute(label,mode,data):
         Model.calls=0;Model.mode=mode
         (work/'source.bin').write_bytes(data)
-        tid=req('POST','/v1/chat',{'session':label,'message':'Perform the declared fixture operation.'})['id']
+        tid=req('POST','/v1/chat',{'session':label,'message':'Perform the declared fixture operation.','permission_mode':'ask' if mode in ('read-guard','ask-copy') else 'full'})['id']
+        approvals=set()
         deadline=time.monotonic()+15
         while True:
             task=req('GET',f'/v1/tasks/{tid}')
+            if task.get('approval') and task['approval']['id'] not in approvals:
+                a=task['approval'];assert a['tool']=='file_write',a
+                req('POST',f'/v1/tasks/{tid}/approval',{'session':label,'id':a['id'],'allow':True});approvals.add(a['id'])
             if task['status'] in ('DONE','FAILED','CANCELLED','TIMEOUT'):return task
             assert time.monotonic()<deadline,task
             time.sleep(.03)
@@ -61,6 +66,11 @@ try:
             transformed=execute('intentional-different-output','transform',b'input')
             assert transformed['status']=='DONE' and (work/'target.bin').read_bytes()==b'WRONG\n',transformed
             assert transformed['file_equalities_checked']==0,transformed
+            (work/'target.bin').write_bytes(b'not disclosed')
+            guarded=execute('no-hidden-read','read-guard',b'not disclosed')
+            assert guarded['status']=='FAILED' and guarded['file_equalities_verified'] is False,guarded
+            approved=execute('approved-copy-read-scope','ask-copy',b'approved exact bytes')
+            assert approved['status']=='DONE' and approved['file_equalities_verified'],approved
             for mode in ('missing','ambiguous'):
                 (work/'target.bin').write_bytes(b'unchanged')
                 failed=execute(mode,mode,b'correct')
