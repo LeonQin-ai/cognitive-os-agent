@@ -4351,7 +4351,7 @@ restart_planning:
                 r->file_check_rejections=r->file_check_at_tools==r->prog_tool_calls?r->file_check_rejections+1:1;
                 r->file_check_at_tools=r->prog_tool_calls;
                 round_log_append(r,r->file_check_error);
-                if(r->file_check_rejections>=3||r->round_idx>=r->max_rounds){unfinished=1;final_text=xstrdup(r->file_check_error);break;}
+                if(r->file_check_rejections>=3||r->round_idx>=r->max_rounds){unfinished=1;final_text=xstrdup(txt?txt:"");break;}
                 continue;
             }
             if ((r->unresolved_failed_tool_count > 0 || r->unresolved_failed_tools_overflow) &&
@@ -4699,7 +4699,9 @@ restart_planning:
 
         if (final_text && *final_text) {
             strbuf_append(&out, "\n\n");
-            if (r->unresolved_failed_tool_count > 0 || r->unresolved_failed_tools_overflow)
+            if(r->file_checks_failed)
+                strbuf_appendf(&out,"模型阶段性总结（交付验证未通过，不代表任务完成）：\n%s",final_text);
+            else if (r->unresolved_failed_tool_count > 0 || r->unresolved_failed_tools_overflow)
                 strbuf_appendf(&out, "模型阶段性总结（失败调用尚未核实，不代表任务完成）：\n%s", final_text);
             else
                 strbuf_append(&out, final_text);

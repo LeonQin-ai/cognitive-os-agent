@@ -59,6 +59,7 @@ try:
                 assert (work/'target.bin').read_bytes()==data
             failed=execute('wrong-content','mismatch',b'correct')
             assert failed['status']=='FAILED' and 'equality check failed' in failed['output'],failed
+            assert 'All requested bytes are verified.' in failed['output'] and '交付验证未通过' in failed['output'],failed
             assert all(s['ok']==1 for s in failed['steps']),failed # successful tools are not proof of requested equality
             assert failed['llm_calls']<=4,failed # no paid completion-only spin without new tool evidence
             fixed=execute('corrected-content','repair',b'correct\r\n')
