@@ -61,6 +61,24 @@ try:
     p=run(['--no-tui','-p','x']);assert p.returncode==0 and '\x1b' not in p.stdout
     if os.name!='nt':
         import pty, select, fcntl, termios, struct
+        def drain_terminal(fd):
+            data=b'';deadline=time.monotonic()+3
+            while select.select([fd],[],[],.1)[0]:
+                assert time.monotonic()<deadline,'terminal drain did not reach EOF'
+                try:chunk=os.read(fd,65536)
+                except OSError:break
+                # macOS reports PTY EOF as an empty read, while Linux may
+                # raise EIO. EOF remains select-readable on every iteration.
+                if not chunk:break
+                data+=chunk
+            return data
+        reader,writer=os.pipe()
+        try:
+            os.write(writer,b'EOF fixture');os.close(writer);writer=None
+            assert drain_terminal(reader)==b'EOF fixture'
+        finally:
+            os.close(reader)
+            if writer is not None:os.close(writer)
         master,slave=pty.openpty();fcntl.ioctl(slave,termios.TIOCSWINSZ,struct.pack('HHHH',24,100,0,0))
         proc=subprocess.Popen(args+['--tui'],stdin=slave,stdout=slave,stderr=slave,env={**env,'TERM':'xterm-256color'});os.close(slave)
         screen=b'';deadline=time.monotonic()+8
@@ -75,9 +93,7 @@ try:
                     try:screen+=os.read(master,65536)
                     except OSError:break
             proc.wait(timeout=3)
-            try:
-                while select.select([master],[],[],.1)[0]:screen+=os.read(master,65536)
-            except OSError:pass
+            screen+=drain_terminal(master)
             assert proc.returncode==0 and b'\x1b[?1049l' in screen,'alternate screen not restored'
             assert b'/workspace PATH' in screen and b'\x1b[2;21r' in screen,'missing fixed layout'
         finally:
