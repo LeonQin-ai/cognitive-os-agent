@@ -1,3 +1,4 @@
+#include "os/http_cancel.h"
 #include "api/attachment.h"
 /* cognitive-os-agent.c — runtime context assembly: wires config, bus, metrics, policy,
  * memory, snapshot, tools, LLM, transactions, reasoning, scheduler and the
@@ -71,6 +72,8 @@ static void task_done(task *t, void *ud) {
     if (ctx->flowstore)
         flow_store_mark(ctx->flowstore, t->id, st);
 }
+
+static int task_http_cancel(void *context){return task_should_abort((task *)context);}
 
 /* ---------- process/state snapshot (architecture v1.0 §9) ---------- */
 
@@ -584,6 +587,7 @@ static void sched_trampoline(task *t, scheduler *s, void *ud) {
     }
 
     tasklog_record_access(ctx->tasklog,t->id,"RUNNING",t->tag,t->input,NULL,NULL,NULL,t->permission_mode);
+    http_set_cancel_check(task_http_cancel,t);
     scheduler_yield(); /* cooperative fairness: let another task start first */
     if (t->userdata) {
         /* userdata marker (set by /v1/orchestrate = 1, /v1/flows = 2): run the
@@ -609,6 +613,7 @@ static void sched_trampoline(task *t, scheduler *s, void *ud) {
         run_rc = chat_lane_run(ctx, t->tag, t->id, t->thinking_mode, t->input, &answer);
     }
 
+    http_set_cancel_check(NULL,NULL);
     t->output = answer ? answer : xstrdup("(no output)");
     if (!answer || run_rc != 0)
         t->status = TS_FAILED;

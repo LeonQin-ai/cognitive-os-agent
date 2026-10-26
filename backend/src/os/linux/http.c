@@ -23,6 +23,7 @@ struct http_stream {
     size_t c_pos;
     /* plain-socket variant */
     sock *sock;
+    http_cancel_guard *guard;
     int64_t deadline_ms;
     int read_failed;
     char buf[HTTP_BUF];
@@ -140,6 +141,7 @@ typedef struct {
     http_stream *live;
 } cu_sink;
 
+static int cu_cancel_cb(void *ud,double a,double b,double c,double d){(void)ud;(void)a;(void)b;(void)c;(void)d;return http_cancel_requested();}
 static size_t cu_write_cb(const char *ptr, size_t size, size_t nmemb, void *ud) {
     size_t n = size * nmemb;
 
@@ -183,6 +185,7 @@ static size_t cu_header_cb(const char *ptr, size_t size, size_t nmemb, void *ud)
  * (whole body buffered) or NULL on failure. */
 static void curl_pump(http_stream *h){
     while(h->live_running && h->live_data.len==h->c_pos){
+        if(http_cancel_requested()){h->read_failed=1;h->live_running=0;break;}
         int running=0;if(cu.multi_perform(h->live_multi,&running)!=0){h->read_failed=1;h->live_running=0;break;}
         h->live_running=running;
         long status=0;cu.easy_getinfo(h->live_easy,CURLINFO_RESPONSE_CODE,&status);h->status=(int)status;
@@ -250,7 +253,8 @@ static http_stream *curl_open(const char *base_url, const char *method, const ch
     cu.easy_setopt(h, (int)CURLOPT_HEADERFUNCTION, &cu_header_cb);
     cu.easy_setopt(h, (int)CURLOPT_HEADERDATA, &sink);
     cu.easy_setopt(h, (int)CURLOPT_ERRORBUFFER, errbuf);
-    cu.easy_setopt(h, (int)CURLOPT_NOPROGRESS, 1L);
+    cu.easy_setopt(h, (int)CURLOPT_NOPROGRESS, 0L);
+    cu.easy_setopt(h,20056,&cu_cancel_cb);
     cu.easy_setopt(h, (int)CURLOPT_NOSIGNAL, 1L);
     cu.easy_setopt(h, (int)CURLOPT_FOLLOWLOCATION, 1L);
     cu.easy_setopt(h, (int)CURLOPT_ACCEPT_ENCODING, "");
@@ -615,6 +619,7 @@ static int parse_base_url(const char *base, char *host, size_t hostsz, uint16_t 
     return 0;
 }
 
+static void interrupt_socket(void *handle){sock_shutdown((sock *)handle);}
 /* ---------- open connection ---------- */
 static http_stream *http_open(const char *base_url, const char *method, const char *path, const char *body,
                                   const char *content_type, strmap *extra_headers, int timeout_ms) {
@@ -624,6 +629,7 @@ static http_stream *http_open(const char *base_url, const char *method, const ch
     strbuf sb;
     size_t blen;
     int sent;
+    http_cancel_guard *guard=NULL;
     int ok;
     http_stream *h;
 
@@ -653,20 +659,22 @@ static http_stream *http_open(const char *base_url, const char *method, const ch
     if (blen)
         strbuf_append_n(&sb, body, blen);
 
+    guard=http_cancel_watch(interrupt_socket,sock);
     sent = sock_send(sock, sb.buf, sb.len);
     ok = (sent == (int)sb.len);
     strbuf_free(&sb);
     if (!ok) {
-        sock_close(sock);
+        http_cancel_unwatch(guard);sock_close(sock);
         return NULL;
     }
 
     h = calloc(1, sizeof(http_stream));
     if (!h) {
-        sock_close(sock);
+        http_cancel_unwatch(guard);sock_close(sock);
         return NULL;
     }
 
+    h->guard=guard;
     h->sock = sock;
     h->deadline_ms=timeout_ms>0 ? time_now_ms()+timeout_ms:0;
     h->content_remaining = -1;
@@ -692,6 +700,7 @@ static void http_stream_close_impl(http_stream *h) {
         return;
     }
 
+    http_cancel_unwatch(h->guard);
     if (h->sock)
         sock_close(h->sock);
     free(h);

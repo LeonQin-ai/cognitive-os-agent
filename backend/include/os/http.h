@@ -28,6 +28,8 @@ void http_response_free(http_response *r);
 const char *http_last_error(void);
 void http_set_last_error(const char *message);
 
+#include "os/http_cancel.h"
+
 /* Streaming request: sends the request and parses the response head, leaving the
  * connection open so the caller can read the (de-chunked) body line by line. */
 http_stream *http_stream_open(const char *base_url, const char *method, const char *path, const char *body,

@@ -1,3 +1,4 @@
+#include "os/http_cancel.h"
 /* reasoning.c — cognitive reasoning engine.
  * Wires the state machine stages to the LLM, tool registry, transaction/snapshot
  * layer, memory and event bus. The LLM proposes a JSON plan of tool actions;
@@ -760,6 +761,8 @@ static int run_aborted(reasoning *r) {
     if (!r->run_task->cancel_flag) r->run_task->timed_out = 1;
     return 1;
 }
+
+static int reasoning_http_cancel(void *context){return run_aborted((reasoning *)context);}
 
 /* Metadata lookup is independent of the resident history registry. */
 static size_t meta_hash(const char *id) {
@@ -4112,6 +4115,7 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
         }
     }
 
+    if(r->run_task || r->abort_parent)http_set_cancel_check(reasoning_http_cancel,r);
     llm_usage_thread_totals(&r->usage_base_in, &r->usage_base_out, &r->usage_base_reason, &r->run_usage_reports);
     r->usage_base_reports = r->run_usage_reports;
     r->run_usage_in = r->usage_base_in;
@@ -4861,6 +4865,7 @@ restart_planning:
     mutex_unlock(&r->ss->sess_mtx);
     progress_emit(r, cancelled ? "cancelled" : timed_out ? "timed_out" :
                   ret == 0 ? "completed" : "failed");
+    if(r->run_task || r->abort_parent)http_set_cancel_check(NULL,NULL);
     /* The terminal snapshot must still describe the model actually called. */
     if (picked) {
         r->llm = saved;

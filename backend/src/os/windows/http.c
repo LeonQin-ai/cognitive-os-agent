@@ -25,7 +25,12 @@ static void record_winhttp_error(const char *stage, DWORD code) {
     http_set_last_error(message);
 }
 
+static void interrupt_request(void *handle){WinHttpCloseHandle((HINTERNET)handle);}
+static void close_request(http_cancel_guard **guard,HINTERNET handle){
+    int closed=http_cancel_unwatch(*guard);*guard=NULL;if(!closed)WinHttpCloseHandle(handle);
+}
 struct http_stream {
+    http_cancel_guard *guard;
     char *body;
     size_t len;
     size_t pos;
@@ -94,6 +99,7 @@ static int parse_url(const char *url, char *host, size_t hostsz, int *port, char
 
 static http_response *do_request(const char *method, const char *base_url, const char *path, const char *body,
                                      const char *content_type, strmap *extra_headers, int timeout_ms,http_stream **live) {
+    http_cancel_guard *guard=NULL;
     int port;
     int https;
     /* final request path = base_url path + caller path (avoid // and /v1/v1) */
@@ -175,7 +181,7 @@ static http_response *do_request(const char *method, const char *base_url, const
     if (!WinHttpSetTimeouts(hReq, to, to, to, to) ||
         !WinHttpSetOption(hReq, WINHTTP_OPTION_RECEIVE_RESPONSE_TIMEOUT, &to, sizeof to)) {
         record_winhttp_error("set timeout", GetLastError());
-        WinHttpCloseHandle(hReq);
+        close_request(&guard,hReq);
         WinHttpCloseHandle(hConn);
         WinHttpCloseHandle(hSess);
         free(whost); free(wpath); free(wmethod);
@@ -192,7 +198,7 @@ static http_response *do_request(const char *method, const char *base_url, const
 
     wchar_t *whdr = to_wide(hdr.buf && hdr.len ? hdr.buf : "");
     if (!whdr) {
-        WinHttpCloseHandle(hReq);
+        close_request(&guard,hReq);
         WinHttpCloseHandle(hConn);
         WinHttpCloseHandle(hSess);
         strbuf_free(&hdr);
@@ -202,6 +208,7 @@ static http_response *do_request(const char *method, const char *base_url, const
         return NULL;
     }
 
+    guard=http_cancel_watch(interrupt_request,hReq);
     BOOL ok = WinHttpSendRequest(hReq, hdr.len ? whdr : WINHTTP_NO_ADDITIONAL_HEADERS, hdr.len ? (DWORD)-1L : 0,
                                  body ? (LPVOID)body : WINHTTP_NO_REQUEST_DATA, body ? (DWORD)strlen(body) : 0,
                                  body ? (DWORD)strlen(body) : 0, 0);
@@ -209,7 +216,7 @@ static http_response *do_request(const char *method, const char *base_url, const
     strbuf_free(&hdr);
     if (!ok) {
         record_winhttp_error("send", GetLastError());
-        WinHttpCloseHandle(hReq);
+        close_request(&guard,hReq);
         WinHttpCloseHandle(hConn);
         WinHttpCloseHandle(hSess);
         free(whost);
@@ -220,7 +227,7 @@ static http_response *do_request(const char *method, const char *base_url, const
 
     if (WinHttpReceiveResponse(hReq, NULL) == FALSE) {
         record_winhttp_error("receive response", GetLastError());
-        WinHttpCloseHandle(hReq);
+        close_request(&guard,hReq);
         WinHttpCloseHandle(hConn);
         WinHttpCloseHandle(hSess);
         free(whost);
@@ -233,8 +240,8 @@ static http_response *do_request(const char *method, const char *base_url, const
     WinHttpQueryHeaders(hReq, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, NULL, &dwStatus, &dwSize, NULL);
     if(live){
         http_stream *h=calloc(1,sizeof(*h));
-        if(h){h->session=hSess;h->connection=hConn;h->request=hReq;h->deadline=deadline;h->status=(int)dwStatus;*live=h;}
-        else {WinHttpCloseHandle(hReq);WinHttpCloseHandle(hConn);WinHttpCloseHandle(hSess);}
+        if(h){h->guard=guard;guard=NULL;h->session=hSess;h->connection=hConn;h->request=hReq;h->deadline=deadline;h->status=(int)dwStatus;*live=h;}
+        else {close_request(&guard,hReq);WinHttpCloseHandle(hConn);WinHttpCloseHandle(hSess);}
         free(whost);free(wpath);free(wmethod);return NULL;
     }
 
@@ -269,7 +276,7 @@ static http_response *do_request(const char *method, const char *base_url, const
         r->body_len = r->body ? strlen(r->body) : 0;
     } else strbuf_free(&body_buf);
 
-    WinHttpCloseHandle(hReq);
+    close_request(&guard,hReq);
     WinHttpCloseHandle(hConn);
     WinHttpCloseHandle(hSess);
     free(whost);
@@ -358,7 +365,7 @@ static int http_stream_read_line_impl(http_stream *h, char *out, size_t cap) {
 static void http_stream_close_impl(http_stream *h) {
     if (!h)
         return;
-    if(h->request)WinHttpCloseHandle(h->request);
+    if(h->request)close_request(&h->guard,h->request);
     if(h->connection)WinHttpCloseHandle(h->connection);
     if(h->session)WinHttpCloseHandle(h->session);
     free(h->body);

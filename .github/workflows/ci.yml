@@ -67,6 +67,7 @@ jobs:
           COA_BUILD_DIR=build-macos python3 tests/test_flow_workspace_e2e.py
           COA_BUILD_DIR=build-macos python3 tests/test_task_approval_e2e.py
           COA_BUILD_DIR=build-macos python3 tests/test_session_isolation_e2e.py
+          COA_BUILD_DIR=build-macos python3 tests/test_cancel_http_e2e.py
           COA_BUILD_DIR=build-macos python3 tests/test_copy_fidelity_e2e.py
           COA_BUILD_DIR=build-macos python3 tests/test_cli_client.py
           COA_BUILD_DIR=build-macos python3 tests/test_native_preview_e2e.py
@@ -141,6 +142,7 @@ jobs:
           python tests/test_flow_workspace_e2e.py
           python tests/test_task_approval_e2e.py
           python tests/test_session_isolation_e2e.py
+          python tests/test_cancel_http_e2e.py
           python tests/test_copy_fidelity_e2e.py
           python tests/test_cli_client.py
           python tests/test_native_preview_e2e.py
@@ -248,6 +250,7 @@ jobs:
           python tests/test_flow_workspace_e2e.py
           python tests/test_task_approval_e2e.py
           python tests/test_session_isolation_e2e.py
+          python tests/test_cancel_http_e2e.py
           python tests/test_copy_fidelity_e2e.py
           python tests/test_cli_client.py
           python tests/test_native_preview_e2e.py

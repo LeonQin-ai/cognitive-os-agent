@@ -6,6 +6,31 @@
 
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <stdatomic.h>
+#include "os/os_thread.h"
+#include "os/os_time.h"
+
+static _Thread_local http_cancel_check cancel_check;
+static _Thread_local void *cancel_context;
+void http_set_cancel_check(http_cancel_check check,void *context){cancel_check=check;cancel_context=context;}
+int http_cancel_requested(void){return cancel_check && cancel_check(cancel_context);}
+struct http_cancel_guard {http_cancel_check check;void *context;void (*interrupt)(void *);void *handle;thread_t *thread;atomic_int stop,interrupted;};
+static void cancellation_worker(void *arg){
+    http_cancel_guard *g=arg;
+    while(!atomic_load(&g->stop)){
+        if(g->check(g->context)){g->interrupt(g->handle);atomic_store(&g->interrupted,1);break;}
+        time_sleep_ms(25);
+    }
+}
+http_cancel_guard *http_cancel_watch(void (*interrupt)(void *),void *handle){
+    if(!cancel_check)return NULL;http_cancel_guard *g=calloc(1,sizeof(*g));if(!g)return NULL;
+    g->check=cancel_check;g->context=cancel_context;g->interrupt=interrupt;g->handle=handle;
+    g->thread=thread_create(cancellation_worker,g);if(!g->thread){free(g);return NULL;}return g;
+}
+int http_cancel_unwatch(http_cancel_guard *g){
+    if(!g)return 0;atomic_store(&g->stop,1);thread_join(g->thread);int interrupted=atomic_load(&g->interrupted);free(g);return interrupted;
+}
 
 static _Thread_local char g_last_http_error[256];
 
