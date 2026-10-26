@@ -980,7 +980,7 @@ panels.chat = `
     <div class="pillbar">
       <button class="pill-ic" onclick="$('chat-file').click()" title="上传文件（RAG）">＋</button>
       <textarea id="chat-input" placeholder="和 Cognitive OS 一起工作" aria-label="消息" rows="1"></textarea>
-      <select class="composer-policy" id="chat-permission" aria-label="执行权限" title="本轮任务权限；现有全局策略仍然生效" onchange="localStorage.setItem('chat-permission',this.value)"><option value="ask">逐次批准</option><option value="auto" selected>自动批准低风险</option><option value="full">完全访问</option></select>
+      <select class="composer-policy" id="chat-permission" aria-label="执行权限" title="本轮任务权限；现有全局策略仍然生效" onchange="chatPermissionChange(this.value)"><option value="ask">逐次批准</option><option value="auto" selected>自动批准低风险</option><option value="full">完全访问</option></select>
       <select id="chat-model" onchange="chatModelSwitch()" title="对话模型（点击切换）" aria-label="对话模型"></select>
       <button class="thinking-toggle" id="chat-thinking-toggle" onclick="chatThinkingToggle(!chatThinkingEnabled())" aria-pressed="false" title="深度思考：允许额外规划轮次，适合复杂问题">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20v-8M10.7 5.2A4.4 4.4 0 0 0 4 9c0 .5.1 1 .3 1.5A3.8 3.8 0 0 0 6 17.6c.6 1.8 2.5 2.8 4.3 2.4M13.3 5.2A4.4 4.4 0 0 1 20 9c0 .5-.1 1-.3 1.5a3.8 3.8 0 0 1-1.7 7.1c-.6 1.8-2.5 2.8-4.3 2.4M7.2 8.2c.9.1 1.6.6 2 1.4M16.8 8.2c-.9.1-1.6.6-2 1.4M7.4 14c.8 0 1.5.4 1.9 1M16.6 14c-.8 0-1.5.4-1.9 1"/></svg>
@@ -1829,7 +1829,7 @@ let AGENTS = [];
  * (GET /v1/routes). Preserves the current selection when possible. */
 async function fillAgentModelSelect(){
   const sel = $('agent-model'); if(!sel) return;
-  const keep = sel.value;
+  const session=CHAT_SESSION;
   const r = await call('GET', '/v1/routes');
   const routes = Array.isArray(r.obj) ? r.obj : [];
   let html = '<option value="">（当前激活模型）</option>';
@@ -3313,8 +3313,12 @@ function chatApproval(t,session){let box=$('chat-approval');if(!box){box=documen
   const args=document.createElement('pre');args.style.cssText='max-height:180px;overflow:auto;white-space:pre-wrap';args.textContent=t.approval.args;box.append(args);
   for(const [label,allow] of [['批准本次',true],['拒绝',false]]){const b=document.createElement('button');b.textContent=label;b.onclick=async()=>{box.querySelectorAll('button').forEach(x=>x.disabled=true);const r=await call('POST','/v1/tasks/'+t.id+'/approval',{id:t.approval.id,session,allow});if(r.status!==200){toast(r.obj?.error||'审批失败');box.querySelectorAll('button').forEach(x=>x.disabled=false);}};box.append(b);}}
 
+function chatOptions(session=CHAT_SESSION){try{return JSON.parse(localStorage.getItem('coa.session-options:'+session)||'{}');}catch{return {};}}
+function chatOptionSet(name,value,session=CHAT_SESSION){const o=chatOptions(session);o[name]=value;localStorage.setItem('coa.session-options:'+session,JSON.stringify(o));}
+function chatPermissionChange(value){chatOptionSet('permission',value);}
+function syncChatPermission(){const el=$('chat-permission');if(el)el.value=chatOptions().permission || 'auto';}
 async function loadChat(){
-  const permission=$('chat-permission');if(permission){const saved=localStorage.getItem('chat-permission');if(['ask','auto','full'].includes(saved))permission.value=saved;}
+  syncChatPermission();
   const box = $('chat-box'); if(!box) return;
   if(CHAT_SESSION === 'default' && !CHAT_NEW_SESSION) await chatNewSession({ensure:true});
   renderChatTabs(CHAT_TABS_CACHE);
@@ -3335,47 +3339,35 @@ async function loadChat(){
   }
 }
 
-/* 对话侧模型配置（issue #11）：下拉列出 Model routes，选中即把当前激活
- * LLM 切到该路由（POST /v1/config/llm），聊天中途可随时换模型 */
+/* Each conversation selects a registered route without changing global config. */
 let CHAT_ROUTES = [];
 async function fillChatModelSelect(){
   const sel = $('chat-model'); if(!sel) return;
-  const keep = sel.value;
+  const session=CHAT_SESSION;
   const r = await call('GET', '/v1/routes');
   CHAT_ROUTES = Array.isArray(r.obj) ? r.obj : [];
   const cur = await call('GET', '/v1/config/llm');
   const curProv = (cur.obj && cur.obj.provider) || '';
   const curModel = (cur.obj && cur.obj.model) || '';
-  let html = '';
+  if(CHAT_SESSION!==session || !sel.isConnected)return;
+  let html = '<option value="@cur">默认模型：'+esc(curModel || curProv)+'</option>';
   let matched = false;
   CHAT_ROUTES.forEach(x => {
-    const val = (x.provider || '') + '|' + (x.model || '');
+    const val = x.name;
     const isCur = curProv && curProv === x.provider && (curModel || '') === (x.model || '');
     if(isCur) matched = true;
     html += '<option value="' + esc(val) + '">' + esc((x.name || x.model || 'route') + '（' + (x.provider || '?') +
-            (x.model ? ' / ' + x.model : '') + (isCur ? ' · 当前' : '') + '）') + '</option>';
+            (x.model ? ' / ' + x.model : '') + (isCur ? ' · 默认' : '') + '）') + '</option>';
   });
-  if(!matched && curProv)
-    html = '<option value="@cur">（当前：' + esc(curProv + (curModel ? ' / ' + curModel : '')) + '）</option>' + html;
   sel.innerHTML = html;
-  sel.value = keep && Array.from(sel.options).some(o => o.value === keep) ? keep : (matched ? curProv + '|' + curModel : '@cur');
+  const chosen=chatOptions(session).route;
+  sel.value=chosen && CHAT_ROUTES.some(x=>x.name===chosen)?chosen:'@cur';
+
 }
 
 async function chatModelSwitch(){
-  const sel = $('chat-model'); if(!sel || !sel.value || sel.value === '@cur') return;
-  const hit = CHAT_ROUTES.find(x => ((x.provider || '') + '|' + (x.model || '')) === sel.value);
-  if(!hit){ toast('路由不存在'); return; }
-  const body = {provider: hit.provider};
-  if(hit.base_url) body.base_url = hit.base_url;
-  if(hit.model) body.model = hit.model;
-  if(hit.api_key) body.api_key = hit.api_key;
-  const r = await call('POST', '/v1/config/llm', body);
-  if(r.status < 300){
-    toast('已切换对话模型：' + (hit.model || hit.provider));
-    fillChatModelSelect();
-  } else {
-    toast('切换失败：' + (r.obj && r.obj.error || r.status));
-  }
+  const value=$('chat-model')?.value;chatOptionSet('route',value==='@cur'?null:value);
+  toast(value==='@cur'?'本会话使用默认模型':'已设置本会话模型');
 }
 
 /* 后端返回裸数组 [{id,title,turns,created_ms,total_ms,last_active_ms,shared_memory,task}] */
@@ -3708,7 +3700,7 @@ function syncChatSettings(){
   const info = CHAT_TABS_CACHE.find(s => (s.id || 'default') === CHAT_SESSION);
   const cb = $('chat-shared');
   if(cb) cb.checked = !(CHAT_TABS_CACHE[0] && CHAT_TABS_CACHE[0].shared_memory === false);
-  syncChatThinkingToggle();
+  syncChatThinkingToggle();syncChatPermission();void fillChatModelSelect();
   const meta = $('chat-session-meta');
   if(meta){
     const bits = [];
@@ -5697,6 +5689,10 @@ async function chatSubmit(resume = false){
   if(!resume && input?.disabled) { toast('请先配置对话模型'); return; }
   const msg = input?.value.trim() || '';
   if(!resume && !msg && !CHAT_ATTACH.length) return;
+  const settings=chatOptions(session),thinking=chatThinkingEnabled();
+  const permission=$('chat-permission')?.value || settings.permission || 'auto';
+  const route=settings.route || undefined;
+  const destination=CHAT_MSGS;
   const attachments = resume ? [] : CHAT_ATTACH.slice();
   CHAT_SUBMITTING.add(session); chatBusyUI(true);
   await Promise.all(attachments.map(a=>a.upload).filter(Boolean));
@@ -5707,19 +5703,20 @@ async function chatSubmit(resume = false){
   }
   const full = resume ? '（恢复）继续上一次任务' :
     (attachments.length ? '[附件: ' + attachments.map(a=>a.name).join(', ') + ']\n' : '') + msg;
-  CHAT_SUBMITTING.add(session); chatBusyUI(true);
-  if(input && !resume) input.value = '';
-  CHAT_FOLLOW=true;
-  chatAddBubble('user',full);
-  const userEntry=CHAT_MSGS[CHAT_MSGS.length-1];
+  let userEntry,entry;
+  if(CHAT_SESSION===session){
+    if(input && !resume && input.value.trim()===msg)input.value='';
+    CHAT_FOLLOW=true;chatAddBubble('user',full);userEntry=CHAT_MSGS[CHAT_MSGS.length-1];
+    chatAddBubble('bot','');entry=CHAT_MSGS[CHAT_MSGS.length-1];
+  }else{
+    userEntry={role:'user',text:full,pending:false,el:null};entry={role:'bot',text:'',el:null};destination.push(userEntry,entry);
+  }
   userEntry.images=attachments.filter(a=>a.kind==='image').map(a=>({id:a.id,name:a.name,session}));
-  chatRenderImages(userEntry.el,userEntry.images);
-  chatAddBubble('bot','');
-  const entry = CHAT_MSGS[CHAT_MSGS.length-1];
+  if(userEntry.el)chatRenderImages(userEntry.el,userEntry.images);
   entry.pending = true; entry.progress = {stage:'submitting'};
-  CHAT_CACHE[session] = CHAT_MSGS; renderChatEntry(entry);
+  CHAT_CACHE[session] = CHAT_SESSION===session?CHAT_MSGS:destination; renderChatEntry(entry);
   const r = await call('POST',resume ? '/v1/chat/sessions/' + encodeURIComponent(session) + '/resume' : '/v1/chat',
-    resume ? {thinking:chatThinkingEnabled()} : {message:full,session,workspace:executionWorkspace || undefined,permission_mode:$('chat-permission')?.value||'auto',thinking:chatThinkingEnabled(),attachments:attachments.map(a=>a.id)});
+    resume ? {thinking,route,permission_mode:permission} : {message:full,session,route,workspace:executionWorkspace || undefined,permission_mode:permission,thinking,attachments:attachments.map(a=>a.id)});
   CHAT_SUBMITTING.delete(session);
   if(!Number.isInteger(r.obj?.id)){
     entry.pending = false; entry.progress.stage = 'failed';

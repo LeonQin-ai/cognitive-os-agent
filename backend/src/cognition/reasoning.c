@@ -4091,7 +4091,15 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     }
     prompt = safe_prompt;
 
-    if (r->router) {
+    if(r->run_task && r->run_task->llm_config){
+        cJSON *o=cJSON_Parse(r->run_task->llm_config);
+        picked=llm_create(cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(o,"provider")),
+            cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(o,"base_url")),cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(o,"api_key")),
+            cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(o,"model")));
+        if(picked){picked->context_window_tokens=(long long)cJSON_GetNumberValue(cJSON_GetObjectItemCaseSensitive(o,"context_window"));
+            picked->max_output_tokens=(long long)cJSON_GetNumberValue(cJSON_GetObjectItemCaseSensitive(o,"max_output_tokens"));saved=r->llm;r->llm=picked;}
+        cJSON_Delete(o);
+    }else if (r->router) {
         const route *rt = router_pick(r->router);
         if (rt) {
             picked = llm_create(rt->provider, rt->base_url, rt->api_key, rt->model);

@@ -66,6 +66,7 @@ jobs:
           COA_BUILD_DIR=build-macos python3 tests/test_workspaces_e2e.py
           COA_BUILD_DIR=build-macos python3 tests/test_flow_workspace_e2e.py
           COA_BUILD_DIR=build-macos python3 tests/test_task_approval_e2e.py
+          COA_BUILD_DIR=build-macos python3 tests/test_session_isolation_e2e.py
           COA_BUILD_DIR=build-macos python3 tests/test_copy_fidelity_e2e.py
           COA_BUILD_DIR=build-macos python3 tests/test_cli_client.py
           COA_BUILD_DIR=build-macos python3 tests/test_native_preview_e2e.py
@@ -139,6 +140,7 @@ jobs:
           python tests/test_workspaces_e2e.py
           python tests/test_flow_workspace_e2e.py
           python tests/test_task_approval_e2e.py
+          python tests/test_session_isolation_e2e.py
           python tests/test_copy_fidelity_e2e.py
           python tests/test_cli_client.py
           python tests/test_native_preview_e2e.py
@@ -245,6 +247,7 @@ jobs:
           python tests/test_workspaces_e2e.py
           python tests/test_flow_workspace_e2e.py
           python tests/test_task_approval_e2e.py
+          python tests/test_session_isolation_e2e.py
           python tests/test_copy_fidelity_e2e.py
           python tests/test_cli_client.py
           python tests/test_native_preview_e2e.py
@@ -275,6 +278,7 @@ jobs:
           NODE_PATH="$PWD/webarena/node_modules" node tests/test_flow_resume_ui.cjs
           NODE_PATH="$PWD/webarena/node_modules" node tests/test_flow_workspace_ui.cjs
           NODE_PATH="$PWD/webarena/node_modules" node tests/test_folder_picker_timeout_ui.cjs
+          NODE_PATH="$PWD/webarena/node_modules" node tests/test_session_options_ui.cjs
           NODE_PATH="$PWD/webarena/node_modules" node tests/test_image_chat_ui.cjs
           NODE_PATH="$PWD/webarena/node_modules" node tests/test_plugin_install_ui.cjs
           NODE_PATH="$PWD/webarena/node_modules" node tests/test_market_sections_ui.cjs

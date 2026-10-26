@@ -117,7 +117,7 @@ static int add_all(scheduler *s, task *t) {
 
 /* Scheduler lock stabilizes completion/output; progress has its own lock. */
 static size_t task_bytes(task *t) {
-    size_t bytes = sizeof(*t) + (t->workspace ? strlen(t->workspace) : 0) + (t->attachments_json ? strlen(t->attachments_json) : 0) +
+    size_t bytes = sizeof(*t) + (t->llm_config ? strlen(t->llm_config) : 0) + (t->workspace ? strlen(t->workspace) : 0) + (t->attachments_json ? strlen(t->attachments_json) : 0) +
         (t->input ? strlen(t->input) : 0) + (t->tag ? strlen(t->tag) : 0);
     if (t->completed && t->output) bytes += strlen(t->output);
     mutex_lock(&t->progress_mtx);
@@ -368,6 +368,10 @@ int64_t scheduler_submit_preview(scheduler *s,int priority,const char *input,voi
 }
 int64_t scheduler_submit_access(scheduler *s,int priority,const char *input,void *userdata,
     int64_t timeout_ms,const char *tag,int thinking_mode,const char *attachments,const char *workspace,int stream_preview,int permission_mode){
+    return scheduler_submit_configured(s,priority,input,userdata,timeout_ms,tag,thinking_mode,attachments,workspace,stream_preview,permission_mode,NULL);
+}
+int64_t scheduler_submit_configured(scheduler *s,int priority,const char *input,void *userdata,
+    int64_t timeout_ms,const char *tag,int thinking_mode,const char *attachments,const char *workspace,int stream_preview,int permission_mode,const char *llm_config){
     if(permission_mode<0||permission_mode>2)return -1;
     task *t = calloc(1, sizeof(task));
     int64_t id;
@@ -398,20 +402,21 @@ int64_t scheduler_submit_access(scheduler *s,int priority,const char *input,void
     t->tag = tag ? xstrdup(tag) : NULL;
     t->attachments_json = attachments ? xstrdup(attachments) : NULL;
     t->workspace = workspace ? xstrdup(workspace) : NULL;
+    t->llm_config=llm_config?xstrdup(llm_config):NULL;
     t->stream_preview=stream_preview;
     t->permission_mode=permission_mode;
     t->thinking_mode = thinking_mode != 0;
     t->userdata = userdata;
     t->sched = s;
-    if (!t->input || (tag && !t->tag) || (workspace && !t->workspace) || (attachments && !t->attachments_json) || add_all(s, t) != 0) {
+    if ((llm_config && !t->llm_config) || !t->input || (tag && !t->tag) || (workspace && !t->workspace) || (attachments && !t->attachments_json) || add_all(s, t) != 0) {
         mutex_unlock(&s->mtx);
-        free(t->workspace); free(t->attachments_json); free(t->input); free(t->tag); mutex_destroy(&t->progress_mtx); free(t);
+        free(t->llm_config);free(t->workspace); free(t->attachments_json); free(t->input); free(t->tag); mutex_destroy(&t->progress_mtx); free(t);
         return -1;
     }
     if (queue_insert(s, t) != 0) {
         s->alen--; /* the new task is still the last index entry */
         mutex_unlock(&s->mtx);
-        free(t->workspace); free(t->attachments_json); free(t->input); free(t->tag); mutex_destroy(&t->progress_mtx); free(t);
+        free(t->llm_config);free(t->workspace); free(t->attachments_json); free(t->input); free(t->tag); mutex_destroy(&t->progress_mtx); free(t);
         return -1;
     }
     s->next_id++;

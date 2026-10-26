@@ -39,6 +39,7 @@ typedef struct task {
     int timed_out;            /* set when deadline passed */
     TASK_ATOMIC(task_status) status;
     char *attachments_json; /* owned immutable task snapshot; never in history */
+    char *llm_config; /* owned task-local provider snapshot; never serialized */
     char *workspace; /* owned immutable execution directory, never process chdir */
     int stream_preview;
     int permission_mode; /* 0 existing policy, 1 approve every tool, 2 approve risky tools */
@@ -72,6 +73,9 @@ int64_t scheduler_submit_access(scheduler *s,int priority,const char *input,void
     int64_t timeout_ms,const char *tag,int thinking_mode,const char *attachments,const char *workspace,int stream_preview,int permission_mode);
 int64_t scheduler_submit_preview(scheduler *s,int priority,const char *input,void *userdata,
     int64_t timeout_ms,const char *tag,int thinking_mode,const char *attachments,const char *workspace,int stream_preview);
+
+int64_t scheduler_submit_configured(scheduler *s,int priority,const char *input,void *userdata,
+    int64_t timeout_ms,const char *tag,int thinking_mode,const char *attachments,const char *workspace,int stream_preview,int permission_mode,const char *llm_config);
 
 /* Runs a task; t->output / t->status may be set by the runner. */
 typedef void (*task_runner)(task *t, scheduler *s, void *worker_ud);

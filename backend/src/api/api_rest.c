@@ -592,6 +592,21 @@ static int llm_configured(runtime_ctx *ctx) {
  * calls). The optional "session" id isolates the conversation: each session
  * carries its own history, summary and session notes, so multiple chat boxes
  * can run side by side (default = the shared default session). */
+/* Resolve a registered route on the server; never accept credentials from the
+ * composer or mutate the global active provider when a chat changes model. */
+static char *chat_route_snapshot(runtime_ctx *ctx,cJSON *body,int *invalid){
+    *invalid=0;cJSON *choice=cJSON_GetObjectItemCaseSensitive(body,"route");
+    if(!choice)return NULL;
+    const char *name=cJSON_GetStringValue(choice);if(!name || !*name){*invalid=1;return NULL;}
+    for(int i=0;i<router_count(ctx->router);i++){
+        const route *r=router_get(ctx->router,(size_t)i);if(!r || strcmp(r->name,name))continue;
+        cJSON *o=cJSON_CreateObject();cJSON_AddStringToObject(o,"provider",r->provider);cJSON_AddStringToObject(o,"model",r->model?r->model:"");
+        cJSON_AddStringToObject(o,"base_url",r->base_url?r->base_url:"");cJSON_AddStringToObject(o,"api_key",r->api_key?r->api_key:"");
+        cJSON_AddNumberToObject(o,"context_window",(double)r->context_window_tokens);cJSON_AddNumberToObject(o,"max_output_tokens",(double)r->max_output_tokens);
+        char *json=cJSON_PrintUnformatted(o);cJSON_Delete(o);if(!json)*invalid=1;return json;
+    }
+    *invalid=1;return NULL;
+}
 static int h_chat(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
     char *b;
@@ -657,8 +672,10 @@ static int h_chat(const http_request *req, http_response *resp, void *ud) {
     if(cJSON_GetObjectItemCaseSensitive(root,"permission_mode") && !access){free(directory);free(safe_msg);free(attachments);cJSON_Delete(root);resp->status=400;http_resp_json(resp,"{\"error\":\"permission mode must be a string\"}");return 0;}
     if(access){if(!strcmp(access,"ask"))mode=1;else if(!strcmp(access,"auto"))mode=2;
         else if(strcmp(access,"full")){free(directory);free(safe_msg);free(attachments);cJSON_Delete(root);resp->status=400;http_resp_json(resp,"{\"error\":\"invalid permission mode\"}");return 0;}}
-    id = scheduler_submit_access(ctx->scheduler,0,safe_msg,NULL,0,session,thinking,attachments,directory,
-        cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(root,"stream")),mode);
+    int invalid_route=0;char *model=chat_route_snapshot(ctx,root,&invalid_route);
+    if(invalid_route){free(directory);free(safe_msg);free(attachments);cJSON_Delete(root);resp->status=400;http_resp_json(resp,"{\"error\":\"unknown chat model route\"}");return 0;}
+    id = scheduler_submit_configured(ctx->scheduler,0,safe_msg,NULL,0,session,thinking,attachments,directory,
+        cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(root,"stream")),mode,model);free(model);
     if(id>=0)workspace_bind(ctx,NULL,directory,id);free(directory);
     if (id >= 0)
         reasoning_session_note_prompt(ctx->reasoning, session, safe_msg);
@@ -814,7 +831,14 @@ static int h_chat_session_post(const http_request *req, http_response *resp, voi
         }
         char *directory=workspace_pick(ctx,NULL,sid);
         if(!directory){free(input);resp->status=400;http_resp_json(resp,"{\"error\":\"workspace is unavailable\"}");return 0;}
-        int64_t nid = scheduler_submit_access(ctx->scheduler,0,input,NULL,0,sid,0,NULL,directory,0,1);
+        char *settings_text=body_str(req);cJSON *settings=settings_text?cJSON_Parse(settings_text):NULL;free(settings_text);
+        int invalid=0;char *model=chat_route_snapshot(ctx,settings,&invalid);const char *access=json_str(settings,"permission_mode");
+        int mode=access && !strcmp(access,"full")?0:access && !strcmp(access,"auto")?2:1;
+        if(invalid || (access && strcmp(access,"full") && strcmp(access,"ask") && strcmp(access,"auto"))){
+            free(model);free(input);free(directory);cJSON_Delete(settings);resp->status=400;http_resp_json(resp,"{\"error\":\"invalid session execution settings\"}");return 0;
+        }
+        int64_t nid = scheduler_submit_configured(ctx->scheduler,0,input,NULL,0,sid,cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(settings,"thinking")),NULL,directory,0,mode,model);
+        free(model);cJSON_Delete(settings);
         if(nid>=0)workspace_bind(ctx,NULL,directory,nid);free(directory);
         free(input);
         if (nid < 0) {
