@@ -472,6 +472,17 @@ static int same_repository_header(const char *failed, const char *actual) {
     return !strcmp(tail,inc+9);
 }
 
+/* A successful read may repair an exploratory guess that omitted a nested
+ * repository prefix. Compare the entire relative path under this workspace;
+ * basename matches, existing-but-unread files and other repositories do not qualify. */
+static int same_nested_workspace_path(reasoning *r,const char *failed,const char *actual){
+    char root[2048];normalized_evidence_path(r,".",root,sizeof(root));size_t n=strlen(root);
+    if(!n || strncmp(failed,root,n) || failed[n]!='/' || strncmp(actual,root,n) || actual[n]!='/')return 0;
+    if(fs_exists(failed))return 0;
+    const char *relative=failed+n+1;size_t suffix=strlen(relative),len=strlen(actual);
+    return strchr(relative,'/') && len>n+1+suffix && actual[len-suffix-1]=='/' && !strcmp(actual+len-suffix,relative);
+}
+
 static void resolve_failed_tool(reasoning *r, const char *tool_name, const char *args_json) {
     if (!r || !tool_name || !*tool_name) return;
     char scope[2048]; failure_scope(r, tool_name, args_json, scope, sizeof(scope));
@@ -488,7 +499,7 @@ static void resolve_failed_tool(reasoning *r, const char *tool_name, const char 
         int relocated_read = !strcmp(tool_name, "file_read") && !strcmp(r->unresolved_failed_tools[i], "file_read") &&
             r->unresolved_discovered_reads[i][0] && !strcmp(r->unresolved_discovered_reads[i], scope);
         int header_relocated = !strcmp(tool_name,"file_read") && !strcmp(r->unresolved_failed_tools[i],"file_read") &&
-            same_repository_header(failed_scope,scope);
+            (same_repository_header(failed_scope,scope) || same_nested_workspace_path(r,failed_scope,scope));
         if (retry || replacement || relocated_read || header_relocated) {
             --r->unresolved_failed_tool_count;
             if (i < r->unresolved_failed_tool_count) {

@@ -62,6 +62,7 @@ jobs:
         run: |
           COA_BUILD_DIR=build-macos python3 tests/test_trace_commands_e2e.py
           COA_BUILD_DIR=build-macos python3 tests/test_optional_missing_read_e2e.py
+          COA_BUILD_DIR=build-macos python3 tests/test_relocated_read_e2e.py
           COA_BUILD_DIR=build-macos python3 tests/test_workspaces_e2e.py
           COA_BUILD_DIR=build-macos python3 tests/test_flow_workspace_e2e.py
           COA_BUILD_DIR=build-macos python3 tests/test_task_approval_e2e.py
@@ -134,6 +135,7 @@ jobs:
         run: |
           python tests/test_trace_commands_e2e.py
           python tests/test_optional_missing_read_e2e.py
+          python tests/test_relocated_read_e2e.py
           python tests/test_workspaces_e2e.py
           python tests/test_flow_workspace_e2e.py
           python tests/test_task_approval_e2e.py
@@ -239,6 +241,7 @@ jobs:
         run: |
           python tests/test_trace_commands_e2e.py
           python tests/test_optional_missing_read_e2e.py
+          python tests/test_relocated_read_e2e.py
           python tests/test_workspaces_e2e.py
           python tests/test_flow_workspace_e2e.py
           python tests/test_task_approval_e2e.py
