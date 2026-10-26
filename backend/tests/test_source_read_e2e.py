@@ -88,14 +88,14 @@ class Provider(BaseHTTPRequestHandler):
             else:
                 assert 'END_SOURCE' in text and 'end of file' in text
                 answer='连续分页完成，已读到 END_SOURCE。'
-        elif any(case in current for case in ('缺少发现证据回归测试','同名无关文件回归测试','只有路径发现回归测试')):
-            key = next(case for case in ('缺少发现证据回归测试','同名无关文件回归测试','只有路径发现回归测试') if case in current)
+        elif any(case in current for case in ('直接读取修正路径回归测试','同名无关文件回归测试','只有路径发现回归测试')):
+            key = next(case for case in ('直接读取修正路径回归测试','同名无关文件回归测试','只有路径发现回归测试') if case in current)
             count=counts.get(key,0); counts[key]=count+1
             if count==0:
                 answer=json.dumps([{'tool':'file_read','args':{'path':'src/memory/kv.c'}}])
-            elif count==1 and key!='缺少发现证据回归测试':
+            elif count==1 and key!='直接读取修正路径回归测试':
                 answer=json.dumps([{'tool':'glob','args':{'path':'backend','pattern':'**/kv.c'}}])
-            elif key=='缺少发现证据回归测试' and count==1:
+            elif key=='直接读取修正路径回归测试' and count==1:
                 answer=json.dumps([{'tool':'file_read','args':{'path':(state/'backend/src/memory/kv.c').as_posix()}}])
             elif key=='同名无关文件回归测试' and count==2:
                 answer=json.dumps([{'tool':'file_read','args':{'path':(state/'backend/src/storage/kv.c').as_posix()}}])
@@ -175,7 +175,7 @@ with tempfile.TemporaryDirectory(prefix='coa-source-read-') as directory:
                 ('嵌套根目录发现回归测试：阅读代码整理面试题', 'DONE', '实际发现'),
                 ('超大分页参数回归测试：完整阅读源码', 'DONE', '连续分页完成'),
                 ('非SSH文本保留回归测试：读取源码并原样输出', 'DONE', 'CodeOnly_98+!'),
-                ('缺少发现证据回归测试：阅读代码', 'FAILED', 'file_read'),
+                ('直接读取修正路径回归测试：阅读代码', 'DONE', '整理已完成'),
                 ('同名无关文件回归测试：阅读代码', 'FAILED', 'file_read'),
                 ('只有路径发现回归测试：阅读代码', 'FAILED', 'file_read'),
                 ('限定全文范围回归测试：完整阅读文件source.c；fragment.c只需相关片段，不要求全文；生成脚本并检查相关片段即可。', 'DONE', '分析完成'),
