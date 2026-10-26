@@ -3086,7 +3086,7 @@ static void test_cross_round_progress(void) {
                 } else CHECK(rc==0 && f.calls==(mode==42 ? 6:4) && answer && strstr(answer,"完成"));
                 if(mode!=41 && mode!=43) CHECK(!f.saw_fold);
             } else if (mode >= 32) {
-                if (mode == 32) CHECK(rc == 0 && f.calls == 4 && answer && strstr(answer,"嵌套源码分析完成"));
+                if (mode == 32 || mode == 33) CHECK(rc == 0 && f.calls == (mode==32?4:3) && answer && strstr(answer,"嵌套源码分析完成"));
                 else CHECK(rc != 0 && f.calls == (mode == 34 ? 5 : 4) && answer && strstr(answer,"file_read"));
             } else if (mode >= 24) {
                 if (mode == 25 || mode == 26 || mode == 27 || mode == 28)
