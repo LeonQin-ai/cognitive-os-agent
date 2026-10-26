@@ -534,7 +534,7 @@
 .pillbar{border:1px solid var(--border);border-radius:22px!important;box-shadow:0 10px 30px #00000018;padding:12px!important;backdrop-filter:blur(14px)}
 .pillbar:focus-within{border-color:var(--accent-ring);box-shadow:0 0 0 3px var(--accent-soft)}
 #chat-input{font-size:14px;line-height:1.7;min-height:28px}
-.pillbar{display:grid!important;grid-template-columns:auto auto minmax(0,1fr) auto auto auto;align-items:center;gap:8px;border-radius:30px!important;padding:18px!important}
+.pillbar{display:grid!important;grid-template-columns:auto auto minmax(0,1fr) auto auto;align-items:center;gap:8px;border-radius:30px!important;padding:18px!important}
 .pillbar #chat-input{grid-column:1/-1;grid-row:1;min-height:62px;width:100%;padding:2px 0 10px;font-size:16px;border-radius:0;box-shadow:none!important;outline:none!important}
 .pillbar .pill-ic{grid-column:1;grid-row:2;font-size:26px}
 .composer-policy{grid-column:2;grid-row:2;color:#ed6b20;font-size:13px;white-space:nowrap}
@@ -542,7 +542,7 @@
 .pillbar .thinking-toggle.on{color:#6d28d9;background:var(--accent-soft);box-shadow:none}
 .pillbar .thinking-toggle{grid-column:4;grid-row:2;border:0;background:transparent;padding:0 3px;font-weight:400}
 .composer-mic{grid-column:5;grid-row:2;border:0;background:none;color:var(--fg);font-size:23px;padding:5px}
-.pillbar #chat-send,.pillbar #chat-cancel{grid-column:6;grid-row:2;width:42px;height:42px;padding:0!important;border:0;border-radius:50%;background:#8953ef;color:white}
+.pillbar #chat-send,.pillbar #chat-cancel{grid-column:5;grid-row:2;width:42px;height:42px;padding:0!important;border:0;border-radius:50%;background:#8953ef;color:white}
 #chat-resume{grid-column:1/-1;grid-row:3;justify-self:end}
 #chat-workspace{max-width:min(360px,45vw);font-size:12px;height:32px}
 .workspace-group{margin:8px 0}.workspace-group>summary{display:flex;align-items:center;gap:7px;cursor:pointer;padding:8px;color:var(--muted);font-size:13px;list-style:none}
@@ -550,8 +550,8 @@
 .workspace-group .side-recent-row{margin-left:12px}.workspace-group[open]>summary{color:var(--fg)}
 #workspace-dialog{max-width:min(540px,92vw);width:100%;padding:24px;border:1px solid var(--border);border-radius:18px;background:var(--card);color:var(--fg)}
 #workspace-dialog input{width:100%;margin:7px 0 15px}#workspace-dialog::backdrop{background:#0006}
-@media(max-width:640px){.pillbar{grid-template-columns:auto minmax(0,1fr) auto auto auto!important;gap:4px;padding:12px!important}.composer-policy{display:block;grid-column:1/-1;grid-row:3;max-width:100%;justify-self:start}.pillbar #chat-model{grid-column:2}.pillbar .thinking-toggle.on{color:#6d28d9;background:var(--accent-soft);box-shadow:none}
-.pillbar .thinking-toggle{grid-column:3}.composer-mic{grid-column:4}.pillbar #chat-send,.pillbar #chat-cancel{grid-column:5}#chat-workspace{max-width:55vw}}
+@media(max-width:640px){.pillbar{grid-template-columns:auto minmax(0,1fr) auto auto!important;gap:4px;padding:12px!important}.composer-policy{display:block;grid-column:1/-1;grid-row:3;max-width:100%;justify-self:start}.pillbar #chat-model{grid-column:2}.pillbar .thinking-toggle.on{color:#6d28d9;background:var(--accent-soft);box-shadow:none}
+.pillbar .thinking-toggle{grid-column:3}.composer-mic{grid-column:4}.pillbar #chat-send,.pillbar #chat-cancel{grid-column:4}#chat-workspace{max-width:55vw}}
 .content.chat-content{display:flex;flex-direction:column;min-height:0;overflow-y:hidden}
 .chat-content .chat-wrap{min-height:0;flex:1;overflow:hidden}
 .chat-content #chat-hero{min-height:0}
@@ -988,7 +988,7 @@ panels.chat = `
       </button>
       <button class="sec" id="chat-cancel" onclick="chatCancel()" style="display:none;padding:6px 10px" aria-label="停止执行" title="停止当前任务">■</button>
       <button class="sec" id="chat-resume" onclick="chatResume()" style="display:none;padding:6px 10px" title="恢复：重跑本会话上一条输入">恢复</button>
-      <button class="composer-mic" id="chat-mic" onclick="chatDictate()" aria-label="语音输入" aria-pressed="false" title="语音转文字"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0014 0v-2M12 19v3m-4 0h8"/></svg></button>
+
       <button class="pill-send" id="chat-send" onclick="chatSend()" title="发送">↑</button>
       <input type="file" id="chat-file" accept="image/*,video/*,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt,.md,.csv" style="display:none" onchange="uploadFile(this)">
     </div>
@@ -3306,30 +3306,6 @@ async function workspaceAdd(){
   WORKSPACES=r.obj.workspaces;WORKSPACE_DEFAULT=r.obj.default_workspace;flowWorkspaceRender();
   const added=WORKSPACES.find(w=>w.path.replaceAll('\\','/').toLowerCase()===path.replaceAll('\\','/').toLowerCase());
   $('workspace-dialog').close();const previous=CHAT_WORKSPACE;CHAT_WORKSPACE=added?.path || path;sideRecent(CHAT_TABS_CACHE);if(await chatNewSession()===false)CHAT_WORKSPACE=previous;
-}
-let CHAT_RECOGNITION=null;
-function chatDictate(){
-  if(CHAT_RECOGNITION){CHAT_RECOGNITION.stop();return;}
-  const Recognition=window.SpeechRecognition || window.webkitSpeechRecognition;
-  if(!Recognition){void chatSystemDictate();return;}
-  const recognition=new Recognition();recognition.lang='zh-CN';recognition.interimResults=false;
-  const target=$('chat-input'),session=CHAT_SESSION;
-  CHAT_RECOGNITION=recognition;
-  const state=active=>{const b=$('chat-mic');if(b){b.setAttribute('aria-pressed',String(active));b.title=active?'正在听写，点击停止':'语音转文字';b.style.color=active?'#dc2626':'';}};
-  recognition.onstart=()=>state(true);
-  recognition.onresult=e=>{const input=target;if(!input?.isConnected||CHAT_SESSION!==session)return;for(let i=e.resultIndex||0;i<e.results.length;i++)if(e.results[i].isFinal!==false)input.value+=(input.value?' ':'')+e.results[i][0].transcript;input.dispatchEvent(new Event('input',{bubbles:true}));};
-  recognition.onend=()=>{if(CHAT_RECOGNITION!==recognition)return;CHAT_RECOGNITION=null;state(false);};
-  recognition.onerror=e=>{if(CHAT_RECOGNITION!==recognition)return;CHAT_RECOGNITION=null;state(false);
-    if(['network','service-not-allowed','language-not-supported'].includes(e.error)){recognition.abort?.();toast('浏览器语音服务不可用，正在切换系统听写');void chatSystemDictate();return;}
-    const reasons={'not-allowed':'麦克风权限被拒绝，请在系统或浏览器中允许访问','audio-capture':'找不到可用麦克风，请检查输入设备','no-speech':'没有检测到语音，请靠近麦克风后重试','aborted':'听写已停止'};
-    toast(reasons[e.error] || ('语音服务错误：'+(e.error||'未知错误')));};
-  try{recognition.start();}catch(e){CHAT_RECOGNITION=null;state(false);if(e.name==='NotSupportedError'){void chatSystemDictate();return;}toast('无法启动语音输入：'+e.message);}
-}
-async function chatSystemDictate(){
-  const target=$('chat-input'),session=CHAT_SESSION,b=$('chat-mic');
-  CHAT_RECOGNITION={stop:()=>toast('系统听写最长15秒，将自动结束')};if(b){b.setAttribute('aria-pressed','true');b.title='系统听写中，最长15秒';}
-  try{const r=await call('POST','/v1/voice/dictate',{},30000);if(r.status!==200){toast(r.obj?.error||'系统语音输入不可用');return;}if(target?.isConnected&&CHAT_SESSION===session&&r.obj?.text){target.value+=(target.value?' ':'')+r.obj.text;target.dispatchEvent(new Event('input',{bubbles:true}));}else if(!r.obj?.text)toast('没有识别到语音，请重试');}
-  finally{CHAT_RECOGNITION=null;if(b?.isConnected){b.setAttribute('aria-pressed','false');b.title='语音转文字';}}
 }
 async function workspaceBrowse(){const b=$('workspace-browse');if(b)b.disabled=true;try{const r=await call('POST','/v1/workspaces/browse',{},125000);if(r.obj?.path)$('workspace-path').value=r.obj.path;else if(!r.obj?.cancelled)$('workspace-error').textContent=r.obj?.error||'无法选择文件夹，请手动输入路径';}finally{if(b)b.disabled=false;}}
 function chatApproval(t,session){let box=$('chat-approval');if(!box){box=document.createElement('div');box.id='chat-approval';$('chat-status')?.after(box);}if(!box)return;const key=t.approval?session+':'+t.id+':'+t.approval.id:'';if(key&&box.dataset.key===key)return;box.dataset.key=key;box.replaceChildren();if(!t.approval)return;

@@ -16,29 +16,14 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
    if(u.pathname==='/v1/tasks/7/approval'){approvals.push(req.postDataJSON());obj={ok:true};}
    return route.fulfill({contentType:'application/json',body:JSON.stringify(obj)});
   });
-  await page.goto('http://ui.test/');await page.locator('#chat-mic svg').waitFor();
+  await page.goto('http://ui.test/');await page.locator('#chat-input').waitFor();assert.equal(await page.locator('#chat-mic').count(),0,'unavailable dictation entry is removed (#217)');
   await page.locator('#chat-permission').selectOption('ask');await page.evaluate(()=>loadChat());
   assert.equal(await page.locator('#chat-permission').inputValue(),'ask');
-  await page.locator('#chat-input').fill('原草稿');await page.locator('#chat-mic').click();
-  assert.equal(await page.locator('#chat-mic').getAttribute('aria-pressed'),'true');
-  await page.evaluate(()=>rec.onresult({resultIndex:0,results:[Object.assign([{transcript:'语音文字'}],{isFinal:true})]}));
-  assert.equal(await page.locator('#chat-input').inputValue(),'原草稿 语音文字');
-  await page.locator('#chat-mic').click();assert.equal(await page.locator('#chat-mic').getAttribute('aria-pressed'),'false');
-  await page.locator('#chat-mic').click();await page.evaluate(()=>rec.onerror({error:'not-allowed'}));
-  assert.equal(await page.locator('#chat-mic').getAttribute('aria-pressed'),'false');
-  assert.equal(dictations,0,'permission denial must not bypass consent through native capture');
   await page.locator('#chat-thinking-toggle').click();
   assert.match(await page.locator('#chat-thinking-toggle').innerText(),/已开启/);
-  assert.notEqual(await page.locator('#chat-thinking-toggle').evaluate(e=>getComputedStyle(e).color),'rgb(255, 255, 255)','enabled control stays readable');
+  assert.notEqual(await page.locator('#chat-thinking-toggle').evaluate(e=>getComputedStyle(e).color),'rgb(255, 255, 255)');
   await page.locator('#chat-thinking-toggle').click();
   assert.equal(await page.locator('#chat-thinking-toggle').getAttribute('aria-pressed'),'false');
-  await page.locator('#chat-mic').click();await page.evaluate(()=>rec.onerror({error:'network'}));
-  await page.waitForFunction(()=>$('chat-input').value.endsWith('系统语音'));
-  await page.waitForFunction(()=>CHAT_RECOGNITION===null);
-  assert.equal(dictations,1,'browser service error falls back exactly once');
-  const before=await page.locator('#chat-input').inputValue();
-  await page.evaluate(()=>{window.SpeechRecognition=undefined;window.webkitSpeechRecognition=undefined;chatDictate();});
-  await page.waitForFunction(previous=>$('chat-input').value!==previous,before);
   await page.evaluate(()=>workspaceDialog());await page.locator('#workspace-browse').click();
   await page.waitForFunction(()=>$('workspace-path').value==='D:/项目 folder');
   await page.locator('#workspace-dialog button').filter({hasText:'取消'}).click();
@@ -54,6 +39,6 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
   await page.evaluate(()=>flowLiveProgress({id:42,status:'FAILED',flow_nodes:[{id:'step1',agent:'architect',status:'error',model_error:'provider failed'}]}));
   assert.match(await page.locator('#flow-live').innerText(),/provider failed/);
   await page.setViewportSize({width:390,height:844});await page.evaluate(()=>switchPanel('chat'));assert.equal(await page.locator('#chat-permission').isVisible(),true);
-  assert.deepEqual(errors,[]);console.log('PASS: native folder choice, persistent permission control, microphone dictation/stop/error/draft, escaped one-shot approval, live Flow metrics/tools/errors and mobile access');
+  assert.deepEqual(errors,[]);console.log('PASS: native folder choice, persistent permission control, unavailable microphone entry removal, escaped one-shot approval, live Flow metrics/tools/errors and mobile access');
  }finally{await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;});
