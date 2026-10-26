@@ -2713,7 +2713,9 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
             const char *git_args = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(span_args,"args"));
             if (git_args) { strbuf_appendf(&git_command,"git %s",git_args); span_command=git_command.buf; }
         }
-        int command_span = span_command != NULL;
+        /* Every tool needs inspectable arguments, not just shell/git. */
+        int command_span = 1;
+        if(!span_command)span_command=r->actions[i].args_json;
         if (command_span) trace_command_details(r->trace,tool_span,span_command,NULL);
         cJSON_Delete(span_args); strbuf_free(&git_command);
         char step_out[240] = ""; /* output head for the step registry */

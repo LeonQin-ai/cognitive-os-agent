@@ -10,7 +10,6 @@
 #include <time.h>
 #include "cJSON.h"
 
-#define TASKLOG_SPANS_CAP 65536 /* newest spans for one terminal task */
 
 struct tasklog {
     mutex_t mtx;
@@ -87,7 +86,7 @@ void tasklog_record_access(tasklog *tl,int64_t id,const char *status,const char 
         else
             cJSON_Delete(trace);
     }
-    if (spans_json && *spans_json && strlen(spans_json) <= TASKLOG_SPANS_CAP) {
+    if (spans_json && *spans_json) {
         cJSON *spans = cJSON_Parse(spans_json);
         if (spans && cJSON_IsArray(spans))
             cJSON_AddItemToObject(o, "spans", spans);

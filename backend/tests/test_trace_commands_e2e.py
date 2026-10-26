@@ -12,11 +12,11 @@ class Provider(BaseHTTPRequestHandler):
  def do_POST(self):
   global count
   self.rfile.read(int(self.headers['Content-Length']));n=count;count+=1
-  calls=[('shell',commands[n])] if n<4 else [('complete_task',{'status':'complete','requires_tools':False,'answer':'All four command observations were checked, including expected failure and timeout.'})]
+  calls=([('shell',commands[n])] if n<4 else [('file_read',{'path':'marker.txt'})] if n==4 else [('list_dir',{'path':'.'})] if n==5 else [('grep',{'path':'.','pattern':'TRACE_TOOL_PROOF','output_mode':'files_with_matches'})] if n==6 else [('complete_task',{'status':'complete','requires_tools':False,'answer':'All four command observations were checked, including expected failure and timeout.'})])
   response={'choices':[{'message':{'content':'','tool_calls':[{'id':'c','type':'function','function':{'name':name,'arguments':json.dumps(args)}} for name,args in calls]},'finish_reason':'tool_calls'}]}
   raw=json.dumps(response).encode();self.send_response(200);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(raw)));self.end_headers();self.wfile.write(raw)
 with tempfile.TemporaryDirectory(prefix='coa-trace-commands-',ignore_cleanup_errors=True) as folder:
- state=Path(folder);server=ThreadingHTTPServer(('127.0.0.1',0),Provider);threading.Thread(target=server.serve_forever,daemon=True).start()
+ state=Path(folder);(state/'marker.txt').write_text('TRACE_TOOL_PROOF',encoding='utf8');server=ThreadingHTTPServer(('127.0.0.1',0),Provider);threading.Thread(target=server.serve_forever,daemon=True).start()
  (state/'cognitive-os-agent.json').write_text(json.dumps({'llm.provider':'openai','llm.model':'trace-fixture','llm.base_url':f'http://127.0.0.1:{server.server_port}','llm.api_key':'fixture','reasoning.max_rounds':12}),encoding='utf-8')
  with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
  def request(path,body=None):
@@ -33,6 +33,8 @@ with tempfile.TemporaryDirectory(prefix='coa-trace-commands-',ignore_cleanup_err
     time.sleep(.1)
   raise AssertionError('startup failed')
  def check(spans):
+  for name in ('file_read','list_dir','grep'):
+   tool=next(s for s in spans if s['name']=='tool.'+name);assert tool['command'] and tool['result'] and tool['end_ms']>=tool['start_ms'],tool
   spans=[s for s in spans if s['name']=='tool.shell'];assert len(spans)==4
   assert [s['command'] for s in spans]==[c['command'] for c in commands]
   assert [s['status'] for s in spans]==[1,-1,-1,1]
