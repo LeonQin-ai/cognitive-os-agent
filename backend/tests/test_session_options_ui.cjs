@@ -1,6 +1,6 @@
 const {chromium}=require('playwright'),fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
 (async()=>{const browser=await chromium.launch({headless:true,channel:process.env.UI_TEST_BROWSER||'msedge'});try{
- const page=await browser.newPage(),sessions=[],submitted=[];let globalWrites=0;await page.route('http://ui.test/**',async route=>{
+ const page=await browser.newPage(),sessions=[],submitted=[],errors=[];page.on('pageerror',e=>errors.push(e.message));let globalWrites=0;await page.route('http://ui.test/**',async route=>{
  const r=route.request(),u=new URL(r.url());let obj=[];
  if(u.pathname==='/')return route.fulfill({contentType:'text/html',body:fs.readFileSync(path.join(__dirname,'../apps/web/index.html'),'utf8')});
  if(u.pathname==='/v1/config/llm'){if(r.method()==='POST')globalWrites++;obj={provider:'openai',model:'global',api_key_set:true};}
@@ -24,5 +24,6 @@ const {chromium}=require('playwright'),fs=require('node:fs'),path=require('node:
  assert.equal(submitted[0].session,'a');assert.equal(submitted[0].route,'route-a');assert.equal(submitted[0].permission_mode,'ask');assert.equal(submitted[0].thinking,true);
  assert.equal(await page.locator('#chat-input').inputValue(),'draft for B','waiting submission must not clear another chat draft');
  assert.equal(await page.evaluate(()=>CHAT_MSGS.some(m=>m.text==='message for A')),false,'pending attachment submission belongs only to original conversation');
+ await page.evaluate(()=>switchPanel('agents'));await page.locator('#agent-model option[value="openai|a"]').waitFor({state:'attached'});await page.locator('#agent-model').selectOption('openai|a');await page.evaluate(()=>fillAgentModelSelect());assert.equal(await page.locator('#agent-model').inputValue(),'openai|a');assert.deepEqual(errors,[]);
  assert.equal(globalWrites,0);console.log('PASS #222: per-chat model/access/thinking, fresh defaults, switching restore and immutable settings while attachment upload waits');
 }finally{await browser.close();}})().catch(e=>{console.error(e);process.exitCode=1;});

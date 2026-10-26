@@ -1829,7 +1829,7 @@ let AGENTS = [];
  * (GET /v1/routes). Preserves the current selection when possible. */
 async function fillAgentModelSelect(){
   const sel = $('agent-model'); if(!sel) return;
-  const session=CHAT_SESSION;
+  const keep=sel.value;
   const r = await call('GET', '/v1/routes');
   const routes = Array.isArray(r.obj) ? r.obj : [];
   let html = '<option value="">（当前激活模型）</option>';

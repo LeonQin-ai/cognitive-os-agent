@@ -1833,7 +1833,7 @@ static const char web_index_html[] =
     " * (GET /v1/routes). Preserves the current selection when possible. */\n"
     "async function fillAgentModelSelect(){\n"
     "  const sel = $('agent-model'); if(!sel) return;\n"
-    "  const session=CHAT_SESSION;\n"
+    "  const keep=sel.value;\n"
     "  const r = await call('GET', '/v1/routes');\n"
     "  const routes = Array.isArray(r.obj) ? r.obj : [];\n"
     "  let html = '<option value=\"\">（当前激活模型）</option>';\n"
