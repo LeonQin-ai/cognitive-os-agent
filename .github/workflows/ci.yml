@@ -80,7 +80,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: cognitive-os-${{ matrix.runner }}
-          path: backend/dist/Cognitive-OS-macos-*.zip
+          path: |
+            backend/dist/Cognitive-OS-macos-*.zip
+            backend/dist/Cognitive-OS-macos-*.pkg
   linux:
     name: Linux (gcc)
     runs-on: ubuntu-latest

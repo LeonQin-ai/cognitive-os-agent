@@ -75,11 +75,15 @@ jobs:
       - name: Create native app package
         run: bash package-macos.sh
       - name: Normalize archive name
-        run: mv dist/Cognitive-OS-macos-${{ matrix.source_arch }}.zip dist/cognitive-os-agent-macos-${{ matrix.arch }}.zip
+        run: |
+          mv dist/Cognitive-OS-macos-${{ matrix.source_arch }}.zip dist/cognitive-os-agent-macos-${{ matrix.arch }}.zip
+          mv dist/Cognitive-OS-macos-${{ matrix.source_arch }}.pkg dist/cognitive-os-agent-macos-${{ matrix.arch }}.pkg
       - uses: actions/upload-artifact@v4
         with:
           name: macos-${{ matrix.arch }}
-          path: backend/dist/cognitive-os-agent-macos-${{ matrix.arch }}.zip
+          path: |
+            backend/dist/cognitive-os-agent-macos-${{ matrix.arch }}.zip
+            backend/dist/cognitive-os-agent-macos-${{ matrix.arch }}.pkg
 
   publish:
     name: Publish GitHub Release

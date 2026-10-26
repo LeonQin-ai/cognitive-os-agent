@@ -41,5 +41,20 @@ codesign --force --options runtime --sign "$IDENTITY" "$APP"
 codesign --verify --deep --strict "$APP"
 mkdir -p dist
 ditto -c -k --sequesterRsrc --keepParent "$APP" "dist/Cognitive-OS-macos-$(uname -m).zip"
-echo "Built $APP and architecture-specific ZIP (identity: $IDENTITY)."
+# Standard macOS Installer package; no shell commands or manual copying required.
+VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")
+PKG="dist/Cognitive-OS-macos-$(uname -m).pkg"
+pkgbuild --component "$APP" --install-location /Applications \
+  --identifier org.cognitiveos.desktop --version "$VERSION" "$PKG"
+if [[ -n "${MACOS_INSTALLER_IDENTITY:-}" ]]; then
+  productsign --sign "$MACOS_INSTALLER_IDENTITY" "$PKG" "$PKG.signed"
+  mv "$PKG.signed" "$PKG"
+  pkgutil --check-signature "$PKG"
+fi
+# Inspect the actual package payload and destination on both macOS CI runners.
+CHECK_DIR=$(mktemp -d)
+trap 'rm -rf "$CHECK_DIR"' EXIT
+pkgutil --expand "$PKG" "$CHECK_DIR/expanded"
+python3 tools/verify_macos_pkg.py "$CHECK_DIR/expanded" "$VERSION"
+echo "Built $APP, ZIP and Installer PKG (app identity: $IDENTITY)."
 echo 'Public distribution additionally requires Developer ID signing and notarization.'
