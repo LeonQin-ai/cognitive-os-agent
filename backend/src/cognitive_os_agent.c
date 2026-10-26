@@ -587,8 +587,8 @@ static void sched_trampoline(task *t, scheduler *s, void *ud) {
     }
 
     tasklog_record_access(ctx->tasklog,t->id,"RUNNING",t->tag,t->input,NULL,NULL,NULL,t->permission_mode);
-    http_set_cancel_check(task_http_cancel,t);
     scheduler_yield(); /* cooperative fairness: let another task start first */
+    http_set_cancel_check(task_http_cancel,t);
     if (t->userdata) {
         /* userdata marker (set by /v1/orchestrate = 1, /v1/flows = 2): run the
          * multi-agent pipeline / flow DAG instead of the single-agent loop */

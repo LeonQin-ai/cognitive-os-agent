@@ -4146,6 +4146,7 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
                 metrics_inc(r->metrics, "tasks.hook_blocked");
             if (answer)
                 *answer = xstrdup("(run blocked by hook)");
+            if(r->run_task || r->abort_parent)http_set_cancel_check(NULL,NULL);
             free(safe_prompt);
             mutex_lock(&r->ss->sess_mtx);
             if (r->cur)

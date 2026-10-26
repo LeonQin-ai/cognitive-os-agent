@@ -24,9 +24,12 @@ try:
     for _ in range(100):
      try:req('GET','/v1/scheduler');break
      except OSError:assert p.poll() is None;time.sleep(.05)
-    for mode,stream in (('headers',False),('body',False),('headers',True),('body',True)):
+    for mode,stream in (('headers',False),('body',False),('headers',True),('body',True),('orchestrate',False)):
      entered.clear();before=calls
-     tid=req('POST','/v1/chat',{'message':'Describe yourself','session':mode+str(stream),'stream':stream})['id'];assert entered.wait(5)
+     if mode=='orchestrate':
+      req('POST','/v1/agents',{'name':'alpha','role':'Analyze'});tid=req('POST','/v1/orchestrate',{'task':'Describe yourself'})['id']
+     else:tid=req('POST','/v1/chat',{'message':'Describe yourself','session':mode+str(stream),'stream':stream})['id']
+     assert entered.wait(5)
      started=time.monotonic();req('DELETE','/v1/tasks/'+str(tid))
      while True:
       task=req('GET','/v1/tasks/'+str(tid))
