@@ -477,6 +477,16 @@ static void idle_boundary_callback(task *t,void *ud) {
     while(!atomic_load(&idle_callback_release) && time_now_ms()<deadline)time_sleep_ms(1);
 }
 
+static atomic_int terminal_runner_entered, terminal_runner_release;
+static void terminal_result_runner(task *t,scheduler *s,void *ud) {
+    (void)s;
+    t->execution_failed = (int)(intptr_t)ud;
+    t->output=xstrdup("execution-result");
+    atomic_store(&terminal_runner_entered,1);
+    long long deadline=time_now_ms()+2000;
+    while(!atomic_load(&terminal_runner_release) && time_now_ms()<deadline)time_sleep_ms(1);
+}
+
 static void test_scheduler_mn(void) {
     section("scheduler_mn");
     memset(mn_runs, 0, sizeof(mn_runs));
@@ -508,6 +518,28 @@ static void test_scheduler_mn(void) {
     CHECK(scheduler_total(s) == MN_COUNT);
     CHECK(scheduler_shutdown(s, 5000) == 0);
     scheduler_free(s);
+
+    /* A failed runner is still RUNNING until finalization. A cancellation
+     * accepted in this window must be the first visible terminal outcome. */
+    for(int failed=0;failed<=1;failed++) for(int cancel=0;cancel<=1;cancel++) {
+        atomic_store(&terminal_runner_entered,0);atomic_store(&terminal_runner_release,0);
+        s=scheduler_new(1,terminal_result_runner,(void *)(intptr_t)failed);
+        CHECK(s!=NULL);if(!s)continue;
+        int64_t id=scheduler_submit(s,0,"terminal-result",NULL,0);CHECK(id>=0);
+        long long ready_deadline=time_now_ms()+1000;
+        while(!atomic_load(&terminal_runner_entered) && time_now_ms()<ready_deadline)time_sleep_ms(1);
+        CHECK(atomic_load(&terminal_runner_entered));
+        task *pending=scheduler_get(s,id);CHECK(pending!=NULL);
+        if(pending){
+            CHECK(pending->status==TS_RUNNING);
+            if(cancel)pending->cancel_flag=1;
+            CHECK(pending->status==TS_RUNNING);
+        }
+        atomic_store(&terminal_runner_release,1);
+        CHECK(scheduler_wait_idle(s,2000)==0);
+        if(pending)CHECK(pending->status==(cancel?TS_CANCELLED:failed?TS_FAILED:TS_DONE));
+        CHECK(scheduler_shutdown(s,1000)==0);scheduler_free(s);
+    }
 
     /* Completion callbacks and retained history belong to the idle boundary. */
     atomic_store(&idle_callback_started,0);atomic_store(&idle_callback_release,0);

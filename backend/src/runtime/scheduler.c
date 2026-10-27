@@ -161,6 +161,8 @@ static void finalize_task(scheduler *s, task *t) {
         t->status = TS_TIMEOUT;
     else if (t->cancel_flag)
         t->status = TS_CANCELLED;
+    else if (t->execution_failed)
+        t->status = TS_FAILED;
     else if (t->status == TS_RUNNING)
         t->status = TS_DONE;
     s->active--;

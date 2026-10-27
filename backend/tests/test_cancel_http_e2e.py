@@ -24,10 +24,11 @@ try:
     for _ in range(100):
      try:req('GET','/v1/scheduler');break
      except OSError:assert p.poll() is None;time.sleep(.05)
-    for mode,stream in (('headers',False),('body',False),('headers',True),('body',True),('orchestrate',False)):
+    req('POST','/v1/agents',{'name':'alpha','role':'Analyze'})
+    for mode,stream in (('headers',False),('body',False),('headers',True),('body',True),('orchestrate',False))*3:
      entered.clear();before=calls
      if mode=='orchestrate':
-      req('POST','/v1/agents',{'name':'alpha','role':'Analyze'});tid=req('POST','/v1/orchestrate',{'task':'Describe yourself'})['id']
+      tid=req('POST','/v1/orchestrate',{'task':'Describe yourself'})['id']
      else:tid=req('POST','/v1/chat',{'message':'Describe yourself','session':mode+str(stream),'stream':stream})['id']
      assert entered.wait(5)
      started=time.monotonic();req('DELETE','/v1/tasks/'+str(tid))
@@ -35,7 +36,11 @@ try:
       task=req('GET','/v1/tasks/'+str(tid))
       if task['status'] not in ('RUNNING','QUEUED'):break
       assert time.monotonic()-started<3,'cancel remained blocked by model I/O';time.sleep(.02)
+     assert time.monotonic()-started<3,'cancel terminal state exceeded 3s'
      assert task['status']=='CANCELLED' and calls==before+1,(task,calls,before)
+     assert '任务已取消' in task['output'],task
+     # The first terminal state is authoritative; it must not drift later.
+     assert req('GET','/v1/tasks/'+str(tid))['status']=='CANCELLED',task
    finally:release.set();p.terminate();p.wait(timeout=5)
  print('PASS #221: cancel finishes within 3s during silent headers/body for regular and streaming requests; no retries')
 finally:release.set();model.shutdown();model.server_close()

@@ -642,9 +642,11 @@ static void sched_trampoline(task *t, scheduler *s, void *ud) {
 
     http_set_cancel_check(NULL,NULL);
     t->output = answer ? answer : xstrdup("(no output)");
-    if (!answer || run_rc != 0)
-        t->status = TS_FAILED;
-    trace_end(ctx->trace, task_span, task_should_abort(t) || t->status == TS_FAILED ? -1 : 1);
+    /* Publish the terminal state only after returning to the scheduler.
+     * An interrupted HTTP call returns failure even when cancellation caused
+     * it; exposing FAILED here lets API pollers observe it before CANCELLED. */
+    t->execution_failed = !answer || run_rc != 0;
+    trace_end(ctx->trace, task_span, task_should_abort(t) || t->execution_failed ? -1 : 1);
 }
 
 /* Ingest a message received from an external messaging channel into the IM

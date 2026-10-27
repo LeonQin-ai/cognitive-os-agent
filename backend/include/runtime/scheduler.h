@@ -38,6 +38,7 @@ typedef struct task {
     TASK_ATOMIC(int) cancel_flag; /* set by cancel() */
     int timed_out;            /* set when deadline passed */
     TASK_ATOMIC(task_status) status;
+    int execution_failed; /* runner result; scheduler publishes terminal status */
     char *attachments_json; /* owned immutable task snapshot; never in history */
     char *llm_config; /* owned task-local provider snapshot; never serialized */
     char *workspace; /* owned immutable execution directory, never process chdir */
@@ -77,7 +78,8 @@ int64_t scheduler_submit_preview(scheduler *s,int priority,const char *input,voi
 int64_t scheduler_submit_configured(scheduler *s,int priority,const char *input,void *userdata,
     int64_t timeout_ms,const char *tag,int thinking_mode,const char *attachments,const char *workspace,int stream_preview,int permission_mode,const char *llm_config);
 
-/* Runs a task; t->output / t->status may be set by the runner. */
+/* Runs a task; set output / execution_failed, leaving status RUNNING until
+ * scheduler finalization. Legacy runners may still set status directly. */
 typedef void (*task_runner)(task *t, scheduler *s, void *worker_ud);
 /* Called (outside the scheduler lock) when a task finishes. */
 typedef void (*task_completion)(task *t, void *ud);
