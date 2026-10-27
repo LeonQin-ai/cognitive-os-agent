@@ -6,6 +6,7 @@ private source or the pasted report. No real provider credentials are used.
 import json,os,re,socket,subprocess,tempfile,threading,time,urllib.request
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
+from fixture_http_response import respond_json
 root=Path(__file__).resolve().parents[1];build=root/os.environ.get('COA_BUILD_DIR','build')
 binary=build/('cognitive-os-agent.exe' if os.name=='nt' else 'cognitive-os-agent')
 INTRO='我已经收集了足够的架构信息。现在读取保存的 web 包目录列表以补全最后的模块结构，然后撰写架构分析文档。'
@@ -73,9 +74,7 @@ def exercise(mode,protocol):
       message={'content':'','tool_calls':[{'id':f'c-{role}-{n}-{i}','type':'function','function':{'name':action['tool'],'arguments':json.dumps(action['args'])}} for i,action in enumerate(actions)]}
      else:message={'content':answer}
      raw=json.dumps({'choices':[{'message':message,'finish_reason':'tool_calls' if protocol=='native' else 'stop'}]}).encode()
-     self.send_response(200);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(raw)));self.end_headers()
-     try:self.wfile.write(raw)
-     except (BrokenPipeError,ConnectionResetError):pass
+     respond_json(self,raw)
     except Exception as error:errors.append(repr(error));raise
   provider=ThreadingHTTPServer(('127.0.0.1',0),Provider);threading.Thread(target=provider.serve_forever,daemon=True).start()
   (state/'cognitive-os-agent.json').write_text(json.dumps({'llm.provider':'openai','llm.model':'flow-review-fixture','llm.api_key':'fixture','llm.base_url':f'http://127.0.0.1:{provider.server_port}','reasoning.max_rounds':40}),encoding='utf-8')

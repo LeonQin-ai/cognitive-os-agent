@@ -2,6 +2,7 @@
 import json,os,socket,subprocess,tempfile,threading,time,urllib.request
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
+from fixture_http_response import respond_json
 root=Path(__file__).resolve().parents[1];build=root/os.environ.get('COA_BUILD_DIR','build')
 binary=build/('cognitive-os-agent.exe' if os.name=='nt' else 'cognitive-os-agent')
 gates={};entered={};group_calls=[];errors=[]
@@ -19,9 +20,7 @@ class Provider(BaseHTTPRequestHandler):
     group_calls.append(current);answer='GROUP_CAPACITY_OK [[DISCUSSION_DONE]]'
    else:answer='Session fixture completed.'
    raw=json.dumps({'choices':[{'message':{'content':'','tool_calls':[{'id':'done','type':'function','function':{'name':'complete_task','arguments':json.dumps({'status':'complete','requires_tools':False,'answer':answer})}}]},'finish_reason':'tool_calls'}]}).encode()
-   self.send_response(200);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(raw)));self.end_headers()
-   try:self.wfile.write(raw)
-   except (BrokenPipeError,ConnectionResetError):pass
+   respond_json(self,raw)
   except Exception as e:errors.append(repr(e));raise
 with tempfile.TemporaryDirectory(prefix='coa-im-capacity-') as folder:
  work=Path(folder);provider=ThreadingHTTPServer(('127.0.0.1',0),Provider);threading.Thread(target=provider.serve_forever,daemon=True).start()

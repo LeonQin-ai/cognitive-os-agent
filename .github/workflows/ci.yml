@@ -79,10 +79,11 @@ jobs:
       - name: Information answer completion regression
         run: COA_BUILD_DIR=build-macos python3 tests/test_information_answers_e2e.py
       - name: Reciprocal group discussion regression
-        run: |
-          COA_BUILD_DIR=build-macos python3 tests/test_im_discussion_e2e.py
-          COA_BUILD_DIR=build-macos python3 tests/test_im_capacity_e2e.py
-          COA_BUILD_DIR=build-macos python3 tests/test_flow_review_delivery_e2e.py
+        run: COA_BUILD_DIR=build-macos python3 tools/run_ci_regression.py tests/test_im_discussion_e2e.py
+      - name: IM capacity and waiter cancellation regression
+        run: COA_BUILD_DIR=build-macos python3 tools/run_ci_regression.py tests/test_im_capacity_e2e.py
+      - name: Flow review delivery and cancellation regression
+        run: COA_BUILD_DIR=build-macos python3 tools/run_ci_regression.py tests/test_flow_review_delivery_e2e.py
       - name: Package native desktop
         run: bash package-macos.sh
       - uses: actions/upload-artifact@v4
@@ -102,6 +103,8 @@ jobs:
       - uses: actions/checkout@v5
       - name: Scheduled issue repair plumbing
         run: node ../.github/scripts/issue-autofix.test.cjs
+      - name: Regression fixture cancellation transport
+        run: python3 tests/test_fixture_http_response.py
       - name: Build
         run: make -j"$(nproc)"
       - name: Start mock LLM server (needed by adapters + e2e)
@@ -159,10 +162,11 @@ jobs:
       - name: Information answer completion regression
         run: python3 tests/test_information_answers_e2e.py
       - name: Reciprocal group discussion regression
-        run: |
-          python3 tests/test_im_discussion_e2e.py
-          python3 tests/test_im_capacity_e2e.py
-          python3 tests/test_flow_review_delivery_e2e.py
+        run: python3 tools/run_ci_regression.py tests/test_im_discussion_e2e.py
+      - name: IM capacity and waiter cancellation regression
+        run: python3 tools/run_ci_regression.py tests/test_im_capacity_e2e.py
+      - name: Flow review delivery and cancellation regression
+        run: python3 tools/run_ci_regression.py tests/test_flow_review_delivery_e2e.py
       - name: Scenario tests
         run: ./build/cognitive-os-agent-scenario
       - name: Adapter tests (chat + SSE)
@@ -241,11 +245,14 @@ jobs:
         run: python tests/test_flow_dependencies_e2e.py
       - name: IM group member repair and validation
         run: python tests/test_im_members_e2e.py
+      - name: Regression fixture cancellation transport
+        run: python tests/test_fixture_http_response.py
       - name: Reciprocal group discussion regression
-        run: |
-          python tests/test_im_discussion_e2e.py
-          python tests/test_im_capacity_e2e.py
-          python tests/test_flow_review_delivery_e2e.py
+        run: python tools/run_ci_regression.py tests/test_im_discussion_e2e.py
+      - name: IM capacity and waiter cancellation regression
+        run: python tools/run_ci_regression.py tests/test_im_capacity_e2e.py
+      - name: Flow review delivery and cancellation regression
+        run: python tools/run_ci_regression.py tests/test_flow_review_delivery_e2e.py
       - name: Incomplete diagnostics and recovery API regression
         run: python tests/test_completion_recovery_e2e.py
       - name: Durable session scale and cursor regression
@@ -309,3 +316,13 @@ jobs:
           NODE_PATH="$PWD/webarena/node_modules" node tests/test_composer_controls_ui.cjs
           python tests/test_image_preview.py
           COA_PAGING_BROWSER=1 NODE_PATH="$PWD/webarena/node_modules" python tests/test_session_paging_e2e.py
+
+      - name: Retain Windows regression failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-regression-failures-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            backend/build/ci-regressions/*.log
+            backend/build/*e2e*.log
+          if-no-files-found: ignore
