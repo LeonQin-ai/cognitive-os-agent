@@ -2476,7 +2476,7 @@ static void test_planner_dsml(void) {
         provider.impl=(void*)"<tool_call>file_read\",\"args\":{\"path\":\"index.html\"}</tool_call>";
         planned_action *actions=NULL;int n=0;char *raw=NULL,*err=NULL;
         CHECK(planner_plan(&provider,"generate html",&actions,&n,&raw,&err)<0);
-        CHECK(n==0 && actions==NULL && err && strstr(err,"malformed tagged tool name"));
+        CHECK(n==0 && actions==NULL && err && strstr(err,"invalid or incomplete tagged tool-call response"));
         planner_actions_free(actions,n);free(raw);free(err);
     }
     const char *cases[]={

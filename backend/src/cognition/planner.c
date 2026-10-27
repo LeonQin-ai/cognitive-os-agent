@@ -410,6 +410,31 @@ static int parse_plan_actions(const char *plan, planned_action **actions, int *n
     return 1;
 }
 
+/* Control markup outside Markdown code examples is pending protocol, never a
+ * delivered answer. Apply this at every completion boundary, including after
+ * the one-shot semantic review. Do not execute or invent malformed arguments. */
+static const char *next_tool_markup(const char *text, int include_dsml) {
+    for (const char *p=text; p && *p; ++p) {
+        if (*p=='`' || (*p=='~' && p[1]=='~' && p[2]=='~')) {
+            char quote=*p; size_t n=1;
+            while(p[n]==quote)++n;
+            const char *end=p+n;
+            while((end=strchr(end,quote))!=NULL) {
+                size_t count=1;while(end[count]==quote)++count;
+                if(count==n || (n>=3 && count>n)){p=end+count-1;break;}
+                end+=count;
+            }
+            if(end)continue;
+        }
+        if(!strncmp(p,"<tool_call",10) &&
+           (!p[10] || p[10]=='>' || isspace((unsigned char)p[10]))) return p;
+        if(include_dsml && (!strncmp(p,"<｜｜DSML｜｜",strlen("<｜｜DSML｜｜")) ||
+            !strncmp(p,"<｜DSML｜",strlen("<｜DSML｜")) ||
+            !strncmp(p,"<||DSML||",9) || !strncmp(p,"<|DSML|",7))) return p;
+    }
+    return NULL;
+}
+
 /* Some OpenAI-compatible providers serialize tool calls as
  *   <tool_call>shell{"command":"..."}<tool_call>file_read{"path":"..."}
  * instead of putting the tool name inside the JSON object. Parse every such
@@ -417,10 +442,14 @@ static int parse_plan_actions(const char *plan, planned_action **actions, int *n
  * repeat it forever without executing anything. */
 static int parse_tagged_tool_calls(const char *plan, planned_action **actions, int *n_actions) {
     const char *p = plan;
+    while(isspace((unsigned char)*p))++p;
+    /* A tag in JSON arguments is literal tool data. Parse that envelope below. */
+    if(*p=='[' || *p=='{')return 0;
     planned_action *out = NULL;
     int count = 0;
 
-    while ((p = strstr(p, "<tool_call>")) != NULL) {
+    while ((p = next_tool_markup(p,0)) != NULL) {
+        if(strncmp(p,"<tool_call>",11)){planner_actions_free(out,count);return -1;}
         const char *name = p + strlen("<tool_call>");
         while(*name==' ' || *name=='\t' || *name=='\r' || *name=='\n')++name;
         const char *json = name;
@@ -430,22 +459,20 @@ static int parse_tagged_tool_calls(const char *plan, planned_action **actions, i
         while (name_end > name && (name_end[-1] == ' ' || name_end[-1] == '\t' || name_end[-1] == '\r' || name_end[-1] == '\n'))
             name_end--;
         if (json == name || (*json != '{' && *json != '[')) {
-            p = name;
-            continue;
+            planner_actions_free(out,count);return -1;
         }
 
         if(!valid_action_name(name,(size_t)(name_end-name))) {
             planner_actions_free(out,count);return -1;
         }
         char *body = extract_json_span(json);
-        if (!body)
-            break; /* incomplete trailing call: let the normal repair path handle it */
+        if (!body) {planner_actions_free(out,count);return -1;}
+        const char *json_end=json+strlen(body);
         cJSON *args = cJSON_Parse(body);
         free(body);
         if (!args || !cJSON_IsObject(args)) {
             cJSON_Delete(args);
-            p = json + 1;
-            continue;
+            planner_actions_free(out,count);return -1;
         }
 
         planned_action *grown = realloc(out, (size_t)(count + 1) * sizeof(*out));
@@ -469,10 +496,9 @@ static int parse_tagged_tool_calls(const char *plan, planned_action **actions, i
         }
         count++;
 
-        /* Advance past the balanced JSON object, including nested braces and
-         * braces inside strings, by locating the next tag after this object. */
-        const char *next = strstr(json + 1, "<tool_call>");
-        p = next ? next : json + strlen(json);
+        /* Skip the entire parsed object. Tags inside argument strings are
+         * literal payload, never additional executable calls. */
+        p = json_end;
     }
 
     if (count == 0) {
@@ -920,6 +946,11 @@ static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_act
             cJSON *needs=cJSON_GetObjectItemCaseSensitive(finish,"requires_tools");
             int valid=finishes==1 && status && (!strcmp(status,"complete") || !strcmp(status,"blocked")) &&
                 cJSON_IsFalse(needs) && answer && *answer;
+            if(valid && next_tool_markup(answer,1)) {
+                if(err_out)*err_out=xstrdup("completion contains unexecuted tool-call markup; do not return pending calls inside the answer. Emit the next necessary tool using the configured tool protocol, or provide the delivered result with examples inside Markdown code spans/fences.");
+                free(resp.content);free(resp.tool_actions_json);free(resp.error);
+                cJSON_Delete(calls);cJSON_Delete(finish);return -1;
+            }
             if(valid) {
                 log_info("planner: native completion status=%s requires_tools=false",status);
                 if(completion_out)*completion_out=cJSON_PrintUnformatted(finish);
@@ -982,7 +1013,7 @@ static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_act
      * brackets), which used to silently demote a real plan to a plain-text
      * answer — the agent then "answered" instead of acting. */
     looks_like_plan = strstr(plan, "\"tool\"") != NULL || strstr(plan, "'tool'") != NULL ||
-                      strstr(plan, "<tool_call>") != NULL;
+                      next_tool_markup(plan,0) != NULL;
     have = parse_dsml_tool_calls(plan, actions, n_actions);
     if (have<0) {
         if (err_out) *err_out=xstrdup("invalid or incomplete DSML tool-call response; no actions executed");
@@ -992,7 +1023,7 @@ static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_act
     }
     if (!have) have = parse_tagged_tool_calls(plan, actions, n_actions);
     if(have<0) {
-        if(err_out)*err_out=xstrdup("malformed tagged tool name; no actions executed; use a native tool call or a valid tool identifier");
+        if(err_out)*err_out=xstrdup("invalid or incomplete tagged tool-call response; no actions executed; use the configured tool protocol with a valid identifier and complete JSON object");
         if(raw_out)*raw_out=NULL;free(plan);return -1;
     }
     if (!have)
@@ -1042,6 +1073,7 @@ static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_act
                         *raw_out = fixed;
                     } else
                         free(fixed);
+                    have=1;
                     log_info("planner: repaired plan JSON accepted (%d actions)", *n_actions);
                 } else if ((salv = salvage_truncated_array(fixed)) != NULL &&
                            parse_plan_actions(salv, actions, n_actions) && *n_actions > 0) {
@@ -1053,6 +1085,7 @@ static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_act
                     } else
                         free(salv);
                     free(fixed);
+                    have=1;
                 } else {
                     free(salv);
                     free(fixed);
@@ -1060,6 +1093,13 @@ static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_act
             }
             free(user);
         }
+    }
+
+    if(raw_out)plan=*raw_out; /* repair may replace the original buffer */
+    if(looks_like_plan && (!have || !*n_actions)) {
+        planner_actions_free(*actions,*n_actions);*actions=NULL;*n_actions=0;
+        if(err_out)*err_out=xstrdup("invalid tool-action response after repair; no actions executed; emit a valid action using the configured tool protocol");
+        if(raw_out)*raw_out=NULL;free(plan);return -1;
     }
 
     if (require_completion && !using_native) {
@@ -1074,6 +1114,12 @@ static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_act
             const char *answer=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(finish,"answer"));
             int valid=status && (!strcmp(status,"complete") || !strcmp(status,"blocked")) &&
                 cJSON_IsFalse(cJSON_GetObjectItemCaseSensitive(finish,"requires_tools")) && answer && *answer;
+            if(valid && next_tool_markup(answer,1)) {
+                planner_actions_free(*actions,*n_actions);*actions=NULL;*n_actions=0;
+                cJSON_Delete(finish);
+                if(err_out)*err_out=xstrdup("completion contains unexecuted tool-call markup; emit the next necessary tool as a valid JSON action array, not inside the answer. Put literal protocol examples inside Markdown code spans/fences.");
+                if(raw_out)*raw_out=NULL;free(plan);return -1;
+            }
             if (valid) {
                 if (native_end_out) *native_end_out=!strcmp(status,"blocked") ? 2 : 1;
                 if(completion_out)*completion_out=cJSON_PrintUnformatted(finish);
