@@ -4432,6 +4432,20 @@ restart_planning:
                 free(truncated_prefix); truncated_prefix=NULL;
                 break;
             }
+            /* A Flow node must enter the structured delivery review before
+             * legacy narration/read heuristics can terminate it. Otherwise a
+             * reviewer that listed directories and then announced its first
+             * file read could fail on the next identical paragraph without
+             * ever receiving the explicit next-action/completion contract. */
+            if(r->completion_prompt &&
+               r->llm && r->llm->provider &&
+               (!strcmp(r->llm->provider,"openai") || !strcmp(r->llm->provider,"anthropic")) &&
+               r->run_successful_tools>0 && !completion_reviewed && r->round_idx<r->max_rounds) {
+                completion_reviewed=1;r->completion_review_required=!planner_uses_native_tools(r->llm);
+                round_log_append(r,txt?txt:"");
+                round_log_append(r,"[system] Completion review: the previous text is only a candidate node result. Compare it with the ORIGINAL node instruction and actual file/tool evidence. Directory listings are not code review; a promise to read or write a document is not that document. Call the next required tools now, then deliver the actual requested analysis or verified artifact with complete_task. Do not repeat directory discovery already completed, and do not forward a progress announcement to downstream nodes as a result.");
+                continue;
+            }
             int needs_action = !planner_uses_native_tools(r->llm) && prompt_requires_mutation(completion_instruction(r,prompt)) && !run_has_mutating_action(r);
             int needs_read = !planner_uses_native_tools(r->llm) && ((prompt_requires_full_read(completion_instruction(r,prompt)) &&
                 (required_pending_reads(r,completion_instruction(r,prompt)) || r->read_tracking_overflow ||
@@ -4440,10 +4454,10 @@ restart_planning:
                  !r->run_file_reads && !run_has_mutating_action(r)));
             int needs_observation = !planner_uses_native_tools(r->llm) && prompt_requires_observation(completion_instruction(r,prompt)) &&
                                     r->run_successful_tools == 0;
-            /* Prose heuristics are confined to the explicitly selected legacy
-             * text protocol (and offline mock). Native turns can reach here
-             * without actions only via a validated complete_task declaration. */
-            int needs_intent_recovery = !planner_uses_native_tools(r->llm) && !prompt_is_direct_information_request(completion_instruction(r,prompt)) &&
+            /* Native turns need a valid completion declaration. Flow delivery
+             * additionally rejects a brief progress-only announcement, using
+             * the same existing narration check as legacy work requests. */
+            int needs_intent_recovery = (!planner_uses_native_tools(r->llm) || r->completion_prompt) && !prompt_is_direct_information_request(completion_instruction(r,prompt)) &&
                                         (r->run_successful_tools == 0 || answer_only_announces_work(txt)) &&
                                         looks_like_intent(txt);
             if (needs_action || needs_read || needs_observation || needs_intent_recovery) {
@@ -4468,6 +4482,10 @@ restart_planning:
                     round_log_append(r, "[system] 当前完整源码阅读尚未完成：有文件未读到 EOF，或答案明确列出未读源码。"
                                         "不要把目录枚举或部分源码总结当作完成，也不要让用户重新指定已要求阅读的范围。"
                                         "请继续未读文件及 next_offset_bytes 指定的分页，完成后再整理资料。");
+                    continue;
+                }
+                if(planner_uses_native_tools(r->llm)) {
+                    round_log_append(r,"[system] The completion answer is only a work announcement, not the requested node deliverable. Use the native functions to perform the remaining work and verify it, then call complete_task with the actual result. Do not repeat a progress announcement as the final answer.");
                     continue;
                 }
                 round_log_append(r, "[system] 上一轮只输出了意向说明，没有执行任何工具动作。"

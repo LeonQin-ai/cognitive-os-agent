@@ -86,10 +86,10 @@ async function publish({github, context, core}) {
     'commit', '-m', `fix: issue #${result.issue_number} ${result.title.replace(/[\r\n]/g, ' ').slice(0, 100)}`);
   execFileSync('gh', ['auth', 'setup-git'], {stdio: 'inherit'});
   git('push', 'origin', `HEAD:refs/heads/${branch}`);
-  const body = [marker(result.issue_number), `Refs #${result.issue_number}`, result.summary,
+  const body = [marker(result.issue_number), `Fixes #${result.issue_number}`, result.summary,
     'Validation:', ...result.tests.map(test => `- ${test}`),
     'Remaining limitations:', ...result.limitations.map(item => `- ${item}`),
-    'Independent Linux unit/scenario/benchmark and completion regressions passed before publication. Full CI is dispatched separately. This PR does not close the issue or merge itself.'].join('\n\n');
+    'Independent Linux unit/scenario/benchmark and completion regressions passed before publication. Full CI is dispatched separately for review. Merging this repair closes the linked issue; automation does not merge PRs.'].join('\n\n');
   const pr = (await github.rest.pulls.create({...repo, base: context.payload.repository.default_branch,
     head: branch, title: `Issue #${result.issue_number}: ${result.title.slice(0, 150)}`, body})).data;
   core.info(`Published reviewable repair: ${pr.html_url}`);

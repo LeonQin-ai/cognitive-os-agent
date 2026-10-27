@@ -79,7 +79,10 @@ jobs:
       - name: Information answer completion regression
         run: COA_BUILD_DIR=build-macos python3 tests/test_information_answers_e2e.py
       - name: Reciprocal group discussion regression
-        run: COA_BUILD_DIR=build-macos python3 tests/test_im_discussion_e2e.py
+        run: |
+          COA_BUILD_DIR=build-macos python3 tests/test_im_discussion_e2e.py
+          COA_BUILD_DIR=build-macos python3 tests/test_im_capacity_e2e.py
+          COA_BUILD_DIR=build-macos python3 tests/test_flow_review_delivery_e2e.py
       - name: Package native desktop
         run: bash package-macos.sh
       - uses: actions/upload-artifact@v4
@@ -156,7 +159,10 @@ jobs:
       - name: Information answer completion regression
         run: python3 tests/test_information_answers_e2e.py
       - name: Reciprocal group discussion regression
-        run: python3 tests/test_im_discussion_e2e.py
+        run: |
+          python3 tests/test_im_discussion_e2e.py
+          python3 tests/test_im_capacity_e2e.py
+          python3 tests/test_flow_review_delivery_e2e.py
       - name: Scenario tests
         run: ./build/cognitive-os-agent-scenario
       - name: Adapter tests (chat + SSE)
@@ -187,6 +193,8 @@ jobs:
         run: |
           ASAN_OPTIONS=detect_leaks=0 python3 tests/test_completion_review_e2e.py
           ASAN_OPTIONS=detect_leaks=0 python3 tests/test_embedded_tool_completion_e2e.py
+          ASAN_OPTIONS=detect_leaks=0 python3 tests/test_im_capacity_e2e.py
+          ASAN_OPTIONS=detect_leaks=0 python3 tests/test_flow_review_delivery_e2e.py
 
   windows:
     name: Windows (zig cc)
@@ -234,7 +242,10 @@ jobs:
       - name: IM group member repair and validation
         run: python tests/test_im_members_e2e.py
       - name: Reciprocal group discussion regression
-        run: python tests/test_im_discussion_e2e.py
+        run: |
+          python tests/test_im_discussion_e2e.py
+          python tests/test_im_capacity_e2e.py
+          python tests/test_flow_review_delivery_e2e.py
       - name: Incomplete diagnostics and recovery API regression
         run: python tests/test_completion_recovery_e2e.py
       - name: Durable session scale and cursor regression
@@ -286,6 +297,7 @@ jobs:
           NODE_PATH="$PWD/webarena/node_modules" node tests/test_issue_ui.cjs
           NODE_PATH="$PWD/webarena/node_modules" node tests/test_im_members_ui.cjs
           NODE_PATH="$PWD/webarena/node_modules" node tests/test_im_loading_ui.cjs
+          NODE_PATH="$PWD/webarena/node_modules" node tests/test_im_capacity_ui.cjs
           NODE_PATH="$PWD/webarena/node_modules" node tests/test_flow_resume_ui.cjs
           NODE_PATH="$PWD/webarena/node_modules" node tests/test_flow_workspace_ui.cjs
           NODE_PATH="$PWD/webarena/node_modules" node tests/test_folder_picker_timeout_ui.cjs

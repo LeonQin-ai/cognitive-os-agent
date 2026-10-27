@@ -10,6 +10,9 @@
 #include "infra/logging.h"
 #include "os/os_thread.h"
 #include "os/os_time.h"
+#include "os/os_fs.h"
+#include "os/http_cancel.h"
+#include "security/secret.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -20,10 +23,8 @@
 
 #define FLOW_MAX_NODES 64
 #define FLOW_MAX_PARALLEL 8
-#define FLOW_MAX_TASKLEN                                                                                               \
-    8192                    /* after {{ref}} substitution — a distilled                                                \
-                             * upstream answer + the node instruction must                                             \
-                             * both fit (2048 truncated real plans) */
+#define FLOW_MAX_TASKLEN 8192 /* original node instruction; expansion is separate */
+#define FLOW_MAX_EXPANDED_CONTEXT (512 * 1024)
 #define FLOW_SUBST_CAP 4096 /* max chars substituted per {{ref}} */
 
 static void flow_event(runtime_ctx *ctx, const char *stage, const char *id, const char *agent, const char *detail) {
@@ -479,7 +480,8 @@ typedef struct flow_job {
     task *parent;
     const char *workspace;
     flow_node *nd;
-    char task[FLOW_MAX_TASKLEN]; /* after {{ref}} substitution */
+    char *task; /* dynamically expanded; never truncate the node instruction */
+    char *result_path; /* durable full result for downstream paginated reads */
     char *out;
     int rc;
 } flow_job;
@@ -504,11 +506,15 @@ static reasoning *flow_reasoning_new(runtime_ctx *ctx,const char *workspace) {
     return reasoning_new(&rc);
 }
 
+static int flow_abort_requested(void *parent) { return parent && task_should_abort((task *)parent); }
+
 static void flow_worker(void *arg) {
     reasoning *r;
     char key[96];
 
     flow_job *j = (flow_job *)arg;
+    if(!j->task){j->rc=-1;j->out=xstrdup("Unable to prepare complete upstream context (allocation or context limit); no node actions executed.");flow_prog_node_mark(j->task_id,j->nd->id,FP_ERROR);return;}
+    http_set_cancel_check(flow_abort_requested,j->parent);
     flow_event(j->ctx, "execute", j->nd->id, j->nd->agent, j->task);
     flow_prog_node_mark(j->task_id, j->nd->id, FP_RUNNING);
     r = flow_reasoning_new(j->ctx,j->workspace);
@@ -544,82 +550,68 @@ static void flow_worker(void *arg) {
         j->rc = -1;
     }
 
+    http_set_cancel_check(NULL,NULL);
+    if (j->parent && task_should_abort(j->parent))
+        j->rc = j->parent->cancel_flag ? -3 : -4;
+    if(j->result_path) {
+        strbuf full;strbuf_init(&full);
+        strbuf_appendf(&full,"# Flow node %s (%s)\n\nExecution workspace: %s\n\n## Original instruction\n%s\n\n## Resolved instruction and upstream context\n%s\n\n## Result (%s)\n%s",
+            j->nd->id,j->nd->agent,j->workspace?j->workspace:".",j->nd->task,j->task,j->rc==0?"ok":"error",j->out?j->out:"");
+        char *safe=full.buf?secret_redact_ssh_passwords(full.buf,full.len,NULL):NULL;
+        if(!safe || fs_write_file(j->result_path,safe,strlen(safe))) {free(j->result_path);j->result_path=NULL;}
+        free(safe);strbuf_free(&full);
+    }
     const char *result = j->out && *j->out ? j->out : "";
     snprintf(key, sizeof(key), "flow/%s/result", j->nd->id);
     blackboard_put(j->ctx->blackboard, key, result);
     flow_event(j->ctx, "done", j->nd->id, j->nd->agent, j->rc == 0 ? "ok" : "error");
-    if (j->parent && task_should_abort(j->parent))
-        j->rc = j->parent->cancel_flag ? -3 : -4;
     flow_prog_node_mark(j->task_id, j->nd->id, j->rc == 0 ? FP_OK : j->rc == -3 ? FP_CANCELLED : j->rc == -4 ? FP_TIMEOUT : FP_ERROR);
 }
 
-/* Replace "{{<id>}}" in the node's task with upstream results (capped). */
-static void flow_substitute(flow_dag *d, flow_node *nd, char **results, char *out, size_t outsz) {
-    const char *t = nd->task;
-    size_t o = 0;
-    out[0] = '\0';
-    while (*t && o + 1 < outsz) {
-        if (t[0] == '{' && t[1] == '{') {
-            const char *close = strstr(t + 2, "}}");
-            if (close) {
-                size_t idlen = (size_t)(close - (t + 2));
-                char ref[64];
-                if (idlen > 0 && idlen < sizeof(ref)) {
-                    memcpy(ref, t + 2, idlen);
-                    ref[idlen] = '\0';
-                    int ri = flow_node_index(d, ref);
-                    if (ri >= 0 && results[ri]) {
-                        const char *src = results[ri];
-                        /* Prefer the agent's distilled final answer over the
-                         * raw round log: a completed agent run embeds kilobytes
-                         * of tool dumps BEFORE "\n回答: <answer>" — head-capping
-                         * those injects source-code dumps into the downstream
-                         * prompt and the instruction gets lost/drowned. */
-                        const char *ans = NULL;
-                        const char *p = src, *last = NULL;
-                        while ((p = strstr(p, "\n回答: ")) != NULL) {
-                            last = p;
-                            p += 1;
-                        }
-                        if (last)
-                            ans = last + strlen("\n回答: ");
-                        size_t cap = outsz - o - 1;
-                        char hdr[96];
-                        int hl = snprintf(hdr, sizeof(hdr), "「上游 %s 结果开始」\n", ref);
-                        if (hl > 0 && (size_t)hl < cap) {
-                            memcpy(out + o, hdr, (size_t)hl);
-                            o += (size_t)hl;
-                            cap -= (size_t)hl;
-                        }
-                        const char *body = ans && *ans ? ans : src;
-                        size_t len = strlen(body);
-                        if (len > FLOW_SUBST_CAP)
-                            len = FLOW_SUBST_CAP;
-                        if (len > cap)
-                            len = cap;
-                        /* strncat would scan for a NUL that is not written
-                         * at out+o — copy directly instead. */
-                        memcpy(out + o, body, len);
-                        o += len;
-                        cap -= len;
-                        size_t room = outsz - o - 1;
-                        const char *ftr = "\n「上游结果结束」";
-                        size_t fl = strlen(ftr);
-                        if (fl > room)
-                            fl = room;
-                        memcpy(out + o, ftr, fl);
-                        o += fl;
-                        out[o] = '\0';
-                        t = close + 2;
-                        continue;
+/* Inline a bounded preview only if the complete result was saved. The full
+ * artifact includes the original instruction and execution directory, so a
+ * downstream reviewer can recover provenance and limitations beyond the head.
+ * Node instructions themselves are never cut off by substituted material. */
+static char *flow_substitute(flow_dag *d,flow_node *nd,char **results,flow_job *jobs) {
+    strbuf out;strbuf_init(&out);
+    const char *t=nd->task;
+    while(*t) {
+        if(t[0]=='{' && t[1]=='{') {
+            const char *close=strstr(t+2,"}}");
+            if(close && close-t-2>0 && close-t-2<64) {
+                char ref[64];size_t n=(size_t)(close-t-2);memcpy(ref,t+2,n);ref[n]=0;
+                int ri=flow_node_index(d,ref);
+                if(ri>=0 && results[ri]) {
+                    const char *body=results[ri],*scan=body,*last=NULL;
+                    while((scan=strstr(scan,"\n回答: "))){last=scan+strlen("\n回答: ");++scan;}
+                    if(last && *last)body=last;
+                    size_t length=strlen(body),preview=length;
+                    if(jobs[ri].result_path && preview>FLOW_SUBST_CAP) {
+                        preview=FLOW_SUBST_CAP;
+                        while(preview && ((unsigned char)body[preview]&0xc0)==0x80)--preview;
                     }
+                    size_t overhead=512+(jobs[ri].result_path?strlen(jobs[ri].result_path):0);
+                    if(preview>FLOW_MAX_EXPANDED_CONTEXT || overhead>FLOW_MAX_EXPANDED_CONTEXT-preview ||
+                       out.len>FLOW_MAX_EXPANDED_CONTEXT-preview-overhead) {
+                        strbuf_free(&out);return NULL;
+                    }
+                    strbuf_appendf(&out,"「上游 %s 结果开始」\n",ref);
+                    strbuf_append_n(&out,body,preview);
+                    if(preview<length) {
+                        strbuf_appendf(&out,"\n[Upstream preview truncated: %llu/%llu bytes. Full result, original instruction and execution workspace: %s. Read this file with file_read and follow next_offset_bytes to retrieve missing implementation details, limitations and unread-file lists. Do not treat the preview as the complete result.]\n",
+                            (unsigned long long)preview,(unsigned long long)length,jobs[ri].result_path);
+                    } else if(jobs[ri].result_path) {
+                        strbuf_appendf(&out,"\n[Upstream complete result/provenance (original instruction and execution workspace): %s.]\n",jobs[ri].result_path);
+                    }
+                    strbuf_append(&out,"\n「上游结果结束」");
+                    t=close+2;continue;
                 }
             }
         }
-        out[o++] = *t++;
+        strbuf_append_n(&out,t++,1);
     }
-
-    out[o] = '\0';
+    if(out.len>FLOW_MAX_EXPANDED_CONTEXT){strbuf_free(&out);return NULL;}
+    return strbuf_detach(&out);
 }
 
 int flow_validate(const char *dag_json, char **err) {
@@ -736,17 +728,23 @@ int flow_run(runtime_ctx *ctx, const char *dag_json, int64_t task_id, char **ans
         /* substitute upstream results into task templates, set up jobs */
         for (int k = 0; k < layern; k++) {
             int i = runidx[k];
-            tasks[i] = (char *)malloc(FLOW_MAX_TASKLEN);
-            if (tasks[i])
-                flow_substitute(d, &d->nodes[i], results, tasks[i], FLOW_MAX_TASKLEN);
-            else
-                tasks[i] = xstrdup(d->nodes[i].task);
+            tasks[i] = flow_substitute(d, &d->nodes[i], results,jobs);
             jobs[i].ctx = ctx;
             jobs[i].parent = parent;
             jobs[i].workspace=parent && parent->workspace?parent->workspace:ctx->workspace;
             jobs[i].task_id = task_id;
             jobs[i].nd = &d->nodes[i];
-            snprintf(jobs[i].task, FLOW_MAX_TASKLEN, "%s", tasks[i] ? tasks[i] : d->nodes[i].task);
+            jobs[i].task=tasks[i];
+            if(ctx->state_root && task_id>=0) {
+                char relative[96],directory[4096],path[4096];
+                snprintf(relative,sizeof(relative),"flow-results/%lld",(long long)task_id);
+                path_join(directory,sizeof(directory),ctx->state_root,relative);
+                if(!fs_mkdirs(directory)) {
+                    snprintf(relative,sizeof(relative),"node-%02d.md",i);
+                    path_join(path,sizeof(path),directory,relative);
+                    jobs[i].result_path=fs_absolute_path(path);
+                }
+            }
             jobs[i].out = NULL;
             jobs[i].rc = -1;
         }
@@ -785,6 +783,7 @@ int flow_run(runtime_ctx *ctx, const char *dag_json, int64_t task_id, char **ans
             cJSON_AddNumberToObject(st, "layer", (double)d->nodes[i].layer);
             cJSON_AddStringToObject(st, "status", jobs[i].rc == 0 ? "ok" : jobs[i].rc == -2 ? "blocked" : jobs[i].rc == -3 ? "cancelled" : jobs[i].rc == -4 ? "timeout" : "error");
             cJSON_AddStringToObject(st, "result", result);
+            if(jobs[i].result_path)cJSON_AddStringToObject(st,"result_path",jobs[i].result_path);
             cJSON_AddItemToArray(trace, st);
         }
         if (jobs[i].rc != 0) {
@@ -821,6 +820,7 @@ int flow_run(runtime_ctx *ctx, const char *dag_json, int64_t task_id, char **ans
         free(tasks[i]);
     free(results);
     free(tasks);
+    for(int i=0;i<d->n;i++)free(jobs[i].result_path);
     free(jobs);
     free(d);
 

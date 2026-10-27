@@ -2818,7 +2818,7 @@ function imRenderRunStatus(){
   const done={consensus:'全员已达成共识',round_limit:'已完成设定轮数'};
   el.textContent=state.error || (state.stopping?'正在停止讨论，等待当前操作结束…':
     state.status==='queued'?'已排队，等待 Agent…':
-    state.status==='running'?round+(state.agent||'Agent')+' 正在讨论…':
+    state.status==='running'?(state.stage==='waiting_for_executor'?(state.activity||'正在等待可用执行器')+' · '+(state.agent||'Agent'):round+(state.agent||'Agent')+' 正在讨论…'):
     state.status==='failed'?'讨论执行失败，请查看任务 #'+task_id:
     state.status==='timeout'?'讨论执行超时，请查看任务 #'+task_id:
     state.status==='cancelled'?(state.reason==='new_message'?'新消息已接管本次讨论':'讨论已停止'):
@@ -5298,7 +5298,7 @@ const CHAT_POLLERS = new Set();
 const CHAT_ENTRIES = new Map();
 const STAGE_LABELS = {
   steering:'已收到补充，等待当前操作结束', replanning:'正在根据补充调整任务',
-  submitting:'已收到，正在准备', queued:'等待执行', analyzing:'正在分析需求',
+  submitting:'已收到，正在准备', waiting_for_executor:'等待可用执行器', queued:'等待执行', analyzing:'正在分析需求',
   preparing_context:'正在准备会话上下文', planning:'正在等待模型回复', plan_ready:'已收到执行计划',
   response_ready:'已收到模型答复', executing:'正在执行',
   summarizing:'正在整理结果', completed:'执行完成', failed:'执行失败',

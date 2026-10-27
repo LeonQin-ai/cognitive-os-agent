@@ -172,51 +172,74 @@ int state_import(runtime_ctx *ctx, const char *path) {
  * reasoning lane (own session ring caches, own agent loop state) so agents
  * never block each other. Tasks on the SAME session still serialize through
  * a per-session lock; all lanes share one session registry (ctx->sess). */
-#define LANE_SESS_MAX 32
-typedef struct {
-    char id[64];
+typedef struct lane_sess_lock {
+    char *id;
     mutex_t m;
-    int used;
+    unsigned references; /* owners and waiters; protected by g_lane_sess_mtx */
+    struct lane_sess_lock *next;
 } lane_sess_lock;
-static lane_sess_lock g_lane_sess[LANE_SESS_MAX];
+static lane_sess_lock *g_lane_sess;
 static mutex_t g_lane_sess_mtx;
 #define IM_ROOM_LOCKS 64
 static mutex_t g_im_room_mtx[IM_ROOM_LOCKS];
 static _Atomic int64_t g_im_active_tasks[IM_ROOM_LOCKS];
 
-/* Acquire the per-session run lock (entry created on first use). Blocks
- * while another task on the SAME session is still executing. */
-static lane_sess_lock *lane_sess_lock_acquire(const char *session_id) {
-    const char *want = (session_id && *session_id) ? session_id : "default";
-    lane_sess_lock *e = NULL;
-
-    mutex_lock(&g_lane_sess_mtx);
-    for (int i = 0; i < LANE_SESS_MAX; i++) {
-        if (g_lane_sess[i].used && strcmp(g_lane_sess[i].id, want) == 0) {
-            e = &g_lane_sess[i];
-            break;
-        }
+static void lane_wait_progress(task *t, const char *activity) {
+    if(!t)return;
+    char *saved=task_progress_copy(t);
+    cJSON *o=saved?cJSON_Parse(saved):NULL;free(saved);
+    if(!o)o=cJSON_CreateObject();
+    cJSON_DeleteItemFromObjectCaseSensitive(o,"stage");
+    cJSON_DeleteItemFromObjectCaseSensitive(o,"activity");
+    cJSON_AddStringToObject(o,"stage","waiting_for_executor");
+    cJSON_AddStringToObject(o,"activity",activity);
+    char *json=cJSON_PrintUnformatted(o);cJSON_Delete(o);
+    if(json){task_set_progress(t,json);task_trace_add(t,json);free(json);}
+}
+static int lane_lock_wait(mutex_t *m, task *t, const char *activity) {
+    int reported=0;
+    while(!t || !task_should_abort(t)) {
+        if(!mutex_trylock(m))return 0;
+        if(!reported){lane_wait_progress(t,activity);reported=1;}
+        time_sleep_ms(25);
     }
-    if (!e) {
-        for (int i = 0; i < LANE_SESS_MAX; i++) {
-            if (!g_lane_sess[i].used) {
-                g_lane_sess[i].used = 1;
-                snprintf(g_lane_sess[i].id, sizeof(g_lane_sess[i].id), "%s", want);
-                e = &g_lane_sess[i];
-                break;
-            }
-        }
-        if (!e)
-            e = &g_lane_sess[0]; /* map full: degrade to slot 0 */
+    if(t && !t->cancel_flag)t->timed_out=1;
+    return -1;
+}
+static void lane_sess_unref(lane_sess_lock *e) {
+    mutex_lock(&g_lane_sess_mtx);
+    if(!--e->references) {
+        lane_sess_lock **link=&g_lane_sess;
+        while(*link && *link!=e)link=&(*link)->next;
+        if(*link)*link=e->next;
+        mutex_destroy(&e->m);free(e->id);free(e);
     }
     mutex_unlock(&g_lane_sess_mtx);
-    mutex_lock(&e->m);
+}
+/* Session locks live only while owned or awaited. Historical conversations
+ * cannot exhaust a fixed table and serialize unrelated rooms onto slot zero. */
+static lane_sess_lock *lane_sess_lock_acquire(const char *session_id, task *t) {
+    const char *want=session_id && *session_id?session_id:"default";
+    mutex_lock(&g_lane_sess_mtx);
+    lane_sess_lock *e=g_lane_sess;
+    while(e && strcmp(e->id,want))e=e->next;
+    if(!e) {
+        e=calloc(1,sizeof(*e));
+        if(e) {
+            e->id=xstrdup(want);
+            if(!e->id || mutex_init(&e->m)) {free(e->id);free(e);e=NULL;}
+            else {e->next=g_lane_sess;g_lane_sess=e;}
+        }
+    }
+    if(e)e->references++;
+    mutex_unlock(&g_lane_sess_mtx);
+    if(e && lane_lock_wait(&e->m,t,"等待同一会话的上一任务结束")) {
+        lane_sess_unref(e);e=NULL;
+    }
     return e;
 }
-
 static void lane_sess_lock_release(lane_sess_lock *e) {
-    if (e)
-        mutex_unlock(&e->m);
+    if(e){mutex_unlock(&e->m);lane_sess_unref(e);}
 }
 
 typedef struct progress_binding { runtime_ctx *ctx; task *t; cJSON *prior; } progress_binding;
@@ -260,8 +283,8 @@ static void chat_progress(const char *json, void *ud) {
     else cJSON_Delete(o);
 }
 
-/* Pick an idle chat lane (try-lock in order) and run the prompt on it; when
- * all lanes are busy, block on lane 0 (bounded concurrency, overflow waits). */
+/* Keep concurrency bounded, but resume on any available lane. Waiting for
+ * capacity and session serialization must remain cancellable. */
 static void chat_answer_preview(const char *delta,void *ud){
     task *t=ud;if(!t)return;
     mutex_lock(&t->progress_mtx);
@@ -271,21 +294,22 @@ static void chat_answer_preview(const char *delta,void *ud){
 }
 static int chat_lane_run(runtime_ctx *ctx, const char *session_id, int64_t task_id, int thinking_mode, const char *prompt,
                           char **answer) {
-    lane_sess_lock *se = lane_sess_lock_acquire(session_id);
-    int lane = -1;
-
-    for (int i = 0; i < CHAT_LANE_MAX; i++) {
-        if (mutex_trylock(&ctx->lane_mtx[i]) == 0) {
-            lane = i;
-            break;
+    progress_binding binding = {ctx, scheduler_acquire(ctx->scheduler, task_id), NULL};
+    if(!binding.t)return -1;
+    lane_sess_lock *se=lane_sess_lock_acquire(session_id,binding.t);
+    if(!se){scheduler_release(ctx->scheduler,binding.t);return -1;}
+    int lane=-1,reported=0;
+    while(lane<0 && !task_should_abort(binding.t)) {
+        for(int i=0;i<CHAT_LANE_MAX;i++) {
+            if(!mutex_trylock(&ctx->lane_mtx[i])){lane=i;break;}
+        }
+        if(lane<0) {
+            if(!reported){lane_wait_progress(binding.t,"正在等待可用执行器");reported=1;}
+            time_sleep_ms(25);
         }
     }
-    if (lane < 0) {
-        mutex_lock(&ctx->lane_mtx[0]);
-        lane = 0;
-    }
+    if(lane<0){if(!binding.t->cancel_flag)binding.t->timed_out=1;lane_sess_lock_release(se);scheduler_release(ctx->scheduler,binding.t);return -1;}
     ctx->lane_task[lane] = task_id;
-    progress_binding binding = {ctx, scheduler_acquire(ctx->scheduler, task_id), NULL};
     if(binding.t && binding.t->userdata==(void *)3) {
         char *prior=task_progress_copy(binding.t);
         binding.prior=prior?cJSON_Parse(prior):NULL;
@@ -410,7 +434,10 @@ static int im_run_round(runtime_ctx *ctx, task *t, char **summary) {
     room_id = (int64_t)parsed_room;
     trigger_id = (int64_t)parsed_trigger;
     mutex_t *room_lock = &g_im_room_mtx[(uint64_t)room_id % IM_ROOM_LOCKS];
-    mutex_lock(room_lock);
+    if(lane_lock_wait(room_lock,t,"等待上一轮群聊结束")) {
+        im_run_status(ctx,room_id,t->id,t->cancel_flag?"cancelled":"timeout",NULL,0,rounds,t->cancel_flag?"cancelled":"deadline");
+        return -1;
+    }
     atomic_store(&g_im_active_tasks[(uint64_t)room_id % IM_ROOM_LOCKS], t->id);
     sessions = im_list_sessions(ctx->im, &session_n);
     for (size_t i = 0; i < session_n; i++)
@@ -730,8 +757,6 @@ int init(runtime_ctx *ctx, const config *cfg) {
     for (int i = 0; i < IM_ROOM_LOCKS; i++) {
         mutex_init(&g_im_room_mtx[i]); atomic_store(&g_im_active_tasks[i], -1);
     }
-    for (int i = 0; i < LANE_SESS_MAX; i++)
-        mutex_init(&g_lane_sess[i].m);
 
     const char *state_root = (cfg && cfg->state_root && *cfg->state_root) ? cfg->state_root : "state";
     const char *workspace = (cfg && cfg->workspace && *cfg->workspace) ? cfg->workspace : ".";
