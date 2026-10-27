@@ -18,7 +18,7 @@ assert len(REPORT.encode())>4096
 
 def exercise(mode,protocol):
  counts={};requests=[];errors=[];offset=0;report_path=None;source_read=False
- pending=threading.Event();release=threading.Event()
+ pending=threading.Event();release=threading.Event();announced_offsets=set()
  with tempfile.TemporaryDirectory(prefix='coa-flow-delivery-') as folder:
   work=Path(folder);state=work/'state';state.mkdir();(work/'infra').mkdir()
   (work/'nested/src/context').mkdir(parents=True)
@@ -68,7 +68,9 @@ def exercise(mode,protocol):
       assert match,'long upstream report was silently truncated without a full-result reference'
       report_path=match.group(1)
       assert Path(report_path).is_file()
-      if 'REPORT_TAIL_END' not in text:
+      if mode=='repeated_progress' and 0<offset<=8000 and offset not in announced_offsets:
+       announced_offsets.add(offset);answer=finish(NARRATION)
+      elif 'REPORT_TAIL_END' not in text:
        answer=json.dumps([{'tool':'file_read','args':{'path':report_path,'offset_bytes':offset,'max_bytes':4000}}]);offset+=4000
       else:
        assert 'UNREAD_CRITICAL_FILES: infra/store.py, infra/locking.py' in text
@@ -130,13 +132,15 @@ def exercise(mode,protocol):
     assert nodes['step1']['status']==nodes['step2']['status']=='ok',task
     assert (work/'architecture.md').read_text(encoding='utf-8')==ARCH
     assert counts['ARCHITECT']==4 and counts['CODER']==3,counts
-    if mode in ('recover','wide','directory'):
+    if mode in ('recover','wide','directory','repeated_progress'):
      assert task['status']=='DONE' and nodes['step3']['status']=='ok' and REVIEW in task['output'],task
      reads=[s for s in nodes['step3']['steps'] if s['tool']=='file_read']
      assert any('REPORT_TAIL_END' in s['out'] for s in reads),reads
      assert sum(s['target'] in ('infra/store.py','infra/locking.py') for s in reads)==2,reads
      assert report_path and REPORT in Path(report_path).read_text(encoding='utf-8')
      assert counts['REVIEWER']<=25,counts
+     if mode=='repeated_progress':
+      assert announced_offsets=={4000,8000},announced_offsets
      if mode=='directory':
       steps=nodes['step3']['steps']
       assert any(s['tool']=='list_dir' and not s['ok'] for s in steps),steps
@@ -153,4 +157,4 @@ def exercise(mode,protocol):
    finally:
     release.set();proc.terminate();proc.wait(timeout=5);provider.shutdown();provider.server_close()
 for protocol in ('legacy','native'):
- for mode in ('recover','wide','stuck','cancel','directory'):exercise(mode,protocol)
+ for mode in ('recover','wide','stuck','cancel','directory','repeated_progress'):exercise(mode,protocol)

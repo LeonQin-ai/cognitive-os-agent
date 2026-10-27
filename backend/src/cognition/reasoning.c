@@ -4557,6 +4557,13 @@ restart_planning:
         round_log_append(r, result ? result : "");
         obs_log_append(r, result ? result : "");
         r->intent_nudged = 0; /* narration recovered: reset the consecutive bound */
+        /* Repetition is consecutive only while no real work intervenes.
+         * Keeping this text after a new source page was read incorrectly
+         * aborted normal announce -> execute -> announce -> execute runs. */
+        if (r->round_new_observations) {
+            free(last_narration);
+            last_narration = NULL;
+        }
         int search_only = r->n_actions > 0;
         for (int i = 0; i < r->n_actions; i++)
             if (strcmp(r->actions[i].tool, "glob") != 0 &&

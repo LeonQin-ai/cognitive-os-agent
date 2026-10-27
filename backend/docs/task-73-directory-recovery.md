@@ -42,3 +42,29 @@ three-node Flow scenarios passed. The same 20 completion and 10 Flow scenarios
 also passed with AddressSanitizer (`detect_leaks=0`). The existing legacy
 completion-recovery suite passed with its required `COA_TOOL_PROTOCOL=legacy`.
 Windows/macOS execution is delegated to CI and is not claimed as locally tested.
+
+## Follow-up: progress incorrectly treated as repeated narration
+
+The later report contains the generic narration failure rather than the pending
+`list_dir` diagnostic. A new three-node fixture reproduces that exact message:
+the reviewer announces remaining work, reads a new upstream-report page,
+announces the same remaining work again, and is stopped before it can read the
+next page and required source files.
+
+The successful-plan branch already reset the consecutive narration counter but
+left `last_narration` alive. Its equality check therefore compared announcements
+across actual intervening progress. Clear that text only when the executed round
+produced a new observation. No planning budget is extended, failed work is not
+marked DONE, and stalled tools or uninterrupted narration retain existing limits.
+
+The regression inserts identical announcements at two distinct report-page
+boundaries, then requires actual critical source reads and the final delivered
+review. Both protocols must finish the same Flow with 3/3 nodes and DONE. The
+existing no-progress fixture must still fail, and cancellation remains bounded
+by its original three-second limit. This reproduces a concrete cause of the
+reported diagnostic; the generic message alone cannot identify every private run.
+
+Follow-up local validation: 4507 unit checks passed, all 12 Flow scenarios passed
+normally and under AddressSanitizer, and all 20 completion-review scenarios plus
+the legacy completion-recovery suite passed. The old binary failed the new
+repeated-progress scenario with the exact reported narration diagnostic.
