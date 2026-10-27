@@ -68,3 +68,15 @@ These are local controlled-provider reproductions. They do not claim a rerun of
 the user's private Windows task #71 or verification of the target project's
 actual architecture and implementation. Historical terminal task records are
 preserved; updating the runtime does not rewrite an old FAILED record to DONE.
+
+## Windows gate timing follow-up
+
+The cancellation case formerly required all upstream execution and reviewer
+setup to finish within a separate five-second event wait. Windows CI exhausted
+that preparation wait before issuing cancellation. Preparation now uses the same
+25-second Flow budget as other cases and reports terminal node failures
+immediately. The fixture deliberately delays the first upstream response by
+5.5 seconds so restoring the old five-second wait fails on every platform.
+Actual cancellation remains bounded at three seconds, measured from before the
+DELETE request through the terminal state. Provider response helpers also handle
+peer aborts during headers and body; unexpected provider errors still propagate.

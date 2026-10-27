@@ -36,6 +36,9 @@ def exercise(mode,protocol):
      n=counts.get(role,0);counts[role]=n+1;requests.append((role,body))
      review='COMPLETION REVIEW PROTOCOL:' in body['messages'][0]['content'] or (protocol=='native' and 'Completion review:' in text)
      def finish(answer):return json.dumps([{'tool':'complete_task','args':{'status':'complete','requires_tools':False,'answer':answer}}]) if review or protocol=='native' else answer
+     if mode=='cancel' and role=='ARCHITECT' and n==0:
+      # Preparation intentionally exceeds the removed 5s readiness timeout.
+      time.sleep(float(os.environ.get('COA_FIXTURE_SETUP_DELAY_MS','5500'))/1000)
      if mode=='cancel' and role=='REVIEWER' and n==8:pending.set();release.wait(20)
      if role=='IM':answer=finish('IM_CONCURRENT_OK [[DISCUSSION_DONE]]')
      elif role=='ARCHITECT':
@@ -95,16 +98,25 @@ def exercise(mode,protocol):
     if mode=='wide':dag['nodes'][2]['task']='基于 {{step2}} 和补充对照 {{step2}} 的记忆与上下文实现代码，审查其正确性、边界条件、资源泄漏和并发安全，指出潜在风险并提供修复建议。'
     tid=api('/v1/flows',dag)['id'];deadline=time.monotonic()+25
     if mode=='cancel':
-     assert pending.wait(5),'reviewer did not reach its silent request'
+     # Preparing two upstream nodes and entering review has the same budget
+     # as other Flow cases. Only the actual cancellation is timed at 3s.
+     while not pending.wait(.1):
+      preparation=api('/v1/tasks/'+str(tid))
+      diagnostics={'status':preparation['status'],'output':(preparation.get('output') or '')[-1200:],
+       'nodes':[{k:n.get(k) for k in ('id','status','stage','model_error','llm_calls','tool_calls')} for n in preparation.get('flow_nodes',[])],
+       'fixture_errors':errors}
+      assert preparation['status'] in ('QUEUED','RUNNING'),('Flow ended before silent reviewer request',diagnostics)
+      assert time.monotonic()<deadline,('Flow preparation did not reach silent reviewer request within its budget',diagnostics)
      room=api('/v1/im/sessions',{'name':'concurrent','kind':'group','members':['architect'],'discussion_rounds':1})['id']
      group=api('/v1/im/sessions/'+str(room)+'/messages',{'content':'Discuss and finish.'})['task_id']
      group_deadline=time.monotonic()+3
      while api('/v1/tasks/'+str(group))['status'] not in ('DONE','FAILED'):
       assert time.monotonic()<group_deadline;time.sleep(.02)
      assert api('/v1/tasks/'+str(group))['status']=='DONE'
+     cancel_started=time.monotonic()
      req=urllib.request.Request(f'http://127.0.0.1:{port}/v1/tasks/{tid}',method='DELETE')
      with urllib.request.urlopen(req,timeout=5) as response:json.load(response)
-     deadline=time.monotonic()+3
+     deadline=cancel_started+3
     while True:
      task=api('/v1/tasks/'+str(tid))
      if task['status'] not in ('QUEUED','RUNNING'):break
@@ -122,6 +134,7 @@ def exercise(mode,protocol):
      assert report_path and REPORT in Path(report_path).read_text(encoding='utf-8')
      assert counts['REVIEWER']<=25,counts
     elif mode=='cancel':
+     assert time.monotonic()-cancel_started<3,('Flow cancellation exceeded 3 seconds',task)
      assert task['status']=='CANCELLED' and nodes['step3']['status']=='cancelled',task
      assert not source_read and counts.get('IM')==1
     else:
