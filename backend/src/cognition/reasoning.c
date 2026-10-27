@@ -501,7 +501,15 @@ static void resolve_failed_tool(reasoning *r, const char *tool_name, const char 
             r->unresolved_discovered_reads[i][0] && !strcmp(r->unresolved_discovered_reads[i], scope);
         int header_relocated = !strcmp(tool_name,"file_read") && !strcmp(r->unresolved_failed_tools[i],"file_read") &&
             (same_repository_header(failed_scope,scope) || same_nested_workspace_path(r,failed_scope,scope));
-        if (retry || replacement || relocated_read || header_relocated) {
+        /* A missing guessed directory can be located under a nested project,
+         * just like a missing source file. Require an actual successful listing
+         * of the entire relative directory suffix; unrelated reads, matching
+         * basenames and existing-but-inaccessible paths are not a repair. */
+        int directory_relocated = !strcmp(tool_name,"list_dir") &&
+            !strcmp(r->unresolved_failed_tools[i],"list_dir") &&
+            strstr(r->unresolved_failure_errors[i],"directory does not exist") &&
+            same_nested_workspace_path(r,failed_scope,scope);
+        if (retry || replacement || relocated_read || header_relocated || directory_relocated) {
             --r->unresolved_failed_tool_count;
             if (i < r->unresolved_failed_tool_count) {
                 memmove(r->unresolved_failed_tools[i], r->unresolved_failed_tools[i + 1],
@@ -4741,7 +4749,8 @@ restart_planning:
         if (r->unresolved_failed_tool_count > 0 || r->unresolved_failed_tools_overflow) {
             strbuf_append(&out, "\n原因：以下失败工具之后没有成功重试核实，不能将任务标记为完成：");
             for (int i = 0; i < r->unresolved_failed_tool_count; ++i)
-                strbuf_appendf(&out, "%s%s", i ? "、" : " ", r->unresolved_failed_tools[i]);
+                strbuf_appendf(&out, "\n- %s：%s；%s", r->unresolved_failed_tools[i],
+                    r->unresolved_failed_scopes[i],r->unresolved_failure_errors[i]);
             if (r->unresolved_failed_tools_overflow)
                 strbuf_append(&out, "（失败工具记录过多，已按未完成处理）");
             strbuf_append(&out, "。请查看详细执行记录并恢复验证。");

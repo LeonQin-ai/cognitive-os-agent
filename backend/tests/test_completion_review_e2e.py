@@ -44,6 +44,17 @@ class Provider(BaseHTTPRequestHandler):
         if self.mode == 'chat':
             text = '你好！可以交流技术问题。'
             calls = [finish(text)] if self.protocol == 'native' else []
+        elif self.mode.startswith('dir_'):
+            target = 'nested/src/context' if self.mode != 'dir_unrelated' else 'other/context'
+            if n == 0:
+                calls = [('list_dir', {'path': 'src/context'})]
+            elif n == 1:
+                calls = [('file_read', {'path': target + '/proof.py'})] if self.mode == 'dir_readonly' else [('list_dir', {'path': target})]
+            elif n == 2:
+                calls = [('file_read', {'path': target + '/proof.py'})]
+            else:
+                text = 'Context 分析：CONTEXT_SOURCE_PROOF 已从真实源码读取并核实。'
+                calls = [finish(text)] if self.protocol == 'native' or review else []
         elif n == 0:
             calls = [('file_read', {'path': 'process_state.h'})]
         elif n == 1:
@@ -87,6 +98,12 @@ def exercise(protocol, mode):
             state = Path(folder)
             (state / 'process_state.h').write_text('void restore_state(void);', encoding='utf-8')
             (state / 'process_state.cpp').write_text('JOURNAL_REPLAY restores processes; DISK_FLUSH persists board state.', encoding='utf-8')
+            for directory in ('nested/src/context', 'other/context'):
+                (state / directory).mkdir(parents=True)
+                (state / directory / 'proof.py').write_text('CONTEXT_SOURCE_PROOF', encoding='utf-8')
+            if mode == 'dir_existing':
+                (state / 'src').mkdir()
+                (state / 'src/context').write_text('not a directory', encoding='utf-8')
             (state / 'cognitive-os-agent.json').write_text(json.dumps({
                 'llm.provider': 'openai', 'llm.model': 'local-review-fixture',
                 'llm.api_key': 'local-test-only',
@@ -124,6 +141,19 @@ def exercise(protocol, mode):
                             break
                         assert time.monotonic() < deadline, task
                         time.sleep(.03)
+                    if mode.startswith('dir_'):
+                        expected_status = 'DONE' if mode == 'dir_relocated' else 'FAILED'
+                        assert task['status'] == expected_status, task
+                        assert task['steps'][0]['tool'] == 'list_dir' and not task['steps'][0]['ok'], task
+                        assert Provider.calls <= 8, task
+                        assert 'CONTEXT_SOURCE_PROOF' in task['output'], task
+                        assert any(s['tool'] == 'file_read' and s['ok'] for s in task['steps']), task
+                        if expected_status == 'FAILED':
+                            assert 'src/context' in task['output'].replace('\\', '/'), task
+                        history = request('/v1/chat/history?session=review-case')
+                        assert bool(history['turns']) == (expected_status == 'DONE'), history
+                        print(f'PASS: {protocol}/{mode}; {expected_status}, source proof and history verified', flush=True)
+                        return
                     expected = {'recover': (4, 2, 'DONE'), 'commentary': (5, 2, 'DONE'),
                         'stuck': (7, 1, 'FAILED'), 'blocked': (3, 1, 'FAILED'),
                         'budget': (2, 1, 'FAILED'), 'chat': (1, 0, 'DONE')}[mode]
@@ -157,5 +187,5 @@ def exercise(protocol, mode):
 
 if __name__ == '__main__':
     for protocol in ['legacy', 'native']:
-        for mode in ['recover', 'commentary', 'stuck', 'blocked', 'budget', 'chat']:
+        for mode in ['recover', 'commentary', 'stuck', 'blocked', 'budget', 'chat', 'dir_relocated', 'dir_unrelated', 'dir_existing', 'dir_readonly']:
             exercise(protocol, mode)

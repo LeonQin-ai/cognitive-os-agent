@@ -21,6 +21,8 @@ def exercise(mode,protocol):
  pending=threading.Event();release=threading.Event()
  with tempfile.TemporaryDirectory(prefix='coa-flow-delivery-') as folder:
   work=Path(folder);state=work/'state';state.mkdir();(work/'infra').mkdir()
+  (work/'nested/src/context').mkdir(parents=True)
+  (work/'nested/src/context/proof.py').write_text('CONTEXT_DIRECTORY_PROOF',encoding='utf-8')
   for i in range(7):(work/f'scan{i}').mkdir();(work/f'scan{i}'/f'entry{i}.txt').write_text(str(i))
   for name,proof in [('core.py','ARCH_LAYER_BOUNDARY_PROOF'),('memory.py','MEMORY_ENTRY_PROOF'),('context.py','CONTEXT_COMPACT_PROOF'),('infra/store.py','STORE_ATOMIC_PROOF'),('infra/locking.py','LOCK_MUTEX_PROOF')]:
    (work/name).write_text(proof+'\n',encoding='utf-8')
@@ -56,6 +58,8 @@ def exercise(mode,protocol):
       else:
        assert 'MEMORY_ENTRY_PROOF' in text and 'CONTEXT_COMPACT_PROOF' in text
        answer=finish(REPORT)
+     elif mode=='directory' and n==0:answer=json.dumps([{'tool':'list_dir','args':{'path':'src/context'}}])
+     elif mode=='directory' and n==1:answer=json.dumps([{'tool':'list_dir','args':{'path':'nested/src/context'}},{'tool':'file_read','args':{'path':'nested/src/context/proof.py'}}])
      elif n<7:answer=json.dumps([{'tool':'list_dir','args':{'path':f'scan{n}'}}])
      elif n==7 or not review or mode=='stuck':answer=finish(NARRATION)
      elif not source_read:
@@ -126,13 +130,17 @@ def exercise(mode,protocol):
     assert nodes['step1']['status']==nodes['step2']['status']=='ok',task
     assert (work/'architecture.md').read_text(encoding='utf-8')==ARCH
     assert counts['ARCHITECT']==4 and counts['CODER']==3,counts
-    if mode in ('recover','wide'):
+    if mode in ('recover','wide','directory'):
      assert task['status']=='DONE' and nodes['step3']['status']=='ok' and REVIEW in task['output'],task
      reads=[s for s in nodes['step3']['steps'] if s['tool']=='file_read']
      assert any('REPORT_TAIL_END' in s['out'] for s in reads),reads
      assert sum(s['target'] in ('infra/store.py','infra/locking.py') for s in reads)==2,reads
      assert report_path and REPORT in Path(report_path).read_text(encoding='utf-8')
      assert counts['REVIEWER']<=25,counts
+     if mode=='directory':
+      steps=nodes['step3']['steps']
+      assert any(s['tool']=='list_dir' and not s['ok'] for s in steps),steps
+      assert any(s['tool']=='file_read' and 'CONTEXT_DIRECTORY_PROOF' in s['out'] for s in steps),steps
     elif mode=='cancel':
      assert time.monotonic()-cancel_started<3,('Flow cancellation exceeded 3 seconds',task)
      assert task['status']=='CANCELLED' and nodes['step3']['status']=='cancelled',task
@@ -145,4 +153,4 @@ def exercise(mode,protocol):
    finally:
     release.set();proc.terminate();proc.wait(timeout=5);provider.shutdown();provider.server_close()
 for protocol in ('legacy','native'):
- for mode in ('recover','wide','stuck','cancel'):exercise(mode,protocol)
+ for mode in ('recover','wide','stuck','cancel','directory'):exercise(mode,protocol)
