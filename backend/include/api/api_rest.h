@@ -5,6 +5,7 @@
  *   GET  /v1/scheduler           execution capacity and queue statistics
  *   GET  /v1/tools               registered tool list
  *   GET  /v1/memory              working + long-term memory
+ *   GET/POST/DELETE /v1/memory/summary  view/generate/cancel a read-only summary
  *   GET  /v1/snapshots           committed snapshots
  *   POST /v1/snapshots/rollback  restore latest snapshot
  *   GET  /v1/trace[?task_id=N]   live execution spans (in-memory ring)

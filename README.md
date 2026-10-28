@@ -125,7 +125,7 @@ flowchart TD
 |---|---|
 | **Task lifecycle** | Scheduling, cancellation, durable state, and explicit recovery. |
 | **Native tool loop** | Structured `tool_calls` / `tool_use` and completion declarations rather than answer-keyword matching. |
-| **Memory and context** | Memory lifecycle services and budgeted hot/warm/cold context tiers. |
+| **Memory and context** | Memory lifecycle services, budgeted hot/warm/cold context tiers, and [viewable memory summaries](backend/docs/memory-summary.md) generated on demand. |
 | **Execution and policy** | Action checks, file snapshots, verification, and rollback for supported operations. |
 | **Coordination** | Role registration, dependency-based Flows, and group discussions. |
 | **Observability** | Model/tool milestones, token accounting where available, task records, and metrics. |

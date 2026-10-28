@@ -6,6 +6,7 @@
 #include "cognitive-os-agent.h"
 #include "api/api_rest.h"
 #include "runtime/event_bus.h"
+#include "memory/summary.h"
 #include "runtime/flow.h"
 #include "runtime/cron.h"
 #include "runtime/tasklog.h"
@@ -621,7 +622,9 @@ static void sched_trampoline(task *t, scheduler *s, void *ud) {
     if (t->userdata) {
         /* userdata marker (set by /v1/orchestrate = 1, /v1/flows = 2): run the
          * multi-agent pipeline / flow DAG instead of the single-agent loop */
-        if (t->userdata == (void *)3)
+        if (t->userdata == (void *)4)
+            run_rc = memory_summary_run(ctx,t,&answer);
+        else if (t->userdata == (void *)3)
             run_rc = im_run_round(ctx, t, &answer);
         else if (t->userdata == (void *)2) {
             run_rc = flow_run(ctx, t->input, t->id, &answer, NULL);
@@ -757,6 +760,7 @@ int init(runtime_ctx *ctx, const config *cfg) {
     memset(ctx, 0, sizeof(*ctx));
     mutex_init(&ctx->run_lock);
     mutex_init(&ctx->workspace_lock);
+    mutex_init(&ctx->summary_lock);
     mutex_init(&g_lane_sess_mtx);
     for (int i = 0; i < IM_ROOM_LOCKS; i++) {
         mutex_init(&g_im_room_mtx[i]); atomic_store(&g_im_active_tasks[i], -1);
@@ -1395,6 +1399,7 @@ void runtime_shutdown(runtime_ctx *ctx) {
 
     mutex_destroy(&ctx->run_lock);
     mutex_destroy(&ctx->workspace_lock);
+    mutex_destroy(&ctx->summary_lock);
     free(ctx->state_root);
     free(ctx->workspace);
     free(ctx->provider);

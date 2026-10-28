@@ -11,6 +11,7 @@
 #include "runtime/flow_store.h"
 #include "action/tools.h"
 #include "memory/memory.h"
+#include "memory/summary.h"
 #include "snapshot/snapshot.h"
 #include "infra/metrics.h"
 #include "infra/util.h"
@@ -365,7 +366,7 @@ static int h_task_get(const http_request *req, http_response *resp, void *ud) {
             free(fnodes);
         }
         cJSON_Delete(saved);
-    } else if (!t->userdata || t->userdata == (void *)3) {
+    } else if (!t->userdata || t->userdata == (void *)3 || t->userdata == (void *)4) {
         char *snapshot = task_progress_copy(t);
         cJSON *progress = snapshot ? cJSON_Parse(snapshot) : NULL;
         free(snapshot);
@@ -537,6 +538,10 @@ static int h_task_resume(const http_request *req, http_response *resp, void *ud)
         resp->status = 404;
         http_resp_json(resp, "{\"error\":\"no journal record for task\"}");
         return 0;
+    }
+    if(session && !strcmp(session,"memory-summary")){
+        free(status);free(session);free(input);free(output);resp->status=409;
+        http_resp_json(resp,"{\"error\":\"Regenerate the memory summary from Memory; do not replay its data as a chat task\"}");return 0;
     }
     if (status && (strcmp(status, "RUNNING") == 0 || strcmp(status, "QUEUED") == 0)) {
         resp->status = 409;
@@ -1608,6 +1613,24 @@ static int h_tools(const http_request *req, http_response *resp, void *ud) {
     return 0;
 }
 
+static int h_memory_summary(const http_request *req,http_response *resp,void *ud) {
+    runtime_ctx *ctx=ud;if(!authz_ok(ctx,req,resp))return 0;
+    if(strcmp(req->path,"/v1/memory/summary")){resp->status=404;http_resp_json(resp,"{\"error\":\"unknown summary route\"}");return 0;}
+    if(!strcmp(req->method,"GET")){
+        char *json=memory_summary_get(ctx);http_resp_json(resp,json?json:"{}");free(json);return 0;
+    }
+    if(!strcmp(req->method,"DELETE")){
+        int rc=memory_summary_cancel(ctx);resp->status=rc?409:200;
+        http_resp_json(resp,rc?"{\"error\":\"没有运行中的摘要任务\"}":"{\"ok\":true}");return 0;
+    }
+    if(!llm_configured(ctx)){resp->status=409;http_resp_json(resp,"{\"error\":\"请先配置摘要模型\"}");return 0;}
+    char *json=NULL;resp->status=memory_summary_start(ctx,&json);
+    const char *error=resp->status==409?"已有摘要任务正在生成":resp->status==422?"当前没有可摘要的记忆":
+        resp->status==413?"记忆快照超过摘要输入预算；未截断或发送不完整来源":resp->status==429?"执行队列已满，请稍后重试":"摘要任务创建失败";
+    if(json)http_resp_json(resp,json);
+    else {cJSON *o=cJSON_CreateObject();cJSON_AddStringToObject(o,"error",error);char *body=cJSON_PrintUnformatted(o);http_resp_json(resp,body?body:"{}");free(body);cJSON_Delete(o);}
+    free(json);return 0;
+}
 static int h_memory(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
     cJSON *root;
@@ -5594,6 +5617,9 @@ int api_attach(runtime_ctx *ctx) {
     http_server_route(ctx->http, "GET", "/v1/tasks/", h_task_get, ctx);
     http_server_route(ctx->http, "DELETE", "/v1/tasks/", h_task_cancel, ctx);
     http_server_route(ctx->http, "GET", "/v1/tools", h_tools, ctx);
+    http_server_route(ctx->http, "GET", "/v1/memory/summary", h_memory_summary, ctx);
+    http_server_route(ctx->http, "POST", "/v1/memory/summary", h_memory_summary, ctx);
+    http_server_route(ctx->http, "DELETE", "/v1/memory/summary", h_memory_summary, ctx);
     http_server_route(ctx->http, "GET", "/v1/memory", h_memory, ctx);
     http_server_route(ctx->http, "GET", "/v1/blackboard", h_blackboard, ctx);
     http_server_route(ctx->http, "POST", "/v1/blackboard", h_blackboard_put, ctx);

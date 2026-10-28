@@ -1296,7 +1296,18 @@ panels.mcp = `
     <div id="mcp-list">加载中…</div>
   </div>`;
 
-panels.memory    = outPanel('Memory (working / long-term)', 'memory-out', 'memory');
+panels.memory = `
+  <div class="card">
+    <div class="card-head"><h2>记忆摘要</h2><button class="sec sm" onclick="loadMemorySummary()">刷新摘要</button></div>
+    <p class="hint">根据当前工作记忆和长期事实生成只读摘要，会调用当前激活模型。原始记忆与聊天记录保留；这不是某个会话的压缩摘要。</p>
+    <div class="row"><button id="memory-summary-generate" onclick="generateMemorySummary()">生成记忆摘要</button>
+      <button class="sec" id="memory-summary-cancel" hidden onclick="cancelMemorySummary()">取消生成</button>
+      <span id="memory-summary-status" class="muted" role="status" aria-live="polite">正在读取…</span></div>
+    <p id="memory-summary-meta" class="hint"></p>
+    <pre id="memory-summary-text" aria-label="记忆摘要内容" style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:60vh;overflow:auto">尚未生成记忆摘要。</pre>
+    <button class="sec sm" id="memory-summary-copy" hidden onclick="copyPre('memory-summary-text')">复制完整摘要</button>
+  </div>
+  <details class="card"><summary>查看原始记忆</summary><pre id="memory-out" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre></details>`;
 panels.cluster   = outPanel('Cluster nodes', 'cluster-out', 'cluster');
 panels.metrics   = outPanel('Metrics (Prometheus)', 'metrics-out', 'metrics');
 
@@ -1708,6 +1719,7 @@ async function loadTrace(){
 }
 
 async function load(panel){
+  if(panel === 'memory') return (loadFetcher('memory'), loadMemorySummary());
   if(panel === 'models') return loadModels();
   if(panel === 'dashboard') return loadDashboard();
   if(panel === 'im') return renderIm();
@@ -1728,6 +1740,43 @@ async function load(panel){
   }
   return loadFetcher(panel);
 }
+
+let MEMORY_SUMMARY_TIMER=null, MEMORY_SUMMARY_FETCHING=false, MEMORY_SUMMARY_ACTION=false;
+async function loadMemorySummary(){
+  const status=$('memory-summary-status');if(!status || MEMORY_SUMMARY_FETCHING===status)return;
+  clearTimeout(MEMORY_SUMMARY_TIMER);MEMORY_SUMMARY_FETCHING=status;
+  try{
+    const r=await call('GET','/v1/memory/summary');
+    if(status!==$('memory-summary-status'))return;
+    if(r.status!==200)throw Error(r.obj?.error||'摘要读取失败');
+    const saved=r.obj?.summary,job=r.obj?.job,active=['RUNNING','QUEUED'].includes(job?.status);
+    $('memory-summary-generate').disabled=active||MEMORY_SUMMARY_ACTION;
+    $('memory-summary-cancel').hidden=!active;
+    status.textContent=job?.save_error || (active?'正在生成摘要…':job && job.status!=='DONE'?
+      (job.result?.error||({CANCELLED:'已取消生成',TIMEOUT:'摘要生成超时',INTERRUPTED:'上次摘要生成被中断',FAILED:'摘要生成失败'}[job.status]||'摘要尚未完成'))+(saved?'；显示上次成功摘要':''):
+      saved?'摘要已保存':'暂无成功摘要');
+    if(saved){
+      $('memory-summary-text').textContent=saved.text;
+      $('memory-summary-copy').hidden=false;
+      const usage=saved.usage_available?`${saved.tokens_in} 输入 / ${saved.tokens_out} 输出 tokens`:'模型未提供 token 用量';
+      $('memory-summary-meta').textContent=`${new Date(saved.generated_ms).toLocaleString()} · ${saved.model} · 工作记忆 ${saved.working_count} 条 / 长期事实 ${saved.longterm_count} 条 · ${usage}`;
+    }
+    if(active)MEMORY_SUMMARY_TIMER=setTimeout(()=>{if(current==='memory')void loadMemorySummary();},1000);
+  }catch(e){if(status===$('memory-summary-status'))status.textContent=e.message+'；可点击刷新重试';}
+  finally{if(MEMORY_SUMMARY_FETCHING===status)MEMORY_SUMMARY_FETCHING=false;}
+}
+async function memorySummaryAction(method){
+  if(MEMORY_SUMMARY_ACTION)return;MEMORY_SUMMARY_ACTION=true;
+  const button=$('memory-summary-generate');if(button)button.disabled=true;
+  try{
+    const r=await call(method,'/v1/memory/summary',method==='POST'?{}:null);
+    if(r.status<200||r.status>=300)throw Error(r.obj?.error||'摘要请求失败');
+    await loadMemorySummary();
+  }catch(e){const status=$('memory-summary-status');if(status)status.textContent=e.message;}
+  finally{MEMORY_SUMMARY_ACTION=false;const currentButton=$('memory-summary-generate');if(currentButton && $('memory-summary-cancel')?.hidden)currentButton.disabled=false;}
+}
+function generateMemorySummary(){return memorySummaryAction('POST');}
+function cancelMemorySummary(){return memorySummaryAction('DELETE');}
 
 /* ================= Snapshots ================= */
 
