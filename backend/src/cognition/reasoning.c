@@ -278,6 +278,7 @@ struct reasoning {
     int run_file_reads;
     int run_successful_tools;
     int thinking_mode; /* task-local preference; set by the chat lane */
+    int completion_only; /* reserved final review cannot execute more tools */
 
     /* live run progress for status display (polled via reasoning_progress):
      * run start time, executed tool-call count, tool currently running.
@@ -2514,6 +2515,11 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
         return 0;
     }
 
+    if(r->completion_only){
+        strbuf_append(&b,"Planning budget exhausted: final completion review requested additional tools; no actions executed.");
+        *out=strbuf_detach(&b);return -1;
+    }
+
     memset(&tctx, 0, sizeof(tctx));
     tctx.reg = r->tools;
     tctx.policy = r->policy;
@@ -4218,13 +4224,18 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     int artifact_read_nudged = 0;
     int failure_recovery_nudges = 0, truncated_response_nudges = 0;
     int completion_reviewed = 0;
+    int completion_grace = 0;
+    const char *completion_reserve_note = "[system] Finalization-only reserve: the configured tool-execution budget is exhausted. Assess the ORIGINAL request against existing successful observations. Do not reread or execute extra checks solely for reassurance; no executable tool actions can run in this reserve. If the requested work is already delivered and verified, call complete_task(status=complete, requires_tools=false, answer=full_result). If essential work remains, call complete_task(status=blocked, requires_tools=false, answer=what_is_missing). This is the single reserved finalization request, not additional work budget.";
     int output_truncated_unresolved = 0;
     char *truncated_prefix = NULL;
     int synthesized = 0; /* fallback answer may describe an incomplete run */
     int no_progress_rounds = 0, cycle_reads = 0, cycle_nudged = 0, cycle_aborted = 0;
 restart_planning:
-    for (r->round_idx = 1; r->round_idx <= r->max_rounds; r->round_idx++) {
+    completion_grace=0;
+    for (r->round_idx = 1; r->round_idx <= r->max_rounds ||
+         (completion_grace && r->round_idx==r->max_rounds+1); r->round_idx++) {
         if (run_aborted(r)) { st = ST_FAILED; break; }
+        r->completion_only=r->round_idx>r->max_rounds;
         char *messages = task_take_messages(r->run_task, &r->applied_updates);
         if (messages) {
             char *safe_messages = ssh_session_prepare_prompt(r->state_root, session_id, messages);
@@ -4462,10 +4473,11 @@ restart_planning:
                  !r->run_file_reads && !run_has_mutating_action(r)));
             int needs_observation = !planner_uses_native_tools(r->llm) && prompt_requires_observation(completion_instruction(r,prompt)) &&
                                     r->run_successful_tools == 0;
-            /* Native turns need a valid completion declaration. Flow delivery
-             * additionally rejects a brief progress-only announcement, using
-             * the same existing narration check as legacy work requests. */
-            int needs_intent_recovery = (!planner_uses_native_tools(r->llm) || r->completion_prompt) && !prompt_is_direct_information_request(completion_instruction(r,prompt)) &&
+            /* Native completion is structural. Literal future-tense examples,
+             * translations and advice are valid results; never classify their
+             * wording as an instruction to continue. Delivery review above
+             * decides the next native action from the original task/evidence. */
+            int needs_intent_recovery = !planner_uses_native_tools(r->llm) && !prompt_is_direct_information_request(completion_instruction(r,prompt)) &&
                                         (r->run_successful_tools == 0 || answer_only_announces_work(txt)) &&
                                         looks_like_intent(txt);
             if (needs_action || needs_read || needs_observation || needs_intent_recovery) {
@@ -4490,10 +4502,6 @@ restart_planning:
                     round_log_append(r, "[system] 当前完整源码阅读尚未完成：有文件未读到 EOF，或答案明确列出未读源码。"
                                         "不要把目录枚举或部分源码总结当作完成，也不要让用户重新指定已要求阅读的范围。"
                                         "请继续未读文件及 next_offset_bytes 指定的分页，完成后再整理资料。");
-                    continue;
-                }
-                if(planner_uses_native_tools(r->llm)) {
-                    round_log_append(r,"[system] The completion answer is only a work announcement, not the requested node deliverable. Use the native functions to perform the remaining work and verify it, then call complete_task with the actual result. Do not repeat a progress announcement as the final answer.");
                     continue;
                 }
                 round_log_append(r, "[system] 上一轮只输出了意向说明，没有执行任何工具动作。"
@@ -4536,9 +4544,14 @@ restart_planning:
                 r->run_successful_tools > 0 &&
                 !completion_reviewed) {
                 if (r->round_idx >= r->max_rounds) {
-                    unfinished = 1;
-                    final_text = xstrdup(txt ? txt : "");
-                    break;
+                    if(r->planner_native_end_turn==1 && !completion_grace && r->round_idx==r->max_rounds){
+                        completion_grace=1;round_log_append(r,completion_reserve_note);
+                    }
+                    else {
+                        unfinished = 1;
+                        final_text = xstrdup(txt ? txt : "");
+                        break;
+                    }
                 }
                 completion_reviewed = 1;
                 r->completion_review_required = !planner_uses_native_tools(r->llm);
@@ -4563,6 +4576,17 @@ restart_planning:
         if (r->round_new_observations) {
             free(last_narration);
             last_narration = NULL;
+            /* Review the eventual delivery after newly executed work, not an
+             * obsolete candidate reviewed before that work. Cached/repeated
+             * observations do not reopen review and consume extra calls. */
+            if(planner_uses_native_tools(r->llm))
+                completion_reviewed = 0;
+        }
+        if(planner_uses_native_tools(r->llm) && r->round_idx==r->max_rounds &&
+           r->round_new_observations>0 && r->all_actions_ok &&
+           !r->unresolved_failed_tool_count && !r->unresolved_failed_tools_overflow && !completion_grace){
+            completion_grace=1;completion_reviewed=1;
+            round_log_append(r,completion_reserve_note);
         }
         int search_only = r->n_actions > 0;
         for (int i = 0; i < r->n_actions; i++)
@@ -4635,7 +4659,7 @@ restart_planning:
      * transcript. Without this, a stage failure on the LAST round skipped
      * synthesis entirely (the old `st == ST_DONE` guard) and the caller
      * received the raw round log with no answer at all. */
-    if (!run_aborted(r) && !(fail_aborted && r->last_model_error[0]) &&
+    if (!completion_grace && !run_aborted(r) && !(fail_aborted && r->last_model_error[0]) &&
         !final_text && r->round_log_len > 0 && r->llm) {
         r->prog_tool[0] = 0;
         progress_emit(r, "summarizing");

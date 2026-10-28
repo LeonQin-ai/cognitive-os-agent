@@ -262,7 +262,9 @@ for provider_name in ('openai','anthropic'):
      assert task['status']=='DONE' and counts[case]==1 and not task['steps'] and task['output']==answer,(prompt,task)
     for case in ('NATIVE_IPC_PROGRESS','NATIVE_IPC_PENDING','NATIVE_IPC_PREMATURE'):
      ipc=run(case,'分析代码中的服务端和客户端。')
-     assert ipc['status']=='DONE' and counts[case]==(4 if case=='NATIVE_IPC_PREMATURE' else 5),ipc
+     # A premature candidate's review cannot certify a later source read:
+     # the final delivery after that read gets its own bounded review.
+     assert ipc['status']=='DONE' and counts[case]==5,ipc
      assert [st['tool'] for st in ipc['steps']]==['file_read','file_read'] and 'IPC_REQUEST' in ipc['output'],ipc
     partial=run('NATIVE_PARTIAL','阅读样例文件的相关片段，解释注释中的“完整读取全部源码”是什么意思。')
     assert partial['status']=='DONE' and counts['NATIVE_PARTIAL']==3 and len(partial['steps'])==1,partial

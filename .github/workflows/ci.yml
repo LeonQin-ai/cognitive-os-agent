@@ -80,6 +80,9 @@ jobs:
         run: COA_BUILD_DIR=build-macos python3 tests/test_information_answers_e2e.py
       - name: Reciprocal group discussion regression
         run: COA_BUILD_DIR=build-macos python3 tools/run_ci_regression.py tests/test_im_discussion_e2e.py
+      - name: Native discussion and completion boundaries
+        run: |
+          COA_BUILD_DIR=build-macos python3 tests/test_native_flow_literal_results.py
       - name: IM capacity and waiter cancellation regression
         run: COA_BUILD_DIR=build-macos python3 tools/run_ci_regression.py tests/test_im_capacity_e2e.py
       - name: Flow review delivery and cancellation regression
@@ -165,6 +168,9 @@ jobs:
         run: python3 tests/test_information_answers_e2e.py
       - name: Reciprocal group discussion regression
         run: python3 tools/run_ci_regression.py tests/test_im_discussion_e2e.py
+      - name: Native discussion and completion boundaries
+        run: |
+          python3 tests/test_native_flow_literal_results.py
       - name: IM capacity and waiter cancellation regression
         run: python3 tools/run_ci_regression.py tests/test_im_capacity_e2e.py
       - name: Flow review delivery and cancellation regression
@@ -201,6 +207,7 @@ jobs:
           ASAN_OPTIONS=detect_leaks=0 python3 tests/test_embedded_tool_completion_e2e.py
           ASAN_OPTIONS=detect_leaks=0 python3 tests/test_im_capacity_e2e.py
           ASAN_OPTIONS=detect_leaks=0 python3 tests/test_flow_review_delivery_e2e.py
+          ASAN_OPTIONS=detect_leaks=0 python3 tests/test_native_flow_literal_results.py
 
   windows:
     name: Windows (zig cc)
@@ -251,6 +258,9 @@ jobs:
         run: python tests/test_fixture_http_response.py
       - name: Reciprocal group discussion regression
         run: python tools/run_ci_regression.py tests/test_im_discussion_e2e.py
+      - name: Native discussion and completion boundaries
+        run: |
+          python tests/test_native_flow_literal_results.py
       - name: IM capacity and waiter cancellation regression
         run: python tools/run_ci_regression.py tests/test_im_capacity_e2e.py
       - name: Flow review delivery and cancellation regression

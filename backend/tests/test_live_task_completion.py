@@ -83,7 +83,7 @@ with tempfile.TemporaryDirectory(prefix='coa-live-completion-') as folder:
             else: raise RuntimeError('Live completion smoke timed out; isolated process will be stopped')
             output = task.get('output') or ''
             (backend/('build/live-literal-search-task.json' if args.literal_search else 'build/live-completion-task.json')).write_text(json.dumps(task,ensure_ascii=False,indent=2),encoding='utf-8')
-            summary = {key: task[key] for key in ('status','round','llm_calls','tool_calls','model_failures','tokens_in','tokens_out','usage_available') if key in task}
+            summary = {key: task[key] for key in ('status','round','llm_calls','tool_calls','model_failures','tokens_in','tokens_out','usage_available','model_failure') if key in task}
             summary['model'] = config.get('llm.model')
             summary['both_markers_present'] = cache_marker in output and disk_marker in output
             if args.scoped_reading:

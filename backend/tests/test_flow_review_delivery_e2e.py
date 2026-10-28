@@ -80,6 +80,11 @@ def exercise(mode,protocol):
       answer=finish(REVIEW)
      if protocol=='native':
       actions=json.loads(answer)
+      if mode=='stuck' and role=='REVIEWER' and n>=8:
+       # Native failure is a structural contradiction: work still requires
+       # tools. Never require the runtime to classify prose keywords.
+       for action in actions:
+        if action['tool']=='complete_task':action['args']['requires_tools']=True
       message={'content':'','tool_calls':[{'id':f'c-{role}-{n}-{i}','type':'function','function':{'name':action['tool'],'arguments':json.dumps(action['args'])}} for i,action in enumerate(actions)]}
      else:message={'content':answer}
      raw=json.dumps({'choices':[{'message':message,'finish_reason':'tool_calls' if protocol=='native' else 'stop'}]}).encode()
@@ -131,7 +136,7 @@ def exercise(mode,protocol):
     nodes={node['id']:node for node in task['flow_nodes']}
     assert nodes['step1']['status']==nodes['step2']['status']=='ok',task
     assert (work/'architecture.md').read_text(encoding='utf-8')==ARCH
-    assert counts['ARCHITECT']==4 and counts['CODER']==3,counts
+    assert counts['ARCHITECT']==(5 if protocol=='native' else 4) and counts['CODER']==3,counts
     if mode in ('recover','wide','directory','repeated_progress'):
      assert task['status']=='DONE' and nodes['step3']['status']=='ok' and REVIEW in task['output'],task
      reads=[s for s in nodes['step3']['steps'] if s['tool']=='file_read']
