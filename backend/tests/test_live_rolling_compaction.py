@@ -21,6 +21,7 @@ parser.add_argument('--config', required=True, type=Path)
 parser.add_argument('--report', type=Path, default=root/'build/live-rolling-compaction.json')
 parser.add_argument('--max-total-tokens', type=int, default=200000)
 parser.add_argument('--preload-user-inputs', action='store_true', help='target compaction with 15 synthetic user-only inputs, no fabricated assistant answers; then execute 10 real tasks')
+parser.add_argument('--focus-retention', action='store_true', help='progress asks for brief acknowledgement without exact ACK formatting; final random constraint recall remains exact')
 args = parser.parse_args()
 if args.max_total_tokens <= 0:
     parser.error('max-total-tokens must be positive')
@@ -29,6 +30,7 @@ config.update({'auth.key': '', 'http.bind': '127.0.0.1', 'reasoning.max_rounds':
 binary = root/'build'/('cognitive-os-agent.exe' if os.name == 'nt' else 'cognitive-os-agent')
 report = {'schema': 1, 'model': config.get('llm.model'), 'cases': [], 'passed': False,
           'scope': ('15 synthetic user-only inputs + 10 real native chat tasks' if args.preload_user_inputs else '25 actual native Runtime chat tasks')+' / two rolling compactions; not a 500-turn LLM certification'}
+report['focus_retention']=args.focus_retention
 args.report.parent.mkdir(parents=True, exist_ok=True)
 
 def save():
@@ -49,6 +51,7 @@ with tempfile.TemporaryDirectory(prefix='coa-live-rolling-') as folder:
         process = subprocess.Popen([str(binary), '--state', str(state), '--workspace', str(work), 'serve', str(port)],
             cwd=root, stdout=log, stderr=log, env={**os.environ, 'COA_TOOL_PROTOCOL': 'native'},
             creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        session = None
         try:
             for _ in range(150):
                 try:
@@ -86,7 +89,7 @@ with tempfile.TemporaryDirectory(prefix='coa-live-rolling-') as folder:
                 row = {k: result.get(k) for k in ('status', 'output', 'llm_calls', 'tool_calls', 'tokens_in',
                     'tokens_out', 'model_failures', 'model_failure', 'usage_available')}
                 row.update(case=label, id=tid, seconds=round(time.monotonic()-started, 3), expected=expected_answer,
-                    passed=not error and result.get('status') == 'DONE' and result.get('output', '').strip() == expected_answer)
+                    passed=not error and result.get('status') == 'DONE' and (bool(result.get('output', '').strip()) if expected_answer is None else result.get('output', '').strip() == expected_answer))
                 row['efficiency_passed'] = row['passed'] and row.get('usage_available') is True and not row.get('model_failures') and (row.get('tokens_out') or 0) <= 4096
                 if error:
                     row['error'] = error
@@ -111,7 +114,8 @@ with tempfile.TemporaryDirectory(prefix='coa-live-rolling-') as folder:
             else:
                 task('initial-constraints', initial, 'ACK')
             for turn in range(15 if args.preload_user_inputs else 1, 24):
-                task(f'progress-{turn}', f'普通进度记录 {turn}：本轮讨论测试数据分组与日志排版，没有新增或撤销约束，不操作文件、不调用工具，只回答 ACK。', 'ACK')
+                suffix='简短确认收到即可。' if args.focus_retention else '只回答 ACK。'
+                task(f'progress-{turn}', f'普通进度记录 {turn}：本轮讨论测试数据分组与日志排版，没有新增或撤销约束，不操作文件、不调用工具，'+suffix, None if args.focus_retention else 'ACK')
             task('recall-after-second-compaction', '最初约束中禁止修改的目录名称与最终验收命令分别是什么？只输出 目录名称|验收命令，不调用工具；没有记录则只输出 UNKNOWN。', expected)
             history = api('GET', '/v1/chat/history?session='+session)
             turns = history.get('turns', []) if isinstance(history, dict) else history
@@ -125,8 +129,14 @@ with tempfile.TemporaryDirectory(prefix='coa-live-rolling-') as folder:
         finally:
             try:
                 report['usage'] = api('GET', '/v1/usage')
+                if session is not None:
+                    history = api('GET', '/v1/chat/history?session='+session)
+                    report['history_turns_after'] = len(history.get('turns', []))
             except OSError:
                 pass
+            recall = next((row for row in report['cases'] if row['case']=='recall-after-second-compaction'), {})
+            report['retention_passed'] = bool(recall.get('passed')) and report.get('history_turns_after') == 9
+            report['efficiency_passed'] = bool(recall) and all(row.get('efficiency_passed') for row in report['cases'])
             process.terminate(); process.wait(timeout=10)
             report['usage_complete'] = bool(report['cases']) and all(row.get('usage_available') is True for row in report['cases'])
             save()
