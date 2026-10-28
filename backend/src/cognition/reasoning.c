@@ -693,6 +693,8 @@ static void progress_emit(reasoning *r, const char *stage) {
     cJSON_AddStringToObject(o, "stage", stage);
     cJSON_AddStringToObject(o, "activity", activity);
     cJSON_AddStringToObject(o, "model", model);
+    cJSON_AddStringToObject(o,"tool_protocol",planner_uses_native_tools(r->llm)?"native":"legacy");
+    cJSON_AddStringToObject(o,"completion_declaration",r->planner_native_end_turn==1?"complete":r->planner_native_end_turn==2?"blocked":"none");
     if (r->last_model_error[0]) cJSON_AddStringToObject(o,"model_error",r->last_model_error);
     if (r->last_model_failure_call) {
         const planner_model_diagnostic *d = &r->last_model_failure;
@@ -4550,7 +4552,7 @@ restart_planning:
                 }
             }
             /* A syntactically valid completion is a candidate, not proof of
-             * delivery. Review once per run, like a bounded
+             * delivery. Review once per candidate work stage, like a bounded
              * stop hook. Never classify answer prose or recursively review
              * the review itself; ordinary zero-tool conversation needs no extra call. */
             int real_provider = r->llm && r->llm->provider &&
@@ -4575,7 +4577,8 @@ restart_planning:
                                     "A completion declaration alone is not evidence. If any requested analysis, operation, artifact or verification is still missing, "
                                     "call the next necessary tool now. If all requested work is already delivered, call complete_task with the full final answer; "
                                     "do not merely announce future work. Report genuinely blocked work with status blocked. "
-                                    "This review runs once per task; do not reread evidence solely to confirm completion.");
+                                    "Review this work stage once. If review resumes operations, the later delivery is a new candidate. "
+                                    "Do not reread evidence solely to confirm completion.");
                 continue;
             }
             final_text = xstrdup(txt ? txt : "");
@@ -4594,8 +4597,7 @@ restart_planning:
             /* Review the eventual delivery after newly executed work, not an
              * obsolete candidate reviewed before that work. Cached/repeated
              * observations do not reopen review and consume extra calls. */
-            if(planner_uses_native_tools(r->llm))
-                completion_reviewed = 0;
+            completion_reviewed = 0;
         }
         if(planner_uses_native_tools(r->llm) && r->round_idx==r->max_rounds &&
            r->round_new_observations>0 && r->all_actions_ok &&

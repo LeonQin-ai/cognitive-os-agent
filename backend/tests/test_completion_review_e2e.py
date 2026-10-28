@@ -157,7 +157,7 @@ def exercise(protocol, mode):
                     expected = {'recover': (4, 2, 'DONE'), 'commentary': (5, 2, 'DONE'),
                         'stuck': (7, 1, 'FAILED'), 'blocked': (3, 1, 'FAILED'),
                         'budget': (2, 1, 'FAILED'), 'chat': (1, 0, 'DONE')}[mode]
-                    if protocol=='native' and mode in ('recover','commentary'):
+                    if mode in ('recover','commentary'):
                         expected=(expected[0]+1,expected[1],expected[2])
                     if protocol=='native' and mode=='budget':
                         expected=(3,1,'FAILED') # final review cannot perform the missing read

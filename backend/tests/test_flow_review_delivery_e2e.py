@@ -136,7 +136,7 @@ def exercise(mode,protocol):
     nodes={node['id']:node for node in task['flow_nodes']}
     assert nodes['step1']['status']==nodes['step2']['status']=='ok',task
     assert (work/'architecture.md').read_text(encoding='utf-8')==ARCH
-    assert counts['ARCHITECT']==(5 if protocol=='native' else 4) and counts['CODER']==3,counts
+    assert counts['ARCHITECT']==5 and counts['CODER']==3,counts
     if mode in ('recover','wide','directory','repeated_progress'):
      assert task['status']=='DONE' and nodes['step3']['status']=='ok' and REVIEW in task['output'],task
      reads=[s for s in nodes['step3']['steps'] if s['tool']=='file_read']

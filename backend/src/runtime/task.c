@@ -120,6 +120,7 @@ void task_trace_add(task *t, const char *json) {
     /* Keep only observable execution metadata. In particular, do not retain
      * planner text or tool argument/output payloads in the trace. */
     const char *names[] = {"stage", "activity", "model", "thinking", "model_call", "model_failures", "seq",
+                           "tool_protocol", "completion_declaration",
                            "elapsed_ms", "round", "tool_calls", "cur_tool", "llm_ms", "tool_ms",
                            "llm_calls", "applied_updates"};
     for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
