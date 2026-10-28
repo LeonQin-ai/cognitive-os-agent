@@ -35,7 +35,7 @@ typedef struct ctx_page {
     int previously_evicted;
     int pinned;
 
-    uint64_t content_hash;    /* regeneration guard (§7.4) */
+    uint64_t content_hash;    /* content + overview metadata regeneration guard */
     char *repr[3];            /* materialized L0/L1/L2 (owned; NULL = cold) */
     unsigned tok[3];          /* token cost per representation */
     mem_type_t type;
@@ -280,21 +280,24 @@ static char *derive_l2(const ctx_page *pg, const mem_record *r) {
     return xstrdup(r->content ? r->content : "");
 }
 
-/* Materialize `level` for the page if not cached; regenerate everything
- * when the record content hash changed (§7.4). Returns NULL on OOM. */
+/* Access timestamps/counters affect ranking, not representation text. Include
+ * every field used by L0/L1 so metadata-only edits invalidate cached overviews. */
+static uint64_t representation_hash(const mem_record *r) {
+    uint64_t h=hash64(r->content?r->content:"",strlen(r->content?r->content:""));
+    const char *fields[]={r->title,r->scope,r->evidence};
+    for(size_t i=0;i<sizeof(fields)/sizeof(fields[0]);i++)
+        h=(h ^ hash64(fields[i],strlen(fields[i])))*UINT64_C(1099511628211);
+    h=(h ^ hash64(&r->type,sizeof r->type))*UINT64_C(1099511628211);
+    h=(h ^ hash64(&r->status,sizeof r->status))*UINT64_C(1099511628211);
+    h=(h ^ hash64(&r->importance,sizeof r->importance))*UINT64_C(1099511628211);
+    h=(h ^ hash64(&r->confidence,sizeof r->confidence))*UINT64_C(1099511628211);
+    return (h ^ hash64(&r->utility,sizeof r->utility))*UINT64_C(1099511628211);
+}
+
+/* sync_pages invalidates all resident levels before promotion and accounting.
+ * Materialize `level` if not cached. Returns NULL on OOM. */
 static char *materialize(ctx_mmu *mmu, ctx_page *pg, const mem_record *r,
                          ctx_level_t level, unsigned *tok_out) {
-    uint64_t h = hash64(r->content, strlen(r->content));
-    int j;
-
-    if (pg->content_hash != h) {
-        for (j = 0; j < 3; j++) {
-            free(pg->repr[j]);
-            pg->repr[j] = NULL;
-            pg->tok[j] = 0;
-        }
-        pg->content_hash = h;
-    }
     if (!pg->repr[level]) {
         int64_t started=time_now_us();
         switch (level) {
@@ -458,6 +461,14 @@ static int sync_pages(ctx_mmu *mmu, mem_records *rs) {
         pg = page_get(mmu, r->id);
         if (!pg)
             continue;
+        uint64_t revision=representation_hash(r);
+        if(pg->content_hash!=revision) {
+            /* HOT/WARM pages skip materialize during normal recall. Invalidate
+             * here, releasing the OLD charge before clearing cached token sizes. */
+            mmu->token_used-=page_tokens(pg);
+            for(j=0;j<3;j++){free(pg->repr[j]);pg->repr[j]=NULL;pg->tok[j]=0;}
+            pg->residency=CTX_COLD;pg->content_hash=revision;mmu->generation++;
+        }
         pg->type = r->type;
         snprintf(pg->title, sizeof pg->title, "%s", r->title);
         snprintf(pg->scope, sizeof pg->scope, "%s", r->scope);

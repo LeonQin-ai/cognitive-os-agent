@@ -6518,6 +6518,37 @@ static void stream_sink_append(const char *delta, void *ud) {
     (void)dlen;
 }
 
+static void test_memory_cache_updates(void) {
+    section("memory updates invalidate resident context");
+    mem_records *rs=mem_records_new("state-test/cache-updates");
+    vectorstore *vs=vectorstore_new();ctx_mmu *mmu=ctx_mmu_new();
+    CHECK(rs && vs && mmu);if(!rs || !vs || !mmu)goto cleanup;
+    mem_record r={0};snprintf(r.id,sizeof r.id,"mem_cache_update");
+    snprintf(r.title,sizeof r.title,"before-title");snprintf(r.scope,sizeof r.scope,"project/test");
+    r.status=MEM_STATUS_TRUSTED;r.importance=.8;r.confidence=.9;r.utility=.7;
+    r.content="OLD_FACT_TO_INVALIDATE";CHECK(mem_records_put(rs,&r)==0);
+    ctx_mmu_config cfg;ctx_mmu_config_default(&cfg);cfg.token_budget=512;
+    char *out=ctx_mmu_recall(mmu,rs,NULL,"fact",&cfg);
+    CHECK(out && strstr(out,"OLD_FACT_TO_INVALIDATE") && strstr(out,"HOT"));free(out);
+    r.content="NEW_CONFIRMED_FACT";CHECK(mem_records_put(rs,&r)==0);
+    out=ctx_mmu_recall(mmu,rs,NULL,"fact",&cfg);
+    CHECK(out && strstr(out,"NEW_CONFIRMED_FACT") && !strstr(out,"OLD_FACT_TO_INVALIDATE"));free(out);
+    char large[10001];memset(large,'x',sizeof large-1);large[sizeof large-1]=0;r.content=large;
+    CHECK(mem_records_put(rs,&r)==0);out=ctx_mmu_recall(mmu,rs,NULL,"fact",&cfg);
+    CHECK(out && strstr(out,"WARM") && !strstr(out,"NEW_CONFIRMED_FACT"));free(out);
+    snprintf(r.title,sizeof r.title,"after-title");snprintf(r.evidence,sizeof r.evidence,"NEW_VERIFIED_EVIDENCE");
+    CHECK(mem_records_put(rs,&r)==0);out=ctx_mmu_recall(mmu,rs,NULL,"fact",&cfg);
+    cJSON *arr=out?cJSON_Parse(out):NULL,*first=cJSON_GetArrayItem(arr,0);
+    const char *text=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(first,"text"));
+    CHECK(text && strstr(text,"after-title") && strstr(text,"NEW_VERIFIED_EVIDENCE") && !strstr(text,"before-title"));
+    char *stats=ctx_mmu_stats_json(mmu);cJSON *s=stats?cJSON_Parse(stats):NULL;
+    CHECK(cJSON_GetNumberValue(cJSON_GetObjectItemCaseSensitive(s,"token_used"))==
+          cJSON_GetNumberValue(cJSON_GetObjectItemCaseSensitive(first,"tokens")));
+    free(stats);cJSON_Delete(s);cJSON_Delete(arr);free(out);
+cleanup:
+    ctx_mmu_free(mmu);vectorstore_free(vs);mem_records_free(rs);
+}
+
 static void stream_sink_strbuf(const char *delta, void *ud) { strbuf_append((strbuf *)ud, delta); }
 
 static void test_ssh_only_redaction(void) {
@@ -9606,8 +9637,11 @@ int main(int argc, char **argv) {
         test_retrieval_upgrade(); test_context_builder(); test_context_caps();
         test_consolidation(); test_memory_lifecycle(); test_record_v3();
         test_promotion_v3(); test_mmu_v3(); test_mmu_rejected_cache();
-        test_incomplete_run_memory_gate(); test_context_budget();
+        test_incomplete_run_memory_gate(); test_context_budget();test_memory_cache_updates();
         printf("\n%d passed, %d failed\n",g_pass,g_fail); return g_fail ? 1:0;
+    }
+    if(argc==2 && !strcmp(argv[1],"--memory-cache-updates")) {
+        test_memory_cache_updates();printf("\n%d passed, %d failed\n",g_pass,g_fail);return g_fail?1:0;
     }
     if (argc==2 && !strcmp(argv[1],"--mmu-budget")) {
         test_mmu_rejected_cache(); printf("\n%d passed, %d failed\n",g_pass,g_fail); return g_fail ? 1:0;
@@ -9757,7 +9791,7 @@ int main(int argc, char **argv) {
     test_memory_lifecycle();
     test_record_v3();
     test_promotion_v3();
-    test_mmu_v3();
+    test_mmu_v3();test_memory_cache_updates();
     test_ssh_only_redaction();
     test_security();
     test_context_budget();
