@@ -481,6 +481,7 @@
 .chat-message{position:relative}
 .chat-copy{position:absolute;right:4px;top:-10px;opacity:0;padding:3px 8px;border:1px solid var(--border);border-radius:8px;background:var(--card);color:var(--muted);font-size:11px;cursor:pointer;transition:opacity var(--tr-dur)}
 .chat-message:hover .chat-copy,.chat-copy:focus-visible{opacity:1}
+.chat-message.bot>.chat-copy{position:static;display:block;margin:10px 0 0;opacity:1}
 .chat-answer{font-family:var(--sans);font-size:14px;line-height:1.85;white-space:pre-wrap;overflow-wrap:anywhere;margin:18px 0 0}
 .chat-image{display:block;max-width:min(300px,100%);max-height:240px;object-fit:contain;border-radius:12px;cursor:zoom-in;margin:6px 0}
 .chat-images{display:flex;flex-wrap:wrap;gap:8px;max-width:100%}
@@ -829,7 +830,7 @@ function fallbackCopy(t){
   const ta = document.createElement('textarea');
   ta.value = t; ta.style.position = 'fixed'; ta.style.opacity = '0';
   document.body.appendChild(ta); ta.select();
-  try { document.execCommand('copy'); toast('已复制'); } catch(e) { toast('复制失败'); }
+  try { toast(document.execCommand('copy') ? '已复制' : '复制失败'); } catch(e) { toast('复制失败'); }
   ta.remove();
 }
 function copyPre(id){ const el = $(id); if(el) copyText(el.textContent); }
@@ -4028,6 +4029,13 @@ function chatRenderImages(wrap,images){
     }).catch(()=>{ label.textContent='图片加载失败：'+item.name; });
   }
 }
+function chatAppendCopy(wrap, getText){
+  const copy = document.createElement('button');
+  copy.className = 'chat-copy'; copy.type = 'button'; copy.textContent = '复制';
+  copy.title = '复制这条消息'; copy.setAttribute('aria-label','复制这条消息');
+  copy.onclick = () => copyText(getText() || '');
+  wrap.appendChild(copy);
+}
 function chatAddBubble(role, text, push = true){
   const box = $('chat-box'); if(!box) return null;
   const follow = CHAT_FOLLOW || chatNearBottom();
@@ -4041,11 +4049,7 @@ function chatAddBubble(role, text, push = true){
   } else {
     chatRenderText(wrap,text);
   }
-  const copy = document.createElement('button');
-  copy.className = 'chat-copy'; copy.type = 'button'; copy.textContent = '复制';
-  copy.title = '复制这条消息';
-  copy.onclick = () => copyText((role === 'bot' ? wrap.querySelector('.chat-answer')?.textContent : text) || text || '');
-  wrap.appendChild(copy);
+  if(text) chatAppendCopy(wrap, () => text);
   box.appendChild(wrap);
   if(push) CHAT_MSGS.push({role, text, pending:false, el:wrap});
   updateChatHero();
@@ -5582,6 +5586,7 @@ function renderChatEntry(entry){
   if(entry.text && !entry.pending){
     const answer = document.createElement('pre'); answer.className = 'chat-answer';
     chatRenderText(answer,entry.text); el.append(answer);
+    chatAppendCopy(el, () => entry.text);
   }
   if(follow) chatScroll(true);
 }
