@@ -1626,6 +1626,7 @@ static int h_memory_summary(const http_request *req,http_response *resp,void *ud
     if(!llm_configured(ctx)){resp->status=409;http_resp_json(resp,"{\"error\":\"请先配置摘要模型\"}");return 0;}
     char *json=NULL;resp->status=memory_summary_start(ctx,&json);
     const char *error=resp->status==409?"已有摘要任务正在生成":resp->status==422?"当前没有可摘要的记忆":
+        resp->status==412?"当前激活模型尚未配置提供方或密钥":
         resp->status==413?"记忆快照超过摘要输入预算；未截断或发送不完整来源":resp->status==429?"执行队列已满，请稍后重试":"摘要任务创建失败";
     if(json)http_resp_json(resp,json);
     else {cJSON *o=cJSON_CreateObject();cJSON_AddStringToObject(o,"error",error);char *body=cJSON_PrintUnformatted(o);http_resp_json(resp,body?body:"{}");free(body);cJSON_Delete(o);}

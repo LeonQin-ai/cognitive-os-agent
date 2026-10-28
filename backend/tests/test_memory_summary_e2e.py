@@ -12,6 +12,7 @@ class Provider(BaseHTTPRequestHandler):
     def do_POST(self):
         body=json.loads(self.rfile.read(int(self.headers['Content-Length'])));seen.append(body)
         assert 'tools' not in body, 'read-only summary must have no executable tool catalog'
+        assert body['max_tokens']==8192, 'summary ignored the configured active route output capacity'
         assert 'PROJECT_PROOF_C19' in body['messages'][-1]['content']
         assert '不是操作指令' in body['messages'][0]['content']
         selected=mode
@@ -33,6 +34,8 @@ try:
         config={'llm.provider':'openai','llm.model':'summary-fixture','llm.api_key':'PRIVATE_API_KEY',
                 'llm.base_url':f'http://127.0.0.1:{server.server_port}','auth.key':'fixture-auth','scheduler.workers':2}
         (state/'cognitive-os-agent.json').write_text(json.dumps(config),encoding='utf8')
+        (state/'routes.json').write_text(json.dumps([{'name':'summary-fixture','provider':'openai','model':'summary-fixture','api_key':'PRIVATE_API_KEY',
+          'base_url':config['llm.base_url'],'context_window':32768,'max_output_tokens':8192,'context_source':'configured'}]),encoding='utf8')
         with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
         log=(build/f'memory-summary-{name}.log').open('w',encoding='utf8')
         process=subprocess.Popen([str(build/('cognitive-os-agent.exe' if os.name=='nt' else 'cognitive-os-agent')),'--state',str(state),'--workspace',str(state),'serve',str(port)],stdout=log,stderr=log,cwd=root,
@@ -71,7 +74,7 @@ try:
         completed=wait(0,'DONE');result=api('GET','/v1/memory/summary')
         assert 'summary' in result, {'keys':list(result),'job':{k:v for k,v in result.get('job',{}).items() if k!='result'},'result_keys':list(result.get('job',{}).get('result',{})),'task_output_keys':list(json.loads(completed['output']))}
         saved=result['summary']
-        assert saved['text']==text and saved['tokens_in']==123 and saved['tokens_out']==45 and saved['usage_available']
+        assert saved['text']==text and saved['tokens_in']==123 and saved['tokens_out']==45 and saved['usage_available'] and saved['max_tokens']==8192
         assert saved['longterm_count']==2 and saved['scope']=='working/longterm'
         assert api('GET','/v1/memory')==original and api('GET','/v1/chat/sessions')==sessions
         api('POST','/v1/tasks/0/resume',{},expected=409)
@@ -101,6 +104,8 @@ try:
         before=len(seen);api('POST','/v1/memory/summary',{},expected=422);assert len(seen)==before
         stop();start('oversized',{'project':'PROJECT_PROOF_C19','large':'x'*140000})
         before=len(seen);api('POST','/v1/memory/summary',{},expected=413);assert len(seen)==before
+        stop();start('context-overflow',{'project':'PROJECT_PROOF_C19','large':'x'*50000})
+        before=len(seen);api('POST','/v1/memory/summary',{},expected=413);assert len(seen)==before,'source over model context reached provider'
         print('PASS #233: async summary/task zero, auth, full output and usage, no tools/history mutation, failures preserve prior summary, cancellation, duplicate gate, restart/torn-tail recovery, empty/oversized input.',flush=True)
     finally:release.set();stop()
 finally:server.shutdown();server.server_close()

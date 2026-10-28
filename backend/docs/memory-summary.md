@@ -11,7 +11,9 @@ The page shows the complete generated text, model, generation time, source
 counts and reported input/output tokens, and offers full-text copy. Output tokens
 include any reported reasoning tokens. Missing usage is labeled unavailable,
 not zero. Generation uses the active configured model snapshot, has one model
-request and no automatic retry. It can be cancelled without blocking other API
+request and no automatic retry. Its provider credentials, context window and
+output capacity are frozen from the current active model; a configured small
+output capacity is respected. It can be cancelled without blocking other API
 requests. Duplicate active submissions are rejected.
 
 The last successful summary survives failed requests, incomplete model output,
@@ -26,7 +28,8 @@ is restart recovery, not a claim of fsync-based power-loss durability.
 
 - `POST /v1/memory/summary` returns `202 {task_id, started_ms}`. Task ID zero
   is valid. Empty memory returns 422; source snapshots over 128 KiB return 413,
-  with no truncation or provider request. Configured-model and queue limits apply.
+  or cannot fit the selected model's context, with no truncation or provider
+  request. Configured-model and queue limits apply.
 - `GET /v1/memory/summary` returns optional `job` and last successful `summary`.
   `job.status` follows the scheduler. A persistence failure is reported separately
   as `save_error`, retaining the prior saved result. Generated text is in
