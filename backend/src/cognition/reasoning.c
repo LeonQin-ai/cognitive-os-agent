@@ -4129,6 +4129,8 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
         }
     }
 
+    void *caller_cancel_context=NULL;
+    http_cancel_check caller_cancel=http_get_cancel_check(&caller_cancel_context);
     if(r->run_task || r->abort_parent)http_set_cancel_check(reasoning_http_cancel,r);
     llm_usage_thread_totals(&r->usage_base_in, &r->usage_base_out, &r->usage_base_reason, &r->run_usage_reports);
     r->usage_base_reports = r->run_usage_reports;
@@ -4160,13 +4162,14 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
                 metrics_inc(r->metrics, "tasks.hook_blocked");
             if (answer)
                 *answer = xstrdup("(run blocked by hook)");
-            if(r->run_task || r->abort_parent)http_set_cancel_check(NULL,NULL);
+            if(r->run_task || r->abort_parent)http_set_cancel_check(caller_cancel,caller_cancel_context);
+            if(picked){r->llm=saved;llm_destroy(picked);}
             free(safe_prompt);
             mutex_lock(&r->ss->sess_mtx);
             if (r->cur)
                 r->cur->in_run = 0;
             mutex_unlock(&r->ss->sess_mtx);
-            return 0;
+            return -1;
         }
     }
 
@@ -4924,7 +4927,7 @@ restart_planning:
     mutex_unlock(&r->ss->sess_mtx);
     progress_emit(r, cancelled ? "cancelled" : timed_out ? "timed_out" :
                   ret == 0 ? "completed" : "failed");
-    if(r->run_task || r->abort_parent)http_set_cancel_check(NULL,NULL);
+    if(r->run_task || r->abort_parent)http_set_cancel_check(caller_cancel,caller_cancel_context);
     /* The terminal snapshot must still describe the model actually called. */
     if (picked) {
         r->llm = saved;

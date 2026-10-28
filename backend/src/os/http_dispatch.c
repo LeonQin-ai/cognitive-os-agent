@@ -14,6 +14,7 @@
 static _Thread_local http_cancel_check cancel_check;
 static _Thread_local void *cancel_context;
 void http_set_cancel_check(http_cancel_check check,void *context){cancel_check=check;cancel_context=context;}
+http_cancel_check http_get_cancel_check(void **context){if(context)*context=cancel_context;return cancel_check;}
 int http_cancel_requested(void){return cancel_check && cancel_check(cancel_context);}
 struct http_cancel_guard {http_cancel_check check;void *context;void (*interrupt)(void *);void *handle;thread_t *thread;atomic_int stop,interrupted;};
 static void cancellation_worker(void *arg){

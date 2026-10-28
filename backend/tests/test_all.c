@@ -64,6 +64,8 @@
 #include "plugin_runtime/wasm_runner.h"
 #include "cognitive-os-agent.h"
 #include "os/os_time.h"
+#include "os/http_cancel.h"
+#include "runtime/hook.h"
 #define http_response client_http_response
 #include "os/platform.h"
 #undef http_response
@@ -6565,6 +6567,36 @@ cleanup:
     vectorstore_free(vs);mem_records_free(rs);
 }
 
+static int caller_cancel_fixture(void *context){return *(int *)context;}
+static int block_run_fixture(const char *event,const char *json,void *context){(void)event;(void)json;(void)context;return 1;}
+static int restored_provider_fixture(llm *provider,const llm_request *req,llm_response *resp){
+    (void)req;(*(int *)provider->impl)++;memset(resp,0,sizeof(*resp));resp->content=xstrdup("Hello.");return 0;
+}
+static void test_nested_run_cleanup(void){
+    section("nested reasoning restores caller cancellation, provider and blocked status");
+    int called=0,cancelled=0;static const llm_vtable vt={.chat=restored_provider_fixture};
+    llm provider={.vt=&vt,.provider="fixture",.model="original",.impl=&called};
+    tool_registry *tools=tool_registry_new();hook_registry *hooks=hook_registry_new();
+    reasoning_config cfg={0};cfg.llm=&provider;cfg.tools=tools;cfg.hooks=hooks;cfg.max_rounds=3;
+    cfg.workspace="state-test/nested-run-cleanup";reasoning *r=reasoning_new(&cfg);
+    CHECK(tools && hooks && r);if(!tools || !hooks || !r)goto cleanup;
+    int hook=hook_register(hooks,"agent.before_run",block_run_fixture,NULL);CHECK(hook>0);
+    for(int blocked=1;blocked>=0;blocked--){
+        task *t=task_new(100+blocked,0,"Hello",0);CHECK(t!=NULL);if(!t)continue;
+        if(blocked)t->llm_config=xstrdup("{\"provider\":\"mock\",\"model\":\"temporary\"}");
+        reasoning_set_task(r,t);http_set_cancel_check(caller_cancel_fixture,&cancelled);
+        char *answer=NULL;int rc=reasoning_run_ex(r,"nested-cleanup","Hello",&answer);
+        CHECK(blocked?rc!=0:rc==0);CHECK(answer!=NULL);free(answer);
+        void *context=NULL;CHECK(http_get_cancel_check(&context)==caller_cancel_fixture && context==&cancelled);
+        cancelled=1;CHECK(http_cancel_requested()==1);cancelled=0;
+        http_set_cancel_check(NULL,NULL);reasoning_set_task(r,NULL);task_free(t);
+        if(blocked)CHECK(hook_unregister(hooks,hook)==0);
+    }
+    CHECK(called==1); /* the blocked route did not replace the lane's provider */
+cleanup:
+    http_set_cancel_check(NULL,NULL);reasoning_free(r);hook_registry_free(hooks);tool_registry_free(tools);
+}
+
 static void stream_sink_strbuf(const char *delta, void *ud) { strbuf_append((strbuf *)ud, delta); }
 
 static void test_ssh_only_redaction(void) {
@@ -9656,6 +9688,9 @@ int main(int argc, char **argv) {
         test_incomplete_run_memory_gate(); test_context_budget();test_memory_cache_updates();test_memory_deleted_index();
         printf("\n%d passed, %d failed\n",g_pass,g_fail); return g_fail ? 1:0;
     }
+    if(argc==2 && !strcmp(argv[1],"--nested-run-cleanup")){
+        test_nested_run_cleanup();printf("\n%d passed, %d failed\n",g_pass,g_fail);return g_fail?1:0;
+    }
     if(argc==2 && !strcmp(argv[1],"--memory-cache-updates")) {
         test_memory_cache_updates();test_memory_deleted_index();printf("\n%d passed, %d failed\n",g_pass,g_fail);return g_fail?1:0;
     }
@@ -9807,7 +9842,7 @@ int main(int argc, char **argv) {
     test_memory_lifecycle();
     test_record_v3();
     test_promotion_v3();
-    test_mmu_v3();test_memory_cache_updates();test_memory_deleted_index();
+    test_mmu_v3();test_memory_cache_updates();test_memory_deleted_index();test_nested_run_cleanup();
     test_ssh_only_redaction();
     test_security();
     test_context_budget();
