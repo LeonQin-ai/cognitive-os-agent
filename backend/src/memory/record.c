@@ -467,12 +467,9 @@ int mem_records_rebuild_index(mem_records *rs, void *v) {
     vectorstore *vs = (vectorstore *)v;
     if (!rs || !vs)
         return -1;
-    /* wipe previous record mirrors (idempotent rebuild) */
-    for (size_t i = 0; i < rs->count; i++) {
-        char vid[64];
-        snprintf(vid, sizeof vid, "r:%s", rs->items[i]->id);
-        vectorstore_remove(vs, vid);
-    }
+    /* Deleted records no longer appear in rs: purge the entire derived
+     * namespace, while preserving working/episode/document vectors. */
+    vectorstore_remove_prefix(vs,"r:");
     int n = 0;
     for (size_t i = 0; i < rs->count; i++) {
         const mem_record *r = rs->items[i];

@@ -6549,6 +6549,22 @@ cleanup:
     ctx_mmu_free(mmu);vectorstore_free(vs);mem_records_free(rs);
 }
 
+static void test_memory_deleted_index(void) {
+    section("deleted canonical records leave no derived vector mirrors");
+    mem_records *rs=mem_records_new("state-test/deleted-index");vectorstore *vs=vectorstore_new();
+    CHECK(rs && vs);if(!rs || !vs)goto cleanup;
+    mem_record r={0};snprintf(r.id,sizeof r.id,"mem_deleted_index");
+    r.status=MEM_STATUS_TRUSTED;r.content="DELETED_FACT_MUST_NOT_RETURN";
+    CHECK(mem_records_put(rs,&r)==0);
+    CHECK(vectorstore_add(vs,"w:keep","independent working memory","working")==0);
+    CHECK(mem_records_rebuild_index(rs,vs)==1);CHECK(vectorstore_count(vs)==2);
+    CHECK(mem_records_remove(rs,r.id)==1);CHECK(mem_records_rebuild_index(rs,vs)==0);
+    char *out=vectorstore_nearest(vs,"fact",5);
+    CHECK(out && !strstr(out,"r:mem_deleted_index") && !strstr(out,"DELETED_FACT_MUST_NOT_RETURN") && strstr(out,"w:keep"));free(out);
+cleanup:
+    vectorstore_free(vs);mem_records_free(rs);
+}
+
 static void stream_sink_strbuf(const char *delta, void *ud) { strbuf_append((strbuf *)ud, delta); }
 
 static void test_ssh_only_redaction(void) {
@@ -9637,11 +9653,11 @@ int main(int argc, char **argv) {
         test_retrieval_upgrade(); test_context_builder(); test_context_caps();
         test_consolidation(); test_memory_lifecycle(); test_record_v3();
         test_promotion_v3(); test_mmu_v3(); test_mmu_rejected_cache();
-        test_incomplete_run_memory_gate(); test_context_budget();test_memory_cache_updates();
+        test_incomplete_run_memory_gate(); test_context_budget();test_memory_cache_updates();test_memory_deleted_index();
         printf("\n%d passed, %d failed\n",g_pass,g_fail); return g_fail ? 1:0;
     }
     if(argc==2 && !strcmp(argv[1],"--memory-cache-updates")) {
-        test_memory_cache_updates();printf("\n%d passed, %d failed\n",g_pass,g_fail);return g_fail?1:0;
+        test_memory_cache_updates();test_memory_deleted_index();printf("\n%d passed, %d failed\n",g_pass,g_fail);return g_fail?1:0;
     }
     if (argc==2 && !strcmp(argv[1],"--mmu-budget")) {
         test_mmu_rejected_cache(); printf("\n%d passed, %d failed\n",g_pass,g_fail); return g_fail ? 1:0;
@@ -9791,7 +9807,7 @@ int main(int argc, char **argv) {
     test_memory_lifecycle();
     test_record_v3();
     test_promotion_v3();
-    test_mmu_v3();test_memory_cache_updates();
+    test_mmu_v3();test_memory_cache_updates();test_memory_deleted_index();
     test_ssh_only_redaction();
     test_security();
     test_context_budget();
