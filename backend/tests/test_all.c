@@ -9600,6 +9600,15 @@ int main(int argc, char **argv) {
     if (argc==2 && !strcmp(argv[1],"--crash-journal")) {
         test_crash_journal(); printf("\n%d passed, %d failed\n",g_pass,g_fail); return g_fail ? 1:0;
     }
+    if (argc==2 && !strcmp(argv[1],"--memory-lifecycle")) {
+        test_memory(); test_memory_service(); test_kv(); test_vector();
+        test_memory_persist(); test_session_memory(); test_memory_graph();
+        test_retrieval_upgrade(); test_context_builder(); test_context_caps();
+        test_consolidation(); test_memory_lifecycle(); test_record_v3();
+        test_promotion_v3(); test_mmu_v3(); test_mmu_rejected_cache();
+        test_incomplete_run_memory_gate(); test_context_budget();
+        printf("\n%d passed, %d failed\n",g_pass,g_fail); return g_fail ? 1:0;
+    }
     if (argc==2 && !strcmp(argv[1],"--mmu-budget")) {
         test_mmu_rejected_cache(); printf("\n%d passed, %d failed\n",g_pass,g_fail); return g_fail ? 1:0;
     }

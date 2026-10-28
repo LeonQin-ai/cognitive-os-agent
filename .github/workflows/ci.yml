@@ -113,6 +113,8 @@ jobs:
           sleep 1
       - name: Unit tests
         run: ./build/cognitive-os-agent-test
+      - name: Isolated memory lifecycle baseline
+        run: python3 tests/run_memory_baseline.py
       - name: Planner duplicate-read recovery regression
         run: make build/cognitive-os-agent-test-plan-cycle && ./build/cognitive-os-agent-test-plan-cycle
       - name: Source read completion API regressions
