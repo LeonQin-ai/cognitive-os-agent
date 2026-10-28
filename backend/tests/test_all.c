@@ -2495,6 +2495,63 @@ static void test_session_memory(void) {
     }
 }
 
+/* Compaction must carry forward the previous summary, rather than replacing
+ * it with a summary of only the next eight turns. The fixture copies only
+ * markers actually supplied to it; it cannot reconstruct missing constraints. */
+typedef struct {
+    int compactions, continued, missing_constraint, final_has_constraint;
+} rolling_summary_fixture;
+static int rolling_summary_chat(llm *self, const llm_request *req, llm_response *resp) {
+    rolling_summary_fixture *s=self->impl;
+    const char *system=req->num_messages ? req->messages[0].content : "";
+    strbuf input;strbuf_init(&input);
+    for(size_t i=1;i<req->num_messages;i++)
+        strbuf_append(&input,req->messages[i].content ? req->messages[i].content : "");
+    if(system && strstr(system,"你是会话压缩器")) {
+        s->compactions++;
+        if(s->compactions>1 && strstr(input.buf ? input.buf : "","## 已有会话纪要"))s->continued++;
+        int constraint=input.buf && strstr(input.buf,"NO_EDIT_RUNTIME_73C9");
+        int todo=input.buf && strstr(input.buf,"RUN_ALL_TESTS_91AD");
+        if(!constraint || !todo)s->missing_constraint++;
+        strbuf summary;strbuf_init(&summary);
+        if(constraint)strbuf_append(&summary,"约束：NO_EDIT_RUNTIME_73C9\n");
+        if(todo)strbuf_append(&summary,"待办：RUN_ALL_TESTS_91AD\n");
+        if(!constraint && !todo)strbuf_append(&summary,"只记录本轮一般进展");
+        resp->content=strbuf_detach(&summary);
+    } else {
+        if(input.buf && strstr(input.buf,"FINAL_CONSTRAINT_CHECK"))
+            s->final_has_constraint=strstr(input.buf,"NO_EDIT_RUNTIME_73C9") && strstr(input.buf,"RUN_ALL_TESTS_91AD");
+        resp->content=xstrdup("ACK");
+    }
+    strbuf_free(&input);return resp->content ? 0 : -1;
+}
+static void test_rolling_compaction(void) {
+    section("500-turn rolling compaction input continuity");
+    static const llm_vtable vt={.chat=rolling_summary_chat};
+    rolling_summary_fixture observed={0};
+    llm provider={.provider="mock",.model="rolling-summary",.vt=&vt,.impl=&observed};
+    tool_registry *reg=tool_registry_new();reasoning_config cfg={0};cfg.llm=&provider;cfg.tools=reg;
+    reasoning *r=reg ? reasoning_new(&cfg) : NULL;CHECK(r!=NULL);
+    if(r){
+        int failures=0;
+        for(int i=0;i<500;i++){
+            char prompt[160];char *answer=NULL;
+            if(i==0)snprintf(prompt,sizeof prompt,"约束 NO_EDIT_RUNTIME_73C9，待办 RUN_ALL_TESTS_91AD。只回答 ACK。");
+            else snprintf(prompt,sizeof prompt,"普通进展第 %d 轮，记录状态；只回答 ACK。",i);
+            if(reasoning_run_ex(r,"rolling-500",prompt,&answer)!=0)failures++;
+            free(answer);
+        }
+        CHECK(failures==0);CHECK(observed.compactions>=60);
+        CHECK(observed.continued==observed.compactions-1);
+        CHECK(observed.missing_constraint==0);
+        char *state=reasoning_session_json(r);CHECK(state && strstr(state,"NO_EDIT_RUNTIME_73C9") && strstr(state,"RUN_ALL_TESTS_91AD"));free(state);
+        char *answer=NULL;CHECK(reasoning_run_ex(r,"rolling-500","FINAL_CONSTRAINT_CHECK，只回答 ACK。",&answer)==0);free(answer);
+        CHECK(observed.final_has_constraint==1);
+        reasoning_free(r);
+    }
+    tool_registry_free(reg);
+}
+
 /* ---------- cognition: planner + evaluator ---------- */
 static int dsml_fixture_chat(llm *self, const llm_request *req, llm_response *resp) {
     (void)req;
@@ -9681,7 +9738,7 @@ int main(int argc, char **argv) {
     }
     if (argc==2 && !strcmp(argv[1],"--memory-lifecycle")) {
         test_memory(); test_memory_service(); test_kv(); test_vector();
-        test_memory_persist(); test_session_memory(); test_memory_graph();
+        test_memory_persist(); test_session_memory(); test_rolling_compaction(); test_memory_graph();
         test_retrieval_upgrade(); test_context_builder(); test_context_caps();
         test_consolidation(); test_memory_lifecycle(); test_record_v3();
         test_promotion_v3(); test_mmu_v3(); test_mmu_rejected_cache();
@@ -9690,6 +9747,9 @@ int main(int argc, char **argv) {
     }
     if(argc==2 && !strcmp(argv[1],"--nested-run-cleanup")){
         test_nested_run_cleanup();printf("\n%d passed, %d failed\n",g_pass,g_fail);return g_fail?1:0;
+    }
+    if(argc==2 && !strcmp(argv[1],"--rolling-compaction")){
+        test_rolling_compaction();printf("\n%d passed, %d failed\n",g_pass,g_fail);return g_fail?1:0;
     }
     if(argc==2 && !strcmp(argv[1],"--memory-cache-updates")) {
         test_memory_cache_updates();test_memory_deleted_index();printf("\n%d passed, %d failed\n",g_pass,g_fail);return g_fail?1:0;
@@ -9810,6 +9870,7 @@ int main(int argc, char **argv) {
     test_memory_persist();
     test_context_caps();
     test_session_memory();
+    test_rolling_compaction();
     test_planner_dsml();
     test_planner();
     test_evaluator();

@@ -78,3 +78,33 @@ metadata, and retained vector mirrors of deleted records. See
 `memory-resident-update-regression.md` (#225) and
 `memory-deleted-index-regression.md` (#226). They are actual defects, not claims
 of broad memory correctness based on a passing baseline.
+
+## Reopened unfinished work: rolling compaction (#231)
+
+The 500-turn deterministic Runtime test exposed another defect: each new
+compaction replaced the previous summary without supplying it to the compressor.
+It now receives both the previous summary and newly dropped turns. The test
+compressor copies only constraint/todo markers actually present in its input;
+after at least 60 compactions, both markers must still reach the final planner
+input. This tests input continuity, not a model's semantic constraint compliance.
+The success-path temporary summary is also freed.
+
+Run the focused C test with `cognitive-os-agent-test --rolling-compaction`.
+It is included in the full suite and memory baseline. The opt-in
+`python tests/test_live_rolling_compaction.py --config <private-config-path>`
+performs 25 real native chat tasks in a private Runtime with episode sharing
+disabled. It checks exact random facts after two actual compactions and records
+the global usage ledger, including compaction requests. There is no automatic
+retry after failure or after reaching the test's aggregate token budget.
+`--preload-user-inputs` instead seeds 15 synthetic user-only inputs (empty
+assistant fields) and targets the same boundaries with ten real chat tasks.
+Model failures and excessive output fail immediately even if the answer is
+correct. Unreported usage on cancellation must not be counted as zero cost.
+
+Outstanding acceptance work remains explicit: a labeled semantic retrieval
+corpus, authenticated 100-Agent private/shared authorization, acknowledged-write
+crash consistency, 500 real-model turns with independent tool-side-effect
+constraint checks, and matched code-repair tasks with/without memory. Default
+local embeddings use hashing/lexical overlap; MMU scope ranking is not an ACL.
+No result above certifies those separate contracts, or fixes #224's unconfirmed
+high-output provider incident.
