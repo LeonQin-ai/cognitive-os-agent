@@ -278,6 +278,7 @@ struct reasoning {
     int run_file_reads;
     int run_successful_tools;
     int thinking_mode; /* task-local preference; set by the chat lane */
+    int external_history; /* current request already contains canonical transcript */
     int completion_only; /* reserved final review cannot execute more tools */
 
     /* live run progress for status display (polled via reasoning_progress):
@@ -752,6 +753,7 @@ void reasoning_set_observer(reasoning *r, reasoning_observer cb, void *ud) {
     if (r) { r->observer = cb; r->observer_ud = ud; }
 }
 void reasoning_set_thinking_mode(reasoning *r, int enabled) { if (r) r->thinking_mode = enabled != 0; }
+void reasoning_set_external_history(reasoning *r, int enabled) { if(r)r->external_history=enabled!=0; }
 void reasoning_set_abort_parent(reasoning *r, task *t) { if (r) r->abort_parent=t; }
 void reasoning_set_task(reasoning *r, task *t) {
     if(!r)return;
@@ -1834,7 +1836,7 @@ static char *build_context(reasoning *r, const char *prompt) {
      * are kept whole; older turns beyond the hot budget degrade to one line. */
     hot_mark = b.len;
     mutex_lock(&r->cur->mtx);
-    if (r->cur->hist_n > 0) {
+    if (r->cur->hist_n > 0 && !r->external_history) {
         strbuf_append(&b, "## Conversation history\n");
         size_t start = r->cur->hist_n > 6 ? r->cur->hist_n - 6 : 0;
         /* walk newest->oldest; the first turn that pushes the running total

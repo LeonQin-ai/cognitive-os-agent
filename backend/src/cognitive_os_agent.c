@@ -317,12 +317,14 @@ static int chat_lane_run(runtime_ctx *ctx, const char *session_id, int64_t task_
     }
     reasoning_set_task(ctx->chat_lanes[lane], binding.t);
     reasoning_set_thinking_mode(ctx->chat_lanes[lane], thinking_mode);
+    reasoning_set_external_history(ctx->chat_lanes[lane],binding.t->userdata==(void *)3);
     reasoning_set_observer(ctx->chat_lanes[lane], chat_progress, &binding);
     if(binding.t && binding.t->stream_preview)llm_set_chat_preview(chat_answer_preview,binding.t);
     int rc = reasoning_run_ex(ctx->chat_lanes[lane], session_id, prompt, answer);
     llm_set_chat_preview(NULL,NULL);
     reasoning_set_observer(ctx->chat_lanes[lane], NULL, NULL);
     reasoning_set_task(ctx->chat_lanes[lane], NULL);
+    reasoning_set_external_history(ctx->chat_lanes[lane],0);
     cJSON_Delete(binding.prior);
     scheduler_release(ctx->scheduler, binding.t);
     ctx->lane_task[lane] = 0;

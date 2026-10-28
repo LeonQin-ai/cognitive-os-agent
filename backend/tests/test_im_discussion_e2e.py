@@ -22,6 +22,8 @@ BINARY = (BACKEND / os.environ.get('COA_BUILD_DIR', 'build') /
           ('cognitive-os-agent.exe' if os.name == 'nt' else 'cognitive-os-agent')).resolve()
 TERMINAL = ('DONE', 'FAILED', 'CANCELLED', 'TIMEOUT')
 DONE = '[[DISCUSSION_DONE]]'
+PROTOCOL=os.environ.get('COA_IM_TEST_PROTOCOL','legacy')
+assert PROTOCOL in ('legacy','native')
 
 
 class Fixture:
@@ -37,6 +39,13 @@ class Fixture:
             return [call.copy() for call in self.calls if call['case'] == case]
 
     def answer(self, text):
+        current=text.rsplit('## Current request\n',1)[-1].split('\n## Current execution state',1)[0]
+        if 'CHAT_HISTORY_CONTROL_' in current:
+            if 'CHAT_HISTORY_CONTROL_SECOND' in current:
+                assert '## Conversation history\n' in text and 'CONTROL_FIRST' in text, 'ordinary chat lost its history after an IM lane turn'
+                return 'CONTROL_SECOND',200
+            return 'CONTROL_FIRST',200
+        assert '## Conversation history\n' not in text, 'IM transcript was injected again through per-Agent chat history'
         # A role's reasoning session can contain previous rounds. Select the
         # current prompt rather than a role or case mentioned in its history.
         prompt = text[text.rfind('You are '):]
@@ -108,6 +117,9 @@ def make_provider(fixture):
                 answer, status = fixture.answer(body['messages'][-1]['content'])
                 result = ({'usage': {'prompt_tokens': 17, 'completion_tokens': 3}, 'choices': [{'message': {'role': 'assistant', 'content': answer},
                                        'finish_reason': 'stop'}]} if status == 200 else answer)
+                if status==200 and PROTOCOL=='native':
+                    assert body.get('tools'),'native fixture received no native tool catalog'
+                    result['choices']=[{'message':{'content':'','tool_calls':[{'id':'end','type':'function','function':{'name':'complete_task','arguments':json.dumps({'status':'complete','requires_tools':False,'answer':answer})}}]},'finish_reason':'tool_calls'}]
             except Exception as error:
                 with fixture.lock:
                     fixture.errors.append(repr(error))
@@ -211,6 +223,7 @@ def main():
                     process = subprocess.Popen([str(BINARY), '--state', str(state),
                         '--workspace', str(state), 'serve', str(port)], cwd=state,
                         stdout=log, stderr=log,
+                        env={**os.environ,'COA_TOOL_PROTOCOL':PROTOCOL},
                         creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
                     wait_for(lambda: request('GET', '/v1/scheduler'), lambda _: True, 'startup')
 
@@ -230,6 +243,8 @@ def main():
                     assert next(s for s in sessions() if s['id'] == 1)['discussion_rounds'] == 3
 
                     discussion = room()
+                    first_control=finished(request('POST','/v1/chat',{'session':'normal-control','message':'CHAT_HISTORY_CONTROL_FIRST'})['id'])
+                    assert first_control['status']=='DONE',first_control
                     task = finished(send(discussion, 'DISCUSS'))
                     assert task['status'] == 'DONE', task
                     assert task['discussion_round'] == task['discussion_rounds'] == 3, task
@@ -238,7 +253,10 @@ def main():
                     assert task['usage_available'] and task['model_failures'] == 0, task
                     expect_calls('DISCUSS', 3)
                     assert [m['sender'] for m in replies(discussion)] == ['alpha', 'beta'] * 3
+                    second_control=finished(request('POST','/v1/chat',{'session':'normal-control','message':'CHAT_HISTORY_CONTROL_SECOND'})['id'])
+                    assert second_control['status']=='DONE' and second_control['output']=='CONTROL_SECOND',second_control
                     print('PASS: two roles exchange proposals, questions and answers across three rounds', flush=True)
+                    print('PASS: IM transcript is loaded once; ordinary chat history remains enabled after lane reuse',flush=True)
 
                     single = room(1)
                     task = finished(send(single, 'SINGLE'))

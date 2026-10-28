@@ -109,6 +109,10 @@ void reasoning_set_router(reasoning *r, router *router);
 /* Select normal or user-requested deep-thinking behavior for the next run.
  * Callers serialize this with the reasoning instance's run lock. */
 void reasoning_set_thinking_mode(reasoning *r, int enabled);
+/* Caller supplies canonical conversation transcript (e.g. IM). Avoid replaying
+ * that transcript again through recent per-Agent chat history. Persisted
+ * history, summaries, tool notes and long-term memory remain intact. */
+void reasoning_set_external_history(reasoning *r, int enabled);
 
 /* Session-memory snapshot as JSON: session notes (task/state/files/errors/
  * worklog), the rolling compaction summary and history size. Caller frees. */
