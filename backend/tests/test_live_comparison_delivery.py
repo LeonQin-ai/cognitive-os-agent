@@ -1,16 +1,17 @@
 """One configured API task: read two synthetic projects and actually deliver HTML.
 
-Explicit legacy mode exercises the fixed compatibility review; this does not
+Explicit protocol selection exercises native or compatibility review; this does not
 claim the remote issue reporter's unavailable GLM deployment was reproduced.
 """
 import argparse,json,os,socket,subprocess,tempfile,time,urllib.request,uuid
 from pathlib import Path
 root=Path(__file__).resolve().parents[1]
 p=argparse.ArgumentParser(__doc__);p.add_argument('--config',required=True,type=Path)
-p.add_argument('--report',type=Path,default=root/'build/live-comparison-delivery.json');a=p.parse_args()
+p.add_argument('--report',type=Path,default=root/'build/live-comparison-delivery.json')
+p.add_argument('--protocol',choices=('native','legacy'),default='legacy');a=p.parse_args()
 raw=json.loads(a.config.read_text(encoding='utf-8-sig'));cfg={k:v for k,v in raw.items() if k.startswith('llm.')}
 cfg.update({'http.bind':'127.0.0.1','reasoning.max_rounds':16,'scheduler.workers':1,'llm.timeout_ms':60000})
-report={'model':cfg.get('llm.model'),'protocol':'legacy','passed':False,'scope':'synthetic code comparison + actual HTML artifact; reporter GLM endpoint/source unavailable'}
+report={'model':cfg.get('llm.model'),'protocol':a.protocol,'passed':False,'scope':'synthetic code comparison + actual HTML artifact; reporter GLM endpoint/source unavailable'}
 a.report.parent.mkdir(parents=True,exist_ok=True)
 with tempfile.TemporaryDirectory(prefix='coa-live-comparison-') as folder:
  state=Path(folder);left,right=uuid.uuid4().hex[:14],uuid.uuid4().hex[:14]
@@ -22,7 +23,7 @@ with tempfile.TemporaryDirectory(prefix='coa-live-comparison-') as folder:
   req=urllib.request.Request(f'http://127.0.0.1:{port}'+path,method=method,data=json.dumps(body).encode() if body is not None else None,headers={'Content-Type':'application/json'})
   with urllib.request.urlopen(req,timeout=10) as response:return json.load(response)
  with a.report.with_suffix('.log').open('w',encoding='utf8') as log:
-  proc=subprocess.Popen([str(root/'build'/('cognitive-os-agent.exe' if os.name=='nt' else 'cognitive-os-agent')),'--state',folder,'--workspace',folder,'serve',str(port)],cwd=root,stdout=log,stderr=log,env={**os.environ,'COA_TOOL_PROTOCOL':'legacy'},creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
+  proc=subprocess.Popen([str(root/'build'/('cognitive-os-agent.exe' if os.name=='nt' else 'cognitive-os-agent')),'--state',folder,'--workspace',folder,'serve',str(port)],cwd=root,stdout=log,stderr=log,env={**os.environ,'COA_TOOL_PROTOCOL':a.protocol},creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
   observed={};tid=None
   try:
    for _ in range(150):
@@ -37,7 +38,9 @@ with tempfile.TemporaryDirectory(prefix='coa-live-comparison-') as folder:
    while True:
     observed=api('GET',f'/v1/tasks/{tid}')
     if observed.get('status') not in ('RUNNING','QUEUED'):break
-    if observed.get('model_failures',0)>0 or time.monotonic()-started>120 or observed.get('llm_calls',0)>12:
+    # Allow the configured 16 work rounds plus bounded finalization. The old
+    # 12-call cutoff cancelled valid artifact verification before Runtime's limit.
+    if observed.get('model_failures',0)>0 or time.monotonic()-started>180 or observed.get('llm_calls',0)>18:
      report['stop_observation']=observed
      api('DELETE',f'/v1/tasks/{tid}')
      for _ in range(50):
@@ -58,10 +61,16 @@ with tempfile.TemporaryDirectory(prefix='coa-live-comparison-') as folder:
    assert writes and any(i>writes[-1] and s.get('tool')=='file_read' and 'comparison.html' in s.get('args','') and s.get('ok') for i,s in enumerate(steps)),'artifact was not read back after write'
    assert all(s.get('tool') in ('list_dir','file_read','file_write') for s in steps)
    assert left in (state/'frontend.c').read_text() and right in (state/'hardware.c').read_text()
-   assert observed.get('tool_protocol')=='legacy';report['passed']=True
+   assert observed.get('tool_protocol')==a.protocol;report['passed']=True
   except Exception as error:
    report['error']=str(error)
   finally:
+   artifact=state/'comparison.html'
+   if artifact.exists():
+    html=artifact.read_text(encoding='utf-8-sig')
+    report['artifact_bytes']=artifact.stat().st_size
+    report['artifact_passed']=all(x in html for x in (left,right,'scaling_cur_freq','cpuinfo_cur_freq','1000')) and '<html' in html.lower()
+    a.report.with_suffix('.html').write_text(html,encoding='utf8')
    try:
     if tid is not None:report['task']=api('GET',f'/v1/tasks/{tid}')
     report['usage']=api('GET','/v1/usage')

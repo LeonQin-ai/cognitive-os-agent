@@ -49,3 +49,32 @@ Keep #232 open pending the reporter's deployment evidence and matching actual
 model verification. Passing deterministic tests or another configured model's
 answer is not grounds to claim their original task fixed. #224's length-limit
 incident and #231's repeated real-model compaction acceptance remain independent.
+
+## Follow-up: contradictory recovery instructions
+
+Code review found that cached-read and stall recovery told native planners to
+finish with plain text, contradicting the mandatory `complete_task` contract.
+These recovery messages now follow the active protocol; cached native reads
+explicitly require structured completion or the next necessary operation. No
+answer-keyword completion heuristics or malformed-argument repairs were added.
+The resumed-review fixture now inserts a cached read and checks both protocols
+still finish with actual source evidence and a fresh delivery review.
+
+The live comparison harness now selects its protocol explicitly, allows the
+Runtime's configured 16 work rounds plus bounded finalization (the old external
+12-call cutoff could cancel legitimate readback), and preserves generated HTML
+even on failure. The original failed reports are unchanged.
+
+One native execution passed with independently checked source markers, HTML
+write/readback, final answer and unchanged sources: 9 requests, 7 tool executions,
+0 model failures, 67,550 input + 6,906 output = 74,456 reported tokens, 43.49 s.
+Report: `build/live-comparison-native-capture.json` (the temporary diagnostic
+capture was not triggered and has been removed from source).
+
+Earlier native follow-ups remain failed: external budget cancellation consumed
+98,294 reported tokens; two argument-error runs consumed 11,423 and 41,739.
+Their cancelled in-flight usage is unknown. The latter did create and read back
+a valid artifact, but failed before final delivery. A subsequent isolated probe
+captured DSML markup corrupting an otherwise native JSON argument key; this
+provider-response problem remains tracked separately under #224. The successful
+comparison does not prove that intermittent response corruption is eliminated.

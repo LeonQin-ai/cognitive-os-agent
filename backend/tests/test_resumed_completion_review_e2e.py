@@ -18,6 +18,11 @@ class Provider(BaseHTTPRequestHandler):
         Provider.reviews+='Completion review:' in json.dumps(body,ensure_ascii=False)
         name,args='complete_task',{'status':'complete','requires_tools':False,'answer':candidate if n==1 else phase if n==3 else answer}
         if n in (0,2,4):name,args='file_read',{'path':f'source{n//2}.c'}
+        if n==5:name,args='file_read',{'path':'source2.c'}
+        if n==6 and self.protocol=='native':
+            context=json.dumps(body,ensure_ascii=False)
+            assert '立即用纯文本交付答案' not in context, 'cached read recovery contradicts native completion'
+            assert 'Native completion requires complete_task' in context
         if n>=5:assert 'FINAL_SOURCE' in json.dumps(body),'final delivery skipped actual source'
         if self.protocol=='native':
             message={'content':'','tool_calls':[{'id':f'call-{n}','type':'function','function':{'name':name,'arguments':json.dumps(args)}}]}
@@ -51,7 +56,7 @@ for protocol in ('legacy','native'):
                 if task['status'] not in ('RUNNING','QUEUED'):break
                 assert time.monotonic()<end;time.sleep(.03)
             assert task['status']=='DONE' and task['output']==answer,{'status':task['status'],'output':task['output'],'calls':Provider.calls}
-            assert task['tool_calls']==3 and Provider.calls==7,(task['tool_calls'],Provider.calls)
+            assert task['tool_calls']==3 and Provider.calls==8,(task['tool_calls'],Provider.calls)
             assert task['tool_protocol']==protocol and task['completion_declaration']=='complete'
             assert api('/v1/chat/history?session=resumed-review')['turns'][-1]['a']==answer
             for _ in range(100):

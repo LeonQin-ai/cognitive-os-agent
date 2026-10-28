@@ -4615,9 +4615,11 @@ restart_planning:
         if (!search_only || run_has_mutating_action(r)) artifact_read_nudged = 0;
         if (r->n_actions > 0 && r->round_search_skips == r->n_actions) {
             round_log_append(r, "[system] 本轮全部动作已经成功执行过，没有新增事实。"
-                                "先核对已有结果是否已满足原始请求：满足则立即用纯文本交付答案，不要再次执行原请求中的第一步。"
+                                "先核对已有结果是否已满足原始请求：满足则按当前完成协议交付答案，不要再次执行原请求中的第一步。"
                                 "仅在仍缺少明确必需事实时才查询新的目标；不得为了继续执行而列目录、扩大范围或无条件翻页。"
                                 "复用结果不能代替用户要求但尚未完成的写入或验证。");
+            if (planner_uses_native_tools(r->llm))
+                round_log_append(r,"[system] Native completion requires complete_task(status=complete, requires_tools=false, answer). Plain text cannot complete this task. If requested work remains, call the necessary tool instead.");
             /* Use the evidence-based recovery window above. A separate
              * two-round cutoff used to abort before its recovery prompt. */
             free(r->prev_plan); r->prev_plan = NULL;
@@ -4644,7 +4646,7 @@ restart_planning:
         if ((search_only_rounds == 6 || (search_only_rounds > 6 && search_only_rounds % 12 == 0)) &&
             (planner_uses_native_tools(r->llm) || !prompt_requires_mutation(completion_instruction(r,prompt))))
             round_log_append(r, "[system] 已连续多轮读取或搜索资料。请评估已有证据是否足够回答；"
-                                "足够就直接给出最终答案，仍缺关键事实则继续读取不同的目标。");
+                                "足够就按当前完成协议给出最终答案，仍缺关键事实则继续读取不同的目标。");
         /* stall detection: the LLM proposed the exact same plan twice — no
          * progress is possible. Give ONE recovery nudge ("the actions already
          * succeeded; answer from the observations instead of repeating them")
@@ -4660,7 +4662,7 @@ restart_planning:
                 free(r->prev_plan);
                 r->prev_plan = NULL;
                 round_log_append(r, "[system] 连续两轮计划完全相同，但这些动作都已成功执行，结果就在上面。"
-                                    "不要重复已执行的动作：如果观察结果足以回答任务，直接用纯文本给出最终答案；"
+                                    "不要重复已执行的动作：如果观察结果足以回答任务，按当前完成协议给出最终答案；"
                                     "否则给出与之前不同的下一步动作。");
                 continue;
             }
