@@ -80,7 +80,7 @@ static char *build_request_body(const llm_request *req, const char *model, int s
         cJSON *tools=cJSON_Parse(req->tools_json);
         if (cJSON_IsArray(tools) && cJSON_GetArraySize(tools)>0) {
             cJSON_AddItemToObject(root,"tools",tools);
-            cJSON_AddStringToObject(root,"tool_choice","required");
+            cJSON_AddStringToObject(root,"tool_choice","auto");
         } else cJSON_Delete(tools);
     }
     cJSON_AddNumberToObject(root, "temperature", req->temperature);
@@ -233,20 +233,31 @@ static int openai_chat(llm *llm, const llm_request *req, llm_response *resp) {
     if (cJSON_IsArray(native) && cJSON_GetArraySize(native)>0) {
         cJSON *actions=cJSON_CreateArray(), *call;
         int valid=!resp->truncated;
+        char argument_error[240]="";
         cJSON_ArrayForEach(call,native) {
             cJSON *fn=cJSON_GetObjectItemCaseSensitive(call,"function");
             const char *name=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(fn,"name"));
             const char *arguments=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(fn,"arguments"));
             const char *end=NULL;
             cJSON *args=arguments ? cJSON_ParseWithOpts(arguments,&end,1):NULL;
-            if (!name || !*name || !cJSON_IsObject(args)) { cJSON_Delete(args);valid=0;break; }
+            if (!name || !*name || !cJSON_IsObject(args)) {
+                /* Structural diagnostics only: never log argument contents,
+                 * which may contain user documents or credentials. */
+                snprintf(argument_error,sizeof argument_error,
+                    "; name_present=%d arguments_string=%d argument_bytes=%zu parse_offset=%zu parsed_object=%d truncated=%d",
+                    name && *name ? 1:0,arguments ? 1:0,arguments ? strlen(arguments):0,
+                    arguments && end ? (size_t)(end-arguments):0,cJSON_IsObject(args)?1:0,resp->truncated);
+                cJSON_Delete(args);valid=0;break;
+            }
             cJSON *action=cJSON_CreateObject();
             cJSON_AddStringToObject(action,"tool",name);cJSON_AddItemToObject(action,"args",args);
             cJSON_AddItemToArray(actions,action);
         }
         if (!valid) {
             cJSON_Delete(actions);cJSON_Delete(root);
-            set_error(resp,"openai: incomplete native tool arguments; no actions executed");return -1;
+            char detail[400];
+            snprintf(detail,sizeof detail,"openai: incomplete native tool arguments; no actions executed%s",argument_error);
+            set_error(resp,detail);return -1;
         }
         resp->tool_actions_json=cJSON_PrintUnformatted(actions);
         log_info("openai: native tool blocks=%d",cJSON_GetArraySize(actions));cJSON_Delete(actions);

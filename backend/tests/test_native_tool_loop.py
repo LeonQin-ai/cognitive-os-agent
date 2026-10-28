@@ -33,6 +33,7 @@ for provider_name in ('openai','anthropic'):
     response={'choices':[{'message':{'content':'Stopped repeated verification; preserve existing artifacts.'},'finish_reason':'stop'}]} if provider_name=='openai' else {'content':[{'type':'text','text':'Stopped repeated verification; preserve existing artifacts.'}],'stop_reason':'end_turn'}
     raw=json.dumps(response).encode();self.send_response(200);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(raw)));self.end_headers();self.wfile.write(raw);return
    assert body['max_tokens']==4096, 'Model output capacity must bound the request budget'
+   if provider_name=='openai':assert body.get('tool_choice')=='auto', 'native completion remains Runtime-validated without forced provider tool decoding'
    catalogs.append(body.get('tools',[]))
    system=body['messages'][0]['content']
    if isinstance(system,str):
@@ -47,6 +48,10 @@ for provider_name in ('openai','anthropic'):
      assert cursor['attempted_steps']==1 and cursor['last_attempt']['ok']==0
      assert cursor['unresolved_failure_count']==1 and cursor['unresolved_failures'][0]['tool']=='file_read'
    n=counts.get(case,0);counts[case]=n+1
+   if case=='NATIVE_BAD' and n==1 and provider_name=='openai':
+    error=cursor['last_planner_error']
+    assert 'arguments_string=1' in error and 'argument_bytes=8' in error and 'parsed_object=0' in error and 'truncated=0' in error,error
+    assert '{"path":' not in error, 'diagnostic leaked argument contents'
    calls=[];answer='';stop='stop'
    if case.startswith('ANSWER_'):answer=matrix[int(case.split('_')[1])][1]
    elif case in ('NATIVE_READ_PROTOCOL','NATIVE_READ_CONTROL'):
