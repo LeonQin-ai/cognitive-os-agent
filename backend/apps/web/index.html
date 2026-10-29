@@ -1649,8 +1649,13 @@ async function loadFetcher(key){
 }
 
 let traceLoading = false;
-function renderTraceSpans(target, spans, emptyText){
+function traceExpandedDetails(target){
+  if(!target) return new Set();
+  return new Set(Array.from(target.querySelectorAll('details[open][data-trace-key]'), detail => detail.dataset.traceKey));
+}
+function renderTraceSpans(target, spans, emptyText, expanded){
   if(!target) return;
+  expanded = expanded || traceExpandedDetails(target);
   target.replaceChildren();
   if(!spans.length){ target.textContent = emptyText; target.classList.add('hint'); return; }
   target.classList.remove('hint');
@@ -1668,6 +1673,8 @@ function renderTraceSpans(target, spans, emptyText){
     row.append(state,name,task,time);
     if(typeof s.command === 'string' || typeof s.result === 'string'){
       const detail = document.createElement('details'); detail.style.gridColumn = '1 / -1';
+      detail.dataset.traceKey = JSON.stringify([s.task_id,s.id,s.start_ms]);
+      detail.open = expanded.has(detail.dataset.traceKey);
       const summary = document.createElement('summary'); summary.textContent = '调用参数与执行结果'; detail.append(summary);
       [['调用参数 / 执行命令',s.command,s.command_truncated],['执行结果',s.result,s.result_truncated]].forEach(([label,value,truncated]) => {
         if(typeof value !== 'string') return;
@@ -1700,8 +1707,11 @@ async function loadTrace(){
     const persisted = new Set(records.flatMap(rec =>
       (Array.isArray(rec.spans) ? rec.spans : []).map(s => s.id + ':' + s.start_ms)));
     const liveOnly = spans.filter(s => !persisted.has(s.id + ':' + s.start_ms));
+    // Capture after the requests settle, so a click during polling is retained.
+    // Share keys across live/history when a task is journaled between polls.
+    const expanded = new Set([...traceExpandedDetails($('trace-live')), ...traceExpandedDetails($('trace-history'))]);
     const count = $('trace-live-count'); if(count) count.textContent = '(' + liveOnly.length + ')';
-    renderTraceSpans($('trace-live'), liveOnly, live.status === 0 ? 'Trace 服务不可用' : '暂无进行中的 span');
+    renderTraceSpans($('trace-live'), liveOnly, live.status === 0 ? 'Trace 服务不可用' : '暂无进行中的 span', expanded);
     const box = $('trace-history'); if(!box) return;
     box.replaceChildren();
     if(!records.length){ box.classList.add('hint'); box.textContent = history.status === 0 ? '任务历史不可用' : '暂无已落盘的 span'; return; }
@@ -1713,7 +1723,7 @@ async function loadTrace(){
         (rec.session || 'default') + ' · ' + (rec.ts ? new Date(rec.ts).toLocaleString() : '');
       group.append(title);
       const list = document.createElement('div');
-      renderTraceSpans(list, Array.isArray(rec.spans) ? rec.spans : [], '无 span');
+      renderTraceSpans(list, Array.isArray(rec.spans) ? rec.spans : [], '无 span', expanded);
       group.append(list); box.append(group);
     });
   } finally { traceLoading = false; }
