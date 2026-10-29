@@ -5,7 +5,7 @@ from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
 from fixture_http_response import respond_json
 
 root=Path(__file__).resolve().parents[1];build=root/os.environ.get('COA_BUILD_DIR','build')
-candidate='已获得入口线索。\n\n还有采样路径需要核实。'
+candidate='我已经收集了大量信息。让我继续读取关键文档的剩余部分，然后生成对比 HTML。'
 phase=('我需要继续分析 sysctl.c 中 cpufreq 相关的完整逻辑。'
        '从已读内容看到关键线索：新内核使用 scaling_cur_freq 而非 cpuinfo_cur_freq。\n\n'
        '我将同时读取后续内容并搜索关键函数定义。')
@@ -18,6 +18,11 @@ class Provider(BaseHTTPRequestHandler):
         Provider.reviews+='Completion review:' in json.dumps(body,ensure_ascii=False)
         name,args='complete_task',{'status':'complete','requires_tools':False,'answer':candidate if n==1 else phase if n==3 else answer}
         if n in (0,2,4):name,args='file_read',{'path':f'source{n//2}.c'}
+        if n==2 and self.protocol=='legacy' and 'COMPLETION REVIEW PROTOCOL' not in json.dumps(body):
+            # Task 97: without a structured review, the model repeats its
+            # announcement and legacy's identical-narration gate aborts.
+            respond_json(self,json.dumps({'choices':[{'message':{'content':candidate},'finish_reason':'stop'}]}).encode())
+            return
         if n==0:args['max_bytes']=32
         if n==1 and self.protocol=='native':
             context=json.dumps(body,ensure_ascii=False)
