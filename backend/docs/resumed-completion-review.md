@@ -96,3 +96,51 @@ a valid artifact, but failed before final delivery. A subsequent isolated probe
 captured DSML markup corrupting an otherwise native JSON argument key; this
 provider-response problem remains tracked separately under #224. The successful
 comparison does not prove that intermittent response corruption is eliminated.
+
+## Ordinary chat recovery before legacy stop guards (October 29)
+
+The latest #232 report again contains README reads and repeated work
+announcements without the requested HTML. Code inspection found an independent
+control-flow gap: Flow candidates receive explicit delivery review before legacy
+read/narration guards, but ordinary tool-backed chat candidates reached those
+guards first. The repeated announcement could therefore end FAILED without ever
+receiving the existing `COMPLETION REVIEW PROTOCOL` next-action/completion
+contract. This does not establish that the unavailable GLM run used legacy mode.
+
+All tool-backed legacy candidate answers now enter that same bounded review
+before prose guards. A legacy request with an already-detected required mutation
+also receives it when no tools have executed yet. Existing mutation detection is
+unchanged; no new request/answer keywords, synthesized actions, malformed-call
+repairs, protocol switching, or expanded iteration budgets were added. Native
+completion and Flow behavior remain structural. The model must still return
+actual executable calls; a promise alone cannot cause a file read or report write.
+
+`test_artifact_delivery_recovery_e2e.py` covers the comparison request wording
+without adding a `generate` verb to it. Two README reads are followed by the
+reported progress shape, a real two-file source batch, HTML creation, and actual
+readback. The test independently checks both source markers, the saved artifact,
+post-write reading, final answer and chat history. Native batch replies also
+carry progress text, verifying that commentary does not hide real tool calls.
+A zero-tool explicit artifact request recovers separately. A provider that keeps
+returning commentary without a valid decision remains FAILED without creating a
+report or saving a successful conversation turn.
+
+The pre-fix deterministic reproduction failed after observations and a repeated
+progress announcement, with the same generic unfinished/narration diagnostic.
+After the fix the legacy comparison takes seven requests/six real tools; the
+zero-tool recovery takes six requests/four tools. The stuck control stops FAILED
+in seven requests. The native comparison takes seven requests/six tools. These
+four cases are added to Linux, ASAN, Windows, and both macOS CI jobs.
+
+Existing compatibility counts reflect moving the review: cached directory
+recovery uses four requests instead of five, while the no-write stalled control
+receives one explicit review and stops within its unchanged six-round budget.
+Their actual-work and FAILED assertions remain enforced.
+
+Local validation: 4,583 unit checks passed, 20 completion-review scenarios,
+12 Flow scenarios, both resumed-work protocols, the legacy completion-recovery
+suite and all four new cases passed. The four new cases also passed with ASAN
+(`detect_leaks=0`). No original private source or configured GLM API execution is
+claimed. Keep #232 open for CI and verification against the reported deployment;
+this patch fixes a reproduced recovery gap, not every possible model refusal to
+return tool calls.

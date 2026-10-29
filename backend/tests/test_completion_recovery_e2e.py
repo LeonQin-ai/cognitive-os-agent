@@ -127,7 +127,7 @@ with tempfile.TemporaryDirectory(prefix='coa-completion-recovery-') as folder:
             assert false_report['status']=='FAILED',false_report
             print('PASS: issue177 requires an actual HTML artifact; no-write completion is rejected')
             tool_needed=finished(request('/v1/tasks',{'prompt':'分析当前架构 USE_TOOLS176'})['id'])
-            assert tool_needed['status']=='DONE' and counts['tools176']==5,tool_needed
+            assert tool_needed['status']=='DONE' and counts['tools176']==4,tool_needed
             print('PASS: explicit remaining tool need after observations continues tool execution')
             html=finished(request('/v1/tasks',{'prompt':'输出一个html报告并检查内容 HTML_RECOVERY'})['id'])
             assert html['status']=='DONE' and counts.get('html')==6,html
@@ -135,7 +135,8 @@ with tempfile.TemporaryDirectory(prefix='coa-completion-recovery-') as folder:
             assert any(step.get('tool')=='file_read' for step in html.get('steps',[])),html
             print('PASS: HTML write followed by two narration rounds recovers to actual read and final delivery')
             stalled=finished(request('/v1/tasks',{'prompt':'输出HTML报告 HTML_STALL'})['id'])
-            assert stalled['status']=='FAILED' and counts['stall']==5,stalled
+            # One explicit delivery-review turn now precedes bounded legacy nudges.
+            assert stalled['status']=='FAILED' and counts['stall']==6,stalled
             print('PASS: narration without any progress stops after bounded recovery; no false DONE')
             no_action=finished(request('/v1/tasks',{'prompt':'注册这些skills REGISTER_DIAGNOSTIC'})['id'])
             assert no_action['status']=='FAILED' and 'skill_manage' in no_action['output'],no_action

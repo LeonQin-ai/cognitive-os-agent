@@ -4470,21 +4470,21 @@ restart_planning:
                 free(truncated_prefix); truncated_prefix=NULL;
                 break;
             }
-            /* A Flow node must enter the structured delivery review before
-             * legacy narration/read heuristics can terminate it. Otherwise a
-             * reviewer that listed directories and then announced its first
-             * file read could fail on the next identical paragraph without
-             * ever receiving the explicit next-action/completion contract. */
-            if(r->completion_prompt &&
+            int needs_action = !planner_uses_native_tools(r->llm) && prompt_requires_mutation(completion_instruction(r,prompt)) && !run_has_mutating_action(r);
+            /* Every tool-backed legacy candidate needs the explicit delivery
+             * contract before compatibility prose heuristics can stop it.
+             * Previously only Flow did this early, so ordinary analysis and
+             * artifact requests could abort without reaching the same review.
+             * Do not infer tool actions or delivery from answer keywords. */
+            if((r->completion_prompt || !planner_uses_native_tools(r->llm)) &&
                r->llm && r->llm->provider &&
                (!strcmp(r->llm->provider,"openai") || !strcmp(r->llm->provider,"anthropic")) &&
-               r->run_successful_tools>0 && !completion_reviewed && r->round_idx<r->max_rounds) {
+               (r->run_successful_tools>0 || needs_action) && !completion_reviewed && r->round_idx<r->max_rounds) {
                 completion_reviewed=1;r->completion_review_required=!planner_uses_native_tools(r->llm);
                 round_log_append(r,txt?txt:"");
-                round_log_append(r,"[system] Completion review: the previous text is only a candidate node result. Compare it with the ORIGINAL node instruction and actual file/tool evidence. Directory listings are not code review; a promise to read or write a document is not that document. Call the next required tools now, then deliver the actual requested analysis or verified artifact with complete_task. Do not repeat directory discovery already completed, and do not forward a progress announcement to downstream nodes as a result.");
+                round_log_append(r,"[system] Completion review: the previous text is only a candidate result. Compare it with the ORIGINAL instruction and actual file/tool evidence. Directory listings are not code review; a promise to read or write a document is not that document. Call the next required tools now, then deliver the actual requested analysis or verified artifact with complete_task. Do not repeat directory discovery already completed, and do not forward a progress announcement as a result.");
                 continue;
             }
-            int needs_action = !planner_uses_native_tools(r->llm) && prompt_requires_mutation(completion_instruction(r,prompt)) && !run_has_mutating_action(r);
             int needs_read = !planner_uses_native_tools(r->llm) && ((prompt_requires_full_read(completion_instruction(r,prompt)) &&
                 (required_pending_reads(r,completion_instruction(r,prompt)) || r->read_tracking_overflow ||
                  answer_reports_required_unread(r,completion_instruction(r,prompt),txt))) ||
