@@ -1162,6 +1162,28 @@ static int h_flow_resume(const http_request *req, http_response *resp, void *ud)
 /* POST /v1/flows/decompose {task} — compile a task into a Flow DAG via the
  * orchestrator's LLM decomposition WITHOUT executing it. Returns the DAG so
  * the client can inspect/modify it before POST /v1/flows. */
+static int h_desktop_animation(const http_request *req,http_response *resp,void *ud){
+    runtime_ctx *ctx=ud;if(!authz_ok(ctx,req,resp))return 0;
+#ifdef _WIN32
+    const char *local=getenv("LOCALAPPDATA");char dir[2048],path[2200];
+    if(!local||!*local){resp->status=503;http_resp_json(resp,"{\"error\":\"local app data unavailable\"}");return 0;}
+    path_join(dir,sizeof dir,local,"cognitive-os-agent");path_join(path,sizeof path,dir,"desktop-startup-animation");
+    if(!strcmp(req->method,"PUT")){
+        char *body=body_str(req);cJSON *root=body?cJSON_Parse(body):NULL;free(body);
+        cJSON *enabled=cJSON_GetObjectItemCaseSensitive(root,"enabled");
+        if(!cJSON_IsBool(enabled)){cJSON_Delete(root);resp->status=400;http_resp_json(resp,"{\"error\":\"enabled must be boolean\"}");return 0;}
+        char value=cJSON_IsTrue(enabled)?'1':'0';cJSON_Delete(root);fs_mkdirs(dir);
+        if(fs_write_file(path,&value,1)!=0){resp->status=500;http_resp_json(resp,"{\"error\":\"could not save startup preference\"}");return 0;}
+    }
+    char *value=fs_read_file(path);int enabled=!value||value[0]!='0';free(value);
+    http_resp_json(resp,enabled?"{\"available\":true,\"enabled\":true}":"{\"available\":true,\"enabled\":false}");
+#else
+    if(!strcmp(req->method,"PUT")){resp->status=409;http_resp_json(resp,"{\"error\":\"startup animation is Windows desktop only\"}");}
+    else http_resp_json(resp,"{\"available\":false,\"enabled\":false}");
+#endif
+    return 0;
+}
+
 static int h_flow_decompose(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
     char *b;
@@ -5682,6 +5704,8 @@ int api_attach(runtime_ctx *ctx) {
     http_server_route(ctx->http, "POST", "/v1/orchestrate", h_orchestrate, ctx);
     http_server_route(ctx->http, "POST", "/v1/flows", h_flow_run, ctx);
     http_server_route(ctx->http, "POST", "/v1/flows/decompose", h_flow_decompose, ctx);
+    http_server_route(ctx->http, "GET", "/v1/desktop/startup-animation", h_desktop_animation, ctx);
+    http_server_route(ctx->http, "PUT", "/v1/desktop/startup-animation", h_desktop_animation, ctx);
     http_server_route(ctx->http, "GET", "/v1/flows/list", h_flow_list, ctx);
     http_server_route(ctx->http, "PUT", "/v1/flows/", h_flow_modify, ctx);
     http_server_route(ctx->http, "POST", "/v1/flows/", h_flow_resume, ctx);

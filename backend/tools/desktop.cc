@@ -766,7 +766,17 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 
     /* Starting page first, then the boot watcher takes over. */
     {
-        std::string start8 = data_url(kStartingHtml);
+        std::string starting=kStartingHtml;
+        wchar_t local[MAX_PATH];
+        if(GetEnvironmentVariableW(L"LOCALAPPDATA",local,MAX_PATH)>0){
+            std::wstring setting=std::wstring(local)+L"\\cognitive-os-agent\\desktop-startup-animation";
+            FILE *file=_wfopen(setting.c_str(),L"rb");
+            if(file){int value=fgetc(file);fclose(file);if(value=='0'){
+                size_t head=starting.find("</head>");
+                if(head!=std::string::npos)starting.insert(head,"<style>*,*:before,*:after{animation:none!important}</style>");
+            }}
+        }
+        std::string start8 = data_url(starting.c_str());
         std::wstring wstart(start8.begin(), start8.end());
         g_web->Navigate(wstart.c_str());
     }
