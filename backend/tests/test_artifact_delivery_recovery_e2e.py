@@ -24,11 +24,14 @@ def exercise(protocol, mode):
     def finish(answer):
      return [('complete_task',{'status':'complete','requires_tools':False,'answer':answer})] if protocol=='native' or review else []
     answer='';actions=[]
-    if mode!='zero' and phase==0:
+    if mode=='zero_after_error' and len(calls)==1:
+     answer='<tool_call>file_read{invalid arguments</tool_call>'
+    elif not mode.startswith('zero') and phase==0:
      actions=[('file_read',{'path':p+'/README.md'}) for p in ('left','right')];phase=1
     elif not review:
-     answer=PROGRESS;actions=finish(answer)
-    elif mode=='stuck':
+     answer=('我将开始探索这两个项目的结构，以便进行详细的对比。让我先列出这两个目录。'
+      if mode=='zero_after_error' else PROGRESS);actions=finish(answer)
+    elif mode in ('stuck','zero_stuck'):
      answer=PROGRESS # Deliberately no decision: must remain FAILED.
     elif phase<2:
      actions=[('file_read',{'path':p+'/source.c'}) for p in ('left','right')];phase=2
@@ -63,16 +66,16 @@ def exercise(protocol, mode):
      for _ in range(150):
       try:api('/v1/scheduler');break
       except OSError:assert process.poll() is None;time.sleep(.05)
-     prompt=('对比一下 left 和 right 两个项目的代码，详细解释一下两个项目之间的差异与优缺点，最后也输出一个html来对比说明。'
-      if mode!='zero' else '对比 left 和 right 两个项目，生成 comparison.html 文件并读回校验。')
+     prompt='对比一下 left 和 right 两个项目的代码，详细解释一下两个项目之间的差异与优缺点，最后也输出一个html来对比说明。'
      tid=api('/v1/chat',{'message':prompt,'session':'artifact-recovery'})['id']
      while True:
       task=api(f'/v1/tasks/{tid}')
       if task['status'] not in ('RUNNING','QUEUED'):break
       assert time.monotonic()<deadline,task;time.sleep(.03)
      assert not errors,errors
+     if mode=='zero_after_error':assert task['model_failures']==1,task
      assert len(calls)<=10,len(calls)
-     if mode=='stuck':
+     if mode in ('stuck','zero_stuck'):
       assert task['status']=='FAILED' and not (work/'comparison.html').exists(),task
       assert not api('/v1/chat/history?session=artifact-recovery')['turns']
      else:
@@ -86,4 +89,4 @@ def exercise(protocol, mode):
     finally:process.terminate();process.wait(timeout=5)
  finally:server.shutdown();server.server_close()
 if __name__=='__main__':
- for protocol,mode in [('legacy','recover'),('legacy','zero'),('legacy','stuck'),('native','recover')]:exercise(protocol,mode)
+ for protocol,mode in [('legacy','recover'),('legacy','zero'),('legacy','zero_after_error'),('legacy','zero_stuck'),('legacy','stuck'),('native','recover')]:exercise(protocol,mode)

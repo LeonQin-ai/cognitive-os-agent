@@ -4471,20 +4471,6 @@ restart_planning:
                 break;
             }
             int needs_action = !planner_uses_native_tools(r->llm) && prompt_requires_mutation(completion_instruction(r,prompt)) && !run_has_mutating_action(r);
-            /* Every tool-backed legacy candidate needs the explicit delivery
-             * contract before compatibility prose heuristics can stop it.
-             * Previously only Flow did this early, so ordinary analysis and
-             * artifact requests could abort without reaching the same review.
-             * Do not infer tool actions or delivery from answer keywords. */
-            if((r->completion_prompt || !planner_uses_native_tools(r->llm)) &&
-               r->llm && r->llm->provider &&
-               (!strcmp(r->llm->provider,"openai") || !strcmp(r->llm->provider,"anthropic")) &&
-               (r->run_successful_tools>0 || needs_action) && !completion_reviewed && r->round_idx<r->max_rounds) {
-                completion_reviewed=1;r->completion_review_required=!planner_uses_native_tools(r->llm);
-                round_log_append(r,txt?txt:"");
-                round_log_append(r,"[system] Completion review: the previous text is only a candidate result. Compare it with the ORIGINAL instruction and actual file/tool evidence. Directory listings are not code review; a promise to read or write a document is not that document. Call the next required tools now, then deliver the actual requested analysis or verified artifact with complete_task. Do not repeat directory discovery already completed, and do not forward a progress announcement as a result.");
-                continue;
-            }
             int needs_read = !planner_uses_native_tools(r->llm) && ((prompt_requires_full_read(completion_instruction(r,prompt)) &&
                 (required_pending_reads(r,completion_instruction(r,prompt)) || r->read_tracking_overflow ||
                  answer_reports_required_unread(r,completion_instruction(r,prompt),txt))) ||
@@ -4494,11 +4480,25 @@ restart_planning:
                                     r->run_successful_tools == 0;
             /* Native completion is structural. Literal future-tense examples,
              * translations and advice are valid results; never classify their
-             * wording as an instruction to continue. Delivery review above
+             * wording as an instruction to continue. Delivery review below
              * decides the next native action from the original task/evidence. */
             int needs_intent_recovery = !planner_uses_native_tools(r->llm) && !prompt_is_direct_information_request(completion_instruction(r,prompt)) &&
                                         (r->run_successful_tools == 0 || answer_only_announces_work(txt)) &&
                                         looks_like_intent(txt);
+            /* Every legacy candidate with evidence or unmet work needs the explicit delivery
+             * contract before compatibility prose heuristics can stop it.
+             * Previously only Flow did this early, so ordinary analysis and
+             * artifact requests could abort without reaching the same review.
+             * Do not infer tool actions or delivery from answer keywords. */
+            if((r->completion_prompt || !planner_uses_native_tools(r->llm)) &&
+               r->llm && r->llm->provider &&
+               (!strcmp(r->llm->provider,"openai") || !strcmp(r->llm->provider,"anthropic")) &&
+               (r->run_successful_tools>0 || needs_action || needs_read || needs_observation || needs_intent_recovery) && !completion_reviewed && r->round_idx<r->max_rounds) {
+                completion_reviewed=1;r->completion_review_required=!planner_uses_native_tools(r->llm);
+                round_log_append(r,txt?txt:"");
+                round_log_append(r,"[system] Completion review: the previous text is only a candidate result. Compare it with the ORIGINAL instruction and actual file/tool evidence. Directory listings are not code review; a promise to read or write a document is not that document. Call the next required tools now, then deliver the actual requested analysis or verified artifact with complete_task. Do not repeat directory discovery already completed, and do not forward a progress announcement as a result.");
+                continue;
+            }
             if (needs_action || needs_read || needs_observation || needs_intent_recovery) {
                 /* A plain-text answer closes the loop once its explicit action,
                  * read, and observation gates are met. If a gate is still

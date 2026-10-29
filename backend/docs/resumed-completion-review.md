@@ -144,3 +144,39 @@ suite and all four new cases passed. The four new cases also passed with ASAN
 claimed. Keep #232 open for CI and verification against the reported deployment;
 this patch fixes a reproduced recovery gap, not every possible model refusal to
 return tool calls.
+
+## Zero-tool recovery with the reported wording and first-request failure
+
+The next report repeats the HTML comparison request, with zero executed tools,
+three model calls and one model failure, ending after “我将开始探索这两个项目的结构，
+以便进行详细的对比。让我先列出这两个目录。” The prior zero-tool test used the
+stronger “生成 comparison.html 文件” wording, so it did not exercise the original
+request against the mutation detector. That was a real coverage gap.
+
+A pre-fix binary reproduces the same three-call/one-protocol-failure/zero-tool
+FAILED sequence with the reported request wording (private paths replaced by
+fixture project names), a first malformed tagged response, then the exact quoted
+announcement. This demonstrates a Runtime recovery path; the real first GLM
+response/error has not been captured and is not claimed to be that malformed tag.
+
+The early review previously required either already-successful tools or a
+mutation detected by existing request heuristics. Reading/observation/intent
+checks were evaluated only later, where repeated zero-tool narration could stop
+the run before receiving the explicit next-tool/completion contract. Compute the
+existing unmet-work checks first and use them for early review as well. No new
+phrases, automatic tool inference, protocol switching or retry budget is added.
+
+All zero-tool comparison cases now use the original “输出一个html来对比说明”
+wording. New cases cover the first protocol error followed by the exact reported
+announcement, and a zero-tool provider that continues refusing valid decisions.
+The former completes seven requests/four actual tools (two source reads, an HTML
+write, and readback). The latter remains FAILED in six requests/zero tools, with
+no report or successful history. The regular zero-tool recovery completes six
+requests/four tools. Existing tool-backed legacy, no-progress and native parallel
+batch/commentary controls remain covered by the same CI test file.
+
+Local results: 4,577 unit checks, all six artifact-recovery cases, 20 completion
+review scenarios, both resumed-review protocols, the compatibility recovery
+suite and 12 Flow scenarios passed. The six artifact cases also pass under ASAN
+(`detect_leaks=0`). The private Windows source and GLM endpoint have not been run
+in this workspace; deployment matching remains tracked by open #232.
