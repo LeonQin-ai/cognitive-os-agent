@@ -270,12 +270,18 @@ static bool wait_server(int port, int timeout_ms) {
 
 /* Inline HTML pages shown while the backend boots / if it never comes up. */
 static const char kStartingHtml[] = R"(<!doctype html><html><head><meta charset="utf-8"><style>
-body{display:flex;align-items:center;justify-content:center;height:100vh;margin:0;
-background:#101418;color:#9fb3c8;font:15px/1.6 system-ui,sans-serif;user-select:none}
-.s{width:40px;height:40px;border:4px solid #2a3642;border-top-color:#4da3ff;border-radius:50%;
-animation:r 1s linear infinite;margin-right:18px;flex:none}
-@keyframes r{to{transform:rotate(360deg)}}
-</style></head><body><div class="s"></div><div>正在启动 cognitive-os-agent…</div></body></html>)";
+*{box-sizing:border-box}body{display:grid;place-items:center;height:100vh;margin:0;overflow:hidden;
+background:#0b1020;color:#edf1ff;font:15px/1.6 system-ui,sans-serif;user-select:none}
+body:before,body:after{content:"";position:absolute;width:75vw;height:75vw;border-radius:50%;filter:blur(70px);opacity:.36;pointer-events:none;
+background:radial-gradient(circle,#7565df,transparent 65%);animation:drift 12s ease-in-out infinite alternate}
+body:before{left:-25vw;top:-40vw}body:after{right:-25vw;bottom:-45vw;background:radial-gradient(circle,#358c9d,transparent 65%);animation-delay:-6s}
+main{position:relative;text-align:center;padding:48px;max-width:90vw;border:1px solid #ffffff16;border-radius:28px;background:#151b2c99;box-shadow:0 24px 100px #0004}
+.s{display:grid;place-items:center;width:72px;height:72px;margin:0 auto 24px;border-radius:22px;background:linear-gradient(140deg,#b0a4ff,#628adb);box-shadow:0 0 50px #9b85ff40;color:white;font-size:30px;animation:breathe 3s ease-in-out infinite}
+h1{font-size:25px;letter-spacing:.04em;margin:0 0 8px;font-weight:600}p{margin:0;color:#b0bbd3}.track{height:3px;width:180px;margin:28px auto 0;background:#ffffff12;overflow:hidden;border-radius:4px}
+.track:after{content:"";display:block;height:100%;width:40%;background:linear-gradient(90deg,#a99bff,#78c7da);animation:travel 1.8s ease-in-out infinite}
+@keyframes drift{to{transform:translate(12vw,8vh) scale(1.15)}}@keyframes breathe{50%{transform:translateY(-4px);box-shadow:0 0 65px #9b85ff65}}@keyframes travel{from{transform:translateX(-110%)}to{transform:translateX(360%)}}
+@media(prefers-reduced-motion:reduce){body:before,body:after,.s,.track:after{animation:none}.track:after{width:100%;opacity:.6}}
+</style></head><body><main role="status" aria-live="polite"><div class="s" aria-hidden="true">C</div><h1>Cognitive OS</h1><p>正在准备你的工作空间</p><div class="track" aria-hidden="true"></div></main></body></html>)";
 
 static const char kErrorHtml[] = R"(<!doctype html><html><head><meta charset="utf-8"><style>
 body{display:flex;align-items:center;justify-content:center;height:100vh;margin:0;
