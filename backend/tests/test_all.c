@@ -2981,7 +2981,18 @@ static int progress_fixture_chat(llm *self,const llm_request *req,llm_response *
                 "[{\"tool\":\"grep\",\"args\":{\"path\":\".\",\"pattern\":\"status\"}}]" :
                 f->mode == 28 ? "[{\"tool\":\"file_read\",\"args\":{\"path\":\"same.txt\"}},{\"tool\":\"fixture_loop_error\",\"args\":{}}]" :
                 "[{\"tool\":\"file_read\",\"args\":{\"path\":\"same.txt\"}}]");
-        } else resp->content = xstrdup("上下文工程分析完成：源码证据表明缓存复用已读取内容，持久化保存版本。\n\n下一步建议：第一步增加缓存命中指标，第二步对比持久化成本。");
+        } else {
+            const char *answer="上下文工程分析完成：源码证据表明缓存复用已读取内容，持久化保存版本。\n\n下一步建议：第一步增加缓存命中指标，第二步对比持久化成本。";
+            if(f->mode==26 || f->mode==31) resp->content=xstrdup(answer);
+            else {
+                cJSON *array=cJSON_CreateArray(),*action=cJSON_CreateObject();
+                cJSON_AddStringToObject(action,"tool","complete_task");
+                cJSON *args=cJSON_AddObjectToObject(action,"args");
+                cJSON_AddStringToObject(args,"status","complete");cJSON_AddBoolToObject(args,"requires_tools",0);
+                cJSON_AddStringToObject(args,"answer",answer);cJSON_AddItemToArray(array,action);
+                resp->content=cJSON_PrintUnformatted(array);cJSON_Delete(array);
+            }
+        }
     } else if (f->mode >= 20 && f->mode <= 23) {
         if (f->calls == 1)
             resp->content = xstrdup(f->mode == 21 ?
@@ -3154,6 +3165,8 @@ static void test_cross_round_progress(void) {
         if(mode==18) fixture_retryable_failures=0;
         reasoning_config cfg={0}; cfg.llm=&provider; cfg.tools=reg;
         cfg.workspace="state-test/progress-loop"; cfg.max_rounds=-1;
+        trace *plan_trace=(mode>=24 && mode<=31) ? trace_new(32):NULL;
+        cfg.trace=plan_trace;
         reasoning *r=reasoning_new(&cfg); CHECK(r!=NULL);
         if (r) {
             char *answer=NULL;
@@ -3172,6 +3185,18 @@ static void test_cross_round_progress(void) {
                 (mode==7 || mode==9 || mode==10) ? "查看系统状态" : mode==8 ? "查看一下windows机器的状态" :
                 mode>=5 ? "根据源码生成一份深度PPT文件" : "分析资料并提供结论";
             int rc=reasoning_run(r,prompt,&answer);
+            if(plan_trace && mode!=26 && mode!=31) {
+                char *json=trace_json(plan_trace);cJSON *spans=cJSON_Parse(json),*span;
+                int plans=0;
+                cJSON_ArrayForEach(span,spans) {
+                    const char *name=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(span,"name"));
+                    if(!name || strcmp(name,"llm.plan"))continue;
+                    cJSON *decision=cJSON_Parse(cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(span,"result")));
+                    if(++plans==2) CHECK(cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(decision,"completion_review_required")));
+                    cJSON_Delete(decision);
+                }
+                CHECK(plans>=2);cJSON_Delete(spans);free(json);
+            }
             if (mode >= 46) {
                 CHECK(rc==0 && f.calls==4 && answer && strstr(answer,"路径别名分页分析完成"));
             } else if (mode >= 36) {
@@ -3185,8 +3210,8 @@ static void test_cross_round_progress(void) {
                 else CHECK(rc != 0 && f.calls == (mode == 34 ? 5 : 4) && answer && strstr(answer,"file_read"));
             } else if (mode >= 24) {
                 if (mode == 25 || mode == 26 || mode == 27 || mode == 28)
-                    CHECK(rc != 0 && f.calls == 4 && answer && strstr(answer,"任务未完成"));
-                else CHECK(rc == 0 && f.calls == 3 && answer && strstr(answer,"上下文工程分析完成"));
+                    CHECK(rc != 0 && f.calls == (mode==26 ? 4:5) && answer && strstr(answer,"任务未完成"));
+                else CHECK(rc == 0 && f.calls == (mode==31 ? 3:4) && answer && strstr(answer,"上下文工程分析完成"));
             } else if (mode >= 20) {
                 if (mode == 22) CHECK(rc != 0 && f.calls == 3 && answer && strstr(answer,"任务未完成"));
                 else if (mode == 23) CHECK(rc == 0 && f.calls == 2 && answer && strstr(answer,"当前结构已核对"));
@@ -3253,7 +3278,7 @@ static void test_cross_round_progress(void) {
             }
             free(answer); reasoning_free(r);
         }
-        tool_registry_free(reg);
+        trace_free(plan_trace);tool_registry_free(reg);
     }
     const char *cleanup[]={"a.txt","b.txt","c.txt","new.txt","long.txt","changed.txt","draft.ppt","same.txt","paged.txt","generated.py"};
     for (size_t i=0;i<sizeof(cleanup)/sizeof(cleanup[0]);i++) {

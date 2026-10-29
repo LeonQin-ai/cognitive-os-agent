@@ -102,9 +102,42 @@ write/readback actions complete the report on request 12. Live and journaled
 decisions are both checked. The scenario also passes ASAN. This is a controlled
 response replay, not a successful integration run with GLM.
 
-The deployed false flag conflicts with the tested recovery transition. The
-runtime currently restricts that transition to OpenAI/Anthropic adapter objects.
-Before another production change, confirm the actual backend checkout, process
-path/start time and provider identity. The export does not contain those facts,
-so it cannot distinguish an older running executable from an excluded adapter.
-Do not assert that the user is running an old build without that evidence.
+The user confirmed the current source/executable and `openai` provider. Treat
+those as established; do not attribute this report to an old process. The
+exported false flag conflicts with the local transition, and the complete
+deployed stop is still not reproduced. The generic recovery invariant below
+is now enforced at the producer instead of a late outer-loop handler.
+
+## Generic protocol recovery, without task or provider classification
+
+The runtime now latches structural recovery in `h_reason`, immediately when
+the planner rejects a legacy response at the protocol stage. No task text,
+HTML requirement, provider name or model name participates in that decision.
+The provider whitelist and the outer-loop transition were removed. There is
+no new task-type branch or prompt text. The proposed HTML-specific startup
+change was discarded before commit at the user's request.
+
+The state remains latched across successful intermediate tools and clears at
+the start of a new run. Native completion, HTTP/transport failure handling,
+ordinary plain-text conversation, existing failure budgets and acceptance
+checks keep their existing paths. This enforces an error-recovery contract;
+it does not manufacture tool actions or force a stalled model to succeed.
+
+Four additional fixed-response scenarios have no HTML requirement: successful
+source verification after a malformed response and three prose responses;
+bounded failure when prose persists; a legitimate blocked declaration; and a
+plain greeting that still completes on its first call. Existing source and
+artifact scenarios continue to verify actual tool evidence.
+
+In-process tests use the non-vendor `fixture` provider and inspect actual trace
+decisions to require structural recovery on the second call after schema
+rejection. Their final responses now use valid completion declarations, while
+existing assertions still reject unrelated evidence and unresolved failures.
+The offline mock's corrected-arguments fixture also emits a valid declaration
+after its successful retry. These fixture updates conform to the generic
+protocol; no live-provider behavior is keyed to those scenarios.
+
+Validation: 4594 unit checks, 26 fixed-response scenarios with normal/ASAN
+builds, 20 completion-review scenarios, 20 embedded-tool scenarios and the
+legacy completion-recovery suite passed. Successful GLM execution remains an
+integration check; issue #232 stays open.

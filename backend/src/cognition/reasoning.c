@@ -2200,6 +2200,11 @@ static int h_reason(state_machine *sm, void *ud, const char *input, char **out) 
     if (rc != 0 || !raw) {
         r->last_model_failure = diagnostic;
         r->last_model_failure_call = r->prog_llm_calls;
+        /* Latch protocol recovery at the producer of the rejected plan.
+         * It must not depend on task wording, provider names, or whether
+         * an outer loop reaches its generic stage-failure handler. */
+        if(!planner_uses_native_tools(r->llm) && !strcmp(diagnostic.stage,"protocol"))
+            r->completion_review_required=1;
         free(raw);
         char *msg = plan_err ? xstrdup(plan_err)
                              : xstrdup("(LLM 调用失败：请先用「测试」按钮验证模型配置 provider/key/base_url/model)");
@@ -4410,16 +4415,6 @@ restart_planning:
                 transport_fail_streak = 0;
             round_log_append(r, result && *result ? result : "(run failed)");
             obs_log_append(r, result && *result ? result : "(run failed)");
-            /* A rejected wire plan still needs an executable next action.
-             * Keep recovery in the structural protocol instead of allowing
-             * plain prose to fall back into legacy narration/duplicate stops.
-             * Transport failures and deterministic test providers keep their
-             * existing paths; the original failure budget is unchanged. */
-            if(!r->had_plan && !planner_uses_native_tools(r->llm) &&
-               !strcmp(r->last_model_failure.stage,"protocol") &&
-               r->llm && r->llm->provider &&
-               (!strcmp(r->llm->provider,"openai") || !strcmp(r->llm->provider,"anthropic")))
-                r->completion_review_required=1;
             /* A token-limited native call (including complete_task) has no
              * executable arguments. Regenerate the whole call, never append
              * a JSON suffix or misdiagnose this as a failed tool operation.

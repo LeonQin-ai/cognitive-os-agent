@@ -16,7 +16,15 @@ def function(name,args):return {'type':'function','function':{'name':name,'argum
 def exercise(mode,protocol='legacy'):
  calls=0
  expected_html=HTML+('<!--'+('large receipt proof '*6000)+'-->' if mode=='large_html' else '')
- if mode in ('trace_resume','trace_stuck','trace_after_error','trace_after_error_progress'):
+ if mode in ('generic_recovery','generic_stuck','generic_blocked','chat_plain'):
+  finish={'tool':'complete_task','args':{'status':'blocked' if mode=='generic_blocked' else 'complete','requires_tools':False,'answer':'没有可用证据，无法继续核对。' if mode=='generic_blocked' else '证据核对完成：LEFT_WIRE_PROOF、RIGHT_WIRE_PROOF。'}}
+  replies=['<tool_call>file_read{invalid arguments</tool_call>']
+  if mode=='chat_plain':replies=['你好。']
+  elif mode=='generic_blocked':replies += [finish]
+  else:
+   replies += ['正在检查，请稍候。']*3
+   if mode=='generic_recovery':replies += [[{'tool':'file_read','args':{'path':'left.c'}},{'tool':'file_read','args':{'path':'right.c'}}],finish]
+ elif mode in ('trace_resume','trace_stuck','trace_after_error','trace_after_error_progress'):
   narration='我需要进一步了解两个项目的源码结构，以便做出详细的对比分析。让我查看两个项目的源码目录结构和关键文件。'
   replies=[[{'tool':'list_dir','args':{'path':side}} for side in ('left','right')],
    [{'tool':'file_read','args':{'path':'left/README.md'}}],
@@ -74,7 +82,7 @@ def exercise(mode,protocol='legacy'):
      for _ in range(150):
       try:api('/v1/scheduler');break
       except OSError:assert proc.poll() is None;time.sleep(.05)
-     tid=api('/v1/chat',{'message':'你好' if mode=='completion' else '分析 required 目录的代码。' if mode=='unrelated_schema' else '对比一下 left 和 right 两个项目的代码，详细解释差异与优缺点，最后也输出一个html来对比说明。','session':'wire'})['id']
+     tid=api('/v1/chat',{'message':'你好' if mode in ('completion','chat_plain') else '核对 left.c 和 right.c 的证据并给出结论。' if mode.startswith('generic_') else '分析 required 目录的代码。' if mode=='unrelated_schema' else '对比一下 left 和 right 两个项目的代码，详细解释差异与优缺点，最后也输出一个html来对比说明。','session':'wire'})['id']
      while True:
       task=api(f'/v1/tasks/{tid}')
       if task['status'] not in ('RUNNING','QUEUED'):break
@@ -82,7 +90,16 @@ def exercise(mode,protocol='legacy'):
      assert calls<=(12 if mode=='trace_after_error_progress' else 10),(calls,task)
      assert not (work/'must-not-exist.txt').exists(),('invalid batch executed a prefix',mode,task)
      history=api('/v1/chat/history?session=wire')['turns']
-     if mode in ('envelopes','recover_schema','large_html','trace_resume','trace_after_error','trace_after_error_progress'):
+     if mode=='generic_recovery':
+      assert task['status']=='DONE' and calls==7 and task['model_failures']==4 and task['tool_calls']==2,task
+      assert [s['tool'] for s in task['steps']]==['file_read','file_read'],task
+      assert task['output']==finish['args']['answer'] and history[-1]['a']==task['output'],task
+      assert not (work/'comparison.html').exists()
+     elif mode in ('generic_stuck','generic_blocked'):
+      assert task['status']=='FAILED' and calls==(2 if mode=='generic_blocked' else 5) and task['tool_calls']==0 and not history,task
+     elif mode=='chat_plain':
+      assert task['status']=='DONE' and calls==1 and task['tool_calls']==0 and task['output']=='你好。',task
+     elif mode in ('envelopes','recover_schema','large_html','trace_resume','trace_after_error','trace_after_error_progress'):
       if mode=='recover_schema':assert task['model_failures']==1,task
       assert task['status']=='DONE' and task['output']==FINAL,task
       assert (work/'comparison.html').read_text(encoding='utf8')==expected_html
@@ -144,6 +161,7 @@ def exercise(mode,protocol='legacy'):
     finally:proc.terminate();proc.wait(timeout=5)
  finally:server.shutdown();server.server_close()
 if __name__=='__main__':
+ for mode in ('generic_recovery','generic_stuck','generic_blocked','chat_plain'):exercise(mode)
  for mode in ('trace_after_error_progress','trace_after_error','trace_resume','trace_stuck','false_done','preexisting','write_only','stale_read','envelopes','large_html','recover_schema','unrelated_schema','completion','missing_name','argument_type','argument_suffix','schema','commentary'):exercise(mode)
 
 if __name__=='__main__':
