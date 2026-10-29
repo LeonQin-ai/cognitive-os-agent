@@ -33,6 +33,13 @@ with tempfile.TemporaryDirectory(prefix='coa-trace-commands-',ignore_cleanup_err
     time.sleep(.1)
   raise AssertionError('startup failed')
  def check(spans):
+  plans=[s for s in spans if s['name']=='llm.plan']
+  assert plans,spans
+  for span in plans:
+   decision=json.loads(span['result'])
+   assert span['command']=='planner decision' and decision['tool_protocol']=='native',span
+   assert decision['max_rounds']==12 and decision['stop_reason']=='tool_calls',decision
+  assert json.loads(plans[-1]['result'])['completion_declaration']=='complete',plans[-1]
   for name in ('file_read','list_dir','grep'):
    tool=next(s for s in spans if s['name']=='tool.'+name);assert tool['command'] and tool['result'] and tool['end_ms']>=tool['start_ms'],tool
   spans=[s for s in spans if s['name']=='tool.shell'];assert len(spans)==4

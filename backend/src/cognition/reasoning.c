@@ -2150,6 +2150,26 @@ static int h_reason(state_machine *sm, void *ud, const char *input, char **out) 
                                  &raw, &plan_err, r->run_task ? r->run_task->attachments_json : NULL,
                                  &r->planner_response_truncated, output_override, &r->planner_native_end_turn, &diagnostic,
                                  r->completion_review_required,&completion_json);
+    /* A successful HTTP/planner span is not task completion. Preserve the
+     * parsed decision so exported traces explain why no tool ran. Never store
+     * the request context, credentials or provider headers here. The trace
+     * layer bounds/redacts details and journals them with the task. */
+    cJSON *decision=cJSON_CreateObject();
+    if(decision) {
+        cJSON_AddNumberToObject(decision,"round",r->round_idx);
+        cJSON_AddNumberToObject(decision,"max_rounds",r->max_rounds);
+        cJSON_AddStringToObject(decision,"tool_protocol",planner_uses_native_tools(r->llm)?"native":"legacy");
+        cJSON_AddBoolToObject(decision,"completion_review_required",r->completion_review_required);
+        cJSON_AddStringToObject(decision,"completion_declaration",r->planner_native_end_turn==1?"complete":r->planner_native_end_turn==2?"blocked":"none");
+        cJSON_AddNumberToObject(decision,"planned_actions",r->n_actions);
+        cJSON_AddStringToObject(decision,"stop_reason",diagnostic.stop_reason);
+        cJSON_AddBoolToObject(decision,"truncated",r->planner_response_truncated);
+        if(plan_err)cJSON_AddStringToObject(decision,"error",plan_err);
+        if(raw)cJSON_AddStringToObject(decision,"parsed_response",raw);
+        char *detail=cJSON_PrintUnformatted(decision);
+        trace_command_details(r->trace,llm_span,"planner decision",detail);
+        free(detail);cJSON_Delete(decision);
+    }
     /* A batch rejected before execution must not lose the affected target.
      * Otherwise an unrelated successful read could hide its missing work.
      * No fake tool step or tool execution is recorded here. */

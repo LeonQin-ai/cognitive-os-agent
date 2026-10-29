@@ -27,3 +27,25 @@ running commit/build and reasoning.max_rounds. Check the preserved execution
 logs before changing completion, blocked-state or budget handling. Keep #232
 open; physical artifact acceptance prevents false success but does not make a
 provider generate the missing report.
+
+## Follow-up: exported trace has no planner decisions
+
+The additional task #94 trace confirms five `llm.plan` spans all marked
+successful. It still contains no response bodies. These span statuses mean
+successful planning, not completed work, and cannot establish whether a
+response was a completion declaration or prose. This is a reproducible
+observability gap: previously only tool spans had expandable decision details.
+
+Each `llm.plan` span now stores a bounded `planner decision` detail containing
+round/limit, protocol, review requirement, parsed completion declaration,
+planned-action count, provider stop reason, truncation flag, parsing error (if
+any), and the parsed response (if available). This is not the full raw provider
+response or hidden reasoning. Request context and authentication headers are
+not recorded. Existing trace redaction and 4 KiB truncation apply. Details use
+the existing trace API, expandable UI and durable task journal.
+
+The two reconstructed cases verify both live and journaled planner details,
+including the rejected fifth prose response and final structured completion.
+This fixes diagnostic visibility; the original GLM stop on request 5 remains
+unreproduced and unresolved. No execution, completion or prompt policy changes
+are included.

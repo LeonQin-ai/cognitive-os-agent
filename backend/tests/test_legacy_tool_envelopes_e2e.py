@@ -103,6 +103,23 @@ def exercise(mode,protocol='legacy'):
      else:
       assert task['status']=='FAILED' and task['tool_calls']==0 and not history,task
       assert not (work/'comparison.html').exists()
+     if mode.startswith('trace_'):
+      def check_decisions(spans):
+       plans=[s for s in spans if s['name']=='llm.plan']
+       assert len(plans)==calls,plans
+       decisions=[json.loads(s['result']) for s in plans]
+       assert all(s['command']=='planner decision' for s in plans),plans
+       assert [d['round'] for d in decisions]==list(range(1,calls+1)),decisions
+       assert all(d['max_rounds']==16 and d['tool_protocol']=='legacy' for d in decisions),decisions
+       assert decisions[3]['parsed_response']==narration and decisions[3]['completion_declaration']=='none',decisions[3]
+       assert decisions[4]['completion_review_required'] and 'error' in decisions[4] and plans[4]['status']==-1,decisions[4]
+       if mode=='trace_resume':assert decisions[-1]['completion_declaration']=='complete',decisions[-1]
+      check_decisions(api(f'/v1/trace?task_id={tid}'))
+      while True:
+       saved=api(f'/v1/trace/history?task_id={tid}')
+       if saved:break
+       assert time.monotonic()<deadline;time.sleep(.02)
+      check_decisions(saved[0]['spans'])
      print('PASS fixed wire:',protocol,mode,task['status'],'calls',calls,'tools',task['tool_calls'],flush=True)
     finally:proc.terminate();proc.wait(timeout=5)
  finally:server.shutdown();server.server_close()
