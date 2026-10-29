@@ -339,6 +339,7 @@ jobs:
           NODE_PATH="$PWD/webarena/node_modules" node tests/test_session_options_ui.cjs
           NODE_PATH="$PWD/webarena/node_modules" node tests/test_image_chat_ui.cjs
           NODE_PATH="$PWD/webarena/node_modules" node tests/test_answer_copy_ui.cjs
+          NODE_PATH="$PWD/webarena/node_modules" node tests/test_chat_timestamps_ui.cjs
           NODE_PATH="$PWD/webarena/node_modules" node tests/test_memory_summary_ui.cjs
           NODE_PATH="$PWD/webarena/node_modules" node tests/test_plugin_install_ui.cjs
           NODE_PATH="$PWD/webarena/node_modules" node tests/test_market_sections_ui.cjs

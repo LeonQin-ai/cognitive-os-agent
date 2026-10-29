@@ -479,6 +479,7 @@
 .chat-message.user{align-self:flex-end;max-width:85%;padding:12px 18px;background:var(--card);border:1px solid var(--border);border-radius:20px 20px 5px 20px;white-space:pre-wrap;overflow-wrap:anywhere}
 .chat-message.bot{align-self:stretch;max-width:100%;padding:2px 0;background:transparent;border:0}
 .chat-message{position:relative}
+.chat-date-time{display:block;margin-top:6px;font-size:11px;line-height:1.5;color:var(--muted);white-space:normal}
 .chat-copy{position:absolute;right:4px;top:-10px;opacity:0;padding:3px 8px;border:1px solid var(--border);border-radius:8px;background:var(--card);color:var(--muted);font-size:11px;cursor:pointer;transition:opacity var(--tr-dur)}
 .chat-message:hover .chat-copy,.chat-copy:focus-visible{opacity:1}
 .chat-message.bot>.chat-copy{position:static;display:block;margin:10px 0 0;opacity:1}
@@ -3902,14 +3903,16 @@ function chatHistoryEntries(turns, runs){
   }
   const messages = [];
   for(const row of rows){
-    messages.push({role:'user',text:row.q,pending:false,el:null});
+    const events = Array.isArray(row.run?.trace) ? row.run.trace : [];
+    const started = events.find(p => Number(p.started_ms)>0)?.started_ms;
+    messages.push({role:'user',text:row.q,pending:false,el:null,timestamp_ms:started || row.run?.ts || 0});
     if(!row.a && !row.run) continue;
     const run = row.run;
     const trace = Array.isArray(run?.trace) ? run.trace : [];
     const last = trace[trace.length - 1] || {};
     const stage = ({DONE:'completed',FAILED:'failed',CANCELLED:'cancelled',TIMEOUT:'timed_out',
       INTERRUPTED:'interrupted',RUNNING:'interrupted',QUEUED:'interrupted'})[run?.status] || 'failed';
-    messages.push({role:'bot',text:row.a,pending:false,el:null,
+    messages.push({role:'bot',text:row.a,pending:false,el:null,timestamp_ms:run?.ts || 0,
       ...(run ? {taskId:run.id,progress:{...last,stage},progressEvents:trace} : {})});
   }
   return messages;
@@ -4100,7 +4103,10 @@ function chatAddBubble(role, text, push = true){
   }
   if(text) chatAppendCopy(wrap, () => text);
   box.appendChild(wrap);
-  if(push) CHAT_MSGS.push({role, text, pending:false, el:wrap});
+  if(push){
+    const entry={role,text,pending:false,el:wrap,timestamp_ms:Date.now()};
+    CHAT_MSGS.push(entry);chatRenderTimestamp(entry);
+  }
   updateChatHero();
   if(follow) chatScroll(true);
   return wrap;
@@ -5457,7 +5463,7 @@ function chatProgressClock(entry){
 function chatPersist(){
   try {
     const records = Object.entries(CHAT_CACHE).slice(-12).map(([session, msgs]) => [session,
-      msgs.slice(-40).map(({role,text,images,pending,progress,progressEvents,taskId,detailsOpen,timelineOpen,actionsOpen,expandedSteps,stageSince}) => ({role,text,images,pending,progress,progressEvents,taskId,detailsOpen,timelineOpen,actionsOpen,expandedSteps,stageSince}))]);
+      msgs.slice(-40).map(({role,text,images,pending,progress,progressEvents,taskId,detailsOpen,timelineOpen,actionsOpen,expandedSteps,stageSince,timestamp_ms}) => ({role,text,images,pending,progress,progressEvents,taskId,detailsOpen,timelineOpen,actionsOpen,expandedSteps,stageSince,timestamp_ms}))]);
     sessionStorage.setItem('cognitive-progress-v1', JSON.stringify({records,tasks:CHAT_TASKS}));
   } catch(e) { /* storage quota/private mode: in-memory state remains usable */ }
 }
@@ -5478,9 +5484,22 @@ function chatRestore(){
     }
   } catch(e) { /* ignore invalid/old stored state */ }
 }
+function chatRenderTimestamp(entry){
+  const el=entry.el;if(!el?.isConnected)return;
+  el.querySelector(':scope > .chat-date-time')?.remove();
+  const stamp=Number(entry.timestamp_ms),date=new Date(stamp);
+  const time=document.createElement('time');time.className='chat-date-time';
+  if(Number.isFinite(stamp) && stamp>0 && !Number.isNaN(date.getTime())){
+    time.dateTime=date.toISOString();
+    time.textContent=date.toLocaleString(undefined,{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});
+    time.title=Intl.DateTimeFormat().resolvedOptions().timeZone;
+  }else{time.textContent='时间未记录';}
+  el.append(time);
+}
 function renderChatEntry(entry){
   const el = entry.el;
-  if(!el?.isConnected || entry.role !== 'bot') return;
+  if(!el?.isConnected)return;
+  if(entry.role !== 'bot'){chatRenderTimestamp(entry);return;}
   const follow = CHAT_FOLLOW || chatNearBottom();
   const previous = el.querySelector('.run-details');
   const wasOpen = previous?.open ?? entry.detailsOpen ?? false;
@@ -5637,6 +5656,7 @@ function renderChatEntry(entry){
     chatRenderText(answer,entry.text); el.append(answer);
     chatAppendCopy(el, () => entry.text);
   }
+  chatRenderTimestamp(entry);
   if(follow) chatScroll(true);
 }
 function chatNearBottom(){
@@ -5666,7 +5686,7 @@ function chatApplyProgress(session,id,p){
   renderChatEntry(entry); chatPersist(); sideRecent(CHAT_TABS_CACHE);
 }
 function chatFinish(session,id,entry,text,stage){
-  entry.pending = false; entry.text = text;
+  entry.pending = false; entry.text = text;entry.timestamp_ms=Date.now();
   entry.progress = {...entry.progress, stage,
     elapsed_ms: entry.progress?.started_ms ? Date.now()-entry.progress.started_ms : 0};
   delete CHAT_TASKS[session]; CHAT_ENTRIES.delete(id);
@@ -5803,7 +5823,7 @@ async function chatSteer(){
     toast(r.status === 409 ? '任务已进入收尾，请在完成后发送；内容已保留' : '补充未确认送达，内容已保留，请检查连接'); return;
   }
   if(CHAT_SESSION === session){ input.value = ''; chatAddBubble('user',message); }
-  else (CHAT_CACHE[session] ||= []).push({role:'user',text:message,pending:false});
+  else (CHAT_CACHE[session] ||= []).push({role:'user',text:message,pending:false,timestamp_ms:Date.now()});
   const binding = CHAT_ENTRIES.get(id);
   if(binding){ binding.entry.steeringRevision = r.obj.revision; chatApplyProgress(session,id,{stage:'steering'}); }
   chatPersist();
