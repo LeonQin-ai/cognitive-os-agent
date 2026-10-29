@@ -1,4 +1,9 @@
-"""Fixed wire responses exercise parsing/execution, independent of prompt text."""
+"""Fixed wire responses exercise parsing/execution, independent of prompt text.
+
+trace_* reconstruct the Oct 29 17:31 displayed tool sequence. The two prose
+responses are synthetic: the report does not include raw provider responses.
+Passing them does not reproduce or resolve the deployed GLM failure.
+"""
 import json, os, socket, subprocess, tempfile, threading, time, urllib.request
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -11,7 +16,14 @@ def function(name,args):return {'type':'function','function':{'name':name,'argum
 def exercise(mode,protocol='legacy'):
  calls=0
  expected_html=HTML+('<!--'+('large receipt proof '*6000)+'-->' if mode=='large_html' else '')
- if mode in ('envelopes','recover_schema','write_only','stale_read','large_html'):
+ if mode in ('trace_resume','trace_stuck'):
+  narration='我需要进一步了解两个项目的源码结构，以便做出详细的对比分析。让我查看两个项目的源码目录结构和关键文件。'
+  replies=[[{'tool':'list_dir','args':{'path':side}} for side in ('left','right')],
+   [{'tool':'file_read','args':{'path':'left/README.md'}}],
+   [{'tool':'file_read','args':{'path':path}} for path in ('left/README.md','right/README.md','left/Cargo.toml','right/Cargo.toml','left/CHARTER.md','left/SPECIFICATION.md')],
+   narration,narration]
+  if mode=='trace_resume':replies += [[{'tool':'file_read','args':{'path':'left.c'}},{'tool':'file_read','args':{'path':'right.c'}}],{'tool':'file_write','args':{'path':'comparison.html','content':HTML}},{'tool':'file_read','args':{'path':'comparison.html'}},{'tool':'complete_task','args':{'status':'complete','requires_tools':False,'answer':FINAL}}]
+ elif mode in ('envelopes','recover_schema','write_only','stale_read','large_html'):
   replies=[{'tool_calls':[function('file_read',{'path':'left.c'}),function('file_read',{'path':'right.c'})]},function('file_write',{'path':'comparison.html','content':expected_html}),{'tool':'file_read','arguments':{'path':'comparison.html'}},{'name':'complete_task','arguments':{'status':'complete','requires_tools':False,'answer':FINAL}}]
   if mode=='write_only':del replies[2]
   if mode=='stale_read':replies.insert(3,function('file_write',{'path':'comparison.html','content':HTML+'changed'}))
@@ -42,6 +54,10 @@ def exercise(mode,protocol='legacy'):
  try:
   with tempfile.TemporaryDirectory(prefix='coa-wire-actions-') as folder:
    work=Path(folder);(work/'left.c').write_text('LEFT_WIRE_PROOF',encoding='utf8');(work/'right.c').write_text('RIGHT_WIRE_PROOF',encoding='utf8')
+   if mode.startswith('trace_'):
+    for side in ('left','right'):
+     (work/side).mkdir()
+     for name in ('README.md','Cargo.toml','CHARTER.md','SPECIFICATION.md'):(work/side/name).write_text(side+' '+name,encoding='utf8')
    if mode=='preexisting':(work/'comparison.html').write_text(HTML,encoding='utf8')
    (work/'cognitive-os-agent.json').write_text(json.dumps({'llm.provider':'openai','llm.model':'fixed-wire','llm.api_key':'fixture','llm.base_url':f'http://127.0.0.1:{server.server_port}','reasoning.max_rounds':16}),encoding='utf8')
    with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
@@ -63,14 +79,20 @@ def exercise(mode,protocol='legacy'):
      assert calls<=10,(calls,task)
      assert not (work/'must-not-exist.txt').exists(),('invalid batch executed a prefix',mode,task)
      history=api('/v1/chat/history?session=wire')['turns']
-     if mode in ('envelopes','recover_schema','large_html'):
+     if mode in ('envelopes','recover_schema','large_html','trace_resume'):
       if mode=='recover_schema':assert task['model_failures']==1,task
       assert task['status']=='DONE' and task['output']==FINAL,task
       assert (work/'comparison.html').read_text(encoding='utf8')==expected_html
-      steps=task['steps'];assert task['tool_calls']==4,task
+      steps=task['steps']
+      if mode=='trace_resume':
+       assert calls==10 and [s['tool'] for s in steps[-4:]]==['file_read','file_read','file_write','file_read'],task
+       steps=steps[-4:]
+      else:assert task['tool_calls']==4,task
       assert [s['tool'] for s in steps]==['file_read','file_read','file_write','file_read'],steps
       assert 'LEFT_WIRE_PROOF' in steps[0]['out'] and 'RIGHT_WIRE_PROOF' in steps[1]['out'] and HTML in steps[3]['out'],steps
       assert history[-1]['a']==FINAL,history
+     elif mode=='trace_stuck':
+      assert calls==9 and task['status']=='FAILED' and task['tool_calls']==8 and '产物验收' in task['output'] and not history,task
      elif mode=='completion':
       assert task['status']=='DONE' and task['output']=='你好。' and task['tool_calls']==0 and calls==1,task
      elif mode in ('false_done','preexisting','write_only','stale_read'):
@@ -85,7 +107,7 @@ def exercise(mode,protocol='legacy'):
     finally:proc.terminate();proc.wait(timeout=5)
  finally:server.shutdown();server.server_close()
 if __name__=='__main__':
- for mode in ('false_done','preexisting','write_only','stale_read','envelopes','large_html','recover_schema','unrelated_schema','completion','missing_name','argument_type','argument_suffix','schema','commentary'):exercise(mode)
+ for mode in ('trace_resume','trace_stuck','false_done','preexisting','write_only','stale_read','envelopes','large_html','recover_schema','unrelated_schema','completion','missing_name','argument_type','argument_suffix','schema','commentary'):exercise(mode)
 
 if __name__=='__main__':
  for mode in ('false_done','preexisting','envelopes','large_html'):exercise(mode,'native')
