@@ -1469,7 +1469,10 @@ panels.trace = `
     </div>
     <div class="row" style="margin:0 0 12px;gap:8px">
       <input id="trace-task-id" type="number" min="0" placeholder="任务 ID（可选）" style="max-width:190px" onchange="loadTrace()">
-      <span class="hint" style="margin:0">只展示阶段、时间与状态；提示词和工具内容不会进入 span</span>
+      <button class="sec sm" id="trace-expand-all" onclick="traceSetExpanded(true)">全部展开</button>
+      <button class="sec sm" id="trace-collapse-all" onclick="traceSetExpanded(false)">全部折叠</button>
+      <button class="sec sm" id="trace-copy" onclick="traceCopyDiagnostics()">复制诊断</button>
+      <span class="hint" style="margin:0">展开或复制当前加载的任务、规划和工具执行记录。</span>
     </div>
     <h3 style="font-size:12px;margin:14px 0 8px">实时轨迹 <span id="trace-live-count" class="muted"></span></h3>
     <div id="trace-live" class="trace-list hint">加载中…</div>
@@ -1649,6 +1652,16 @@ async function loadFetcher(key){
 }
 
 let traceLoading = false;
+let traceDiagnosticSnapshot = null;
+function traceSetExpanded(open){
+  document.querySelectorAll('#trace-live details, #trace-history details').forEach(detail => { detail.open = open; });
+}
+function traceCopyDiagnostics(){
+  if(!traceDiagnosticSnapshot || (!traceDiagnosticSnapshot.live_spans.length && !traceDiagnosticSnapshot.history.length)){
+    toast('暂无可复制的诊断记录'); return;
+  }
+  copyText(JSON.stringify(traceDiagnosticSnapshot, null, 2));
+}
 function traceExpandedDetails(target){
   if(!target) return new Set();
   return new Set(Array.from(target.querySelectorAll('details[open][data-trace-key]'), detail => detail.dataset.traceKey));
@@ -1707,6 +1720,9 @@ async function loadTrace(){
     const persisted = new Set(records.flatMap(rec =>
       (Array.isArray(rec.spans) ? rec.spans : []).map(s => s.id + ':' + s.start_ms)));
     const liveOnly = spans.filter(s => !persisted.has(s.id + ':' + s.start_ms));
+    // Copy data rather than visible text: collapsed details and truncation
+    // flags are part of the diagnosis too. Preserve the displayed filter.
+    traceDiagnosticSnapshot = {task_filter:value || null, live_spans:liveOnly, history:records};
     // Capture after the requests settle, so a click during polling is retained.
     // Share keys across live/history when a task is journaled between polls.
     const expanded = new Set([...traceExpandedDetails($('trace-live')), ...traceExpandedDetails($('trace-history'))]);
