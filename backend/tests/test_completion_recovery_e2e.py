@@ -32,7 +32,7 @@ class Provider(BaseHTTPRequestHandler):
             n=counts.get('html177',0);counts['html177']=n+1
             answer=(json.dumps([{'tool':'list_dir','args':{'path':'.'}}]) if n==0 else
                     '根据之前的分析，我现在需要创建一个 HTML 报告文档，整理上下文工程的架构和流程图。我已经有完整的分析内容，直接生成 HTML 文件。' if n==1 else
-                    json.dumps([{'tool':'file_write','args':{'path':'report177.html','content':'<!doctype html><html><body><svg></svg>Context architecture and flow</body></html>'}}]) if n==2 else
+                    json.dumps([{'tool':'file_write','args':{'path':'report177.html','content':'<!doctype html><html><body><svg></svg>Context architecture and flow</body></html>'}},{'tool':'file_read','args':{'path':'report177.html'}}]) if n==2 else
                     '报告已交付：report177.html，包含架构和流程图。')
         elif 'HTML_FALSE177' in current: answer='报告已经完成。'
         elif 'USE_TOOLS176' in current:
@@ -135,8 +135,8 @@ with tempfile.TemporaryDirectory(prefix='coa-completion-recovery-') as folder:
             assert any(step.get('tool')=='file_read' for step in html.get('steps',[])),html
             print('PASS: HTML write followed by two narration rounds recovers to actual read and final delivery')
             stalled=finished(request('/v1/tasks',{'prompt':'输出HTML报告 HTML_STALL'})['id'])
-            # One explicit delivery-review turn now precedes bounded legacy nudges.
-            assert stalled['status']=='FAILED' and counts['stall']==6,stalled
+            # Physical artifact rejection stops three invalid completion attempts.
+            assert stalled['status']=='FAILED' and counts['stall']==4,stalled
             print('PASS: narration without any progress stops after bounded recovery; no false DONE')
             no_action=finished(request('/v1/tasks',{'prompt':'注册这些skills REGISTER_DIAGNOSTIC'})['id'])
             assert no_action['status']=='FAILED' and 'skill_manage' in no_action['output'],no_action

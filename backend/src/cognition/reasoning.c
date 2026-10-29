@@ -132,6 +132,7 @@ struct sess_store {
 
 /* One executed action of the current/most recent run (step registry). */
 struct run_step {
+    char *evidence_path; /* canonical tool target, independent of UI argument caps */
     unsigned id;
     char tool[48];
     char *args;
@@ -2241,7 +2242,7 @@ static void utf8_head_copy(char *dst, size_t cap, const char *src) {
 
 /* Record one executed action in the step registry (Claude-Code style
  * "● Tool(args) ⎿ out-head" display; args/out are truncated heads). */
-static void step_strings_free(struct run_step *step) { free(step->args); free(step->out); }
+static void step_strings_free(struct run_step *step) { free(step->args); free(step->out); free(step->evidence_path); }
 static void run_step_add(reasoning *r, const char *tool, const char *args, const char *out, int ok, int ms) {
     struct run_step *st;
 
@@ -2277,6 +2278,10 @@ static void run_step_add(reasoning *r, const char *tool, const char *args, const
         cJSON *path = parsed ? cJSON_GetObjectItemCaseSensitive(parsed, "path") : NULL;
         if (cJSON_IsString(path) && path->valuestring)
             utf8_head_copy(st->target, sizeof(st->target), path->valuestring);
+        if(ok==1 && cJSON_IsString(path) && (!strcmp(tool,"file_read") || !strcmp(tool,"file_write"))) {
+            char canonical[2048];normalized_evidence_path(r,path->valuestring,canonical,sizeof(canonical));
+            st->evidence_path=xstrdup(canonical);
+        }
         cJSON_Delete(parsed);
     }
     st->ok = ok;
@@ -3392,6 +3397,17 @@ static int mutation_verb_negated(const char *prompt, const char *verb) {
     return 0;
 }
 
+/* An explicit output-format request establishes an artifact acceptance rule,
+ * independently of the wording of the model's proposed answer. */
+static int prompt_requires_html_artifact(const char *prompt) {
+    if(!prompt || prompt_is_direct_information_request(prompt))return 0;
+    for(const char *p=strstr(prompt,"输出");p;p=strstr(p+strlen("输出"),"输出")) {
+        const char *html=strstr(p,"html");if(!html)html=strstr(p,"HTML");
+        if(html && html-p<=32 && !mutation_verb_negated(prompt,p))return 1;
+    }
+    return 0;
+}
+
 static int prompt_requires_mutation(const char *prompt) {
     static const char *const verbs[] = {
         "生成", "制作", "创建", "复制", "写入", "修改", "修复", "保存", "导出",
@@ -3621,6 +3637,25 @@ static int answer_reports_required_unread(reasoning *r, const char *prompt, cons
 
 static int run_has_mutating_action(const reasoning *r) {
     return r->run_mutated;
+}
+
+/* A model declaration is not an artifact receipt. Match real successful
+ * writes and subsequent reads by canonical path, then check the actual file. */
+static int run_has_verified_html(reasoning *r) {
+    for(int i=r->n_steps-1;i>=0;i--) {
+        struct run_step *read=&r->steps[i];
+        if(read->ok!=1 || strcmp(read->tool,"file_read"))continue;
+        const char *target=read->evidence_path;if(!target)continue;
+        size_t n=strlen(target);
+        if(n<5 || (strcmp(target+n-5,".html") && strcmp(target+n-5,".HTML")))continue;
+        if(!fs_exists(target) || fs_is_dir(target) || fs_file_size(target)<=0)continue;
+        for(int j=r->n_steps-1;j>=0;j--) {
+            struct run_step *write=&r->steps[j];
+            if(write->ok!=1 || strcmp(write->tool,"file_write"))continue;
+            if(write->evidence_path && !strcmp(write->evidence_path,target)){if(j<i)return 1;break;}
+        }
+    }
+    return 0;
 }
 
 /* The model sometimes echoes the injected "[system] …" nudge text at the
@@ -4253,6 +4288,7 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     int artifact_read_nudged = 0;
     int failure_recovery_nudges = 0, truncated_response_nudges = 0;
     int completion_reviewed = 0;
+    int artifact_rejections = 0;
     int completion_grace = 0;
     const char *completion_reserve_note = "[system] Finalization-only reserve: the configured tool-execution budget is exhausted. Assess the ORIGINAL request against existing successful observations. Do not reread or execute extra checks solely for reassurance; no executable tool actions can run in this reserve. If the requested work is already delivered and verified, call complete_task(status=complete, requires_tools=false, answer=full_result). If essential work remains, call complete_task(status=blocked, requires_tools=false, answer=what_is_missing). This is the single reserved finalization request, not additional work budget.";
     int output_truncated_unresolved = 0;
@@ -4435,6 +4471,11 @@ restart_planning:
             if(r->planner_native_end_turn==2) {
                 unfinished=1;final_text=xstrdup(txt?txt:"");break;
             }
+            if(completion_reviewed && prompt_requires_html_artifact(completion_instruction(r,prompt)) && !run_has_verified_html(r)) {
+                if(++artifact_rejections>=3 || r->round_idx>=r->max_rounds){unfinished=1;final_text=xstrdup(txt?txt:"");break;}
+                round_log_append(r,"[system] HTML artifact acceptance failed: no successful file_write followed by file_read for the same existing nonempty .html file in this run. A completion declaration cannot replace the missing artifact receipt.");
+                continue;
+            }
             if(r->file_checks_failed){
                 r->file_check_rejections=r->file_check_at_tools==r->prog_tool_calls?r->file_check_rejections+1:1;
                 r->file_check_at_tools=r->prog_tool_calls;
@@ -4610,6 +4651,7 @@ restart_planning:
              * obsolete candidate reviewed before that work. Cached/repeated
              * observations do not reopen review and consume extra calls. */
             completion_reviewed = 0;
+            artifact_rejections = 0;
         }
         if(planner_uses_native_tools(r->llm) && r->round_idx==r->max_rounds &&
            r->round_new_observations>0 && r->all_actions_ok &&
@@ -4745,6 +4787,8 @@ restart_planning:
      * the no-plan guard above. It is still incomplete if a write was asked. */
     if (!planner_uses_native_tools(r->llm) && prompt_requires_mutation(completion_instruction(r,prompt)) && !run_has_mutating_action(r))
         unfinished = 1;
+    int html_missing=prompt_requires_html_artifact(completion_instruction(r,prompt)) && !run_has_verified_html(r);
+    if(html_missing)unfinished=1;
     if (stalled || synthesized || fail_aborted || r->tool_fail_aborted ||
         r->file_checks_failed || r->unresolved_failed_tool_count > 0 || r->unresolved_failed_tools_overflow ||
         (!planner_uses_native_tools(r->llm) && prompt_requires_full_read(completion_instruction(r,prompt)) &&
@@ -4774,6 +4818,7 @@ restart_planning:
     } else if (unfinished) {
         strbuf_append(&out, "任务未完成：尚未完成请求的阅读、操作或验证，当前结果仅为部分进展。");
         int explained=0;
+        if(html_missing){strbuf_append(&out,"\n原因：缺少本次任务写入并读回的非空 HTML 文件，未通过产物验收。");explained=1;}
         if(r->file_checks_failed){strbuf_appendf(&out,"\n原因：%s",r->file_check_error);explained=1;}
         if (output_repeated) {
             strbuf_append(&out,"\n原因：模型单次答复内部出现持续循环，无法作为有效的完成结果。");
