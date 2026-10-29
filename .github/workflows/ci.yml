@@ -227,6 +227,7 @@ jobs:
         run: ASAN_OPTIONS=detect_leaks=0 python3 tools/run_ci_regression.py tests/test_memory_summary_e2e.py
       - name: ASAN resumed completion review e2e
         run: ASAN_OPTIONS=detect_leaks=0 python3 tools/run_ci_regression.py tests/test_resumed_completion_review_e2e.py
+      - name: ASAN Flow agent selection
         run: ASAN_OPTIONS=detect_leaks=0 python3 tools/run_ci_regression.py tests/test_flow_agent_selection.py
       - name: ASAN artifact delivery recovery e2e
         run: ASAN_OPTIONS=detect_leaks=0 python3 tools/run_ci_regression.py tests/test_artifact_delivery_recovery_e2e.py
