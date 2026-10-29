@@ -49,7 +49,25 @@ static char *llm_simple_booked(runtime_ctx *ctx, const char *sys, const char *us
 
 /* Roster lines for the decompose prompt, from the pool snapshot JSON.
  * Returns malloc'd text ("name (role)" per line) or NULL. */
-static char *roster_text(runtime_ctx *ctx) {
+static int scope_has(cJSON *allowed,const char *name) {
+    if(!allowed)return 1;
+    cJSON *item;cJSON_ArrayForEach(item,allowed)
+        if(cJSON_IsString(item)&&!strcmp(item->valuestring,name))return 1;
+    return 0;
+}
+
+/* Persist the execution roster with the task so resume cannot broaden it. */
+char *flow_scope_task(runtime_ctx *ctx,const char *task,const char *agents_json) {
+    if(!agents_json)return xstrdup(task);
+    cJSON *allowed=cJSON_Parse(agents_json),*item;
+    if(!cJSON_IsArray(allowed)||!cJSON_GetArraySize(allowed)){cJSON_Delete(allowed);return NULL;}
+    cJSON_ArrayForEach(item,allowed)if(!cJSON_IsString(item)||agent_pool_find(ctx->agents,item->valuestring)<0){cJSON_Delete(allowed);return NULL;}
+    cJSON *scope=cJSON_CreateObject();cJSON_AddNumberToObject(scope,"coa_flow_scope",1);
+    cJSON_AddStringToObject(scope,"task",task);cJSON_AddItemToObject(scope,"agents",allowed);
+    char *out=cJSON_PrintUnformatted(scope);cJSON_Delete(scope);return out;
+}
+
+static char *roster_text(runtime_ctx *ctx,cJSON *allowed) {
     char *snap = agent_pool_snapshot_json(ctx->agents);
     cJSON *root;
     cJSON *agents;
@@ -73,6 +91,7 @@ static char *roster_text(runtime_ctx *ctx) {
                 cJSON *r = cJSON_GetObjectItemCaseSensitive(a, "role");
                 const char *name = (n && cJSON_IsString(n)) ? n->valuestring : "";
                 const char *role = (r && cJSON_IsString(r)) ? r->valuestring : "";
+                if(!scope_has(allowed,name))continue;
                 size_t need = strlen(name) + strlen(role) + 8;
                 if (len + need + 1 > cap) {
                     cap = (len + need + 1) * 2;
@@ -206,10 +225,18 @@ static char *build_dag_json(char agents[][64], char tasks[][ORCH_MAX_TASKLEN], i
  * valid steps (0 = no roster / no parseable plan). */
 static int decompose_task(runtime_ctx *ctx, const char *task, char (*agents)[64], char (*tasks)[ORCH_MAX_TASKLEN],
                           int (*after)[ORCH_MAX_STEPS]) {
-    char *roster = ctx->llm && ctx->agents && agent_pool_count(ctx->agents) > 0 ? roster_text(ctx) : NULL;
+    cJSON *scope=cJSON_Parse(task),*allowed=NULL;
+    if(cJSON_IsNumber(cJSON_GetObjectItemCaseSensitive(scope,"coa_flow_scope"))){
+        allowed=cJSON_GetObjectItemCaseSensitive(scope,"agents");
+        const char *original=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(scope,"task"));
+        if(!original||!cJSON_IsArray(allowed)||!cJSON_GetArraySize(allowed)){cJSON_Delete(scope);return -1;}
+        cJSON *item;cJSON_ArrayForEach(item,allowed)if(!cJSON_IsString(item)||agent_pool_find(ctx->agents,item->valuestring)<0){cJSON_Delete(scope);return -1;}
+        task=original;
+    }
+    char *roster = ctx->llm && ctx->agents && agent_pool_count(ctx->agents) > 0 ? roster_text(ctx,allowed) : NULL;
     int nsteps = 0;
     if (roster && *roster) {
-        char sys[] = "你是多 agent 编排器。把用户任务分解为 2-4 个有依赖关系的子任务并分配给可用的 agent。"
+        char sys[] = "你是多 agent 编排器。把用户任务分解为 1-4 个必要的子任务，仅分配给所列可用 agent。按任务需要选择最少角色，不必使用所有角色；一个角色足够时只生成一个步骤。"
                      "只输出 JSON 数组，格式：[{\"agent\":\"agent 名\",\"task\":\"子任务描述\","
                      "\"after\":[1,2]}]。"
                      "\"after\" 是本步骤依赖的前置步骤编号（从 1 开始，按数组顺序编号），"
@@ -226,6 +253,7 @@ static int decompose_task(runtime_ctx *ctx, const char *task, char (*agents)[64]
             if (raw) {
                 log_info("orchestrator: decompose raw: %s", raw);
                 nsteps = parse_plan(ctx, raw, agents, tasks, after);
+                for(int i=0;i<nsteps;i++)if(!scope_has(allowed,agents[i])){nsteps=-1;break;}
                 log_info("orchestrator: parsed %d steps", nsteps);
                 free(raw);
             }
@@ -233,6 +261,8 @@ static int decompose_task(runtime_ctx *ctx, const char *task, char (*agents)[64]
     }
 
     free(roster);
+    if(allowed && nsteps<=0)nsteps=-1; /* never fall back outside a restricted roster */
+    cJSON_Delete(scope);
     return nsteps;
 }
 

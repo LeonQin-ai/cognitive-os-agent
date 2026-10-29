@@ -86,6 +86,7 @@ jobs:
           COA_BUILD_DIR=build-macos python3 tests/test_native_flow_literal_results.py
           COA_BUILD_DIR=build-macos python3 tests/test_memory_summary_e2e.py
           COA_BUILD_DIR=build-macos python3 tests/test_resumed_completion_review_e2e.py
+          COA_BUILD_DIR=build-macos python3 tests/test_flow_agent_selection.py
           COA_BUILD_DIR=build-macos python3 tests/test_artifact_delivery_recovery_e2e.py
           COA_BUILD_DIR=build-macos python3 tests/test_legacy_tool_envelopes_e2e.py
       - name: IM capacity and waiter cancellation regression
@@ -179,6 +180,7 @@ jobs:
           python3 tests/test_native_flow_literal_results.py
           python3 tests/test_memory_summary_e2e.py
           python3 tests/test_resumed_completion_review_e2e.py
+          python3 tests/test_flow_agent_selection.py
           python3 tests/test_artifact_delivery_recovery_e2e.py
           python3 tests/test_legacy_tool_envelopes_e2e.py
       - name: IM capacity and waiter cancellation regression
@@ -225,6 +227,7 @@ jobs:
         run: ASAN_OPTIONS=detect_leaks=0 python3 tools/run_ci_regression.py tests/test_memory_summary_e2e.py
       - name: ASAN resumed completion review e2e
         run: ASAN_OPTIONS=detect_leaks=0 python3 tools/run_ci_regression.py tests/test_resumed_completion_review_e2e.py
+        run: ASAN_OPTIONS=detect_leaks=0 python3 tools/run_ci_regression.py tests/test_flow_agent_selection.py
       - name: ASAN artifact delivery recovery e2e
         run: ASAN_OPTIONS=detect_leaks=0 python3 tools/run_ci_regression.py tests/test_artifact_delivery_recovery_e2e.py
       - name: ASAN legacy tool envelopes e2e
@@ -297,6 +300,7 @@ jobs:
           python tests/test_native_flow_literal_results.py
           python tests/test_memory_summary_e2e.py
           python tests/test_resumed_completion_review_e2e.py
+          python tests/test_flow_agent_selection.py
           python tests/test_artifact_delivery_recovery_e2e.py
           python tests/test_legacy_tool_envelopes_e2e.py
       - name: IM capacity and waiter cancellation regression

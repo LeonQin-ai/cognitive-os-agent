@@ -926,6 +926,10 @@ static int h_orchestrate(const http_request *req, http_response *resp, void *ud)
         http_resp_json(resp, "{\"error\":\"SSH credential needs a host or saved environment and a working local vault\"}");
         return 0;
     }
+    cJSON *selected=cJSON_GetObjectItemCaseSensitive(root,"agents");
+    char *selection=selected?cJSON_PrintUnformatted(selected):NULL;
+    char *scoped=flow_scope_task(ctx,safe_task,selection);free(selection);free(safe_task);safe_task=scoped;
+    if(!safe_task){cJSON_Delete(root);resp->status=400;http_resp_json(resp,"{\"error\":\"select at least one registered agent\"}");return 0;}
     /* userdata = marker so the task runner routes to orchestrate */
     char *directory=workspace_pick(ctx,root,NULL);
     if(!directory){free(safe_task);cJSON_Delete(root);resp->status=400;http_resp_json(resp,"{\"error\":\"workspace must be registered and available\"}");return 0;}
@@ -1188,6 +1192,10 @@ static int h_flow_decompose(const http_request *req, http_response *resp, void *
         http_resp_json(resp, "{\"error\":\"SSH credential needs a host or saved environment and a working local vault\"}");
         return 0;
     }
+    cJSON *selected=cJSON_GetObjectItemCaseSensitive(root,"agents");
+    char *selection=selected?cJSON_PrintUnformatted(selected):NULL;
+    char *scoped=flow_scope_task(ctx,safe_task,selection);free(selection);free(safe_task);safe_task=scoped;
+    if(!safe_task){cJSON_Delete(root);resp->status=400;http_resp_json(resp,"{\"error\":\"select at least one registered agent\"}");return 0;}
     rc = flow_decompose(ctx, safe_task, &dag_json);
     free(safe_task);
     cJSON_Delete(root);

@@ -183,6 +183,7 @@ int orchestrate_task(runtime_ctx *ctx,const char *task,int64_t task_id,char **an
  * frees) so the caller can inspect/modify it before flow_run. Returns 0
  * ok, -1 when no agents are registered or no plan could be parsed. */
 int flow_decompose(runtime_ctx *ctx, const char *task, char **dag_json);
+char *flow_scope_task(runtime_ctx *ctx, const char *task, const char *agents_json);
 
 /* Switch the active LLM at runtime (provider/base_url/model/api_key). Rebuilds
  * the LLM adapter, swaps it into the reasoning engine under the run-lock, keeps

@@ -1037,6 +1037,8 @@ panels.agents = `
     <h2>Flow 自动编排（LLM 生成 DAG）</h2>
     <label>执行工作区 <select id="flow-workspace" aria-label="Flow 执行工作区" onchange="FLOW_WORKSPACE=this.value;localStorage.setItem('coa.flow-workspace',this.value)"></select></label>
     <div class="hint">输入一个总任务，LLM 自动分解成 Flow DAG（每个子任务分给一个 agent，并行执行）。生成后填入下方编辑器，可修改再执行；「自动执行」则一步完成 分解→执行→LLM 综合答案。需先在上方注册 agent。</div>
+    <label>角色分配 <select id="flow-agent-mode" onchange="flowAgentOptions()"><option value="auto">LLM 按需选择</option><option value="manual">手动限定角色</option></select></label>
+    <div id="flow-agent-options" role="group" aria-label="可用 Agent"></div>
     <div id="flow-gen-status" class="muted flow-status-line" role="status" aria-live="polite"></div>
     <div class="row">
       <input id="flow-task" type="text" placeholder="描述总任务，如：调研 dist 目录并写一份问题清单" style="flex:1;min-width:220px">
@@ -1210,6 +1212,8 @@ panels.flow = `
   <div class="card">
     <h2>自动编排（LLM 生成 DAG）</h2>
     <div class="hint">输入一个总任务，LLM 自动分解成 Flow DAG（每个子任务一个节点，并行执行）。生成后填入下方编辑器，可修改再执行；「自动执行」则一步完成 分解→执行→LLM 综合答案。需先在 Agents 页注册 agent。</div>
+    <label>角色分配 <select id="flow-agent-mode" onchange="flowAgentOptions()"><option value="auto">LLM 按需选择</option><option value="manual">手动限定角色</option></select></label>
+    <div id="flow-agent-options" role="group" aria-label="可用 Agent"></div>
     <div id="flow-gen-status" class="muted flow-status-line" role="status" aria-live="polite"></div>
     <div class="row">
       <input id="flow-task" type="text" placeholder="描述总任务，如：调研 dist 目录并写一份问题清单" style="flex:1;min-width:220px">
@@ -1927,6 +1931,7 @@ async function loadAgents(){
   if(!box) return;
   const obj = (r.obj && typeof r.obj === 'object') ? r.obj : {};
   AGENTS = Array.isArray(obj.agents) ? obj.agents : [];
+  flowAgentOptions();
   /* 模型选项来自路由表：每个 agent 可单独换模型（PUT /v1/agents/<name>） */
   const rr = await call('GET', '/v1/routes');
   const routes = Array.isArray(rr.obj) ? rr.obj : [];
@@ -4462,6 +4467,8 @@ function flowSaveState(){
 }
 
 function flowRestoreState(){
+  if($('flow-agent-mode'))$('flow-agent-mode').value=FLOW_ROLE_MODE;
+  flowAgentOptions();
   if(FLOW_MIRROR.live)flowLiveProgress(FLOW_MIRROR.live);
   const t = $('flow-task'), j = $('flow-json'), o = $('flow-out');
   if(t && FLOW_MIRROR.task) t.value = FLOW_MIRROR.task;
@@ -4473,13 +4480,27 @@ function flowRestoreState(){
 }
 
 /* 生成 DAG：LLM 分解总任务 → 填入下方编辑器（不执行，可修改） */
+let FLOW_ROLE_NAMES=[],FLOW_ROLE_MODE='auto';
+function flowAgentOptions(){
+ FLOW_ROLE_MODE=$('flow-agent-mode')?.value||'auto';
+ const box=$('flow-agent-options');if(!box)return;box.hidden=$('flow-agent-mode')?.value!=='manual';if(box.hidden)return;box.replaceChildren();
+ for(const a of AGENTS){const label=document.createElement('label'),check=document.createElement('input');check.type='checkbox';check.value=a.name;check.checked=FLOW_ROLE_NAMES.includes(a.name);check.onchange=()=>{FLOW_ROLE_NAMES=Array.from(box.querySelectorAll('input:checked')).map(x=>x.value);};label.append(check,document.createTextNode(a.name+' · '+(a.role||'')));box.append(label);}
+}
+const FLOW_ROLE_SCOPES=new Map();
+function flowTaskText(value,id){try{const scope=JSON.parse(value);if(scope.coa_flow_scope===1&&typeof scope.task==='string'){FLOW_ROLE_SCOPES.set(id,scope);return scope.task;}}catch(e){}return value||'';}
+function flowSelectedAgents(){
+ if($('flow-agent-mode')?.value!=='manual')return undefined;
+ const agents=Array.from(document.querySelectorAll('#flow-agent-options input:checked')).map(x=>x.value);
+ if(!agents.length)throw new Error('请至少选择一个 Agent');return agents;
+}
 async function flowGen(){
   const input = $('flow-task'), st = $('flow-gen-status'), ta = $('flow-json');
   if(!input || !st) return;
   const task = input.value.trim();
   if(!task){ flowStatus('gen-status', '请先输入总任务'); return; }
   flowStatus('gen-status', '分解中…');
-  const c = await call('POST', '/v1/flows/decompose', {task});
+  let agents;try{agents=flowSelectedAgents();}catch(e){flowStatus('gen-status',e.message);return;}
+  const c = await call('POST', '/v1/flows/decompose', {task,agents});
   if(c.status === 200 && c.obj && c.obj.dag){
     if(ta) ta.value = JSON.stringify(c.obj.dag, null, 2);
     flowStatus('gen-status', '已生成，可在下方修改后执行');
@@ -4495,11 +4516,12 @@ async function flowAuto(){
   if(!input) return;
   const task = input.value.trim();
   if(!task){ flowStatus('gen-status', '请先输入总任务'); return; }
+  let agents;try{agents=flowSelectedAgents();}catch(e){flowStatus('gen-status',e.message);return;}
   FLOW_BUSY = true;
   flowStatus('gen-status', '已提交（分解→执行→综合）…');
   FLOW_MIRROR.out = '';
   if(out) out.textContent = '';
-  const c = await call('POST', '/v1/orchestrate', {task,workspace:$('flow-workspace')?.value || FLOW_WORKSPACE});
+  const c = await call('POST', '/v1/orchestrate', {task,agents,workspace:$('flow-workspace')?.value || FLOW_WORKSPACE});
   const id = c.obj && c.obj.id;
   if(id === undefined){
     flowStatus('gen-status', '提交失败: ' + (c.text || ('HTTP ' + c.status)));
@@ -4651,11 +4673,11 @@ async function loadFlowTasks(){
     return '<div id="flow-task-' + id + '" data-flow-record-id="' + id + '"' + (tid != null ? ' data-flow-task-id="' + tid + '"' : '') + ' data-flow-status="' + esc(s) + '" style="border:1px solid var(--bd,#ddd);border-radius:8px;padding:8px 10px;margin:6px 0">' +
       '<div class="flow-task-heading"><span class="flow-record-status">' + flowStatusBadge(s) + '</span>' +
       '<b>#' + id + '</b>' +
-      '<span class="flow-task-title" title="' + esc(x.name || x.input || '') + '">' + esc(x.name || (x.input || '').slice(0, 60) || '(无名称)') + '</span>' +
+      '<span class="flow-task-title" title="' + esc(x.name || flowTaskText(x.input,x.id)) + '">' + esc(x.name || flowTaskText(x.input,x.id).slice(0, 60) || '(无名称)') + '</span>' +
       '<span class="flow-record-actions">' + resume + cancel + edit + '</span>' +
       '</div>' +
       (x.workspace ? '<div class="muted" style="font-size:12px;overflow-wrap:anywhere">工作区：'+esc(x.workspace)+'</div>' : '') +
-      (x.input ? '<div class="muted" style="font-size:11.5px;margin-top:4px;white-space:pre-wrap">' + esc(x.input).slice(0, 200) + '</div>' : '') +
+      (x.input ? '<div class="muted" style="font-size:11.5px;margin-top:4px;white-space:pre-wrap">' + esc(flowTaskText(x.input,x.id)).slice(0, 200) + '</div>' : '') +
       '<div class="muted" style="font-size:11px;margin-top:2px">创建: ' + new Date(x.created_ms).toLocaleString() + ' · 更新: ' + new Date(x.updated_ms).toLocaleString() + '</div>' +
       '<div class="flow-record-progress" role="status" aria-live="polite" style="white-space:pre-wrap;overflow-wrap:anywhere;margin-top:6px">' + (tid != null ? '正在读取执行进度…' : '历史执行记录；可点击继续开始新任务。') + '</div>' +
       '<div id="flow-task-edit-' + id + '"></div>' +
@@ -4741,7 +4763,7 @@ function flowTaskEdit(id){
     const x = recs.find(t => String(t.id) === String(id));
     if(!x){ toast('记录不存在'); return; }
     box.innerHTML =
-      '<textarea id="flow-task-input-' + id + '" style="width:100%;min-height:40px;font-size:12px;margin-top:6px" placeholder="任务描述">' + esc(x.input || '') + '</textarea>' +
+      '<textarea id="flow-task-input-' + id + '" style="width:100%;min-height:40px;font-size:12px;margin-top:6px" placeholder="任务描述">' + esc(flowTaskText(x.input,x.id)) + '</textarea>' +
       (x.automatic ? '<p class="muted">自动编排任务：继续执行时会按任务描述重新生成 DAG。</p>' : '<textarea id="flow-task-dag-' + id + '" style="width:100%;min-height:120px;font-family:monospace;font-size:12px;margin-top:4px">' + esc(x.dag || '') + '</textarea>') +
       '<div class="row" style="margin-top:4px">' +
       '<input id="flow-task-name-' + id + '" type="text" placeholder="名称" style="flex:1;min-width:120px" value="' + esc(x.name || '') + '">' +
@@ -4758,7 +4780,7 @@ async function flowTaskSave(id){
   const dagRaw = (($('flow-task-dag-' + id) || {}).value || '').trim();
   let body = {};
   if(name !== undefined) body.name = name;
-  if(input !== undefined) body.input = input;
+  if(input !== undefined) body.input = FLOW_ROLE_SCOPES.has(id)?JSON.stringify({...FLOW_ROLE_SCOPES.get(id),task:input}):input;
   try { if(dagRaw) body.dag = JSON.parse(dagRaw); }
   catch(e){ toast('DAG JSON 语法错误: ' + e.message); return; }
   const r = await call('PUT', '/v1/flows/' + id, body);
