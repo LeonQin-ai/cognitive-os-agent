@@ -294,7 +294,8 @@ static char *mock_respond(const char *msg) {
         return xstrdup("[{\"tool\":\"grep\",\"args\":{\"path\":\".\",\"pattern\":\"evidence\",\"output_mode\":\"content\"}}]");
     }
     if (has_substr(msg,"交替无效参数回归测试")) {
-        if(in_loop) return xstrdup("已使用正确参数恢复查询，任务完成。");
+        if(in_loop && has_substr(full,"[file_read] project evidence")) return xstrdup("已使用正确参数恢复查询，任务完成。");
+        if(in_loop) return xstrdup("[{\"tool\":\"file_read\",\"args\":{\"path\":\"readme.txt\"}},{\"tool\":\"grep\",\"args\":{\"path\":\".\",\"pattern\":\"evidence\"}}]");
         return xstrdup("[{\"tool\":\"grep\",\"args\":{}},"
             "{\"tool\":\"list_dir\",\"args\":{\"path\":\".\"}},"
             "{\"tool\":\"grep\",\"args\":{}},"

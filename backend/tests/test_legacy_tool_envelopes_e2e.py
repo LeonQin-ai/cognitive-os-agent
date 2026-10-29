@@ -1,0 +1,73 @@
+"""Fixed wire responses exercise parsing/execution, independent of prompt text."""
+import json, os, socket, subprocess, tempfile, threading, time, urllib.request
+from pathlib import Path
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from fixture_http_response import respond_json
+ROOT=Path(__file__).resolve().parents[1];BUILD=ROOT/os.environ.get('COA_BUILD_DIR','build')
+BINARY=BUILD/('cognitive-os-agent.exe' if os.name=='nt' else 'cognitive-os-agent')
+HTML='<html>LEFT_WIRE_PROOF RIGHT_WIRE_PROOF</html>'
+FINAL='comparison.html 已生成并读回；LEFT_WIRE_PROOF 与 RIGHT_WIRE_PROOF 已核对。'
+def function(name,args):return {'type':'function','function':{'name':name,'arguments':json.dumps(args)}}
+def exercise(mode):
+ calls=0
+ if mode in ('envelopes','recover_schema'):
+  replies=[{'tool_calls':[function('file_read',{'path':'left.c'}),function('file_read',{'path':'right.c'})]},function('file_write',{'path':'comparison.html','content':HTML}),{'tool':'file_read','arguments':{'path':'comparison.html'}},{'name':'complete_task','arguments':{'status':'complete','requires_tools':False,'answer':FINAL}}]
+  if mode=='recover_schema':replies.insert(0,[{'tool':'file_write','args':{'path':'must-not-exist.txt','content':'rejected prefix'}},{'tool':'file_read','args':{}}])
+ elif mode=='unrelated_schema':replies=[[{'tool':'grep','args':{'path':'required'}}],{'tool':'file_read','args':{'path':'left.c'}},{'tool':'complete_task','args':{'status':'complete','requires_tools':False,'answer':'源码分析完成。'}}]
+ elif mode=='completion':replies=[{'tool':'complete_task','args':{'status':'complete','requires_tools':False,'answer':'你好。'}}]
+ elif mode=='commentary':replies=['我将开始探索这两个项目的结构，以便进行详细的对比。让我先列出这两个目录。']
+ else:
+  bad={'missing_name':{'args':{'path':'left.c'}},'argument_type':{'tool':'file_read','args':[]},'argument_suffix':{'tool':'file_read','args':'{"path":"left.c"} trailing'},'schema':{'tool':'file_read','args':{}}}[mode]
+  replies=[[{'tool':'file_write','args':{'path':'must-not-exist.txt','content':'unsafe partial batch'}},bad]]
+ class Provider(BaseHTTPRequestHandler):
+  def log_message(self,*_):pass
+  def do_POST(self):
+   nonlocal calls
+   self.rfile.read(int(self.headers['Content-Length'])) # Never inspect a prompt or recovery hint.
+   reply=replies[min(calls,len(replies)-1)];calls+=1
+   content=reply if isinstance(reply,str) else json.dumps(reply,ensure_ascii=False)
+   respond_json(self,json.dumps({'choices':[{'message':{'content':content},'finish_reason':'stop'}]}).encode())
+ server=ThreadingHTTPServer(('127.0.0.1',0),Provider);threading.Thread(target=server.serve_forever,daemon=True).start()
+ try:
+  with tempfile.TemporaryDirectory(prefix='coa-wire-actions-') as folder:
+   work=Path(folder);(work/'left.c').write_text('LEFT_WIRE_PROOF',encoding='utf8');(work/'right.c').write_text('RIGHT_WIRE_PROOF',encoding='utf8')
+   (work/'cognitive-os-agent.json').write_text(json.dumps({'llm.provider':'openai','llm.model':'fixed-wire','llm.api_key':'fixture','llm.base_url':f'http://127.0.0.1:{server.server_port}','reasoning.max_rounds':16}),encoding='utf8')
+   with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
+   def api(path,body=None):
+    req=urllib.request.Request(f'http://127.0.0.1:{port}'+path,data=json.dumps(body).encode() if body is not None else None,headers={'Content-Type':'application/json'})
+    with urllib.request.urlopen(req,timeout=5) as response:return json.load(response)
+   with (BUILD/f'wire-envelopes-{mode}.log').open('w',encoding='utf8') as log:
+    proc=subprocess.Popen([str(BINARY),'--state',folder,'--workspace',folder,'serve',str(port)],cwd=ROOT,stdout=log,stderr=log,env={**os.environ,'COA_TOOL_PROTOCOL':'legacy'},creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
+    try:
+     deadline=time.monotonic()+25
+     for _ in range(150):
+      try:api('/v1/scheduler');break
+      except OSError:assert proc.poll() is None;time.sleep(.05)
+     tid=api('/v1/chat',{'message':'你好' if mode=='completion' else '分析 required 目录的代码。' if mode=='unrelated_schema' else '读取 left.c 和 right.c 并生成 comparison.html 文件，实际读回验证。','session':'wire'})['id']
+     while True:
+      task=api(f'/v1/tasks/{tid}')
+      if task['status'] not in ('RUNNING','QUEUED'):break
+      assert time.monotonic()<deadline,task;time.sleep(.02)
+     assert calls<=10,(calls,task)
+     assert not (work/'must-not-exist.txt').exists(),('invalid batch executed a prefix',mode,task)
+     history=api('/v1/chat/history?session=wire')['turns']
+     if mode in ('envelopes','recover_schema'):
+      if mode=='recover_schema':assert task['model_failures']==1,task
+      assert task['status']=='DONE' and task['output']==FINAL,task
+      assert (work/'comparison.html').read_text(encoding='utf8')==HTML
+      steps=task['steps'];assert task['tool_calls']==4,task
+      assert [s['tool'] for s in steps]==['file_read','file_read','file_write','file_read'],steps
+      assert 'LEFT_WIRE_PROOF' in steps[0]['out'] and 'RIGHT_WIRE_PROOF' in steps[1]['out'] and HTML in steps[3]['out'],steps
+      assert history[-1]['a']==FINAL,history
+     elif mode=='completion':
+      assert task['status']=='DONE' and task['output']=='你好。' and task['tool_calls']==0 and calls==1,task
+     elif mode=='unrelated_schema':
+      assert task['status']=='FAILED' and 'grep' in task['output'] and task['tool_calls']==1 and not history,task
+     else:
+      assert task['status']=='FAILED' and task['tool_calls']==0 and not history,task
+      assert not (work/'comparison.html').exists()
+     print('PASS fixed wire:',mode,task['status'],'calls',calls,'tools',task['tool_calls'],flush=True)
+    finally:proc.terminate();proc.wait(timeout=5)
+ finally:server.shutdown();server.server_close()
+if __name__=='__main__':
+ for mode in ('envelopes','recover_schema','unrelated_schema','completion','missing_name','argument_type','argument_suffix','schema','commentary'):exercise(mode)

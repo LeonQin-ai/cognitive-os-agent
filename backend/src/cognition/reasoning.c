@@ -2149,6 +2149,16 @@ static int h_reason(state_machine *sm, void *ud, const char *input, char **out) 
                                  &raw, &plan_err, r->run_task ? r->run_task->attachments_json : NULL,
                                  &r->planner_response_truncated, output_override, &r->planner_native_end_turn, &diagnostic,
                                  r->completion_review_required,&completion_json);
+    /* A batch rejected before execution must not lose the affected target.
+     * Otherwise an unrelated successful read could hide its missing work.
+     * No fake tool step or tool execution is recorded here. */
+    if(rc!=0 && diagnostic.rejected_tool[0] && diagnostic.rejected_path[0]) {
+        cJSON *args=cJSON_CreateObject();
+        if(diagnostic.rejected_path[0])cJSON_AddStringToObject(args,"path",diagnostic.rejected_path);
+        char *json=cJSON_PrintUnformatted(args);
+        note_failed_tool(r,diagnostic.rejected_tool,json?json:"{}",plan_err?plan_err:"batch schema rejected");
+        free(json);cJSON_Delete(args);
+    }
     if(rc==0 && completion_json)resolve_optional_missing_reads(r,completion_json);
     /* Only visible generation/tool arguments can benefit from more output
      * room. An exhausted hidden-only response is not partial deliverable. */

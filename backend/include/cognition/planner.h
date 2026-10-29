@@ -15,6 +15,9 @@ typedef struct planner_model_diagnostic {
     int http_status, max_tokens, truncated, has_content, has_tool_calls;
     char stop_reason[64];
     char stage[24]; /* transport, http, response, protocol */
+    /* Rejected operation identity for recovery, not an executed tool result.
+     * Never includes command text or file mutation bodies. */
+    char rejected_tool[256], rejected_path[2048];
 } planner_model_diagnostic;
 /* Native protocol decisions must not be overridden by prose heuristics. */
 int planner_uses_native_tools(const llm *l);

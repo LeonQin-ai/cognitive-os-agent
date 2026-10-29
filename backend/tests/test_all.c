@@ -4670,7 +4670,7 @@ static void test_agent_loop(void) {
         free(answer);answer=NULL;
         CHECK(reasoning_run(ctx.reasoning,"交替无效参数回归测试：查询 evidence",&answer)==0);
         char *steps=reasoning_steps_json(ctx.reasoning);
-        CHECK(steps && strstr(steps,"repeated invalid arguments suppressed"));
+        CHECK(steps && !strstr(steps,"\"ok\":0"));
         CHECK(steps && strstr(steps,"project evidence"));
         char *log=reasoning_round_log_tail(ctx.reasoning,65536);
         CHECK(log && strstr(log,"schema:") && strstr(log,"pattern"));
@@ -4678,7 +4678,7 @@ static void test_agent_loop(void) {
         CHECK(reasoning_run(ctx.reasoning,"交替无效熔断回归测试：查询",&answer)!=0);
         long long elapsed=0,tin=0,tout=0;int round=0,calls=0;const char *tool=NULL;
         reasoning_progress(ctx.reasoning,&elapsed,&round,&calls,&tool,&tin,&tout);
-        CHECK(round==1 && calls==3);
+        CHECK(round==5 && calls==0);
         free(answer);runtime_shutdown(&ctx);fs_remove("state-test/loop-w/readme.txt");
     }
     /* Opaque commands preserve unchanged file/directory identities. Actual

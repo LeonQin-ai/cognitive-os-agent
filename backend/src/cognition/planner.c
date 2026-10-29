@@ -252,7 +252,7 @@ static char *args_to_json(cJSON *args) {
     if (cJSON_IsObject(args))
         return cJSON_PrintUnformatted(args);
     if (cJSON_IsString(args) && args->valuestring) {
-        cJSON *p = cJSON_Parse(args->valuestring);
+        cJSON *p = cJSON_ParseWithOpts(args->valuestring,NULL,1);
         if (p) {
             char *s = cJSON_IsObject(p) ? cJSON_PrintUnformatted(p) : NULL;
             cJSON_Delete(p);
@@ -261,7 +261,7 @@ static char *args_to_json(cJSON *args) {
         }
     }
 
-    return xstrdup("{}");
+    return NULL;
 }
 
 /* Salvage a plan array that was truncated mid-output by the LLM's output
@@ -326,6 +326,7 @@ static int valid_action_name(const char *name, size_t n) {
     return 1;
 }
 
+/* 1: valid batch; 0: no recognized plan; -1: malformed explicit batch. */
 static int parse_plan_actions(const char *plan, planned_action **actions, int *n_actions) {
     cJSON *root;
     planned_action *a = NULL;
@@ -345,8 +346,17 @@ static int parse_plan_actions(const char *plan, planned_action **actions, int *n
 
     if (!root)
         return 0;
-    /* also accept a single tool object (not wrapped in an array) */
-    if (cJSON_IsObject(root) && cJSON_GetObjectItemCaseSensitive(root, "tool")) {
+    /* Normalize explicit wire envelopes locally; no model repair is needed
+     * for a valid function object or tool_calls batch. */
+    cJSON *wire_calls=cJSON_IsObject(root) ? cJSON_GetObjectItemCaseSensitive(root,"tool_calls") : NULL;
+    if(wire_calls){
+        if(!cJSON_IsArray(wire_calls)){cJSON_Delete(root);return -1;}
+        cJSON *list=cJSON_DetachItemFromObjectCaseSensitive(root,"tool_calls");
+        cJSON_Delete(root);root=list;
+    }
+    if (cJSON_IsObject(root) && (cJSON_GetObjectItemCaseSensitive(root, "tool") ||
+        cJSON_GetObjectItemCaseSensitive(root,"function") ||
+        (cJSON_GetObjectItemCaseSensitive(root,"name") && cJSON_GetObjectItemCaseSensitive(root,"arguments")))) {
         cJSON *arr = cJSON_CreateArray();
         cJSON_AddItemToArray(arr, root);
         root = arr;
@@ -364,10 +374,11 @@ static int parse_plan_actions(const char *plan, planned_action **actions, int *n
     planned_action *na;
 
         if (!cJSON_IsObject(it))
-            continue;
+            goto invalid_batch;
         tool = cJSON_GetObjectItemCaseSensitive(it, "tool");
         args = cJSON_GetObjectItemCaseSensitive(it, "args");
-        if (!tool || !cJSON_IsString(tool)) {
+        if (!args) args=cJSON_GetObjectItemCaseSensitive(it,"arguments");
+        if (!tool) {
             /* models occasionally drift into the OpenAI/Claude tool-call
              * envelope; a plan parsed to zero actions used to be treated as
              * the final answer, silently dropping real edits (SWE-bench
@@ -386,16 +397,14 @@ static int parse_plan_actions(const char *plan, planned_action **actions, int *n
             }
         }
 
-        if (!tool || !cJSON_IsString(tool))
-            continue;
-        if(!valid_action_name(tool->valuestring,strlen(tool->valuestring))) {
-            planner_actions_free(a,n);cJSON_Delete(root);return 0;
-        }
+        if (!tool || !cJSON_IsString(tool) || !valid_action_name(tool->valuestring,strlen(tool->valuestring)))
+            goto invalid_batch;
         args_json = args_to_json(args);
+        if(!args_json)goto invalid_batch;
         na = (planned_action *)realloc(a, (size_t)(n + 1) * sizeof(planned_action));
         if (!na) {
             free(args_json);
-            break;
+            goto invalid_batch;
         }
 
         a = na;
@@ -408,6 +417,9 @@ static int parse_plan_actions(const char *plan, planned_action **actions, int *n
     *actions = a;
     *n_actions = n;
     return 1;
+invalid_batch:
+    planner_actions_free(a,n);cJSON_Delete(root);
+    return -1;
 }
 
 /* Control markup outside Markdown code examples is pending protocol, never a
@@ -1028,6 +1040,10 @@ static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_act
     }
     if (!have)
         have = parse_plan_actions(plan, actions, n_actions);
+    if (have<0) {
+        if(err_out)*err_out=xstrdup("invalid tool-action batch; no actions executed");
+        if(raw_out)*raw_out=NULL;free(plan);return -1;
+    }
     if (!have && looks_like_plan) {
         const char *epos = cJSON_GetErrorPtr();
         size_t off = (epos && epos >= plan && epos < plan + strlen(plan)) ? (size_t)(epos - plan) : 0;
@@ -1039,7 +1055,7 @@ static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_act
          * call. The agent loop re-plans for whatever the truncated tail
          * dropped, so no work is silently lost. */
         char *salv = salvage_truncated_array(plan);
-        if (salv && parse_plan_actions(salv, actions, n_actions) && *n_actions > 0) {
+        if (salv && parse_plan_actions(salv, actions, n_actions)==1 && *n_actions > 0) {
             log_warn("planner: salvaged %d complete action(s) from truncated plan", *n_actions);
             if (raw_out) {
                 free(*raw_out);
@@ -1067,7 +1083,7 @@ static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_act
                                      req.max_tokens)
                                : NULL;
             if (fixed) {
-                if (parse_plan_actions(fixed, actions, n_actions)) {
+                if (parse_plan_actions(fixed, actions, n_actions)==1) {
                     if (raw_out) {
                         free(*raw_out);
                         *raw_out = fixed;
@@ -1076,7 +1092,7 @@ static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_act
                     have=1;
                     log_info("planner: repaired plan JSON accepted (%d actions)", *n_actions);
                 } else if ((salv = salvage_truncated_array(fixed)) != NULL &&
-                           parse_plan_actions(salv, actions, n_actions) && *n_actions > 0) {
+                           parse_plan_actions(salv, actions, n_actions)==1 && *n_actions > 0) {
                     /* the repair itself got truncated — salvage its prefix */
                     log_warn("planner: salvaged %d action(s) from truncated repair", *n_actions);
                     if (raw_out) {
@@ -1102,7 +1118,26 @@ static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_act
         if(raw_out)*raw_out=NULL;free(plan);return -1;
     }
 
-    if (require_completion && !using_native) {
+    /* Validate the entire batch before any action can mutate the workspace.
+     * Execution still performs the normal tool policy/permission checks. */
+    for(int i=0;i<*n_actions;i++) {
+        const tool *definition=tools ? tool_find((tool_registry *)tools,(*actions)[i].tool):NULL;
+        char *error=NULL;
+        if(definition && tool_validate_args(definition,(*actions)[i].args_json,&error)) {
+            if(diagnostic) {
+                snprintf(diagnostic->rejected_tool,sizeof(diagnostic->rejected_tool),"%s",(*actions)[i].tool);
+                cJSON *args=cJSON_Parse((*actions)[i].args_json);
+                const char *path=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(args,"path"));
+                if(path)snprintf(diagnostic->rejected_path,sizeof(diagnostic->rejected_path),"%s",path);
+                cJSON_Delete(args);
+            }
+            if(err_out){strbuf msg;strbuf_init(&msg);strbuf_appendf(&msg,"tool arguments for %s do not match schema: %s; no actions executed",(*actions)[i].tool,error?error:"invalid arguments");*err_out=strbuf_detach(&msg);}
+            free(error);planner_actions_free(*actions,*n_actions);*actions=NULL;*n_actions=0;
+            if(raw_out)*raw_out=NULL;free(plan);return -1;
+        }
+        free(error);
+    }
+    if (!using_native) {
         /* A JSON repair may have replaced/freed the original plan. */
         if (raw_out) plan = *raw_out;
         int finish_count = 0;
@@ -1131,7 +1166,7 @@ static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_act
             }
             cJSON_Delete(finish);
         }
-        if (finish_count || !*n_actions) {
+        if (finish_count || (require_completion && !*n_actions)) {
             planner_actions_free(*actions,*n_actions); *actions=NULL; *n_actions=0;
             if (err_out) *err_out=xstrdup("completion review requires next tool actions or a valid complete_task declaration; commentary is not completion");
             if (raw_out) *raw_out=NULL;
