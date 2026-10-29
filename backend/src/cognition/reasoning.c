@@ -4410,6 +4410,16 @@ restart_planning:
                 transport_fail_streak = 0;
             round_log_append(r, result && *result ? result : "(run failed)");
             obs_log_append(r, result && *result ? result : "(run failed)");
+            /* A rejected wire plan still needs an executable next action.
+             * Keep recovery in the structural protocol instead of allowing
+             * plain prose to fall back into legacy narration/duplicate stops.
+             * Transport failures and deterministic test providers keep their
+             * existing paths; the original failure budget is unchanged. */
+            if(!r->had_plan && !planner_uses_native_tools(r->llm) &&
+               !strcmp(r->last_model_failure.stage,"protocol") &&
+               r->llm && r->llm->provider &&
+               (!strcmp(r->llm->provider,"openai") || !strcmp(r->llm->provider,"anthropic")))
+                r->completion_review_required=1;
             /* A token-limited native call (including complete_task) has no
              * executable arguments. Regenerate the whole call, never append
              * a JSON suffix or misdiagnose this as a failed tool operation.

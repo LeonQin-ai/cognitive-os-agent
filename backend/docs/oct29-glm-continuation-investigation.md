@@ -49,3 +49,38 @@ including the rejected fifth prose response and final structured completion.
 This fixes diagnostic visibility; the original GLM stop on request 5 remains
 unreproduced and unresolved. No execution, completion or prompt policy changes
 are included.
+
+## Task #96: retain the recovery protocol after rejected plans
+
+The next export contains a failed planner request on round 2, followed by three
+plain narration responses on rounds 3–5, each showing
+`completion_review_required:false`. The last two texts are identical. There is
+no blocked declaration, truncation, or exhausted round budget. The failed
+round's detail was not expanded in the supplied file, so its actual error is
+still unknown.
+
+A fixed-wire test now covers one concrete variant: directory discovery,
+malformed tagged tool call, three narration responses, then actual source
+reads, HTML write/readback, and structured completion. Before this change the
+test fails because the first prose response after the malformed call is still
+accepted with the completion protocol disabled. This does not reproduce the
+entire deployed failure: the existing local review subsequently recovers.
+
+On a legacy protocol parsing/schema failure, the runtime now enables the
+existing structural completion protocol for subsequent recovery calls. Prose
+alone is rejected by the planner; it cannot fall into narration equality
+checks. Tool actions and valid complete/blocked declarations remain accepted.
+No prompt wording, keyword lists, retry limits, physical artifact checks,
+transport error handling or native behavior changed. In-process test providers retain
+their existing behavior. The new test requires the recovery protocol on round
+3, checks all three rejected prose responses in live and journaled traces,
+then requires real HTML delivery and completion on request 10.
+
+This fixes the reproduced protocol recovery gap. Confirming that it addresses
+the deployed #96 failure still requires that failed round-2 diagnostic and a
+real GLM run. Issue #232 remains unresolved pending that verification.
+
+Validation: 4585 unit checks; 21 fixed-wire scenarios with normal and ASAN
+builds; 6 artifact-recovery scenarios; 20 completion-review scenarios; 20
+embedded-tool scenarios passed. The new fixed-wire scenario fails before the
+patch on the required recovery-state assertion.
