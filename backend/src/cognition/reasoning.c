@@ -2018,8 +2018,10 @@ static char *build_context(reasoning *r, const char *prompt) {
      * only — the current request must always be planned and executed fresh */
     if (r->pending_reads_n) {
         int required = planner_uses_native_tools(r->llm) ? 0:required_pending_reads(r, completion_instruction(r, prompt));
-        strbuf_append(&b, required ? "## 尚未连续读取到文件末尾 / unread page coverage\n" :
-                                    "## 可选片段的续读游标（不是待办事项，不要求读到 EOF）\n");
+        strbuf_append(&b, planner_uses_native_tools(r->llm) ?
+            "## Observed incomplete file coverage\nThese cursors record unread bytes, not permission to omit requested work. Compare each file against the original task: continue required source coverage before complete_task; a relevant excerpt may suffice only when the requested analysis is supported by actual evidence. Do not ask the user to reauthorize work already requested.\n" :
+            required ? "## 尚未连续读取到文件末尾 / unread page coverage\n" :
+                       "## 可选片段的续读游标（不是待办事项，不要求读到 EOF）\n");
         int shown = 0;
         for (int i=0; i<r->pending_reads_n && shown<16; ++i) {
             if (required && !path_requires_full_read(r, completion_instruction(r,prompt), r->pending_reads[i].path)) continue;

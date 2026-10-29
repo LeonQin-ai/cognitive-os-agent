@@ -18,6 +18,11 @@ class Provider(BaseHTTPRequestHandler):
         Provider.reviews+='Completion review:' in json.dumps(body,ensure_ascii=False)
         name,args='complete_task',{'status':'complete','requires_tools':False,'answer':candidate if n==1 else phase if n==3 else answer}
         if n in (0,2,4):name,args='file_read',{'path':f'source{n//2}.c'}
+        if n==0:args['max_bytes']=32
+        if n==1 and self.protocol=='native':
+            context=json.dumps(body,ensure_ascii=False)
+            assert 'Observed incomplete file coverage' in context
+            assert '不是待办事项，不要求读到 EOF' not in context, 'native cursor falsely waives original reading scope'
         if n==5:name,args='file_read',{'path':'source2.c'}
         if n==6 and self.protocol=='native':
             context=json.dumps(body,ensure_ascii=False)
@@ -36,7 +41,7 @@ for protocol in ('legacy','native'):
     try:
       with tempfile.TemporaryDirectory(prefix='coa-resumed-review-') as folder:
         state=Path(folder)
-        for i,marker in enumerate(('FIRST_SOURCE','SECOND_SOURCE','FINAL_SOURCE')):(state/f'source{i}.c').write_text(marker,encoding='utf8')
+        for i,marker in enumerate(('FIRST_SOURCE','SECOND_SOURCE','FINAL_SOURCE')):(state/f'source{i}.c').write_text(marker+(' '*5000 if i==0 else ''),encoding='utf8')
         (state/'cognitive-os-agent.json').write_text(json.dumps({'llm.provider':'openai','llm.model':'fixture','llm.api_key':'fixture',
           'llm.base_url':f'http://127.0.0.1:{server.server_port}','reasoning.max_rounds':12}),encoding='utf8')
         with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]

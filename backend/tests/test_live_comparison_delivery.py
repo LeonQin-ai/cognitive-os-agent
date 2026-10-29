@@ -8,7 +8,8 @@ from pathlib import Path
 root=Path(__file__).resolve().parents[1]
 p=argparse.ArgumentParser(__doc__);p.add_argument('--config',required=True,type=Path)
 p.add_argument('--report',type=Path,default=root/'build/live-comparison-delivery.json')
-p.add_argument('--protocol',choices=('native','legacy'),default='legacy');a=p.parse_args()
+p.add_argument('--protocol',choices=('native','legacy'),default='legacy')
+p.add_argument('--paged-sources',action='store_true');a=p.parse_args()
 raw=json.loads(a.config.read_text(encoding='utf-8-sig'));cfg={k:v for k,v in raw.items() if k.startswith('llm.')}
 cfg.update({'http.bind':'127.0.0.1','reasoning.max_rounds':16,'scheduler.workers':1,'llm.timeout_ms':60000})
 report={'model':cfg.get('llm.model'),'protocol':a.protocol,'passed':False,'scope':'synthetic code comparison + actual HTML artifact; reporter GLM endpoint/source unavailable'}
@@ -17,6 +18,11 @@ with tempfile.TemporaryDirectory(prefix='coa-live-comparison-') as folder:
  state=Path(folder);left,right=uuid.uuid4().hex[:14],uuid.uuid4().hex[:14]
  (state/'frontend.c').write_text(f'// PROJECT_A_MARKER {left}\nunsigned frontend_mhz(void) {{ return read_sysfs("scaling_cur_freq") / 1000; }}\n',encoding='utf8')
  (state/'hardware.c').write_text(f'// PROJECT_B_MARKER {right}\nconst char *hardware_query = "cat /sys/devices/system/cpu/cpu*/cpufreq/cpuinfo_cur_freq"; // values in kHz\n',encoding='utf8')
+ if a.paged_sources:
+  for name in ('frontend.c','hardware.c'):
+   source=state/name
+   source.write_text(('// unrelated source commentary for pagination\n'*420)+source.read_text(encoding='utf8'),encoding='utf8')
+ report['paged_sources']=a.paged_sources
  (state/'cognitive-os-agent.json').write_text(json.dumps(cfg),encoding='utf8')
  with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
  def api(method,path,body=None):

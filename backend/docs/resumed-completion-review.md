@@ -52,6 +52,24 @@ incident and #231's repeated real-model compaction acceptance remain independent
 
 ## Follow-up: contradictory recovery instructions
 
+### Native paged-source cursor correction
+
+Native planner input incorrectly labelled every pending read as optional and
+explicitly said EOF was unnecessary. It now presents observed incomplete byte
+coverage neutrally and requires the planner to compare it with the original
+scope before structured completion. This does not classify answer keywords or
+force exploratory excerpts to EOF. The resumed-review fixture uses a long file
+and rejects the old misleading exemption in native input.
+
+Actual configured API validation: `test_live_comparison_delivery.py
+--protocol native --paged-sources` passed. Both source markers were placed after
+18 KB of comments. Actual reads covered offsets 0/4000/8000/12000/16000 for both
+files, followed by HTML write and paged readback. Final marker and artifact
+checks passed: 11 requests, 14 tools, zero model failures, 130,804 input + 6,489
+output = 137,293 tokens, 40.374 seconds. Report and generated HTML are retained
+under `build/live-paged-comparison-232.*`. This is synthetic task validation with
+the configured DeepSeek API, not a claim of testing the unavailable GLM endpoint.
+
 Code review found that cached-read and stall recovery told native planners to
 finish with plain text, contradicting the mandatory `complete_task` contract.
 These recovery messages now follow the active protocol; cached native reads
