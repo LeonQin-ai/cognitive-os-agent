@@ -55,9 +55,11 @@ are included.
 The next export contains a failed planner request on round 2, followed by three
 plain narration responses on rounds 3–5, each showing
 `completion_review_required:false`. The last two texts are identical. There is
-no blocked declaration, truncation, or exhausted round budget. The failed
-round's detail was not expanded in the supplied file, so its actual error is
-still unknown.
+no blocked declaration, truncation, or exhausted round budget. The subsequent
+expanded round-2 detail confirms `invalid or incomplete tagged tool-call
+response; no actions executed; use the configured tool protocol with a valid
+identifier and complete JSON object`. This is the protocol-error branch covered
+by the fix, rather than a transport or tool-execution failure.
 
 A fixed-wire test now covers one concrete variant: directory discovery,
 malformed tagged tool call, three narration responses, then actual source
@@ -76,9 +78,10 @@ their existing behavior. The new test requires the recovery protocol on round
 3, checks all three rejected prose responses in live and journaled traces,
 then requires real HTML delivery and completion on request 10.
 
-This fixes the reproduced protocol recovery gap. Confirming that it addresses
-the deployed #96 failure still requires that failed round-2 diagnostic and a
-real GLM run. Issue #232 remains unresolved pending that verification.
+This fixes the reproduced protocol recovery gap, and the supplied round-2
+diagnostic confirms that #96 entered the affected branch. Successful completion
+with the actual GLM endpoint still requires a real run. Issue #232 remains
+unresolved pending that verification.
 
 Validation: 4585 unit checks; 21 fixed-wire scenarios with normal and ASAN
 builds; 6 artifact-recovery scenarios; 20 completion-review scenarios; 20

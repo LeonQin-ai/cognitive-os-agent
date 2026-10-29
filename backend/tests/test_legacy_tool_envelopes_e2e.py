@@ -113,6 +113,7 @@ def exercise(mode,protocol='legacy'):
        assert [d['round'] for d in decisions]==list(range(1,calls+1)),decisions
        assert all(d['max_rounds']==16 and d['tool_protocol']=='legacy' for d in decisions),decisions
        if mode=='trace_after_error':
+        assert decisions[1]['error']=='invalid or incomplete tagged tool-call response; no actions executed; use the configured tool protocol with a valid identifier and complete JSON object',decisions[1]
         assert decisions[2]['completion_review_required'],decisions[2]
         assert all(d['completion_review_required'] and 'error' in d for d in decisions[2:5]),decisions[2:5]
         assert task['model_failures']==4,task
