@@ -552,6 +552,10 @@ static void test_scheduler_mn(void) {
     long long deadline=time_now_ms()+1000;
     while(!atomic_load(&idle_callback_started) && time_now_ms()<deadline)time_sleep_ms(1);
     CHECK(atomic_load(&idle_callback_started));
+    /* Terminal status is visible before the callback commits durable history. */
+    task *finishing=scheduler_get(s,0);
+    CHECK(finishing && finishing->status==TS_DONE);
+    CHECK(finishing && !finishing->completed);
     CHECK(scheduler_wait_idle(s,10)==-1);
     atomic_store(&idle_callback_release,1);
     CHECK(scheduler_wait_idle(s,1000)==0);

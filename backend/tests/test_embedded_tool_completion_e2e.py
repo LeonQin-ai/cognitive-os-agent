@@ -116,7 +116,18 @@ def exercise(protocol, mode):
                         for item in value:yield from strings(item)
                     elif isinstance(value,dict):
                         for item in value.values():yield from strings(item)
-                assert task['output'] in list(strings(api('/v1/chat/history?session=issue-223')))
+                # Scheduler terminal status precedes the completion callback
+                # that commits failed runs to history. Await that exact record,
+                # using the original task deadline, rather than racing the writer.
+                while True:
+                    history=api('/v1/chat/history?session=issue-223')
+                    committed=[run for run in history.get('runs',[]) if run.get('id')==tid and
+                        run.get('status')==task['status'] and run.get('output')==task['output']]
+                    if committed:break
+                    assert time.monotonic()<deadline,('terminal run not committed to history',task,history)
+                    time.sleep(.02)
+                assert task['output'] in list(strings(history))
+                if mode=='stuck':assert not history.get('turns'), 'failed run became a successful conversation turn'
                 assert len(calls)<=10,len(calls)
                 print(f'PASS: {protocol}/{mode}; status={task["status"]}; real tools={len(task["steps"])}; model calls={len(calls)}',flush=True)
             finally:

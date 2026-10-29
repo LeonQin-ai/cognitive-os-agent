@@ -211,18 +211,36 @@ jobs:
           LD_PRELOAD=$(gcc -print-file-name=libasan.so) ASAN_OPTIONS=detect_leaks=0 ./build/cognitive-os-agent-test
       - name: Native tool block continuation under ASAN
         run: ASAN_OPTIONS=detect_leaks=0 python3 tests/test_native_tool_loop.py
-      - name: Legacy and native completion review under ASAN
-        run: |
-          ASAN_OPTIONS=detect_leaks=0 python3 tests/test_completion_review_e2e.py
-          ASAN_OPTIONS=detect_leaks=0 python3 tests/test_embedded_tool_completion_e2e.py
-          ASAN_OPTIONS=detect_leaks=0 python3 tests/test_im_capacity_e2e.py
-          ASAN_OPTIONS=detect_leaks=0 python3 tests/test_flow_review_delivery_e2e.py
-          ASAN_OPTIONS=detect_leaks=0 python3 tests/test_native_flow_literal_results.py
-          ASAN_OPTIONS=detect_leaks=0 python3 tests/test_memory_summary_e2e.py
-          ASAN_OPTIONS=detect_leaks=0 python3 tests/test_resumed_completion_review_e2e.py
-          ASAN_OPTIONS=detect_leaks=0 python3 tests/test_artifact_delivery_recovery_e2e.py
-          ASAN_OPTIONS=detect_leaks=0 python3 tests/test_legacy_tool_envelopes_e2e.py
-          ASAN_OPTIONS=detect_leaks=0 python3 tests/test_im_discussion_native_e2e.py
+      - name: ASAN completion review e2e
+        run: ASAN_OPTIONS=detect_leaks=0 python3 tools/run_ci_regression.py tests/test_completion_review_e2e.py
+      - name: ASAN embedded tool completion e2e
+        run: ASAN_OPTIONS=detect_leaks=0 python3 tools/run_ci_regression.py tests/test_embedded_tool_completion_e2e.py
+      - name: ASAN im capacity e2e
+        run: ASAN_OPTIONS=detect_leaks=0 python3 tools/run_ci_regression.py tests/test_im_capacity_e2e.py
+      - name: ASAN flow review delivery e2e
+        run: ASAN_OPTIONS=detect_leaks=0 python3 tools/run_ci_regression.py tests/test_flow_review_delivery_e2e.py
+      - name: ASAN native flow literal results
+        run: ASAN_OPTIONS=detect_leaks=0 python3 tools/run_ci_regression.py tests/test_native_flow_literal_results.py
+      - name: ASAN memory summary e2e
+        run: ASAN_OPTIONS=detect_leaks=0 python3 tools/run_ci_regression.py tests/test_memory_summary_e2e.py
+      - name: ASAN resumed completion review e2e
+        run: ASAN_OPTIONS=detect_leaks=0 python3 tools/run_ci_regression.py tests/test_resumed_completion_review_e2e.py
+      - name: ASAN artifact delivery recovery e2e
+        run: ASAN_OPTIONS=detect_leaks=0 python3 tools/run_ci_regression.py tests/test_artifact_delivery_recovery_e2e.py
+      - name: ASAN legacy tool envelopes e2e
+        run: ASAN_OPTIONS=detect_leaks=0 python3 tools/run_ci_regression.py tests/test_legacy_tool_envelopes_e2e.py
+      - name: ASAN im discussion native e2e
+        run: ASAN_OPTIONS=detect_leaks=0 python3 tools/run_ci_regression.py tests/test_im_discussion_native_e2e.py
+      - name: Retain ASAN regression failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: asan-regression-failures-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            backend/build/ci-regressions/*.log
+            backend/build/*.log
+          if-no-files-found: ignore
+          retention-days: 7
 
   windows:
     name: Windows (zig cc)
