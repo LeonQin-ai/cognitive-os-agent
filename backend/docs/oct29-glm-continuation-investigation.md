@@ -87,3 +87,24 @@ Validation: 4585 unit checks; 21 fixed-wire scenarios with normal and ASAN
 builds; 6 artifact-recovery scenarios; 20 completion-review scenarios; 20
 embedded-tool scenarios passed. The new fixed-wire scenario fails before the
 patch on the required recovery-state assertion.
+
+## Task #97: recovery flag remains false in the deployed trace
+
+The copied diagnostic confirms a tagged-call parser failure on round 4, two
+successful read rounds, then identical prose on rounds 7 and 8. All planner
+decisions still show `completion_review_required:false`, including after the
+protocol failure. There is no structured blocked declaration or budget limit.
+
+`trace_after_error_progress` reproduces that order with temporary source
+fixtures. On the current runtime the flag becomes true on round 5 and stays
+true after both reads; prose rounds 7 and 8 are rejected structurally, and later
+write/readback actions complete the report on request 12. Live and journaled
+decisions are both checked. The scenario also passes ASAN. This is a controlled
+response replay, not a successful integration run with GLM.
+
+The deployed false flag conflicts with the tested recovery transition. The
+runtime currently restricts that transition to OpenAI/Anthropic adapter objects.
+Before another production change, confirm the actual backend checkout, process
+path/start time and provider identity. The export does not contain those facts,
+so it cannot distinguish an older running executable from an excluded adapter.
+Do not assert that the user is running an old build without that evidence.

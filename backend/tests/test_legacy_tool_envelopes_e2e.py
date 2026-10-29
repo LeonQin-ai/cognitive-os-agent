@@ -16,14 +16,16 @@ def function(name,args):return {'type':'function','function':{'name':name,'argum
 def exercise(mode,protocol='legacy'):
  calls=0
  expected_html=HTML+('<!--'+('large receipt proof '*6000)+'-->' if mode=='large_html' else '')
- if mode in ('trace_resume','trace_stuck','trace_after_error'):
+ if mode in ('trace_resume','trace_stuck','trace_after_error','trace_after_error_progress'):
   narration='我需要进一步了解两个项目的源码结构，以便做出详细的对比分析。让我查看两个项目的源码目录结构和关键文件。'
   replies=[[{'tool':'list_dir','args':{'path':side}} for side in ('left','right')],
    [{'tool':'file_read','args':{'path':'left/README.md'}}],
    [{'tool':'file_read','args':{'path':path}} for path in ('left/README.md','right/README.md','left/Cargo.toml','right/Cargo.toml','left/CHARTER.md','left/SPECIFICATION.md')],
    narration,narration]
   if mode=='trace_after_error':replies=[replies[0],'<tool_call>file_read{invalid arguments</tool_call>',narration,narration,narration]
+  if mode=='trace_after_error_progress':replies=replies[:3]+['<tool_call>file_read{invalid arguments</tool_call>',{'tool':'file_read','args':{'path':'left.c'}},{'tool':'file_read','args':{'path':'right.c'}},narration,narration]
   if mode!='trace_stuck':replies += [[{'tool':'file_read','args':{'path':'left.c'}},{'tool':'file_read','args':{'path':'right.c'}}],{'tool':'file_write','args':{'path':'comparison.html','content':HTML}},{'tool':'file_read','args':{'path':'comparison.html'}},{'tool':'complete_task','args':{'status':'complete','requires_tools':False,'answer':FINAL}}]
+  if mode=='trace_after_error_progress':del replies[8] # Both source reads already executed after the error.
  elif mode in ('envelopes','recover_schema','write_only','stale_read','large_html'):
   replies=[{'tool_calls':[function('file_read',{'path':'left.c'}),function('file_read',{'path':'right.c'})]},function('file_write',{'path':'comparison.html','content':expected_html}),{'tool':'file_read','arguments':{'path':'comparison.html'}},{'name':'complete_task','arguments':{'status':'complete','requires_tools':False,'answer':FINAL}}]
   if mode=='write_only':del replies[2]
@@ -77,15 +79,19 @@ def exercise(mode,protocol='legacy'):
       task=api(f'/v1/tasks/{tid}')
       if task['status'] not in ('RUNNING','QUEUED'):break
       assert time.monotonic()<deadline,task;time.sleep(.02)
-     assert calls<=10,(calls,task)
+     assert calls<=(12 if mode=='trace_after_error_progress' else 10),(calls,task)
      assert not (work/'must-not-exist.txt').exists(),('invalid batch executed a prefix',mode,task)
      history=api('/v1/chat/history?session=wire')['turns']
-     if mode in ('envelopes','recover_schema','large_html','trace_resume','trace_after_error'):
+     if mode in ('envelopes','recover_schema','large_html','trace_resume','trace_after_error','trace_after_error_progress'):
       if mode=='recover_schema':assert task['model_failures']==1,task
       assert task['status']=='DONE' and task['output']==FINAL,task
       assert (work/'comparison.html').read_text(encoding='utf8')==expected_html
       steps=task['steps']
-      if mode in ('trace_resume','trace_after_error'):
+      if mode=='trace_after_error_progress':
+       assert calls==12 and task['model_failures']==3,task
+       assert [s['tool'] for s in steps[-4:]]==['file_read','file_read','file_write','file_read'],steps
+       steps=steps[-4:]
+      elif mode in ('trace_resume','trace_after_error'):
        assert calls==10 and [s['tool'] for s in steps[-4:]]==['file_read','file_read','file_write','file_read'],task
        steps=steps[-4:]
       else:assert task['tool_calls']==4,task
@@ -112,6 +118,13 @@ def exercise(mode,protocol='legacy'):
        assert all(s['command']=='planner decision' for s in plans),plans
        assert [d['round'] for d in decisions]==list(range(1,calls+1)),decisions
        assert all(d['max_rounds']==16 and d['tool_protocol']=='legacy' for d in decisions),decisions
+       if mode=='trace_after_error_progress':
+        assert 'invalid or incomplete tagged tool-call response' in decisions[3]['error'],decisions[3]
+        assert all(d['completion_review_required'] for d in decisions[4:]),decisions
+        assert [d['planned_actions'] for d in decisions[4:6]]==[1,1],decisions[4:6]
+        assert all('error' in d for d in decisions[6:8]),decisions[6:8]
+        assert decisions[-1]['completion_declaration']=='complete',decisions[-1]
+        return
        if mode=='trace_after_error':
         assert decisions[1]['error']=='invalid or incomplete tagged tool-call response; no actions executed; use the configured tool protocol with a valid identifier and complete JSON object',decisions[1]
         assert decisions[2]['completion_review_required'],decisions[2]
@@ -131,7 +144,7 @@ def exercise(mode,protocol='legacy'):
     finally:proc.terminate();proc.wait(timeout=5)
  finally:server.shutdown();server.server_close()
 if __name__=='__main__':
- for mode in ('trace_after_error','trace_resume','trace_stuck','false_done','preexisting','write_only','stale_read','envelopes','large_html','recover_schema','unrelated_schema','completion','missing_name','argument_type','argument_suffix','schema','commentary'):exercise(mode)
+ for mode in ('trace_after_error_progress','trace_after_error','trace_resume','trace_stuck','false_done','preexisting','write_only','stale_read','envelopes','large_html','recover_schema','unrelated_schema','completion','missing_name','argument_type','argument_suffix','schema','commentary'):exercise(mode)
 
 if __name__=='__main__':
  for mode in ('false_done','preexisting','envelopes','large_html'):exercise(mode,'native')
