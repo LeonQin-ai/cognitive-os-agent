@@ -1,5 +1,5 @@
 """Actionable incomplete diagnostics and real task resume regression (#128)."""
-import json, socket, subprocess, tempfile, threading, time, urllib.request
+import json, os, socket, subprocess, tempfile, threading, time, urllib.request
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from fixture_completion import reviewed_answer
@@ -92,6 +92,7 @@ with tempfile.TemporaryDirectory(prefix='coa-completion-recovery-') as folder:
     with (backend/'build/completion-diagnostics-e2e.log').open('w',encoding='utf-8') as log:
         process = subprocess.Popen([str(backend/'build/cognitive-os-agent.exe'),'--state',str(state),
             '--workspace',str(state),'serve',str(port)],cwd=backend,stdout=log,stderr=log,
+            env={**os.environ,'COA_TOOL_PROTOCOL':'legacy'},
             creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
         try:
             deadline = time.monotonic()+20

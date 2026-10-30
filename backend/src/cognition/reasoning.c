@@ -4461,6 +4461,15 @@ restart_planning:
                 fail_aborted = 1;
                 break;
             }
+            if (!r->had_plan) {
+                /* Planner/protocol rejection executed no actions. Telling the
+                 * model to fix a failed command/path here invents a tool failure
+                 * and sends protocol recovery back into narration/discovery. */
+                round_log_append(r, planner_uses_native_tools(r->llm) ?
+                    "[system] The previous model response did not produce a valid executable decision. No tools from that response ran. Correct the response protocol: emit the next necessary native tool call, or complete_task only when the requested work is verified or genuinely blocked. Do not diagnose a fictitious failed tool or repeat already successful setup." :
+                    "[system] The previous model response was rejected before execution; no tool from that response ran. Return the next necessary operation as a complete JSON action array [{\"tool\":\"registered_tool_name\",\"args\":{...}}]. Do not return a promise to call tools or retry a fictitious failed command. If all requested work is verified, return a valid complete_task declaration; otherwise continue the remaining actual work. Use complete_task with status blocked only for a genuine blocker.");
+                continue;
+            }
             /* issue #25: a failed action (e.g. ssh login failure) must not end
              * the task. Without an explicit recovery instruction the model
              * tends to answer with an apology and the remaining steps of the

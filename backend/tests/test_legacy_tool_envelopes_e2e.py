@@ -50,7 +50,12 @@ def exercise(mode,protocol='legacy'):
   def log_message(self,*_):pass
   def do_POST(self):
    nonlocal calls
-   self.rfile.read(int(self.headers['Content-Length'])) # Never inspect a prompt or recovery hint.
+   body=json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+   if mode=='generic_recovery' and protocol=='legacy' and calls==1:
+    context=json.dumps(body,ensure_ascii=False)
+    assert 'no tool from that response ran' in context, 'planner rejection must not become a fictitious tool failure'
+    assert '上一轮有动作执行失败' not in context, 'wrong tool-failure recovery branch'
+   # Responses remain fixed and independent of the prompt/recovery hint.
    reply=replies[min(calls,len(replies)-1)];calls+=1
    content=reply if isinstance(reply,str) else json.dumps(reply,ensure_ascii=False)
    message={'content':content}
