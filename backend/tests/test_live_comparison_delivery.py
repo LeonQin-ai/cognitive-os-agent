@@ -9,10 +9,12 @@ root=Path(__file__).resolve().parents[1]
 p=argparse.ArgumentParser(__doc__);p.add_argument('--config',required=True,type=Path)
 p.add_argument('--report',type=Path,default=root/'build/live-comparison-delivery.json')
 p.add_argument('--protocol',choices=('native','legacy'),default='legacy')
-p.add_argument('--paged-sources',action='store_true');a=p.parse_args()
+p.add_argument('--paged-sources',action='store_true')
+p.add_argument('--accept-recovery',action='store_true',help='verify actual delivery after at most three recorded model failures; strict zero-failure mode remains default');a=p.parse_args()
 raw=json.loads(a.config.read_text(encoding='utf-8-sig'));cfg={k:v for k,v in raw.items() if k.startswith('llm.')}
 cfg.update({'http.bind':'127.0.0.1','reasoning.max_rounds':16,'scheduler.workers':1,'llm.timeout_ms':60000})
 report={'model':cfg.get('llm.model'),'protocol':a.protocol,'passed':False,'scope':'synthetic code comparison + actual HTML artifact; reporter GLM endpoint/source unavailable'}
+report['accept_recovery']=a.accept_recovery
 a.report.parent.mkdir(parents=True,exist_ok=True)
 with tempfile.TemporaryDirectory(prefix='coa-live-comparison-') as folder:
  state=Path(folder);left,right=uuid.uuid4().hex[:14],uuid.uuid4().hex[:14]
@@ -46,7 +48,7 @@ with tempfile.TemporaryDirectory(prefix='coa-live-comparison-') as folder:
     if observed.get('status') not in ('RUNNING','QUEUED'):break
     # Allow the configured 16 work rounds plus bounded finalization. The old
     # 12-call cutoff cancelled valid artifact verification before Runtime's limit.
-    if observed.get('model_failures',0)>0 or time.monotonic()-started>180 or observed.get('llm_calls',0)>18:
+    if observed.get('model_failures',0)>(3 if a.accept_recovery else 0) or time.monotonic()-started>180 or observed.get('llm_calls',0)>18:
      report['stop_observation']=observed
      api('DELETE',f'/v1/tasks/{tid}')
      for _ in range(50):
@@ -57,7 +59,7 @@ with tempfile.TemporaryDirectory(prefix='coa-live-comparison-') as folder:
     time.sleep(.2)
    report['seconds']=round(time.monotonic()-started,3)
    report['task']=observed;report['usage']=api('GET','/v1/usage')
-   assert observed.get('status')=='DONE' and not observed.get('model_failures'),'task failed or required model retry'
+   assert observed.get('status')=='DONE' and observed.get('model_failures',0)<=(3 if a.accept_recovery else 0),'task failed or exceeded model recovery allowance'
    artifact=state/'comparison.html';html=artifact.read_text(encoding='utf-8-sig') if artifact.exists() else ''
    report['artifact_bytes']=artifact.stat().st_size if artifact.exists() else 0
    report['artifact_passed']=all(x in html for x in (left,right,'scaling_cur_freq','cpuinfo_cur_freq','1000')) and '<html' in html.lower()
