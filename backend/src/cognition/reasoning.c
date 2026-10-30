@@ -4512,7 +4512,8 @@ restart_planning:
             }
             if(completion_reviewed && prompt_requires_html_artifact(completion_instruction(r,prompt)) && !run_has_verified_html(r)) {
                 if(++artifact_rejections>=3 || r->round_idx>=r->max_rounds){unfinished=1;final_text=xstrdup(txt?txt:"");break;}
-                round_log_append(r,"[system] HTML artifact acceptance failed: no successful file_write followed by file_read for the same existing nonempty .html file in this run. A completion declaration cannot replace the missing artifact receipt.");
+                r->completion_review_required=!planner_uses_native_tools(r->llm);
+                round_log_append(r,"[system] HTML artifact acceptance failed: no successful file_write followed by file_read for the same existing nonempty .html file in this run. A completion declaration cannot replace the missing artifact receipt. Return the next necessary tool calls using the configured protocol; plain text cannot complete this recovery. Use complete_task with status blocked only if no actionable recovery remains.");
                 continue;
             }
             if(r->file_checks_failed){
@@ -4604,6 +4605,11 @@ restart_planning:
                     break;
                 }
                 r->intent_nudged++;
+                /* Recovery must agree with the parser: compatibility narration
+                 * is not a final decision once unmet work has been observed.
+                 * A valid tool plan clears this per-stage requirement. */
+                r->completion_review_required=1;
+                round_log_append(r,"[system] LEGACY ACTION RECOVERY: Return a complete JSON action array [{\"tool\":\"registered_tool_name\",\"args\":{...}}] for the next required operation. If all requested work is verified, return [{\"tool\":\"complete_task\",\"args\":{\"status\":\"complete\",\"requires_tools\":false,\"answer\":\"full final answer\"}}]. For a genuine blocker use status blocked. Plain text is commentary, not an executable decision. Do not repeat an announcement or already successful discovery.");
                 free(last_narration);
                 last_narration = xstrdup(txt ? txt : "");
                 round_log_append(r, txt && *txt ? txt : "");
@@ -4618,8 +4624,7 @@ restart_planning:
                                     "请输出 JSON 动作数组并实际执行；"
                                     "如果回答里包含应该写入文件的代码，用 file_write 把它写到磁盘，"
                                     "不要把代码当文本贴在回答里；"
-                                    "如果任务已经完成或确实无需任何工具，"
-                                    "请直接给出最终答案文本。");
+                                    "任务完成时返回上述 complete_task 声明，不要再返回纯文本意向。");
                 continue;
             }
             /* A raw JSON array as the "answer" is a malformed plan echo: the
