@@ -3,6 +3,8 @@ import json,os,socket,subprocess,tempfile,threading,time,urllib.request,urllib.e
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
 root=Path(__file__).resolve().parents[1]
+build=root/os.environ.get('COA_BUILD_DIR','build')
+build.mkdir(parents=True,exist_ok=True)
 class Model(BaseHTTPRequestHandler):
     choice='role3';calls=0;prompts=[]
     def log_message(self,*args):pass
@@ -25,8 +27,8 @@ try:
         except urllib.error.HTTPError as error:response=error
         assert response.status==status,(response.status,response.read())
         return json.load(response)
-    with (root/'build/flow-agent-selection.log').open('w') as log:
-     proc=subprocess.Popen([str(root/'build/cognitive-os-agent.exe' if os.name=='nt' else root/'build/cognitive-os-agent'),'--state',folder,'--workspace',folder,'serve',str(port)],cwd=root,stdout=log,stderr=log,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
+    with (build/'flow-agent-selection.log').open('w') as log:
+     proc=subprocess.Popen([str(build/('cognitive-os-agent.exe' if os.name=='nt' else 'cognitive-os-agent')),'--state',folder,'--workspace',folder,'serve',str(port)],cwd=root,stdout=log,stderr=log,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
      try:
         for _ in range(100):
             try:api('/v1/scheduler');break
