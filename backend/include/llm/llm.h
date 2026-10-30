@@ -35,6 +35,7 @@ typedef struct llm_request {
     const char *reasoning_effort; /* optional OpenAI-compatible reasoning control */
     const char *tools_json; /* optional OpenAI-format native function catalog, borrowed */
     int stream;      /* set by the streaming entry points */
+    int structured_decision; /* planner control protocol, not a semantic task classifier */
     long timeout_ms; /* HTTP timeout override; 0 = llm_timeout_ms() default */
     llm_stream_cb preview;
     void *preview_ud;

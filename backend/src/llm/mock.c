@@ -157,7 +157,9 @@ static char *extract_command(const char *msg) {
 }
 
 /* Build the mock response for a user message. */
-static char *mock_respond(const char *msg) {
+static char *mock_commentary(int *flag,const char *text){if(flag)*flag=1;return xstrdup(text);}
+static char *mock_respond(const char *msg,int *commentary) {
+    if(commentary)*commentary=0;
     int in_loop;
     const char *full = msg;
     int want_shell;
@@ -250,7 +252,7 @@ static char *mock_respond(const char *msg) {
         if (header) sscanf(header, "## 之前轮次的动作结果 (第 %d/", &previous);
         if (previous <= 1) return xstrdup("[{\"tool\":\"list_dir\",\"args\":{\"path\":\".\"}}]");
         if (previous == 2) return xstrdup("[{\"tool\":\"file_read\",\"args\":{\"path\":\"source.c\"}}]");
-        if (previous == 3) return xstrdup("暂时只读了第一段，尚未读取后续源码。");
+        if (previous == 3) return mock_commentary(commentary,"暂时只读了第一段，尚未读取后续源码。");
         if (previous == 4) return xstrdup("[{\"tool\":\"file_read\",\"args\":{\"path\":\"source.c\",\"offset_bytes\":4000}}]");
         return xstrdup("源码阅读完成：两段源码均已读取，末段证据 END_SOURCE。");
     }
@@ -264,7 +266,7 @@ static char *mock_respond(const char *msg) {
     if(has_substr(msg,"继续读取意向回归测试")) {
         int previous=0; const char *header=strstr(full,"## 之前轮次的动作结果 (第 ");
         if(header) sscanf(header,"## 之前轮次的动作结果 (第 %d/",&previous);
-        if(previous==0) return xstrdup("现在需要深入读取后续文件来定位问题。");
+        if(previous==0) return mock_commentary(commentary,"现在需要深入读取后续文件来定位问题。");
         if(previous==1) return xstrdup("[{\"tool\":\"file_read\",\"args\":{\"path\":\"readme.txt\"}}]");
         return xstrdup("后续源码已实际读取。");
     }
@@ -381,7 +383,7 @@ static char *mock_respond(const char *msg) {
      * generate a PPT, with no action that actually creates the artifact. */
     if (has_substr(msg, "未完成PPT回归测试")) {
         if (in_loop)
-            return xstrdup("我来继续读取技术分析文档，然后生成PPT。");
+            return mock_commentary(commentary,"我来继续读取技术分析文档，然后生成PPT。");
         return xstrdup("[{\"tool\":\"file_read\",\"args\":{\"path\":\"readme.txt\"}}]");
     }
     if (has_substr(msg, "无动作PPT回归测试"))
@@ -601,13 +603,25 @@ static char *mock_respond(const char *msg) {
 static int mock_chat(llm *llm, const llm_request *req, llm_response *resp) {
     (void)llm;
     const char *last = req->num_messages ? req->messages[req->num_messages - 1].content : "";
-    resp->content = mock_respond(last);
+    int commentary=0;
+    resp->content = mock_respond(last,&commentary);
+    if(req->structured_decision && resp->content && !commentary) {
+        const char *p=resp->content;while(*p && isspace((unsigned char)*p))p++;
+        if(*p!='[' && *p!='{' && *p!='<') {
+            cJSON *array=cJSON_CreateArray(),*call=cJSON_CreateObject();
+            cJSON_AddStringToObject(call,"tool","complete_task");cJSON *args=cJSON_AddObjectToObject(call,"args");
+            cJSON_AddStringToObject(args,"status","complete");cJSON_AddBoolToObject(args,"requires_tools",0);
+            cJSON_AddStringToObject(args,"answer",resp->content);cJSON_AddObjectToObject(args,"acceptance");
+            cJSON_AddItemToArray(array,call);char *encoded=cJSON_PrintUnformatted(array);cJSON_Delete(array);
+            if(encoded){free(resp->content);resp->content=encoded;}
+        }
+    }
     return 0;
 }
 
 static int mock_stream(llm *llm, const llm_request *req, llm_stream_cb cb, void *ud) {
     const char *last = req->num_messages ? req->messages[req->num_messages - 1].content : "";
-    char *text = mock_respond(last);
+    char *text = mock_respond(last,NULL);
     size_t len;
 
     if (!text)
