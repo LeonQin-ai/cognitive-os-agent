@@ -2169,6 +2169,7 @@ static int h_reason(state_machine *sm, void *ud, const char *input, char **out) 
         cJSON_AddNumberToObject(decision,"planned_actions",r->n_actions);
         cJSON_AddStringToObject(decision,"stop_reason",diagnostic.stop_reason);
         cJSON_AddBoolToObject(decision,"truncated",r->planner_response_truncated);
+        cJSON_AddBoolToObject(decision,"no_action_response",diagnostic.no_action_response);
         if(plan_err)cJSON_AddStringToObject(decision,"error",plan_err);
         if(raw)cJSON_AddStringToObject(decision,"parsed_response",raw);
         char *detail=cJSON_PrintUnformatted(decision);
@@ -4086,14 +4087,16 @@ int reasoning_run(reasoning *r, const char *prompt, char **answer) {
 }
 
 /* Detect sustained verbatim cycles inside one answer, independently of task
- * wording and tool protocol. Require six cycles, 768 bytes and 40% of the
- * answer so ordinary repeated headings, code idioms and short quotes pass.
+ * wording and tool protocol. Require six cycles and 768 bytes per repeated
+ * region, covering 40% of the answer in total. Disjoint cycles separated by
+ * punctuation or progress labels still count; overlapping bytes count once.
  * Hashes only select candidates; actual bytes must match. */
 static int answer_has_repetition(const char *text) {
     size_t n = text ? strlen(text) : 0;
     if (n < 768) return 0;
     size_t *seen = (size_t *)calloc(8192, sizeof(*seen));
     if (!seen) return 0;
+    size_t covered=0, covered_end=0;
     for (size_t i = 0; i + 32 <= n; i++) {
         unsigned hash = 2166136261u;
         for (size_t k = 0; k < 32; k++)
@@ -4106,9 +4109,14 @@ static int answer_has_repetition(const char *text) {
         size_t end = i + 32;
         while (end < n && text[end] == text[end-period]) end++;
         size_t repeated = end - start;
-        if (repeated >= 768 && repeated / period >= 6 && repeated >= n - n*3/5) {
-            free(seen);
-            return 1;
+        if (repeated >= 768 && repeated / period >= 6) {
+            size_t uncovered_start=start>covered_end ? start:covered_end;
+            if(end>uncovered_start)covered+=end-uncovered_start;
+            if(end>covered_end)covered_end=end;
+            if(covered >= n - n*3/5) {
+                free(seen);
+                return 1;
+            }
         }
         /* A long quoted cycle below the answer-wide threshold must not
          * cause the same suffix to be rescanned at every byte. */
@@ -4125,7 +4133,6 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     llm *saved = NULL;
     char *final_text = NULL;
     char *result = NULL;
-    char *last_narration = NULL; /* previous narration text (repetition break) */
     int stalled = 0;
     /* compose the answer: everything that happened + the final reply */
     strbuf out;
@@ -4312,6 +4319,7 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     int consec_fail = 0; /* consecutive stage failures → circuit breaker */
     int transport_fail_streak = 0;
     int fail_aborted = 0;
+    int no_action_rounds = 0, no_action_stalled = 0;
     int unfinished = 0; /* text described future work, or requested write never ran */
     int output_repeated = 0;
     int search_only_rounds = 0;
@@ -4352,6 +4360,7 @@ restart_planning:
             r->search_seen_n = r->versioned_seen_n = 0;
             search_only_rounds = artifact_read_nudged = 0;
             no_progress_rounds = cycle_reads = cycle_nudged = cycle_aborted = 0;
+            no_action_rounds = no_action_stalled = 0;
             r->observation_seen_n = 0;
             r->opaque_seen_n = 0;r->artifact_seen_n=0;r->artifact_versions_seen_n=0;
             free(r->prev_plan); r->prev_plan = NULL;
@@ -4451,6 +4460,14 @@ restart_planning:
                 fail_aborted = 1;
                 break;
             }
+            /* Count absent executable decisions, not wording. Malformed
+             * arguments, truncation and transport failures keep their own
+             * recovery budgets. Only new observations reopen this window. */
+            if(!r->had_plan && r->last_model_failure_call==r->prog_llm_calls &&
+               r->last_model_failure.no_action_response && ++no_action_rounds>=2) {
+                no_action_stalled=fail_aborted=unfinished=1;
+                break;
+            }
             progress_emit(r, r->had_plan ? "recovering" : "reconnecting");
         if (r->round_idx >= r->max_rounds)
                 break;
@@ -4492,15 +4509,9 @@ restart_planning:
         consec_fail = 0; /* a successful (ST_DONE) round resets the breaker */
         transport_fail_streak = 0;
         if (!r->had_plan) { /* no actions planned → this is the final answer */
-            /* Intent narration ("Let me check the files…") without a single
-             * action is a premature stop: the model announced its plan
-             * instead of emitting the JSON action array. Narration is NOT
-             * confined to round 1, and chatty models narrate repeatedly, so
-             * nudge on ANY round — bounded by CONSECUTIVE narration rounds
-             * (reset whenever a round executes a plan), not a per-run total:
-             * a narration → plan → narration pattern is normal thinking
-             * aloud, while the model stuck narrating 4 rounds in a row will
-             * not recover. Exhaustion must report an incomplete task. */
+            /* A no-action reply is a candidate result. Reviewed decisions
+             * use structural validation; compatibility recovery below is
+             * bounded by attempts, never by equality of response text. */
             const char *txt = strip_nudge_echo(result);
             if (answer_has_repetition(txt)) {
                 unfinished = 1;
@@ -4594,12 +4605,7 @@ restart_planning:
                 /* A plain-text answer closes the loop once its explicit action,
                  * read, and observation gates are met. If a gate is still
                  * unmet, allow bounded consecutive correction requests, then fail closed. */
-                if (last_narration && txt && strcmp(txt, last_narration) == 0) {
-                    unfinished = 1;
-                    final_text = xstrdup(txt);
-                    break;
-                }
-                if (r->max_rounds <= 1 || r->intent_nudged >= (needs_intent_recovery ? 4 : 1) || r->round_idx >= r->max_rounds) {
+                if (r->max_rounds <= 1 || r->intent_nudged >= 1 || r->round_idx >= r->max_rounds) {
                     unfinished = 1;
                     final_text = xstrdup(txt ? txt : "");
                     break;
@@ -4608,8 +4614,6 @@ restart_planning:
                 /* Keep the compatibility hint consistent with reviewed recovery,
                  * without changing specific read/tool-failure recovery budgets. */
                 round_log_append(r,"[system] LEGACY ACTION RECOVERY: Return a complete JSON action array [{\"tool\":\"registered_tool_name\",\"args\":{...}}] for the next required operation. If all requested work is verified, return [{\"tool\":\"complete_task\",\"args\":{\"status\":\"complete\",\"requires_tools\":false,\"answer\":\"full final answer\"}}]. For a genuine blocker use status blocked. Plain text is commentary, not an executable decision. Do not repeat an announcement or already successful discovery.");
-                free(last_narration);
-                last_narration = xstrdup(txt ? txt : "");
                 round_log_append(r, txt && *txt ? txt : "");
                 if (needs_read) {
                     round_log_append(r, "[system] 当前完整源码阅读尚未完成：有文件未读到 EOF，或答案明确列出未读源码。"
@@ -4683,17 +4687,18 @@ restart_planning:
         round_log_append(r, result ? result : "");
         obs_log_append(r, result ? result : "");
         r->intent_nudged = 0; /* narration recovered: reset the consecutive bound */
-        /* Repetition is consecutive only while no real work intervenes.
-         * Keeping this text after a new source page was read incorrectly
-         * aborted normal announce -> execute -> announce -> execute runs. */
         if (r->round_new_observations) {
-            free(last_narration);
-            last_narration = NULL;
+            no_action_rounds = 0;
             /* Review the eventual delivery after newly executed work, not an
              * obsolete candidate reviewed before that work. Cached/repeated
              * observations do not reopen review and consume extra calls. */
             completion_reviewed = 0;
             artifact_rejections = 0;
+        } else if(no_action_rounds && !planner_uses_native_tools(r->llm)) {
+            /* Replaying cached evidence is not recovery progress. A valid
+             * plan may clear parser recovery, but it cannot reopen this
+             * absent-decision window without a new observation. */
+            r->completion_review_required=1;
         }
         if(planner_uses_native_tools(r->llm) && r->round_idx==r->max_rounds &&
            r->round_new_observations>0 && r->all_actions_ok &&
@@ -4813,7 +4818,7 @@ restart_planning:
     if (!run_aborted(r) && !task_close_messages(r->run_task)) {
         free(final_text); final_text = NULL;
         free(result); result = NULL;
-        free(last_narration); last_narration = NULL;
+        no_action_rounds = no_action_stalled = 0;
         stalled = consec_fail = fail_aborted = synthesized = unfinished = 0;
         goto restart_planning;
     }
@@ -4861,6 +4866,7 @@ restart_planning:
         strbuf_append(&out, "任务未完成：尚未完成请求的阅读、操作或验证，当前结果仅为部分进展。");
         int explained=0;
         if(html_missing){strbuf_append(&out,"\n原因：缺少本次任务写入并读回的非空 HTML 文件，未通过产物验收。");explained=1;}
+        if(no_action_stalled){strbuf_append(&out,"\n原因：恢复阶段连续两次没有返回可执行动作或合法完成声明，且没有新增执行进展，已停止重复规划。");explained=1;}
         if(r->file_checks_failed){strbuf_appendf(&out,"\n原因：%s",r->file_check_error);explained=1;}
         if (output_repeated) {
             strbuf_append(&out,"\n原因：模型单次答复内部出现持续循环，无法作为有效的完成结果。");
@@ -4962,7 +4968,6 @@ restart_planning:
     free(final_text);
     free(truncated_prefix);
     free(result);
-    free(last_narration);
     free(r->last_plan_raw);
     r->last_plan_raw = NULL;
     free(r->prev_plan);

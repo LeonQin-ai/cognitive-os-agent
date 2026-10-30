@@ -155,7 +155,7 @@ def exercise(protocol, mode):
                         print(f'PASS: {protocol}/{mode}; {expected_status}, source proof and history verified', flush=True)
                         return
                     expected = {'recover': (4, 2, 'DONE'), 'commentary': (5, 2, 'DONE'),
-                        'stuck': (7, 1, 'FAILED'), 'blocked': (3, 1, 'FAILED'),
+                        'stuck': (4, 1, 'FAILED'), 'blocked': (3, 1, 'FAILED'),
                         'budget': (2, 1, 'FAILED'), 'chat': (1, 0, 'DONE')}[mode]
                     if mode in ('recover','commentary'):
                         expected=(expected[0]+1,expected[1],expected[2])

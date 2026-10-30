@@ -13,6 +13,7 @@ typedef struct llm llm;
 /* Safe metadata for the primary planner request; no text, arguments or keys. */
 typedef struct planner_model_diagnostic {
     int http_status, max_tokens, truncated, has_content, has_tool_calls;
+    int no_action_response; /* required decision absent; not malformed tool arguments */
     char stop_reason[64];
     char stage[24]; /* transport, http, response, protocol */
     /* Rejected operation identity for recovery, not an executed tool result.

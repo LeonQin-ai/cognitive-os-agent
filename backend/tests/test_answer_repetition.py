@@ -56,6 +56,11 @@ def main():
         ('issue-202', '我将搜索相关代码。' + cycle * 18, True),
         ('after-tools', '我将搜索相关代码。' + cycle * 18, True),
         ('english-cycle', 'Inspect source, then check recovery evidence. ' * 40, True),
+        ('issue-235-fragmented',
+         '我需要继续读取 DPU 版本的 sysctl.c 文件，并搜索关键函数来分析差异。'
+         + '让我继续读取文件并搜索关键代码。' * 30 + '......'
+         + '让我继续读取文件并搜索关键代码。' * 30 + '\n继续：\n'
+         + '让我继续读取文件并搜索关键代码。' * 30, True),
         ('issue-232-task102',
          '我需要深入分析代码。从已有信息看到关键点：CPUINFO_CURRENT_FREQ 随内核版本变化。'
          '我需要继续读取代码中 cpufreq 相关的实现函数和 frontend 相关部分。'
@@ -66,6 +71,9 @@ def main():
         ('distinct-analysis', '\n'.join(
             f'Section {i}: evidence at src/module_{i}/store.c:{i*17} '
             f'has value {i*i*i}; recovery result {i*123457}.' for i in range(80)), False),
+        ('disjoint-quotes', 'quoted-reference-x ' * 50 + '\n'.join(
+            f'Unique evidence {i}: {i*i}, path src/{i}/state.c' for i in range(180))
+            + 'quoted-reference-y ' * 50, False),
         ('quoted-repetition', 'x' * 800 + '\n'.join(
             f'Unique evidence {i}: {i*i}, path src/{i}/state.c' for i in range(100)), False),
     ]
@@ -99,31 +107,34 @@ def main():
                     print(f'PASS: {protocol}/{name}', flush=True)
             # Task 102 was exported as DONE through HTTP, not the CLI. Exercise
             # the scheduler/chat path too, including a successful source read.
-            Provider.answer=next(answer for name,answer,rejected in cases if name=='issue-232-task102')
-            Provider.calls=0;Provider.tool_first=True
-            with tempfile.TemporaryDirectory(prefix='coa-http-repetition-') as folder:
-                state=Path(folder);(state/'evidence.txt').write_text('actual source evidence',encoding='utf8')
-                (state/'cognitive-os-agent.json').write_text(json.dumps({'llm.provider':'openai','llm.model':'fixture','llm.api_key':'fixture','llm.base_url':f'http://127.0.0.1:{server.server_port}','reasoning.max_rounds':8}),encoding='utf8')
-                with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
-                def api(path,body=None):
-                    request=urllib.request.Request(f'http://127.0.0.1:{port}'+path,data=json.dumps(body).encode() if body is not None else None,headers={'Content-Type':'application/json'})
-                    with urllib.request.urlopen(request,timeout=5) as response:return json.load(response)
-                proc=subprocess.Popen([str(BINARY),'--state',folder,'--workspace',folder,'serve',str(port)],cwd=BACKEND,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,env={**os.environ,'COA_TOOL_PROTOCOL':protocol},creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
-                try:
-                    for _ in range(100):
-                        try:api('/v1/scheduler');break
-                        except OSError:assert proc.poll() is None;time.sleep(.05)
-                    session=api('/v1/chat/sessions',{})['id']
-                    tid=api('/v1/chat',{'session':session,'message':'分析 evidence.txt 中 CPU 频率采样逻辑并给出结论。'})['id']
-                    deadline=time.monotonic()+15
-                    while True:
-                        task=api(f'/v1/tasks/{tid}')
-                        if task['status'] not in ('RUNNING','QUEUED'):break
-                        assert time.monotonic()<deadline;time.sleep(.05)
-                    assert task['status']=='FAILED' and task['tool_calls']==1,task
-                    assert '持续重复' in task['output'] and Provider.answer not in task['output'],task
-                    print(f'PASS: {protocol}/task102 HTTP scheduler rejects repeated delivery after real read')
-                finally:proc.terminate();proc.wait(timeout=10)
+            for http_case in ('issue-232-task102','issue-235-fragmented'):
+                Provider.answer=next(answer for name,answer,rejected in cases if name==http_case)
+                Provider.calls=0;Provider.tool_first=True
+                with tempfile.TemporaryDirectory(prefix='coa-http-repetition-') as folder:
+                    state=Path(folder);(state/'evidence.txt').write_text('actual source evidence',encoding='utf8')
+                    (state/'cognitive-os-agent.json').write_text(json.dumps({'llm.provider':'openai','llm.model':'fixture','llm.api_key':'fixture','llm.base_url':f'http://127.0.0.1:{server.server_port}','reasoning.max_rounds':8}),encoding='utf8')
+                    with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
+                    def api(path,body=None):
+                        request=urllib.request.Request(f'http://127.0.0.1:{port}'+path,data=json.dumps(body).encode() if body is not None else None,headers={'Content-Type':'application/json'})
+                        with urllib.request.urlopen(request,timeout=5) as response:return json.load(response)
+                    proc=subprocess.Popen([str(BINARY),'--state',folder,'--workspace',folder,'serve',str(port)],cwd=BACKEND,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,env={**os.environ,'COA_TOOL_PROTOCOL':protocol},creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
+                    try:
+                        for _ in range(100):
+                            try:api('/v1/scheduler');break
+                            except OSError:assert proc.poll() is None;time.sleep(.05)
+                        session=api('/v1/chat/sessions',{})['id']
+                        tid=api('/v1/chat',{'session':session,'message':'分析 evidence.txt 中 CPU 频率采样逻辑并给出结论。'})['id']
+                        deadline=time.monotonic()+15
+                        while True:
+                            task=api(f'/v1/tasks/{tid}')
+                            if task['status'] not in ('RUNNING','QUEUED'):break
+                            assert time.monotonic()<deadline;time.sleep(.05)
+                        assert task['status']=='FAILED' and task['tool_calls']==1,task
+                        assert '持续重复' in task['output'] and Provider.answer not in task['output'],task
+                        assert Provider.calls==2,Provider.calls
+                        assert not api('/v1/chat/history?session='+session)['turns']
+                        print(f'PASS: {protocol}/{http_case} HTTP scheduler rejects repeated delivery after real read')
+                    finally:proc.terminate();proc.wait(timeout=10)
     finally:
         server.shutdown()
         server.server_close()

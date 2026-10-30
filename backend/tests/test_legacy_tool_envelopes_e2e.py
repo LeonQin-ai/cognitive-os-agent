@@ -16,14 +16,23 @@ def function(name,args):return {'type':'function','function':{'name':name,'argum
 def exercise(mode,protocol='legacy'):
  calls=0
  expected_html=HTML+('<!--'+('large receipt proof '*6000)+'-->' if mode=='large_html' else '')
- if mode in ('generic_recovery','generic_stuck','generic_blocked','chat_plain'):
+ if mode in ('generic_recovery','generic_delayed','generic_stuck','generic_blocked','generic_progress','generic_cached','generic_task110','chat_plain'):
   finish={'tool':'complete_task','args':{'status':'blocked' if mode=='generic_blocked' else 'complete','requires_tools':False,'answer':'没有可用证据，无法继续核对。' if mode=='generic_blocked' else '证据核对完成：LEFT_WIRE_PROOF、RIGHT_WIRE_PROOF。'}}
   replies=['<tool_call>file_read{invalid arguments</tool_call>']
   if mode=='chat_plain':replies=['你好。']
   elif mode=='generic_blocked':replies += [finish]
+  elif mode in ('generic_progress','generic_cached'):
+   replies += ['准备检查。',{'tool':'file_read','args':{'path':'left.c'}},'需要继续推进。','正在核对。',{'tool':'file_read','args':{'path':'left.c' if mode=='generic_cached' else 'right.c'}},finish]
+   if mode=='generic_cached':replies[-1]='换一种说法，继续检查。'
+  elif mode=='generic_task110':
+   replies=[[{'tool':'list_dir','args':{'path':side}} for side in ('left','right')],'我需要实际读取两个项目的关键文件来进行有意义的对比。让我先并行读取。',[{'tool':'file_read','args':{'path':'left.c'}},{'tool':'file_read','args':{'path':'right.c'}}],
+    '我需要继续读取两个项目的更多内容来完成对比分析。让我并行读取两个README的后续部分，并深入查看源码结构。',
+    '我需要继续读取两个项目的更多内容来完成对比分析。让我并行读取两个README的后续部分，并查看核心源码结构。',
+    '我已经有了两个项目的基础信息。让我继续读取两个README的后续部分以获取功能特性详情，同时查看文档目录结构。',
+    '我需要继续读取两个项目的README后续部分和核心源码结构，以完成有意义的对比分析。让我并行执行多个读取操作。']
   else:
-   replies += ['正在检查，请稍候。']*3
-   if mode=='generic_recovery':replies += [[{'tool':'file_read','args':{'path':'left.c'}},{'tool':'file_read','args':{'path':'right.c'}}],finish]
+   replies += (['正在检查，请稍候。'] if mode=='generic_recovery' else ['正在检查，请稍候。','计划先核对证据。','下一步读取两个文件。'])
+   if mode in ('generic_recovery','generic_delayed'):replies += [[{'tool':'file_read','args':{'path':'left.c'}},{'tool':'file_read','args':{'path':'right.c'}}],finish]
  elif mode in ('trace_resume','trace_stuck','trace_after_error','trace_after_error_progress','trace_107','trace_narration_recovery'):
   narration='我需要进一步了解两个项目的源码结构，以便做出详细的对比分析。让我查看两个项目的源码目录结构和关键文件。'
   replies=[[{'tool':'list_dir','args':{'path':side}} for side in ('left','right')],
@@ -76,7 +85,7 @@ def exercise(mode,protocol='legacy'):
  try:
   with tempfile.TemporaryDirectory(prefix='coa-wire-actions-') as folder:
    work=Path(folder);(work/'left.c').write_text('LEFT_WIRE_PROOF',encoding='utf8');(work/'right.c').write_text('RIGHT_WIRE_PROOF',encoding='utf8')
-   if mode.startswith('trace_'):
+   if mode.startswith('trace_') or mode=='generic_task110':
     for side in ('left','right'):
      (work/side).mkdir()
      for name in ('README.md','Cargo.toml','CHARTER.md','SPECIFICATION.md'):(work/side/name).write_text(side+' '+name,encoding='utf8')
@@ -102,32 +111,37 @@ def exercise(mode,protocol='legacy'):
      assert not (work/'must-not-exist.txt').exists(),('invalid batch executed a prefix',mode,task)
      history=api('/v1/chat/history?session=wire')['turns']
      if mode=='generic_recovery':
-      assert task['status']=='DONE' and calls==7 and task['model_failures']==4 and task['tool_calls']==2,task
+      assert task['status']=='DONE' and calls==5 and task['model_failures']==2 and task['tool_calls']==2,task
       assert [s['tool'] for s in task['steps']]==['file_read','file_read'],task
       assert task['output']==finish['args']['answer'] and history[-1]['a']==task['output'],task
       assert not (work/'comparison.html').exists()
-     elif mode in ('generic_stuck','generic_blocked'):
-      assert task['status']=='FAILED' and calls==(2 if mode=='generic_blocked' else 5) and task['tool_calls']==0 and not history,task
+     elif mode in ('generic_stuck','generic_delayed','generic_blocked','generic_cached','generic_task110'):
+      expected_calls={'generic_blocked':2,'generic_cached':7,'generic_task110':6}.get(mode,3)
+      expected_tools={'generic_cached':1,'generic_task110':4}.get(mode,0)
+      assert task['status']=='FAILED' and calls==expected_calls and task['tool_calls']==expected_tools and not history,task
+      if mode!='generic_blocked':
+       assert '恢复阶段连续两次' in task['output'],task
+       decisions=[json.loads(s['result']) for s in api(f'/v1/trace?task_id={tid}') if s['name']=='llm.plan']
+       assert decisions[-1]['no_action_response'],decisions[-1]
+     elif mode=='generic_progress':
+      assert task['status']=='DONE' and calls==8 and task['tool_calls']==2 and task['model_failures']==3,task
+      assert task['output']==finish['args']['answer'],task
      elif mode=='chat_plain':
       assert task['status']=='DONE' and calls==1 and task['tool_calls']==0 and task['output']=='你好。',task
-     elif mode in ('envelopes','recover_schema','large_html','trace_resume','trace_after_error','trace_after_error_progress','trace_107','trace_narration_recovery'):
+     elif mode in ('trace_after_error','trace_107','trace_narration_recovery'):
+      expected={'trace_after_error':(4,2),'trace_107':(7,3),'trace_narration_recovery':(6,2)}[mode]
+      assert task['status']=='FAILED' and (calls,task['tool_calls'])==expected and not history,task
+      assert '恢复阶段连续两次' in task['output'] and not (work/'comparison.html').exists(),task
+     elif mode in ('envelopes','recover_schema','large_html','trace_resume','trace_after_error_progress'):
       if mode=='recover_schema':assert task['model_failures']==1,task
       assert task['status']=='DONE' and task['output']==FINAL,task
       assert (work/'comparison.html').read_text(encoding='utf8')==expected_html
       steps=task['steps']
-      if mode=='trace_narration_recovery':
-       assert calls==10 and task['model_failures']==2,task
-       assert [s['tool'] for s in steps]==['file_read','file_read','file_read','file_read','file_write','file_read'],steps
-       steps=[steps[0],steps[1],steps[-2],steps[-1]]
-      elif mode=='trace_107':
-       assert calls==13 and task['model_failures']==4,task
-       assert [s['tool'] for s in steps[-4:]]==['file_read','file_read','file_write','file_read'],steps
-       steps=steps[-4:]
-      elif mode=='trace_after_error_progress':
+      if mode=='trace_after_error_progress':
        assert calls==12 and task['model_failures']==2,task
        assert [s['tool'] for s in steps[-4:]]==['file_read','file_read','file_write','file_read'],steps
        steps=steps[-4:]
-      elif mode in ('trace_resume','trace_after_error'):
+      elif mode=='trace_resume':
        assert calls==10 and [s['tool'] for s in steps[-4:]]==['file_read','file_read','file_write','file_read'],task
        steps=steps[-4:]
       else:assert task['tool_calls']==4,task
@@ -135,7 +149,7 @@ def exercise(mode,protocol='legacy'):
       assert 'LEFT_WIRE_PROOF' in steps[0]['out'] and 'RIGHT_WIRE_PROOF' in steps[1]['out'] and HTML in steps[3]['out'],steps
       assert history[-1]['a']==FINAL,history
      elif mode=='trace_stuck':
-      assert calls==9 and task['status']=='FAILED' and task['tool_calls']==8 and '产物验收' in task['output'] and not history,task
+      assert calls==6 and task['status']=='FAILED' and task['tool_calls']==8 and '产物验收' in task['output'] and not history,task
      elif mode=='completion':
       assert task['status']=='DONE' and task['output']=='你好。' and task['tool_calls']==0 and calls==1,task
      elif mode in ('false_done','preexisting','write_only','stale_read'):
@@ -156,14 +170,12 @@ def exercise(mode,protocol='legacy'):
        assert all(d['max_rounds']==16 and d['tool_protocol']=='legacy' for d in decisions),decisions
        if mode=='trace_narration_recovery':
         assert not decisions[3]['completion_review_required'] and decisions[4]['completion_review_required'],decisions
-        assert decisions[5]['completion_review_required'] and decisions[6]['completion_review_required'],decisions
-        assert decisions[-1]['completion_declaration']=='complete',decisions[-1]
+        assert decisions[5]['completion_review_required'] and decisions[5]['no_action_response'],decisions
         return
        if mode=='trace_107':
-        assert [d['planned_actions'] for d in decisions]==[2,0,0,1,0,0,0,1,0,1,1,0,0],decisions
+        assert [d['planned_actions'] for d in decisions]==[2,0,0,1,0,0,0],decisions
         assert decisions[5]['completion_review_required'] and decisions[6]['completion_review_required'],decisions
-        assert not decisions[8]['completion_review_required'],decisions
-        assert decisions[-1]['completion_declaration']=='complete',decisions[-1]
+        assert decisions[-1]['no_action_response'],decisions[-1]
         return
        if mode=='trace_after_error_progress':
         assert 'invalid or incomplete tagged tool-call response' in decisions[3]['error'],decisions[3]
@@ -177,8 +189,8 @@ def exercise(mode,protocol='legacy'):
        if mode=='trace_after_error':
         assert decisions[1]['error']=='invalid or incomplete tagged tool-call response; no actions executed; use the configured tool protocol with a valid identifier and complete JSON object',decisions[1]
         assert decisions[2]['completion_review_required'],decisions[2]
-        assert all(d['completion_review_required'] and 'error' in d for d in decisions[2:5]),decisions[2:5]
-        assert task['model_failures']==4,task
+        assert all(d['completion_review_required'] and d['no_action_response'] for d in decisions[2:4]),decisions[2:4]
+        assert task['model_failures']==3,task
         return
        assert decisions[3]['parsed_response']==narration and decisions[3]['completion_declaration']=='none',decisions[3]
        assert decisions[4]['completion_review_required'] and 'error' in decisions[4] and plans[4]['status']==-1,decisions[4]
@@ -193,7 +205,7 @@ def exercise(mode,protocol='legacy'):
     finally:proc.terminate();proc.wait(timeout=5)
  finally:server.shutdown();server.server_close()
 if __name__=='__main__':
- for mode in ('generic_recovery','generic_stuck','generic_blocked','chat_plain'):exercise(mode)
+ for mode in ('generic_recovery','generic_delayed','generic_stuck','generic_blocked','generic_progress','generic_cached','generic_task110','chat_plain'):exercise(mode)
  for mode in ('trace_narration_recovery','trace_107','trace_after_error_progress','trace_after_error','trace_resume','trace_stuck','false_done','preexisting','write_only','stale_read','envelopes','large_html','recover_schema','unrelated_schema','completion','missing_name','argument_type','argument_suffix','schema','commentary'):exercise(mode)
 
 if __name__=='__main__':

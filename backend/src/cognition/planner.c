@@ -971,6 +971,7 @@ static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_act
                 free(resp.content);free(resp.tool_actions_json);free(resp.error);
                 cJSON_Delete(calls);cJSON_Delete(finish);return 0;
             }
+            if(diagnostic)diagnostic->no_action_response=finishes==0 && resp.content && *resp.content;
             if(err_out)*err_out=xstrdup("native turn has no executable tool calls or valid complete_task declaration; call the required tools, or complete_task(status, requires_tools=false, answer) only after work is finished");
             free(resp.content);free(resp.tool_actions_json);free(resp.error);
             cJSON_Delete(calls);cJSON_Delete(finish);return -1;
@@ -1167,6 +1168,7 @@ static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_act
             cJSON_Delete(finish);
         }
         if (finish_count || (require_completion && !*n_actions)) {
+            if(diagnostic)diagnostic->no_action_response=!finish_count && !*n_actions;
             planner_actions_free(*actions,*n_actions); *actions=NULL; *n_actions=0;
             if (err_out) *err_out=xstrdup("completion review requires next tool actions or a valid complete_task declaration; commentary is not completion");
             if (raw_out) *raw_out=NULL;

@@ -234,6 +234,8 @@ jobs:
         run: ASAN_OPTIONS=detect_leaks=0 python3 tools/run_ci_regression.py tests/test_artifact_delivery_recovery_e2e.py
       - name: ASAN legacy tool envelopes e2e
         run: ASAN_OPTIONS=detect_leaks=0 python3 tools/run_ci_regression.py tests/test_legacy_tool_envelopes_e2e.py
+      - name: ASAN repeated answer rejection
+        run: ASAN_OPTIONS=detect_leaks=0 python3 tools/run_ci_regression.py tests/test_answer_repetition.py
       - name: ASAN im discussion native e2e
         run: ASAN_OPTIONS=detect_leaks=0 python3 tools/run_ci_regression.py tests/test_im_discussion_native_e2e.py
       - name: Retain ASAN regression failure diagnostics
