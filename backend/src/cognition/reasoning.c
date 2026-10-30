@@ -4605,10 +4605,8 @@ restart_planning:
                     break;
                 }
                 r->intent_nudged++;
-                /* Recovery must agree with the parser: compatibility narration
-                 * is not a final decision once unmet work has been observed.
-                 * A valid tool plan clears this per-stage requirement. */
-                r->completion_review_required=1;
+                /* Keep the compatibility hint consistent with reviewed recovery,
+                 * without changing specific read/tool-failure recovery budgets. */
                 round_log_append(r,"[system] LEGACY ACTION RECOVERY: Return a complete JSON action array [{\"tool\":\"registered_tool_name\",\"args\":{...}}] for the next required operation. If all requested work is verified, return [{\"tool\":\"complete_task\",\"args\":{\"status\":\"complete\",\"requires_tools\":false,\"answer\":\"full final answer\"}}]. For a genuine blocker use status blocked. Plain text is commentary, not an executable decision. Do not repeat an announcement or already successful discovery.");
                 free(last_narration);
                 last_narration = xstrdup(txt ? txt : "");
