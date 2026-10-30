@@ -959,6 +959,14 @@ static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_act
                 free(resp.content);free(resp.tool_actions_json);free(resp.error);
                 cJSON_Delete(calls);cJSON_Delete(finish);return 0;
             }
+            /* Text carrying tool markup is an attempted protocol response,
+             * not commentary. Never repair or execute ambiguous bytes; ask
+             * the provider for a fresh native call with validated arguments. */
+            if(!finishes && resp.content && next_tool_markup(resp.content,1)) {
+                if(err_out)*err_out=xstrdup("native turn has no executable tool calls: unexecuted tool-call markup in text; emit a fresh native tool call with complete arguments, or quote examples in Markdown");
+                free(resp.content);free(resp.tool_actions_json);free(resp.error);
+                cJSON_Delete(calls);cJSON_Delete(finish);return -1;
+            }
             if(diagnostic)diagnostic->no_action_response=finishes==0 && resp.content && *resp.content;
             if(!finishes && resp.content && *resp.content && !resp.truncated) {
                 if(native_end_out)*native_end_out=4;
