@@ -96,7 +96,7 @@ def exercise(mode,protocol):
   def api(path,body=None):
    req=urllib.request.Request(f'http://127.0.0.1:{port}'+path,data=json.dumps(body).encode() if body is not None else None,headers={'Content-Type':'application/json'})
    with urllib.request.urlopen(req,timeout=5) as r:return json.load(r)
-  with (build/f'flow-review-delivery-{protocol}-{mode}.log').open('w',encoding='utf-8') as log:
+  with (build/f'flow-review-delivery-e2e-{protocol}-{mode}.log').open('w',encoding='utf-8') as log:
    proc=subprocess.Popen([str(binary),'--state',str(state),'--workspace',str(work),'serve',str(port)],cwd=root,stdout=log,stderr=log,env={**os.environ,'COA_TOOL_PROTOCOL':protocol},creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
    try:
     for _ in range(100):
@@ -107,7 +107,9 @@ def exercise(mode,protocol):
      {'id':'step2','agent':'coder','task':'基于 {{step1}} 分析记忆与上下文实现，给出分析报告和尚未审查的文件。'},
      {'id':'step3','agent':'reviewer','task':'基于 {{step2}} 的记忆与上下文实现代码，审查其正确性、边界条件、资源泄漏和并发安全，指出潜在风险并提供修复建议。'}]}
     if mode=='wide':dag['nodes'][2]['task']='基于 {{step2}} 和补充对照 {{step2}} 的记忆与上下文实现代码，审查其正确性、边界条件、资源泄漏和并发安全，指出潜在风险并提供修复建议。'
-    tid=api('/v1/flows',dag)['id'];deadline=time.monotonic()+25
+    # Wide context preparation scales with report size and Windows runner load.
+    # This is a harness deadline, not the 3s cancellation SLA or the model-call cap.
+    tid=api('/v1/flows',dag)['id'];deadline=time.monotonic()+(60 if mode=='wide' else 25)
     if mode=='cancel':
      # Preparing two upstream nodes and entering review has the same budget
      # as other Flow cases. Only the actual cancellation is timed at 3s.
