@@ -26,3 +26,11 @@ Focused validation uses `test_structured_task_contract_e2e.py` and the C
 need migration and verification. No live maas-glm-5.1-zhipu endpoint was available
 for validation in this environment. Offline mock prompt matching only selects
 fixture responses; it does not control the production runtime state machine.
+
+## Regression migration checkpoint
+
+Legacy C suite: 4603 passed, zero failures. Structured contract suite: all 40
+legacy/native scenarios passed. Both binaries compile. Fixtures now supply
+explicit obligations and valid completion decisions; tool-count assertions are
+preserved. Other Python regressions and the full CI matrix still require
+verification before merging to main.

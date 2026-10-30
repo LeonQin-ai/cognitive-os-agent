@@ -2595,7 +2595,7 @@ static void test_planner_dsml(void) {
          * serialization escapes the closing DSML tags. */
         "脚本里中文全角冒号误当成了键值分隔符，需要用逗号替换。先写一个修复脚本并确认条目解析方式。\n\n<｜｜DSML｜｜ calls>\n<｜｜DSML｜｜ invoke name=\"file_write\">\n<｜｜DSML｜｜ parameter name=\"args\" string=\"false\">{\"path\":\"_fix_deck.py\",\"content\":\"print('fix and verify')\\n\"}\\</｜｜DSML｜｜ parameter>\n</｜｜DSML｜｜ invoke>\n<｜｜DSML｜｜ invoke name=\"grep\">\n<｜｜DSML｜｜ parameter name=\"args\" string=\"false\">{\"pattern\":\"content_slide\",\"path\":\"_generate_interview_deck.py\"}</｜｜DSML｜｜ parameter>\n</｜｜DSML｜｜ invoke>\n</｜｜DSML｜｜ calls>"
     };
-    int expected[]={4,2,1,1,-1,-1,-1,-1,0,1,1,3,2};
+    int expected[]={4,2,1,1,-1,-1,-1,-1,0,1,1,3,0};
     for (size_t i=0;i<sizeof(cases)/sizeof(*cases);i++) {
         llm provider={.vt=&vt,.impl=(void *)cases[i]};
         planned_action *actions=NULL; int n=0; char *raw=NULL,*err=NULL;
@@ -2616,9 +2616,9 @@ static void test_planner_dsml(void) {
         }
         planner_actions_free(actions,n); free(raw); free(err);
     }
-    /* A real coder response mixes object-wrapped glob arguments with git's
-     * scalar args. The scalar is a tool parameter, not a JSON envelope. */
-    const char *mixed="I'll locate the source.\n<｜｜DSML｜｜ calls>"
+    /* A root-level envelope mixes object-wrapped glob arguments with git's
+     * scalar args. Prose-prefixed envelopes above must not execute. */
+    const char *mixed="<｜｜DSML｜｜ calls>"
         "<｜｜DSML｜｜ invoke name='glob'><｜｜DSML｜｜ parameter name='args' string='false'>{\"pattern\":\"**/memory/*.c\"}</｜｜DSML｜｜ parameter></｜｜DSML｜｜ invoke>"
         "<｜｜DSML｜｜ invoke name='git'><｜｜DSML｜｜ parameter name='args' string='true'>status</｜｜DSML｜｜ parameter><｜｜DSML｜｜ parameter name='dir' string='true'>D:\\AI\\code\\cognitive-os\\backend</｜｜DSML｜｜ parameter></｜｜DSML｜｜ invoke></｜｜DSML｜｜ calls>";
     llm provider={.vt=&vt,.impl=(void *)mixed};
@@ -2911,6 +2911,19 @@ static void test_git_empty_args_checks_status(void) {
 }
 
 /* Fixtures declare finality explicitly; production never classifies these words. */
+/* Caller obligations are explicit protocol data; request wording must not
+ * create runtime requirements. Use a real task lifecycle for these fixtures. */
+static int fixture_run_acceptance(reasoning *r, const char *prompt, const char *acceptance, char **answer) {
+    task *t=task_new(1,0,prompt,0);
+    if(!t)return -1;
+    t->acceptance_json=xstrdup(acceptance);
+    reasoning_set_task(r,t);
+    int rc=reasoning_run(r,prompt,answer);
+    reasoning_set_task(r,NULL);
+    task_free(t);
+    return rc;
+}
+
 static void fixture_final_decision(const llm_request *req,llm_response *resp,int final) {
     if(!req->structured_decision || !final || !resp->content || resp->tool_actions_json)return;
     const char *p=resp->content;while(*p==' ' || *p=='\n' || *p=='\r' || *p=='\t')p++;
@@ -4578,7 +4591,7 @@ static void test_agent_loop(void) {
         CHECK(ans && strstr(ans, "任务未完成") != NULL);
         free(ans);
         ans = NULL;
-        CHECK(reasoning_run(ctx.reasoning, "无动作PPT回归测试：生成PPT", &ans) != 0);
+        CHECK(fixture_run_acceptance(ctx.reasoning, "无动作PPT回归测试：生成PPT", "{\"artifacts\":[\"result.pptx\"]}", &ans) != 0);
         CHECK(ans && strstr(ans, "任务未完成") != NULL);
         free(ans);
         runtime_shutdown(&ctx);
@@ -4601,7 +4614,7 @@ static void test_agent_loop(void) {
         CHECK(ans && strstr(ans, "面试清单：") != NULL);
         free(ans);
         ans = NULL;
-        CHECK(reasoning_run(ctx.reasoning, "面试清单回归测试：生成清单并保存为 interview.md 文件", &ans) != 0);
+        CHECK(fixture_run_acceptance(ctx.reasoning, "面试清单回归测试：生成清单并保存为 interview.md 文件", "{\"artifacts\":[\"interview.md\"]}", &ans) != 0);
         CHECK(ans && strstr(ans, "任务未完成") != NULL);
         free(ans);
         runtime_shutdown(&ctx);
@@ -4622,7 +4635,7 @@ static void test_agent_loop(void) {
         CHECK(answer && strstr(answer, "源码阅读完成"));
         long long elapsed=0, tin=0, tout=0; int round=0, calls=0; const char *tool=NULL;
         reasoning_progress(ctx.reasoning, &elapsed, &round, &calls, &tool, &tin, &tout);
-        CHECK(round == 6); CHECK(calls == 3);
+        CHECK(round == 7); CHECK(calls == 3); /* explicit final decision + review */
         char *log = reasoning_round_log_tail(ctx.reasoning, 65536);
         CHECK(log && strstr(log, "END_SOURCE"));
         CHECK(log && !strstr(log, "output elided"));
@@ -4694,7 +4707,7 @@ static void test_agent_loop(void) {
         CHECK(reasoning_run(ctx.reasoning,"继续读取意向回归测试：深入读取readme.txt代码",&ans)==0);
         CHECK(ans && strstr(ans,"后续源码已实际读取"));
         reasoning_progress(ctx.reasoning,&elapsed,&round,&calls,&tool,&in,&out);
-        CHECK(calls==1 && round==3);
+        CHECK(calls==1 && round==4);
         free(ans); ans=NULL;
         CHECK(reasoning_run(ctx.reasoning,"字面标签回归测试：写入标签文件",&ans)==0);
         char *literal=fs_read_file("state-test/loop-w/keep-think.txt");
@@ -4719,7 +4732,7 @@ static void test_agent_loop(void) {
         char *answer=NULL;
         CHECK(reasoning_run(ctx.reasoning,"否定短语回归测试：用 grep 检索 evidence，不修改文件",&answer)==0);
         free(answer);answer=NULL;
-        CHECK(reasoning_run(ctx.reasoning,"否定短语回归测试：不修改旧文件，创建新文件 result.txt",&answer)!=0);
+        CHECK(fixture_run_acceptance(ctx.reasoning,"否定短语回归测试：不修改旧文件，创建新文件 result.txt","{\"artifacts\":[\"result.txt\"]}",&answer)!=0);
         CHECK(!fs_exists("state-test/loop-w/result.txt"));
         free(answer);answer=NULL;
         CHECK(reasoning_run(ctx.reasoning,"交替无效参数回归测试：查询 evidence",&answer)==0);
@@ -4810,7 +4823,7 @@ static void test_agent_loop(void) {
         int round = 0, calls = 0;
         const char *tool = NULL;
         reasoning_progress(ctx.reasoning, &elapsed, &round, &calls, &tool, &in, &out);
-        CHECK(round == 21);
+        CHECK(round == 22);
         CHECK(calls == 20);
         free(ans);
         runtime_shutdown(&ctx);
@@ -4844,7 +4857,7 @@ static void test_agent_loop(void) {
         int round = 0, calls = 0;
         const char *tool = NULL;
         reasoning_progress(ctx.reasoning, &elapsed, &round, &calls, &tool, &in, &out);
-        CHECK(round == 21);
+        CHECK(round == 22);
         CHECK(calls == 20);
         free(ans);
         runtime_shutdown(&ctx);
@@ -4926,7 +4939,7 @@ static void test_agent_loop(void) {
         int round = 0, calls = 0;
         const char *tool = NULL;
         reasoning_progress(ctx.reasoning, &elapsed, &round, &calls, &tool, &in, &out);
-        CHECK(round == 22);
+        CHECK(round == 23);
         CHECK(calls == 21);
         char *log_tail = reasoning_round_log_tail(ctx.reasoning, 65536);
         CHECK(log_tail && str_utf8_valid_n(log_tail, -1));
@@ -5381,7 +5394,7 @@ static void test_information_answers(void) {
     };
     for (size_t i = 0; i < sizeof(work) / sizeof(work[0]); ++i) {
         char *ans = NULL;
-        CHECK(reasoning_run(ctx.reasoning, work[i], &ans) != 0);
+        CHECK(fixture_run_acceptance(ctx.reasoning, work[i], "{\"requires_observation\":true}", &ans) != 0);
         CHECK(ans && strstr(ans, "任务未完成"));
         free(ans);
     }
@@ -5430,7 +5443,7 @@ static void test_policy_rules(void) {
         policy_add_rule(ctx.policy, "file_write", "deny", "readonly guard");
 
         char *ans = NULL;
-        CHECK(reasoning_run(ctx.reasoning, "创建 blocked.txt 写入内容 x", &ans) != 0);
+        CHECK(fixture_run_acceptance(ctx.reasoning, "创建 blocked.txt 写入内容 x", "{\"requires_action\":true}", &ans) != 0);
         /* the deny surfaces in the execution log (process tail), not the
          * user-visible answer — the answer is final text only */
         char *plog = reasoning_round_log_tail(ctx.reasoning, 65536);
@@ -8204,7 +8217,7 @@ static int selected_model_http(const http_request *req,http_response *resp,void 
     if (atomic_load(&f->fail)) {
         resp->status=503;
         http_resp_json(resp,"{\"error\":{\"message\":\"fixture provider unavailable\"}}");
-    } else http_resp_json(resp,"{\"choices\":[{\"message\":{\"content\":\"我是当前配置的测试模型。\"}}]}");
+    } else http_resp_json(resp,"{\"choices\":[{\"message\":{\"content\":\"[{\\\"tool\\\":\\\"complete_task\\\",\\\"args\\\":{\\\"status\\\":\\\"complete\\\",\\\"requires_tools\\\":false,\\\"answer\\\":\\\"我是当前配置的测试模型。\\\"}}]\"}}]}");
     return 0;
 }
 static void assert_chat_model(runtime_ctx *ctx,const char *expected,int success) {
