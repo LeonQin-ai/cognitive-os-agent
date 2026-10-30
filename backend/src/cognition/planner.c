@@ -446,8 +446,14 @@ static const char *next_tool_markup(const char *text, int include_dsml) {
  * repeat it forever without executing anything. */
 static int parse_tagged_tool_calls(const char *plan, planned_action **actions, int *n_actions) {
     const char *root=plan;while(isspace((unsigned char)*root))root++;
+    /* Structured JSON owns all of its contents, including literal tags. */
+    if(*root=='[' || *root=='{')return 0;
     const char *first=next_tool_markup(root,0);
-    if(first && first!=root)return 0;
+    /* Prose may precede provider shorthand; Markdown examples remain inert. */
+    if(first && first!=root) {
+        if(strncmp(first,"<tool_call>",11))return -1;
+        plan=first;
+    }
     const char *p = plan;
     while(isspace((unsigned char)*p))++p;
     /* A tag in JSON arguments is literal tool data. Parse that envelope below. */
@@ -485,7 +491,7 @@ static int parse_tagged_tool_calls(const char *plan, planned_action **actions, i
         planned_action *grown = realloc(out, (size_t)(count + 1) * sizeof(*out));
         if (!grown) {
             cJSON_Delete(args);
-            break;
+            planner_actions_free(out,count);return -1;
         }
         out = grown;
         size_t tool_len = (size_t)(name_end - name);
@@ -499,7 +505,7 @@ static int parse_tagged_tool_calls(const char *plan, planned_action **actions, i
         if (!out[count].tool || !out[count].args_json) {
             free(out[count].tool);
             free(out[count].args_json);
-            break;
+            planner_actions_free(out,count);return -1;
         }
         count++;
 
@@ -1014,7 +1020,7 @@ static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_act
      * brackets), which used to silently demote a real plan to a plain-text
      * answer — the agent then "answered" instead of acting. */
     const char *shape=plan;while(*shape && isspace((unsigned char)*shape))shape++;
-    looks_like_plan = *shape=='[' || *shape=='{' || !strncmp(shape,"```",3) || next_tool_markup(plan,0)==shape;
+    looks_like_plan = *shape=='[' || *shape=='{' || !strncmp(shape,"```",3) || next_tool_markup(plan,0)!=NULL;
     have = parse_dsml_tool_calls(plan, actions, n_actions);
     if (have<0) {
         if (err_out) *err_out=xstrdup("invalid or incomplete DSML tool-call response; no actions executed");

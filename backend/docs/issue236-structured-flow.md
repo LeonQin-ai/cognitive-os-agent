@@ -18,8 +18,9 @@ Compatibility changes:
   caller or model. The runtime no longer infers them from request wording.
   An under-declared contract cannot prove that every natural-language request
   was fulfilled.
-- Tagged tool envelopes must be at the structural response root; free prose
-  cannot authorize an embedded tool call.
+- Provider shorthand `<tool_call>name{...}` can follow prose in a legacy
+  response. Markdown code spans and fences remain literal. An unquoted valid
+  shorthand in prose is executable, so examples should use Markdown quoting.
 
 Focused validation uses `test_structured_task_contract_e2e.py` and the C
 `--progress-loop` suite. Existing protocol fixtures and the full CI matrix still

@@ -2575,6 +2575,18 @@ static void test_planner_dsml(void) {
         CHECK(n==0 && actions==NULL && err && strstr(err,"invalid or incomplete tagged tool-call response"));
         planner_actions_free(actions,n);free(raw);free(err);
     }
+    {
+        const char *replies[]={"先查看。<tool_call>list_dir{\"path\":\".\"}<tool_call>glob{\"pattern\":\"*.c\"}",
+            "先查看。<tool_call>list_dir{\"path\":\".\"}<tool_call>glob{\"pattern\":"};
+        for(int i=0;i<2;i++) {
+            llm provider={.vt=&vt,.impl=(void*)replies[i]};
+            planned_action *actions=NULL; int n=0; char *raw=NULL,*err=NULL;
+            int rc=planner_plan(&provider,"fixture",&actions,&n,&raw,&err);
+            if(i==0) { CHECK(rc==0 && n==2); if(n==2) {CHECK_STR(actions[0].tool,"list_dir");CHECK_STR(actions[1].tool,"glob");} }
+            else CHECK(rc<0 && n==0 && actions==NULL && err);
+            planner_actions_free(actions,n);free(raw);free(err);
+        }
+    }
     const char *cases[]={
         /* Exact final planner reply from the 90-step PPT incident. The
          * installed 2026-10-14 binary treated this as a completed answer. */

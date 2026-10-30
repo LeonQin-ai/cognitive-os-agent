@@ -19,6 +19,7 @@ def exercise(protocol,mode,prompt='Verify the requested result.'):
     read=action('file_read',path='report.any')
     done=finish()
     if mode=='chat':replies=[done];expected='DONE'
+    elif mode=='prefixed':replies=['我先检查文件。<tool_call>file_read{\"path\":\"tiny\"}',done];expected='DONE'
     elif mode=='commentary':replies=['Changing wording does not finish a task.','I will inspect the file.',action('file_read',path='tiny'),done];expected='DONE'
     elif mode=='stuck':replies=['准备继续。','The next phase is still pending.','还需要继续查看。'];expected='FAILED'
     elif mode in ('artifact','missing','erase','preexisting','write_only','stale'):
@@ -79,6 +80,7 @@ def exercise(protocol,mode,prompt='Verify the requested result.'):
                         assert task['output']==FINAL,task
                         if mode=='artifact':assert (work/'report.any').read_text()==CONTENT
                     else:assert not api('/v1/chat/history?session=contract')['turns']
+                    if mode=='prefixed':assert task['tool_calls']==1 and task['model_failures']==0,task
                     if mode=='commentary':assert task['tool_calls']==1 and task['model_failures']==0,task
                     if mode=='stuck':assert calls==3 and task['tool_calls']==0,task
                     if mode=='full':assert task['tool_calls']==3,task
@@ -89,6 +91,7 @@ def exercise(protocol,mode,prompt='Verify the requested result.'):
     finally:server.shutdown();server.server_close()
 
 if __name__=='__main__':
+    exercise('legacy','prefixed')
     for protocol in ('legacy','native'):
         for mode in ('chat','commentary','stuck','artifact','missing','erase','preexisting','write_only','stale','full','partial','small','optional','api_missing','observation','mutation','failed_tool'):
             exercise(protocol,mode)
