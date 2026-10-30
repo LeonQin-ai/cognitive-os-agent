@@ -19,8 +19,8 @@ def exercise(protocol,mode,prompt='Verify the requested result.'):
     read=action('file_read',path='report.any')
     done=finish()
     if mode=='chat':replies=[done];expected='DONE'
-    elif mode=='commentary':replies=['Changing wording does not finish a task.',action('file_read',path='tiny'),done];expected='DONE'
-    elif mode=='stuck':replies=['准备继续。','The next phase is still pending.'];expected='FAILED'
+    elif mode=='commentary':replies=['Changing wording does not finish a task.','I will inspect the file.',action('file_read',path='tiny'),done];expected='DONE'
+    elif mode=='stuck':replies=['准备继续。','The next phase is still pending.','还需要继续查看。'];expected='FAILED'
     elif mode in ('artifact','missing','erase','preexisting','write_only','stale'):
         replies=[declare(artifacts=['report.any'])]
         if mode in ('artifact','write_only','stale'):replies += [write]
@@ -80,7 +80,7 @@ def exercise(protocol,mode,prompt='Verify the requested result.'):
                         if mode=='artifact':assert (work/'report.any').read_text()==CONTENT
                     else:assert not api('/v1/chat/history?session=contract')['turns']
                     if mode=='commentary':assert task['tool_calls']==1 and task['model_failures']==0,task
-                    if mode=='stuck':assert calls==2 and task['tool_calls']==0,task
+                    if mode=='stuck':assert calls==3 and task['tool_calls']==0,task
                     if mode=='full':assert task['tool_calls']==3,task
                     if mode=='optional':assert task['tool_calls']==1,task
                     if mode in ('missing','erase'):assert task['tool_calls']==0 and not (work/'report.any').exists(),task

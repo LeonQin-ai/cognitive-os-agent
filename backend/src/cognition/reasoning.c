@@ -4152,9 +4152,10 @@ restart_planning:
             }
             if(r->planner_native_end_turn==4) {
                 round_log_append(r,txt?txt:"");
-                if(++no_action_rounds>=2 || r->round_idx>=r->max_rounds) {
-                    no_action_stalled=unfinished=1;final_text=xstrdup("");break;
+                if(++no_action_rounds>=3 || r->round_idx>=r->max_rounds) {
+                    no_action_stalled=unfinished=1;final_text=xstrdup(txt?txt:"");break;
                 }
+                round_log_append(r,"[system] 上一轮仅返回说明，没有执行动作。请调用工具继续任务，或使用 complete_task 提交完成声明。");
                 continue;
             }
             if(r->file_checks_failed){
@@ -4383,7 +4384,7 @@ restart_planning:
     } else if (unfinished) {
         strbuf_append(&out, "任务未完成：尚未完成请求的阅读、操作或验证，当前结果仅为部分进展。");
         int explained=0;
-        if(no_action_stalled){strbuf_append(&out,"\n原因：恢复阶段连续两次没有返回可执行动作或合法完成声明，且没有新增执行进展，已停止重复规划。");explained=1;}
+        if(no_action_stalled){strbuf_append(&out,"\n原因：恢复阶段连续多次没有返回可执行动作或合法完成声明，且没有新增执行进展，已停止重复规划。");explained=1;}
         if(r->file_checks_failed){strbuf_appendf(&out,"\n原因：%s",r->file_check_error);explained=1;}
         if (output_repeated) {
             strbuf_append(&out,"\n原因：模型单次答复内部出现持续循环，无法作为有效的完成结果。");
