@@ -133,6 +133,7 @@ struct sess_store {
 /* One executed action of the current/most recent run (step registry). */
 struct run_step {
     char *evidence_path; /* canonical tool target, independent of UI argument caps */
+    uint64_t evidence_version;
     unsigned id;
     char tool[48];
     char *args;
@@ -231,7 +232,6 @@ struct reasoning {
     int max_rounds;      /* from config (default AGENT_LOOP_MAX_ROUNDS) */
     int round_idx;       /* 1-based round currently executing */
     int stall_nudged;    /* one-shot stall-recovery nudge already given */
-    int intent_nudged;   /* intent-narration nudges given this run (bounded) */
     int had_plan;        /* last REASON produced tool actions (vs final text) */
     char *last_plan_raw; /* this round's raw plan (stall detection) */
     char *prev_plan;     /* previous round's raw plan (stall detection) */
@@ -301,6 +301,9 @@ struct reasoning {
     char file_check_error[600];
     int planner_output_escalated; /* one bounded 32K -> 64K retry after truncation */
     int completion_review_required; /* legacy review must make an explicit decision */
+    cJSON *acceptance; /* monotonic structured obligations, never inferred from prose */
+    char *default_acceptance_json;
+    int acceptance_invalid;
     char last_model_error[1024];
     planner_model_diagnostic last_model_failure;
     int last_model_failure_call;
@@ -510,7 +513,7 @@ static void resolve_failed_tool(reasoning *r, const char *tool_name, const char 
          * basenames and existing-but-inaccessible paths are not a repair. */
         int directory_relocated = !strcmp(tool_name,"list_dir") &&
             !strcmp(r->unresolved_failed_tools[i],"list_dir") &&
-            strstr(r->unresolved_failure_errors[i],"directory does not exist") &&
+            !fs_exists(failed_scope) &&
             same_nested_workspace_path(r,failed_scope,scope);
         if (retry || replacement || relocated_read || header_relocated || directory_relocated) {
             --r->unresolved_failed_tool_count;
@@ -555,8 +558,53 @@ static int completion_file_read_allowed(reasoning *r,const char *path){
     }
     return 0;
 }
+static int full_read_verified(reasoning *r,const char *path);
+static int run_has_verified_artifact(reasoning *r,const char *path);
+int reasoning_acceptance_validate(const char *json) {
+    cJSON *o=cJSON_ParseWithOpts(json?json:"{}",NULL,1);int valid=cJSON_IsObject(o);cJSON *field;
+    if(!valid){cJSON_Delete(o);return -1;}
+    cJSON_ArrayForEach(field,o) {
+        if(!strcmp(field->string,"requires_action") || !strcmp(field->string,"requires_observation")) {
+            if(!cJSON_IsBool(field))valid=0;
+        } else if(!strcmp(field->string,"artifacts") || !strcmp(field->string,"full_reads")) {
+            if(!cJSON_IsArray(field)||cJSON_GetArraySize(field)>64)valid=0;
+            cJSON *path;cJSON_ArrayForEach(path,field)
+                if(!cJSON_IsString(path)||!path->valuestring[0]||strlen(path->valuestring)>1800)valid=0;
+        } else valid=0;
+    }
+    cJSON_Delete(o);return valid?0:-1;
+}
+static void merge_acceptance(reasoning *r,const cJSON *input) {
+    if(!input)return;
+    char *text=cJSON_PrintUnformatted(input);
+    if(!text||reasoning_acceptance_validate(text)){free(text);r->acceptance_invalid=1;return;}
+    free(text);cJSON *next=r->acceptance?cJSON_Duplicate(r->acceptance,1):cJSON_CreateObject();
+    if(!next){r->acceptance_invalid=1;return;}
+    cJSON *field;cJSON_ArrayForEach(field,input) {
+        if(cJSON_IsBool(field)) {
+            if(cJSON_IsTrue(field)) {
+                cJSON_DeleteItemFromObjectCaseSensitive(next,field->string);
+                if(!cJSON_AddBoolToObject(next,field->string,1)){cJSON_Delete(next);r->acceptance_invalid=1;return;}
+            }
+        } else {
+            cJSON *paths=cJSON_GetObjectItemCaseSensitive(next,field->string);
+            if(!paths){paths=cJSON_AddArrayToObject(next,field->string);if(!paths){cJSON_Delete(next);r->acceptance_invalid=1;return;}}
+            cJSON *path;cJSON_ArrayForEach(path,field) {
+                char full[2048];normalized_evidence_path(r,path->valuestring,full,sizeof(full));
+                if(strlen(full)>=sizeof(full)-1){cJSON_Delete(next);r->acceptance_invalid=1;return;}
+                int found=0;cJSON *old;cJSON_ArrayForEach(old,paths)if(!strcmp(old->valuestring,full))found=1;
+                if(!found) {
+                    cJSON *entry=cJSON_CreateString(full);
+                    if(cJSON_GetArraySize(paths)>=64||!entry||!cJSON_AddItemToArray(paths,entry)){cJSON_Delete(entry);cJSON_Delete(next);r->acceptance_invalid=1;return;}
+                }
+            }
+        }
+    }
+    cJSON_Delete(r->acceptance);r->acceptance=next;r->acceptance_invalid=0;
+}
 static void verify_completion_files(reasoning *r,const char *completion_json){
     cJSON *decision=cJSON_Parse(completion_json?completion_json:"{}");
+    merge_acceptance(r,cJSON_GetObjectItemCaseSensitive(decision,"acceptance"));
     cJSON *checks=cJSON_GetObjectItemCaseSensitive(decision,"file_equalities");
     if(checks){
         if(!cJSON_IsArray(checks)||cJSON_GetArraySize(checks)>16)r->file_checks_invalid=1;
@@ -592,6 +640,13 @@ static void verify_completion_files(reasoning *r,const char *completion_json){
         if(equal!=1){r->file_checks_failed=1;snprintf(r->file_check_error,sizeof(r->file_check_error),
             "Runtime byte equality check failed: %.200s != %.200s (%s). Repair the artifact or report blocked; do not omit the declared check.",a,b,equal==0?"different bytes":"unreadable, denied, changed during verification, or over 64 MiB");break;}
     }
+    if(r->acceptance_invalid){r->file_checks_failed=1;snprintf(r->file_check_error,sizeof(r->file_check_error),"Invalid structured acceptance contract.");}
+    if(!r->file_checks_failed && cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(r->acceptance,"requires_action")) && !r->run_mutated){r->file_checks_failed=1;snprintf(r->file_check_error,sizeof(r->file_check_error),"Acceptance requires a successful action; no committed action receipt is present.");}
+    if(!r->file_checks_failed && cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(r->acceptance,"requires_observation")) && !r->run_successful_tools){r->file_checks_failed=1;snprintf(r->file_check_error,sizeof(r->file_check_error),"Acceptance requires a successful tool observation.");}
+    cJSON_ArrayForEach(entry,cJSON_GetObjectItemCaseSensitive(r->acceptance,"artifacts"))
+        if(!r->file_checks_failed && !run_has_verified_artifact(r,entry->valuestring)){r->file_checks_failed=1;snprintf(r->file_check_error,sizeof(r->file_check_error),"Artifact acceptance requires a nonempty file written and read back in this run: %.200s",entry->valuestring);}
+    cJSON_ArrayForEach(entry,cJSON_GetObjectItemCaseSensitive(r->acceptance,"full_reads"))
+        if(!r->file_checks_failed && (r->read_tracking_overflow || !full_read_verified(r,entry->valuestring))){r->file_checks_failed=1;snprintf(r->file_check_error,sizeof(r->file_check_error),"Full-read acceptance has not reached contiguous EOF: %.200s",entry->valuestring);}
     if(!r->file_checks_failed)r->file_check_rejections=0;
     r->file_checks_running=0;cJSON_Delete(decision);
 }
@@ -671,6 +726,8 @@ static void progress_emit(reasoning *r, const char *stage) {
         snprintf(activity, sizeof(activity), "模型已返回计划，准备执行 %d 个动作", r->n_actions);
     else if (strcmp(stage, "response_ready") == 0)
         snprintf(activity, sizeof(activity), "模型已返回答复，正在整理结果");
+    else if (strcmp(stage,"continuing")==0)
+        snprintf(activity,sizeof(activity),"模型返回阶段说明，正在继续执行");
     else if (strcmp(stage, "reconnecting") == 0)
         snprintf(activity, sizeof(activity), "模型请求第 %d 次失败，正在重试", r->prog_model_failures);
     else if (strcmp(stage, "recovering") == 0)
@@ -695,7 +752,7 @@ static void progress_emit(reasoning *r, const char *stage) {
     cJSON_AddStringToObject(o, "activity", activity);
     cJSON_AddStringToObject(o, "model", model);
     cJSON_AddStringToObject(o,"tool_protocol",planner_uses_native_tools(r->llm)?"native":"legacy");
-    cJSON_AddStringToObject(o,"completion_declaration",r->planner_native_end_turn==1?"complete":r->planner_native_end_turn==2?"blocked":"none");
+    cJSON_AddStringToObject(o,"completion_declaration",r->planner_native_end_turn==1?"complete":r->planner_native_end_turn==2?"blocked":r->planner_native_end_turn==3?"contract":r->planner_native_end_turn==4?"commentary":"none");
     if (r->last_model_error[0]) cJSON_AddStringToObject(o,"model_error",r->last_model_error);
     if (r->last_model_failure_call) {
         const planner_model_diagnostic *d = &r->last_model_failure;
@@ -731,6 +788,7 @@ static void progress_emit(reasoning *r, const char *stage) {
     cJSON_AddNumberToObject(o, "model_failures", r->prog_model_failures);
     cJSON_AddNumberToObject(o,"file_equalities_checked",cJSON_GetArraySize(r->file_equalities));
     cJSON_AddBoolToObject(o,"file_equalities_verified",r->file_equalities && cJSON_GetArraySize(r->file_equalities)>0 && !r->file_checks_failed && !r->file_checks_running);
+    if(r->acceptance)cJSON_AddItemToObject(o,"acceptance",cJSON_Duplicate(r->acceptance,1));
     long long tin = 0, tout = 0;
     long long reports = 0;
     llm_usage_thread_totals(&tin, &tout, NULL, &reports);
@@ -765,9 +823,6 @@ void reasoning_set_task(reasoning *r, task *t) {
     if(directory){free(r->workspace);r->workspace=directory;}
 }
 void reasoning_set_completion_prompt(reasoning *r, const char *prompt) { if(r) r->completion_prompt=prompt; }
-static const char *completion_instruction(reasoning *r, const char *prompt) {
-    return r->completion_prompt ? r->completion_prompt:prompt;
-}
 void reasoning_set_trace_task_id(reasoning *r, int64_t task_id) { if (r) r->trace_task_id = task_id; }
 static int run_aborted(reasoning *r) {
     if (r->abort_parent && task_should_abort(r->abort_parent)) return 1;
@@ -1436,21 +1491,6 @@ static void clear_actions(reasoning *r) {
 #define REASONING_CONSEC_FAIL_ABORT 5 /* consecutive stage failures before aborting the run */
 #define REASONING_CONSEC_FAIL_ABORT_STR "5"
 
-/* HTTP 429 is a provider/quota decision, not a transient planning failure.
- * Retrying it in later reasoning rounds cannot help and can burn the user's
- * remaining request budget. Keep this narrow: other failures still follow the
- * normal recovery path. */
-static int reasoning_is_rate_limited(const char *error) {
-    if (!error || !*error) return 0;
-    return strstr(error, "http 429") != NULL || strstr(error, "HTTP 429") != NULL ||
-           strstr(error, "status=429") != NULL || strstr(error, "status 429") != NULL;
-}
-/* Retrying an unchanged transport failure five times can spend 25 minutes
- * waiting on the same 5-minute HTTP deadline without executing another tool.
- * Allow one recovery attempt, then preserve the task for a later resume. */
-static int reasoning_is_transport_failure(const char *error) {
-    return error && strstr(error, "http request failed") != NULL;
-}
 /* Startup fallback only. Active runs size their observation partition from
  * the selected model input budget in build_context. */
 #define ROUND_LOG_CAP 65536
@@ -1595,7 +1635,15 @@ static void record_read_page(reasoning *r, const char *args_json, const char *ou
     const char *marker = paged ? strstr(header, "next_offset_bytes=") : NULL;
     if (marker) sscanf(marker, "next_offset_bytes=%llu", &next);
     int more = paged && strstr(header, "more available") != NULL;
-    if (!paged && i == r->pending_reads_n) { cJSON_Delete(args); return; }
+    if (!paged && i == r->pending_reads_n) {
+        const cJSON *offset=cJSON_GetObjectItemCaseSensitive(args,"offset_bytes");
+        if((!cJSON_IsNumber(offset)||offset->valuedouble==0) && r->completed_reads_n<128) {
+            char *saved=xstrdup(full);
+            if(saved){int done=r->completed_reads_n++;r->completed_reads[done].path=saved;r->completed_reads[done].version=version;}
+            else r->read_tracking_overflow=1;
+        }
+        cJSON_Delete(args); return;
+    }
     if (i == r->pending_reads_n) {
         if (i == 128 || !(r->pending_reads[i].path = xstrdup(full))) {
             r->read_tracking_overflow = 1; cJSON_Delete(args); return;
@@ -1779,8 +1827,10 @@ static char *str_head(const char *s, size_t cap) {
 /* Build an augmented prompt for the planner: recent multi-turn history, then
  * retrieved RAG context (ranked by attention), then the current request.
  * Caller frees the returned string. */
-static int path_requires_full_read(reasoning *r, const char *prompt, const char *path);
-static int required_pending_reads(reasoning *r, const char *prompt);
+static int path_requires_full_read(reasoning *r, const char *path);
+static int full_read_verified(reasoning *r,const char *path);
+static int run_has_verified_artifact(reasoning *r,const char *path);
+static int required_pending_reads(reasoning *r);
 
 static char *build_context(reasoning *r, const char *prompt) {
     strbuf b;
@@ -1796,6 +1846,11 @@ static char *build_context(reasoning *r, const char *prompt) {
     size_t cold_mark;
 
     strbuf_init(&b);
+
+    if(r->completion_prompt) {
+        strbuf_append(&b,"## Authoritative node instruction\n");
+        strbuf_append(&b,r->completion_prompt);strbuf_append(&b,"\n");
+    }
 
     /* WARM tier: compaction summary + session notes under an explicit budget.
      * Over budget the lowest-value sections shed first:
@@ -2018,22 +2073,12 @@ static char *build_context(reasoning *r, const char *prompt) {
     /* anti-pollution caution: history/notes/retrieved context are reference
      * only — the current request must always be planned and executed fresh */
     if (r->pending_reads_n) {
-        int required = planner_uses_native_tools(r->llm) ? 0:required_pending_reads(r, completion_instruction(r, prompt));
-        strbuf_append(&b, planner_uses_native_tools(r->llm) ?
-            "## Observed incomplete file coverage\nThese cursors record unread bytes, not permission to omit requested work. Compare each file against the original task: continue required source coverage before complete_task; a relevant excerpt may suffice only when the requested analysis is supported by actual evidence. Do not ask the user to reauthorize work already requested.\n" :
-            required ? "## 尚未连续读取到文件末尾 / unread page coverage\n" :
-                       "## 可选片段的续读游标（不是待办事项，不要求读到 EOF）\n");
-        int shown = 0;
-        for (int i=0; i<r->pending_reads_n && shown<16; ++i) {
-            if (required && !path_requires_full_read(r, completion_instruction(r,prompt), r->pending_reads[i].path)) continue;
-            strbuf_appendf(&b, "- %s: offset_bytes=%llu; next_offset_bytes=%llu\n", r->pending_reads[i].path,
-                           r->pending_reads[i].next, r->pending_reads[i].next);
-            shown++;
-        }
-        if (required > 16)
-            strbuf_appendf(&b, "另有 %d 个必读分页文件待续读，先完成以上文件。\n", required-16);
-        if (required) strbuf_append(&b, "用户要求全文的文件必须用 file_read 的 offset_bytes 继续到 end of file；只读相关片段的文件和未被要求全文的生成脚本不在此列。\n");
+        strbuf_append(&b,"## Observed unread page coverage\nCursors are observations. Only explicit acceptance.full_reads entries require EOF.\n");
+        for(int i=0;i<r->pending_reads_n && i<16;i++)
+            strbuf_appendf(&b,"- %s: offset_bytes=%llu; required=%s\n",r->pending_reads[i].path,
+                r->pending_reads[i].next,path_requires_full_read(r,r->pending_reads[i].path)?"true":"false");
     }
+    if(r->acceptance){char *contract=cJSON_PrintUnformatted(r->acceptance);strbuf_append(&b,"## Runtime acceptance contract\n");strbuf_append(&b,contract?contract:"{}");strbuf_append(&b,"\n");free(contract);}
     strbuf_append(&b, "## 重要约束\n"
                           "- 上面的会话摘要、Session notes、Conversation history、Retrieved context 都只是背景参考，"
                           "不代表当前请求已经完成。\n"
@@ -2116,6 +2161,7 @@ static char *build_context(reasoning *r, const char *prompt) {
 }
 
 static uint64_t plan_action_signature(const planned_action *actions, int n_actions);
+static uint64_t observation_json_hash(const cJSON *item);
 
 /* REASON: ask the LLM for a plan (JSON array of actions, or plain text). */
 static int h_reason(state_machine *sm, void *ud, const char *input, char **out) {
@@ -2151,10 +2197,11 @@ static int h_reason(state_machine *sm, void *ud, const char *input, char **out) 
                                  &raw, &plan_err, r->run_task ? r->run_task->attachments_json : NULL,
                                  &r->planner_response_truncated, output_override, &r->planner_native_end_turn, &diagnostic,
                                  r->completion_review_required,&completion_json);
-    /* A valid tool plan has recovered the legacy wire protocol. Do not keep
-     * treating later final text as malformed because an earlier call failed. */
-    if(rc==0 && r->n_actions>0 && !planner_uses_native_tools(r->llm))
-        r->completion_review_required=0;
+    if(rc==0 && r->planner_native_end_turn==3) {
+        cJSON *control=cJSON_Parse(completion_json?completion_json:"{}");
+        merge_acceptance(r,cJSON_GetObjectItemCaseSensitive(control,"acceptance"));cJSON_Delete(control);
+        if(r->acceptance_invalid){rc=-1;free(plan_err);plan_err=xstrdup("Invalid acceptance declaration; no tools executed.");}
+    }
     /* A successful HTTP/planner span is not task completion. Preserve the
      * parsed decision so exported traces explain why no tool ran. Never store
      * the request context, credentials or provider headers here. The trace
@@ -2165,7 +2212,7 @@ static int h_reason(state_machine *sm, void *ud, const char *input, char **out) 
         cJSON_AddNumberToObject(decision,"max_rounds",r->max_rounds);
         cJSON_AddStringToObject(decision,"tool_protocol",planner_uses_native_tools(r->llm)?"native":"legacy");
         cJSON_AddBoolToObject(decision,"completion_review_required",review_requested);
-        cJSON_AddStringToObject(decision,"completion_declaration",r->planner_native_end_turn==1?"complete":r->planner_native_end_turn==2?"blocked":"none");
+        cJSON_AddStringToObject(decision,"completion_declaration",r->planner_native_end_turn==1?"complete":r->planner_native_end_turn==2?"blocked":r->planner_native_end_turn==3?"contract":r->planner_native_end_turn==4?"commentary":"none");
         cJSON_AddNumberToObject(decision,"planned_actions",r->n_actions);
         cJSON_AddStringToObject(decision,"stop_reason",diagnostic.stop_reason);
         cJSON_AddBoolToObject(decision,"truncated",r->planner_response_truncated);
@@ -2201,7 +2248,7 @@ static int h_reason(state_machine *sm, void *ud, const char *input, char **out) 
     if(rc==0 && completion_json)verify_completion_files(r,completion_json);
     free(completion_json);
     if (rc == 0 && raw)
-        progress_emit(r, r->n_actions ? "plan_ready" : "response_ready");
+        progress_emit(r, r->n_actions ? "plan_ready" : r->planner_native_end_turn==4?"continuing":"response_ready");
     free(aug);
     if (rc != 0 || !raw) {
         r->last_model_failure = diagnostic;
@@ -2225,9 +2272,10 @@ static int h_reason(state_machine *sm, void *ud, const char *input, char **out) 
 
     log_info("reasoning: LLM plan: %s", raw);
     r->last_model_error[0]=0;
-    r->had_plan = r->n_actions > 0;
+    r->had_plan = r->n_actions > 0 || r->planner_native_end_turn==3;
     r->prev_plan_action_sig = r->last_plan_action_sig;
-    r->last_plan_action_sig = plan_action_signature(r->actions, r->n_actions);
+    r->last_plan_action_sig = r->planner_native_end_turn==3 ?
+        observation_json_hash(r->acceptance)^UINT64_C(0x9e3779b185ebca87):plan_action_signature(r->actions, r->n_actions);
     /* remember this round's plan for stall detection (identical plan twice in
      * a row means the loop is not making progress); copy — raw flows out */
     free(r->prev_plan);
@@ -2312,6 +2360,7 @@ static void run_step_add(reasoning *r, const char *tool, const char *args, const
         if(ok==1 && cJSON_IsString(path) && (!strcmp(tool,"file_read") || !strcmp(tool,"file_write"))) {
             char canonical[2048];normalized_evidence_path(r,path->valuestring,canonical,sizeof(canonical));
             st->evidence_path=xstrdup(canonical);
+            st->evidence_version=fs_file_version(canonical);
         }
         cJSON_Delete(parsed);
     }
@@ -2839,8 +2888,12 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
                 /* Keep byte range/status in the fingerprint so distinct
                  * pages count as progress; exclude cache HIT/MISS and version
                  * metadata, which do not change the source evidence. */
-                uint64_t range_hash = hash64(range, (size_t)(cache_tag - range));
-                uint64_t body_hash = hash64(body ? body : "", body ? strlen(body) : 0);
+                unsigned long long first=0,next=0;
+                const char *cursor=strstr(range,"next_offset_bytes=");
+                int empty=cursor && sscanf(range,"[bytes %llu-",&first)==1 &&
+                    sscanf(cursor,"next_offset_bytes=%llu",&next)==1 && first==next;
+                uint64_t range_hash = empty?0:hash64(range, (size_t)(cache_tag - range));
+                uint64_t body_hash = hash64(empty?"":body?body:"",empty?0:body?strlen(body):0);
                 output_hash = range_hash ^ (body_hash * UINT64_C(0x9e3779b185ebca87));
             } else {
                 output_hash = hash64(body ? body : "", body ? strlen(body) : 0);
@@ -3074,6 +3127,7 @@ reasoning *reasoning_new(const reasoning_config *cfg) {
 
     if (!cfg || !cfg->llm || !cfg->tools)
         return NULL;
+    if(cfg->acceptance_json && reasoning_acceptance_validate(cfg->acceptance_json))return NULL;
     r = calloc(1, sizeof(reasoning));
     if (!r)
         return NULL;
@@ -3084,6 +3138,7 @@ reasoning *reasoning_new(const reasoning_config *cfg) {
     atomic_init(&r->own_store_.shared_memory_global, 1);
     r->cur = session_get(r, NULL); /* default session, always present */
     r->llm = cfg->llm;
+    r->default_acceptance_json=cfg->acceptance_json?xstrdup(cfg->acceptance_json):NULL;
     r->tools = cfg->tools;
     r->mem = cfg->memory;
     r->memsvc = cfg->memory_service;
@@ -3156,6 +3211,7 @@ void reasoning_free(reasoning *r) {
     free(r->round_log);
     free(r->obs_log);
     cJSON_Delete(r->file_equalities);
+    cJSON_Delete(r->acceptance);free(r->default_acceptance_json);
     attention_free(r->attention);
     state_machine_free(r->sm);
     evaluator_free(r->eval);
@@ -3256,467 +3312,39 @@ static void compact_history(reasoning *r, size_t n_drop) {
  * Called from the run path; also read from the HTTP thread by
  * reasoning_history_json, hence the hist_mtx guard. compact_history is
  * only ever invoked from here with the lock held (do not lock inside it). */
-/* Detect a text answer that only announces work instead of reporting its
- * outcome. The caller decides whether existing observations make that safe. */
-static int looks_like_intent(const char *text) {
-    static const char *const marks[] = {
-        "I need to", "Let me", "I will", "I'll", "First,", "First ", "I'm going to",
-        "我需要", "让我", "我将", "我先", "我来", "我还需要", "接下来", "让我继续", "继续读取", "第一步"
-    };
-    for (size_t i = 0; text && i < sizeof(marks) / sizeof(marks[0]); ++i)
-        if (strstr(text, marks[i])) return 1;
+/* Structured acceptance replaces natural-language task/answer classifiers. */
+static int path_requires_full_read(reasoning *r,const char *path) {
+    char full[2048];normalized_evidence_path(r,path,full,sizeof(full));
+    cJSON *item;
+    cJSON_ArrayForEach(item,cJSON_GetObjectItemCaseSensitive(r->acceptance,"full_reads"))
+        if(cJSON_IsString(item) && !strcmp(full,item->valuestring))return 1;
     return 0;
 }
-
-/* Match ASCII case without changing UTF-8 bytes. Return the remaining text. */
-static const char *information_prefix(const char *text, const char *prefix) {
-    while (*prefix) {
-        unsigned char a = (unsigned char)*text, b = (unsigned char)*prefix;
-        if (a >= 'A' && a <= 'Z') a += 'a' - 'A';
-        if (b >= 'A' && b <= 'Z') b += 'a' - 'A';
-        if (!a || a != b) return NULL;
-        ++text; ++prefix;
-    }
-    return text;
-}
-
-/* A successful directory listing or read is only an observation. It cannot
- * turn a short announcement of the next action into a delivered analysis.
- * A developed answer may contain future suggestions, so only classify an
- * opening, single-paragraph announcement here. */
-static int answer_only_announces_work(const char *text) {
-    static const char *const prefixes[] = {
-        "I need to", "Let me", "I will", "I'll", "First,", "I'm going to",
-        "我需要", "让我", "我将", "我先", "我来", "我还需要", "接下来", "继续读取"
-    };
-    if (!text) return 0;
-    while (*text == ' ' || *text == '\t' || *text == '\r' || *text == '\n') ++text;
-    if (strlen(text) > 1200 || strstr(text, "\n\n")) return 0;
-    if (strstr(text, "结果：") || strstr(text, "结论：") || strstr(text, "发现：") ||
-        strstr(text, "结果:") || strstr(text, "结论:")) return 0;
-    for (size_t i = 0; i < sizeof(prefixes) / sizeof(prefixes[0]); ++i)
-        if (information_prefix(text, prefixes[i])) return 1;
-    /* #175: a brief progress preamble ("I have read most files. Let me
-     * read the rest") is still narration, not the requested analysis.
-     * Keep this confined to short, single-paragraph text without findings. */
-    static const char *const pending[] = {
-        "让我读取", "让我继续", "我还需要读取", "让我检查", "让我核对",
-        "Let me read", "let me read", "Let me check", "I still need to",
-        "需要调用工具", "需要使用工具", "现在需要创建", "直接生成 HTML 文件"
-    };
-    for (size_t i = 0; i < sizeof(pending) / sizeof(pending[0]); ++i)
-        if (strstr(text, pending[i])) return 1;
-    return 0;
-}
-
-/* #139: only a standalone explanation is exempt from narration recovery.
- * Matching the whole request avoids accepting an appended work instruction,
- * including verbs the read/write guards do not know (e.g. connect/download). */
-static int prompt_is_self_explanation(const char *prompt) {
-    static const char *const intros[] = {
-        "please explain ", "please describe ", "explain ", "describe ",
-        "说明一下", "解释一下", "介绍一下", "说明", "解释", "介绍"
-    };
-    static const char *const subjects[] = {
-        "你的操作安全吗", "你的操作是否安全", "你的安全机制", "你的安全措施", "你的安全性",
-        "你的权限", "你的能力边界", "你的能力限制", "are your operations safe",
-        "your safety mechanisms", "your permissions", "your limitations"
-    };
-    static const char *const endings[] = { "是什么", "有哪些", "如何", "怎么样" };
-    while (*prompt == ' ' || *prompt == '\t' || *prompt == '\r' || *prompt == '\n') ++prompt;
-    const char *p = information_prefix(prompt, "请");
-    if (p) prompt = p;
-    for (size_t i = 0; i < sizeof(intros) / sizeof(intros[0]); ++i) {
-        p = information_prefix(prompt, intros[i]);
-        if (p) { prompt = p; break; }
-    }
-    for (size_t i = 0; i < sizeof(subjects) / sizeof(subjects[0]); ++i) {
-        p = information_prefix(prompt, subjects[i]);
-        if (!p) continue;
-        for (size_t j = 0; j < sizeof(endings) / sizeof(endings[0]); ++j) {
-            const char *end = information_prefix(p, endings[j]);
-            if (end) { p = end; break; }
+static int full_read_verified(reasoning *r,const char *path) {
+    for(int i=0;i<r->completed_reads_n;i++)
+        if(!strcmp(path,r->completed_reads[i].path)) {
+            uint64_t version=fs_file_version(path);
+            return version && version==r->completed_reads[i].version;
         }
-        while (*p) {
-            if (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n' ||
-                *p == '?' || *p == '!' || *p == '.') { ++p; continue; }
-            const char *end = information_prefix(p, "？");
-            if (!end) end = information_prefix(p, "。");
-            if (!end) end = information_prefix(p, "！");
-            if (!end) break;
-            p = end;
-        }
-        if (!*p) return 1;
-    }
     return 0;
 }
-
-/* A direct capability/help/safety question is answerable from the prompt and
- * registered context. Some reasoning models preface a perfectly useful list
- * with "我需要…" or "Let me…"; treating that as an unfinished tool plan made
- * a simple "有哪些工具" question burn five model calls before accepting the
- * same answer. Keep the narration recovery for work requests, but accept the
- * first text response for unmistakably informational questions. */
-static int prompt_is_direct_information_request(const char *prompt) {
-    static const char *const questions[] = {
-        "有什么工具", "有哪些工具", "什么工具", "有什么技能", "有哪些技能", "什么技能",
-        "你会什么", "帮助", "help", "what tools", "what skills", "capabilities",
-        "为什么", "为啥", "为何", "why "
-    };
-    static const char *const actions[] = {
-        "修复", "修改", "创建", "写入", "执行", "运行", "检查", "分析", "搜索", "查找",
-        "安装", "部署", "删除", "fix ", "edit ", "create ", "write ", "run ", "execute ",
-        "analyze ", "search ", "install ", "deploy ", "delete "
-    };
-    if (!prompt)
-        return 0;
-    const char *agent_task = strstr(prompt, "## 用户任务\n");
-    if (agent_task) prompt = agent_task + strlen("## 用户任务\n");
-    for (size_t i = 0; i < sizeof(actions) / sizeof(actions[0]); i++)
-        if (strstr(prompt, actions[i]))
-            return 0;
-    if (prompt_is_self_explanation(prompt)) return 1;
-    for (size_t i = 0; i < sizeof(questions) / sizeof(questions[0]); i++)
-        if (strstr(prompt, questions[i]))
-            return 1;
-    return 0;
+static int required_pending_reads(reasoning *r) {
+    int pending=0;cJSON *item;
+    cJSON_ArrayForEach(item,cJSON_GetObjectItemCaseSensitive(r->acceptance,"full_reads"))
+        if(!full_read_verified(r,item->valuestring))pending++;
+    return pending;
 }
-
-/* Explicit inspection requests require at least one successful observation.
- * The planner's tool-action plan, not prose phrasing, drives continuation. */
-static int prompt_requires_observation(const char *prompt) {
-    if (!prompt) return 0;
-    const char *agent_task = strstr(prompt, "## 用户任务\n");
-    if (agent_task) prompt = agent_task + strlen("## 用户任务\n");
-    if (prompt_is_direct_information_request(prompt)) return 0;
-    static const char *const actions[] = {
-        "查看", "看看", "检查", "分析", "诊断", "读取", "检视", "搜索", "查找",
-        "inspect ", "review ", "check ", "analyze ", "diagnose ", "read ", "search "
-    };
-    static const char *const subjects[] = {
-        "状态", "系统", "机器", "电脑", "服务", "文件", "目录", "代码", "源码", "项目", "日志", "文档",
-        "status", "system", "machine", "computer", "service", "file", "directory", "code", "source", "project", "log", "document", "repository"
-    };
-    int has_action = 0, has_subject = 0;
-    for (size_t i = 0; i < sizeof(actions) / sizeof(actions[0]); ++i)
-        if (strstr(prompt, actions[i])) { has_action = 1; break; }
-    for (size_t i = 0; i < sizeof(subjects) / sizeof(subjects[0]); ++i)
-        if (strstr(prompt, subjects[i])) { has_subject = 1; break; }
-    return has_action && has_subject;
-}
-
-/* A requested file/code change needs evidence of an action before a text-only
- * answer can close the run. In particular, reading source files is not proof
- * that a requested PPT or copy was created (issue #68). */
-static int mutation_verb_negated(const char *prompt, const char *verb) {
-    /* Common Chinese prohibitions use the bare prefix: 不修改/不写入.
-     * Match only immediately before this verb, never a distant 不 elsewhere. */
-    size_t no_len=strlen("不");
-    if((size_t)(verb-prompt)>=no_len && !memcmp(verb-no_len,"不",no_len)) return 1;
-    const char *clause=prompt;
-    for (const char *p=prompt;p<verb;p++) {
-        if (*p=='\n' || *p==',' || *p==';' || *p=='.' ||
-            !strncmp(p,"，",strlen("，")) || !strncmp(p,"。",strlen("。")) ||
-            !strncmp(p,"；",strlen("；"))) clause=p+1;
-    }
-    const char *negations[]={"不要","不得","禁止","无需","不需要","不允许","不必","勿",
-                             "do not ","don't ","never ","without "};
-    for(size_t i=0;i<sizeof(negations)/sizeof(negations[0]);i++) {
-        const char *n=strstr(clause,negations[i]);
-        if(n && n<verb) return 1;
-    }
-    return 0;
-}
-
-/* An explicit output-format request establishes an artifact acceptance rule,
- * independently of the wording of the model's proposed answer. */
-static int prompt_requires_html_artifact(const char *prompt) {
-    if(!prompt || prompt_is_direct_information_request(prompt))return 0;
-    for(const char *p=strstr(prompt,"输出");p;p=strstr(p+strlen("输出"),"输出")) {
-        const char *html=strstr(p,"html");if(!html)html=strstr(p,"HTML");
-        if(html && html-p<=32 && !mutation_verb_negated(prompt,p))return 1;
-    }
-    return 0;
-}
-
-static int prompt_requires_mutation(const char *prompt) {
-    static const char *const verbs[] = {
-        "生成", "制作", "创建", "复制", "写入", "修改", "修复", "保存", "导出",
-        "安装", "部署", "删除", "register ", "create ", "generate ", "copy ", "write ",
-        "edit ", "fix ", "save ", "export ", "install ", "deploy ", "delete "
-    };
-    if (!prompt) return 0;
-    if (prompt_is_direct_information_request(prompt)) return 0;
-    const char *agent_task = strstr(prompt, "## 用户任务\n");
-    if (agent_task) prompt = agent_task + strlen("## 用户任务\n");
-    if (strstr(prompt, "如何") || strstr(prompt, "怎么") || strstr(prompt, "how to "))
-        return 0;
-    if ((strstr(prompt,"修复建议") || strstr(prompt,"修复原因") || strstr(prompt,"修复方案")) &&
-        !strstr(prompt,"并修复") && !strstr(prompt,"实际修复") && !strstr(prompt,"保存") &&
-        !strstr(prompt,"写入") && !strstr(prompt,".md") && !strstr(prompt,".txt")) return 0;
-    /* #177: "output an HTML report document" is an artifact request even
-     * without the create/write verbs below. Do not exempt it as a chat report. */
-    if ((strstr(prompt,"html") || strstr(prompt,"HTML")) &&
-        (strstr(prompt,"文档") || strstr(prompt,"文件") || strstr(prompt,"报告"))) {
-        const char *output=strstr(prompt,"输出");
-        if (output && !mutation_verb_negated(prompt,output)) return 1;
-    }
-    /* A checklist requested in chat is a text answer, even when phrased as
-     * "生成一份…". Keep explicit file/PPT requests under the write guard. */
-    if ((strstr(prompt, "清单") || strstr(prompt, "面试题") || strstr(prompt,"报告") || strstr(prompt,"资料")) &&
-        !strstr(prompt, "文件") && !strstr(prompt, "PPT") &&
-        !strstr(prompt, "ppt") && !strstr(prompt, ".md") &&
-        !strstr(prompt, ".txt") && !strstr(prompt, ".pdf") &&
-        !strstr(prompt, "保存") && !strstr(prompt, "写入") &&
-        !strstr(prompt, "导出") && !strstr(prompt, "复制到") &&
-        !strstr(prompt, "修复") && !strstr(prompt, "修改") &&
-        !strstr(prompt, "删除") && !strstr(prompt, "部署") &&
-        !strstr(prompt, "安装"))
-        return 0;
-    /* 注册表 is a noun (registry), not an instruction to register a skill. */
-    for (const char *p=strstr(prompt,"注册"); p; p=strstr(p+strlen("注册"),"注册"))
-        if (strncmp(p+strlen("注册"),"表",strlen("表"))) return 1;
-    for (size_t i = 0; i < sizeof(verbs) / sizeof(verbs[0]); i++)
-        for(const char *v=strstr(prompt,verbs[i]);v;v=strstr(v+strlen(verbs[i]),verbs[i]))
-            if(!mutation_verb_negated(prompt,v)) return 1;
-    return 0;
-}
-
-static int prompt_requests_read(const char *prompt) {
-    if (!prompt) return 0;
-    const char *task=strstr(prompt,"## 用户任务\n"); if(task) prompt=task+strlen("## 用户任务\n");
-    return (strstr(prompt,"读") || strstr(prompt,"read ")) &&
-        (strstr(prompt,"代码") || strstr(prompt,"源码") || strstr(prompt,"文件") || strstr(prompt,"目录") ||
-         strstr(prompt,".c") || strstr(prompt,".h") || strstr(prompt,".txt") || strstr(prompt,".py") || strstr(prompt,".log"));
-}
-static int prompt_requires_full_read(const char *prompt) {
-    if (prompt) { const char *task=strstr(prompt,"## 用户任务\n"); if(task) prompt=task+strlen("## 用户任务\n"); }
-    return prompt && (strstr(prompt, "代码") || strstr(prompt, "源码") || strstr(prompt, "source") || strstr(prompt, "code") || strstr(prompt,"浏览器") ||
-        strstr(prompt,"网页") || strstr(prompt,"页面") || strstr(prompt,"文档") || strstr(prompt,"文件")) &&
-        (strstr(prompt, "读") || strstr(prompt, "read") || strstr(prompt, "review") || strstr(prompt,"提取")) &&
-        (strstr(prompt, "全部") || strstr(prompt, "完整") || strstr(prompt, "完备") || strstr(prompt, "所有") ||
-         strstr(prompt, "补读") || strstr(prompt, "继续") || strstr(prompt, "entire") || strstr(prompt, "all ") || strstr(prompt, "full"));
-}
-
-/* Completion is scoped to the user's reading request, not every file opened
- * while researching or debugging generated code. Only the original request
- * is examined: tool output cannot grant itself a partial-read exemption. */
-static const char *read_clause_end(const char *begin) {
-    const char *p = begin;
-    while (*p && *p != '\n' && *p != '\r' && *p != ';' &&
-           strncmp(p,"；",strlen("；")) && strncmp(p,"。",strlen("。"))) ++p;
-    return p;
-}
-
-static const char *read_next_clause(const char *end) {
-    if (!*end) return end;
-    if (!strncmp(end,"；",strlen("；"))) return end+strlen("；");
-    if (!strncmp(end,"。",strlen("。"))) return end+strlen("。");
-    return end+1;
-}
-
-static int read_span_has(const char *begin, const char *end, const char *needle) {
-    const char *p = strstr(begin, needle);
-    return p && p + strlen(needle) <= end;
-}
-
-static int file_token_char(unsigned char c) {
-    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
-           c == '_' || c == '-' || c == '.' || c == '/' || c == '\\' || c == ':';
-}
-
-/* Enumerate explicit file references in a clause without treating a shared
- * basename substring (e.g. foo.c in otherfoo.c) as the same subject. */
-static int read_span_files(const char *begin, const char *end, const char *wanted, char *last, size_t cap) {
-    int found = 0;
-    if (last && cap) last[0] = '\0';
-    for (const char *p = begin; p < end;) {
-        if (!file_token_char((unsigned char)*p)) { ++p; continue; }
-        const char *base = p, *dot = NULL;
-        while (p < end && file_token_char((unsigned char)*p)) {
-            if (*p == '/' || *p == '\\') { base = p + 1; dot = NULL; }
-            else if (*p == '.') dot = p;
-            ++p;
-        }
-        const char *finish=p;
-        while(finish>base && (finish[-1]=='.' || finish[-1]==':')) --finish;
-        dot=NULL;
-        for(const char *q=base;q<finish;q++) if(*q=='.') dot=q;
-        if (!dot || dot == base || dot + 1 >= finish || finish - dot > 13) continue;
-        char name[256]; size_t n = (size_t)(finish - base);
-        if (n >= sizeof(name)) continue;
-        memcpy(name,base,n); name[n] = '\0';
-        /* Dotted config keys such as llm.model are not file declarations. */
-        static const char *const extensions[] = {"c","h","cc","cpp","hpp","rs","go","py","js","ts","tsx","jsx",
-            "java","kt","swift","m","mm","cs","sh","ps1","bat","txt","md","json","yaml","yml","toml",
-            "xml","html","css","scss","sql","log","ini","conf","cfg","vue","svelte","rb","php","pptx","docx","pdf"};
-        const char *extension=strrchr(name,'.')+1;
-        int recognized=0;
-        for(size_t i=0;i<sizeof(extensions)/sizeof(extensions[0]);i++) {
-            const char *rest=information_prefix(extension,extensions[i]);
-            if(rest && !*rest) { recognized=1;break; }
-        }
-        if(!recognized) continue;
-        if (last && cap) snprintf(last,cap,"%s",name);
-        if (!wanted || (information_prefix(name,wanted) && !*information_prefix(name,wanted))) found = 1;
-    }
-    return found;
-}
-
-static int read_span_full(const char *begin, const char *end) {
-    static const char *const full[] = {"完整","全文","全部","所有","补读","entire","all ","full"};
-    static const char *const no[] = {"不要求全文","无需全文","不需要全文","不必全文","不用全文",
-        "不要求完整","不需要完整","无需完整","不要完整","不必完整","not the entire","not the whole","not full"};
-    for (size_t i=0;i<sizeof(full)/sizeof(full[0]);++i) {
-        const char *p=begin;
-        while ((p=strstr(p,full[i])) && p+strlen(full[i])<=end) {
-            int negated=0;
-            for(size_t j=0;j<sizeof(no)/sizeof(no[0]);++j) {
-                const char *n=begin;
-                while((n=strstr(n,no[j])) && n+strlen(no[j])<=end) {
-                    if(n<=p && p<n+strlen(no[j])) negated=1;
-                    ++n;
-                }
-            }
-            if(!negated) return 1;
-            ++p;
-        }
-    }
-    return 0;
-}
-
-static int path_requires_full_read(reasoning *r, const char *prompt, const char *path) {
-    (void)r;
-    if (!prompt_requires_full_read(prompt)) return 0;
-    const char *task=strstr(prompt,"## 用户任务\n"); if(task) prompt=task+strlen("## 用户任务\n");
-    const char *base=path;
-    for(const char *p=path;*p;++p) if(*p=='/' || *p=='\\') base=p+1;
-    static const char *const partial[] = {"不要求全文","无需全文","不需要全文","不必全文","不用全文",
-        "不要求完整","不需要完整","无需完整","只看相关","只读相关","只读取相关","仅阅读相关",
-        "only relevant","relevant sections only","not the entire","not the whole","not full"};
-    int scoped=0, target=0, global=0, exempt=0;
-    for(const char *begin=prompt;*begin;) {
-        const char *end=read_clause_end(begin);
-        for(size_t i=0;i<sizeof(partial)/sizeof(partial[0]);++i) {
-            const char *p=begin;
-            while((p=strstr(p,partial[i])) && p+strlen(partial[i])<=end) {
-                char subject[256];
-                read_span_files(begin,p,NULL,subject,sizeof(subject));
-                if (subject[0] && information_prefix(subject,base) && !*information_prefix(subject,base)) exempt=1;
-                ++p;
-            }
-        }
-        if ((read_span_has(begin,end,"读") || read_span_has(begin,end,"read") || read_span_has(begin,end,"review")) && read_span_full(begin,end)) {
-            static const char *const groups[] = {"全部源码","所有源码","全部文件","所有文件","整个项目","整个代码库",
-                "all source","all files","entire project","entire repository"};
-            for(size_t i=0;i<sizeof(groups)/sizeof(groups[0]);i++)
-                if(read_span_has(begin,end,groups[i])) global=1;
-            if(read_span_files(begin,end,NULL,NULL,0)) {
-                scoped=1;
-                if(read_span_files(begin,end,base,NULL,0)) target=1;
-            } else global=1;
-        }
-        begin=read_next_clause(end);
-    }
-    if(exempt) return 0;
-    return global || !scoped || target;
-}
-
-static int required_pending_reads(reasoning *r, const char *prompt) {
-    int count=0;
-    for(int i=0;i<r->pending_reads_n;i++)
-        count+=path_requires_full_read(r,prompt,r->pending_reads[i].path);
-    return count;
-}
-
-static int answer_reports_unread(const char *text) {
-    const char *marks[] = {"未读取", "未读到", "尚未读", "需要补读", "只读了", "只读取了",
-                          "还需要读取", "not yet read", "have not read", "files remain unread"};
-    for (size_t i=0; text && i<sizeof(marks)/sizeof(marks[0]); ++i)
-        if (strstr(text, marks[i])) return 1;
-    return 0;
-}
-
-static int answer_reports_required_unread(reasoning *r, const char *prompt, const char *text) {
-    if (!answer_reports_unread(text)) return 0;
-    for (const char *begin=text;*begin;) {
-        const char *end=read_clause_end(begin);
-        size_t length=(size_t)(end-begin);
-        char *clause=malloc(length+1);
-        if(!clause) return 1;
-        memcpy(clause,begin,length); clause[length]='\0';
-        int unread=answer_reports_unread(clause); free(clause);
-        if(unread) {
-            int optional=0;
-            for(int pass=0;pass<2;pass++) {
-                int count=pass ? r->completed_reads_n : r->pending_reads_n;
-                for(int i=0;i<count;i++) {
-                    const char *path=pass ? r->completed_reads[i].path : r->pending_reads[i].path;
-                    const char *base=path;
-                    for(const char *p=path;*p;p++) if(*p=='/' || *p=='\\') base=p+1;
-                    if(!read_span_files(begin,end,base,NULL,0)) continue;
-                    if(path_requires_full_read(r,prompt,path)) return 1;
-                    optional=1;
-                }
-            }
-            if(!optional) return 1;
-        }
-        begin=read_next_clause(end);
-    }
-    return 0;
-}
-
-static int run_has_mutating_action(const reasoning *r) {
-    return r->run_mutated;
-}
-
-/* A model declaration is not an artifact receipt. Match real successful
- * writes and subsequent reads by canonical path, then check the actual file. */
-static int run_has_verified_html(reasoning *r) {
+static int run_has_verified_artifact(reasoning *r,const char *target) {
     for(int i=r->n_steps-1;i>=0;i--) {
         struct run_step *read=&r->steps[i];
-        if(read->ok!=1 || strcmp(read->tool,"file_read"))continue;
-        const char *target=read->evidence_path;if(!target)continue;
-        size_t n=strlen(target);
-        if(n<5 || (strcmp(target+n-5,".html") && strcmp(target+n-5,".HTML")))continue;
-        if(!fs_exists(target) || fs_is_dir(target) || fs_file_size(target)<=0)continue;
+        if(read->ok!=1 || strcmp(read->tool,"file_read") || !read->evidence_path || strcmp(read->evidence_path,target))continue;
+        if(!read->evidence_version || read->evidence_version!=fs_file_version(target) || fs_is_dir(target) || fs_file_size(target)<=0)return 0;
         for(int j=r->n_steps-1;j>=0;j--) {
             struct run_step *write=&r->steps[j];
-            if(write->ok!=1 || strcmp(write->tool,"file_write"))continue;
-            if(write->evidence_path && !strcmp(write->evidence_path,target)){if(j<i)return 1;break;}
+            if(write->ok==1 && !strcmp(write->tool,"file_write") && write->evidence_path && !strcmp(write->evidence_path,target))return j<i;
         }
     }
     return 0;
-}
-
-/* The model sometimes echoes the injected "[system] …" nudge text at the
- * start of its reply. Strip that echo (up to the end of a known nudge
- * sentence) so it never lands in the round log / answer, and so the
- * same-answer repetition check below compares clean texts. Returns a
- * pointer into `text` (no allocation). */
-static const char *strip_nudge_echo(const char *text) {
-    static const char *const tails[] = {
-        "\xe8\xaf\xb7\xe7\x9b\xb4\xe6\x8e\xa5\xe7\xbb\x99\xe5\x87\xba\xe6\x9c\x80\xe7\xbb\x88\xe7\xad\x94\xe6\xa1\x88\xe6\x96\x87\xe6\x9c\xac\xe3\x80\x82", /* 请直接给出最终答案文本。 */
-        "\xe5\x90\xa6\xe5\x88\x99\xe7\xbb\x99\xe5\x87\xba\xe4\xb8\x8e\xe4\xb9\x8b\xe5\x89\x8d\xe4\xb8\x8d\xe5\x90\x8c\xe7\x9a\x84\xe4\xb8\x8b\xe4\xb8\x80\xe6\xad\xa5\xe5\x8a\xa8\xe4\xbd\x9c\xe3\x80\x82" /* 否则给出与之前不同的下一步动作。 */
-    };
-    const char *p = text;
-    size_t i;
-    if (!text)
-        return text;
-    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')
-        p++;
-    if (strncmp(p, "[system]", 8) != 0)
-        return text;
-    for (i = 0; i < sizeof(tails) / sizeof(tails[0]); i++) {
-        const char *mark = strstr(p, tails[i]);
-        if (mark && (size_t)(mark - p) < 1024) {
-            p = mark + strlen(tails[i]);
-            while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')
-                p++;
-            return p;
-        }
-    }
-    return text;
 }
 
 static void record_turn(reasoning *r, const char *q, const char *a) {
@@ -4183,7 +3811,8 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     r->prog_tool[0] = 0;
     r->prog_tool_calls = r->prog_llm_calls = r->round_idx = r->prog_model_failures = 0;
     r->last_model_failure_call=0;
-    r->completion_review_required=0;
+    r->completion_review_required=1;
+    cJSON_Delete(r->acceptance);r->acceptance=NULL;r->acceptance_invalid=0;
     r->prog_llm_ms = r->prog_tool_ms = 0;
     r->last_model_error[0]=0;
     r->planner_output_escalated = 0;
@@ -4227,6 +3856,9 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
         }
     }
 
+    r->completion_review_required=!planner_uses_native_tools(r->llm);
+    const char *contracts[]={r->default_acceptance_json,r->run_task?r->run_task->acceptance_json:NULL};
+    for(int i=0;i<2;i++)if(contracts[i]){cJSON *contract=cJSON_Parse(contracts[i]);merge_acceptance(r,contract);cJSON_Delete(contract);}
     void *caller_cancel_context=NULL;
     http_cancel_check caller_cancel=http_get_cancel_check(&caller_cancel_context);
     if(r->run_task || r->abort_parent)http_set_cancel_check(reasoning_http_cancel,r);
@@ -4282,7 +3914,6 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     r->prev_plan = NULL;
     r->last_plan_action_sig = r->prev_plan_action_sig = 0;
     r->stall_nudged = 0;
-    r->intent_nudged = 0;
     r->prog_tool_calls = 0;
     r->prog_llm_ms = 0;
     r->prog_llm_calls = 0;
@@ -4323,10 +3954,8 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     int unfinished = 0; /* text described future work, or requested write never ran */
     int output_repeated = 0;
     int search_only_rounds = 0;
-    int artifact_read_nudged = 0;
     int failure_recovery_nudges = 0, truncated_response_nudges = 0;
     int completion_reviewed = 0;
-    int artifact_rejections = 0;
     int completion_grace = 0;
     const char *completion_reserve_note = "[system] Finalization-only reserve: the configured tool-execution budget is exhausted. Assess the ORIGINAL request against existing successful observations. Do not reread or execute extra checks solely for reassurance; no executable tool actions can run in this reserve. If the requested work is already delivered and verified, call complete_task(status=complete, requires_tools=false, answer=full_result). If essential work remains, call complete_task(status=blocked, requires_tools=false, answer=what_is_missing). This is the single reserved finalization request, not additional work budget.";
     int output_truncated_unresolved = 0;
@@ -4355,10 +3984,10 @@ restart_planning:
              * model retries/empty completion arrays must never erase them. */
             cJSON_Delete(r->file_equalities);r->file_equalities=NULL;r->file_checks_failed=r->file_checks_invalid=0;r->file_check_error[0]=0;
             r->file_check_rejections=0;
-            r->stall_nudged = r->intent_nudged = 0;
+            r->stall_nudged = 0;
             r->invalid_args_n = 0;
             r->search_seen_n = r->versioned_seen_n = 0;
-            search_only_rounds = artifact_read_nudged = 0;
+            search_only_rounds = 0;
             no_progress_rounds = cycle_reads = cycle_nudged = cycle_aborted = 0;
             no_action_rounds = no_action_stalled = 0;
             r->observation_seen_n = 0;
@@ -4423,7 +4052,7 @@ restart_planning:
              * exhausted, and the report stays in the answer either way. */
             consec_fail++;
             if (!r->had_plan) r->prog_model_failures++;
-            if (!r->had_plan && reasoning_is_transport_failure(r->last_model_error))
+            if (!r->had_plan && !strcmp(r->last_model_failure.stage,"transport") && r->last_model_failure_call==r->prog_llm_calls)
                 transport_fail_streak++;
             else
                 transport_fail_streak = 0;
@@ -4449,7 +4078,7 @@ restart_planning:
                 fail_aborted = 1;
                 break;
             }
-            if (!r->had_plan && reasoning_is_rate_limited(r->last_model_error)) {
+            if (!r->had_plan && r->last_model_failure.http_status==429 && r->last_model_failure_call==r->prog_llm_calls) {
                 round_log_append(r, "[system] 模型服务返回 HTTP 429（请求限额或速率限制）；停止自动重试，避免继续消耗请求额度。修复限额或等待重置后，可由用户重新发起任务。");
                 fail_aborted = 1;
                 break;
@@ -4512,7 +4141,7 @@ restart_planning:
             /* A no-action reply is a candidate result. Reviewed decisions
              * use structural validation; compatibility recovery below is
              * bounded by attempts, never by equality of response text. */
-            const char *txt = strip_nudge_echo(result);
+            const char *txt = result;
             if (answer_has_repetition(txt)) {
                 unfinished = 1;
                 final_text = xstrdup(txt);
@@ -4521,10 +4150,11 @@ restart_planning:
             if(r->planner_native_end_turn==2) {
                 unfinished=1;final_text=xstrdup(txt?txt:"");break;
             }
-            if(completion_reviewed && prompt_requires_html_artifact(completion_instruction(r,prompt)) && !run_has_verified_html(r)) {
-                if(++artifact_rejections>=3 || r->round_idx>=r->max_rounds){unfinished=1;final_text=xstrdup(txt?txt:"");break;}
-                r->completion_review_required=!planner_uses_native_tools(r->llm);
-                round_log_append(r,"[system] HTML artifact acceptance failed: no successful file_write followed by file_read for the same existing nonempty .html file in this run. A completion declaration cannot replace the missing artifact receipt. Return the next necessary tool calls using the configured protocol; plain text cannot complete this recovery. Use complete_task with status blocked only if no actionable recovery remains.");
+            if(r->planner_native_end_turn==4) {
+                round_log_append(r,txt?txt:"");
+                if(++no_action_rounds>=2 || r->round_idx>=r->max_rounds) {
+                    no_action_stalled=unfinished=1;final_text=xstrdup("");break;
+                }
                 continue;
             }
             if(r->file_checks_failed){
@@ -4572,91 +4202,11 @@ restart_planning:
                 free(truncated_prefix); truncated_prefix=NULL;
                 break;
             }
-            int needs_action = !planner_uses_native_tools(r->llm) && prompt_requires_mutation(completion_instruction(r,prompt)) && !run_has_mutating_action(r);
-            int needs_read = !planner_uses_native_tools(r->llm) && ((prompt_requires_full_read(completion_instruction(r,prompt)) &&
-                (required_pending_reads(r,completion_instruction(r,prompt)) || r->read_tracking_overflow ||
-                 answer_reports_required_unread(r,completion_instruction(r,prompt),txt))) ||
-                (!r->planner_native_end_turn && prompt_requests_read(completion_instruction(r,prompt)) &&
-                 !r->run_file_reads && !run_has_mutating_action(r)));
-            int needs_observation = !planner_uses_native_tools(r->llm) && prompt_requires_observation(completion_instruction(r,prompt)) &&
-                                    r->run_successful_tools == 0;
-            /* Native completion is structural. Literal future-tense examples,
-             * translations and advice are valid results; never classify their
-             * wording as an instruction to continue. Delivery review below
-             * decides the next native action from the original task/evidence. */
-            int needs_intent_recovery = !planner_uses_native_tools(r->llm) && !prompt_is_direct_information_request(completion_instruction(r,prompt)) &&
-                                        (r->run_successful_tools == 0 || answer_only_announces_work(txt)) &&
-                                        looks_like_intent(txt);
-            /* Every legacy candidate with evidence or unmet work needs the explicit delivery
-             * contract before compatibility prose heuristics can stop it.
-             * Previously only Flow did this early, so ordinary analysis and
-             * artifact requests could abort without reaching the same review.
-             * Do not infer tool actions or delivery from answer keywords. */
-            if((r->completion_prompt || !planner_uses_native_tools(r->llm)) &&
-               r->llm && r->llm->provider &&
-               (!strcmp(r->llm->provider,"openai") || !strcmp(r->llm->provider,"anthropic")) &&
-               (r->run_successful_tools>0 || needs_action || needs_read || needs_observation || needs_intent_recovery) && !completion_reviewed && r->round_idx<r->max_rounds) {
-                completion_reviewed=1;r->completion_review_required=!planner_uses_native_tools(r->llm);
-                round_log_append(r,txt?txt:"");
-                round_log_append(r,"[system] Completion review: the previous text is only a candidate result. Compare it with the ORIGINAL instruction and actual file/tool evidence. Directory listings are not code review; a promise to read or write a document is not that document. Call the next required tools now, then deliver the actual requested analysis or verified artifact with complete_task. Do not repeat directory discovery already completed, and do not forward a progress announcement as a result.");
-                continue;
-            }
-            if (needs_action || needs_read || needs_observation || needs_intent_recovery) {
-                /* A plain-text answer closes the loop once its explicit action,
-                 * read, and observation gates are met. If a gate is still
-                 * unmet, allow bounded consecutive correction requests, then fail closed. */
-                if (r->max_rounds <= 1 || r->intent_nudged >= 1 || r->round_idx >= r->max_rounds) {
-                    unfinished = 1;
-                    final_text = xstrdup(txt ? txt : "");
-                    break;
-                }
-                r->intent_nudged++;
-                /* Keep the compatibility hint consistent with reviewed recovery,
-                 * without changing specific read/tool-failure recovery budgets. */
-                round_log_append(r,"[system] LEGACY ACTION RECOVERY: Return a complete JSON action array [{\"tool\":\"registered_tool_name\",\"args\":{...}}] for the next required operation. If all requested work is verified, return [{\"tool\":\"complete_task\",\"args\":{\"status\":\"complete\",\"requires_tools\":false,\"answer\":\"full final answer\"}}]. For a genuine blocker use status blocked. Plain text is commentary, not an executable decision. Do not repeat an announcement or already successful discovery.");
-                round_log_append(r, txt && *txt ? txt : "");
-                if (needs_read) {
-                    round_log_append(r, "[system] 当前完整源码阅读尚未完成：有文件未读到 EOF，或答案明确列出未读源码。"
-                                        "不要把目录枚举或部分源码总结当作完成，也不要让用户重新指定已要求阅读的范围。"
-                                        "请继续未读文件及 next_offset_bytes 指定的分页，完成后再整理资料。");
-                    continue;
-                }
-                round_log_append(r, "[system] 上一轮只输出了意向说明，没有执行任何工具动作。"
-                                    "如果任务还需要操作（读写文件、执行命令、生成文件等），"
-                                    "请输出 JSON 动作数组并实际执行；"
-                                    "如果回答里包含应该写入文件的代码，用 file_write 把它写到磁盘，"
-                                    "不要把代码当文本贴在回答里；"
-                                    "任务完成时返回上述 complete_task 声明，不要再返回纯文本意向。");
-                continue;
-            }
-            /* A raw JSON array as the "answer" is a malformed plan echo: the
-             * model meant to emit actions (e.g. a flat ["file_read","path",…]
-             * that the planner cannot parse) but the text fell through the
-             * no-plan path. Accepting it as the final answer produced garbage
-             * node results (a real reviewer run once ended with a bare tool
-             * list). Bounce it back with the correct format instead. */
-            {
-                const char *t2 = txt;
-                while (t2 && *t2 == ' ')
-                    t2++;
-                if (!r->planner_native_end_turn && r->max_rounds > 1 && r->intent_nudged < 4 &&
-                    r->round_idx < r->max_rounds && t2 && *t2 == '[') {
-                    r->intent_nudged++;
-                    round_log_append(r, txt);
-                    round_log_append(r, "[system] 上一轮输出的是动作数组，但格式无法解析为计划。"
-                                        "如需执行工具动作，请输出 JSON 对象数组："
-                                        "[{\"tool\":\"文件工具名\",\"args\":{...}}]；"
-                                        "如果任务已完成，请直接输出纯文本的最终答案（不要输出 JSON）。");
-                    continue;
-                }
-            }
             /* A syntactically valid completion is a candidate, not proof of
              * delivery. Review once per candidate work stage, like a bounded
              * stop hook. Never classify answer prose or recursively review
              * the review itself; ordinary zero-tool conversation needs no extra call. */
-            int real_provider = r->llm && r->llm->provider &&
-                (!strcmp(r->llm->provider,"openai") || !strcmp(r->llm->provider,"anthropic"));
-            if ((r->planner_native_end_turn == 1 || (!planner_uses_native_tools(r->llm) && real_provider)) &&
+            if (r->planner_native_end_turn == 1 &&
                 r->run_successful_tools > 0 &&
                 !completion_reviewed) {
                 if (r->round_idx >= r->max_rounds) {
@@ -4686,14 +4236,12 @@ restart_planning:
         /* executed a planned round: keep the observation for the next round */
         round_log_append(r, result ? result : "");
         obs_log_append(r, result ? result : "");
-        r->intent_nudged = 0; /* narration recovered: reset the consecutive bound */
         if (r->round_new_observations) {
             no_action_rounds = 0;
             /* Review the eventual delivery after newly executed work, not an
              * obsolete candidate reviewed before that work. Cached/repeated
              * observations do not reopen review and consume extra calls. */
             completion_reviewed = 0;
-            artifact_rejections = 0;
         } else if(no_action_rounds && !planner_uses_native_tools(r->llm)) {
             /* Replaying cached evidence is not recovery progress. A valid
              * plan may clear parser recovery, but it cannot reopen this
@@ -4713,7 +4261,6 @@ restart_planning:
                 strcmp(r->actions[i].tool, "file_read") != 0 &&
                 strcmp(r->actions[i].tool, "list_dir") != 0) search_only = 0;
         search_only_rounds = search_only ? search_only_rounds + 1 : 0;
-        if (!search_only || run_has_mutating_action(r)) artifact_read_nudged = 0;
         if (r->n_actions > 0 && r->round_search_skips == r->n_actions) {
             round_log_append(r, "[system] 本轮全部动作已经成功执行过，没有新增事实。"
                                 "先核对已有结果是否已满足原始请求：满足则按当前完成协议交付答案，不要再次执行原请求中的第一步。"
@@ -4726,28 +4273,8 @@ restart_planning:
             free(r->prev_plan); r->prev_plan = NULL;
             continue;
         }
-        /* A deliverable request cannot make unlimited progress by reading
-         * ever more source pages. Once the model has had ample discovery
-         * rounds, require an actual artifact action; research may continue
-         * after the first write. This bounds the stalled phase, not the task. */
-        if (!planner_uses_native_tools(r->llm) && search_only && prompt_requires_mutation(completion_instruction(r,prompt)) &&
-            !run_has_mutating_action(r)) {
-            if (search_only_rounds >= 12 && !artifact_read_nudged) {
-                artifact_read_nudged = 1;
-                round_log_append(r,"[system] 已连续多轮阅读资料，用户要求生成或修改实际文件。"
-                    "下一轮必须开始写入产物或运行生成命令；后续仍可按需读取源码。"
-                    "仅继续阅读不能算完成任务。");
-            } else if (search_only_rounds >= 16) {
-                round_log_append(r,"[system] 多轮提醒后仍未开始创建用户要求的产物；"
-                    "停止当前只读循环，报告未完成和已有证据。");
-                stalled = 1;
-                break;
-            }
-        }
-        if ((search_only_rounds == 6 || (search_only_rounds > 6 && search_only_rounds % 12 == 0)) &&
-            (planner_uses_native_tools(r->llm) || !prompt_requires_mutation(completion_instruction(r,prompt))))
-            round_log_append(r, "[system] 已连续多轮读取或搜索资料。请评估已有证据是否足够回答；"
-                                "足够就按当前完成协议给出最终答案，仍缺关键事实则继续读取不同的目标。");
+        if(search_only_rounds==6 || (search_only_rounds>6 && search_only_rounds%12==0))
+            round_log_append(r,"[system] Multiple read/search rounds completed. Compare actual observations with the declared acceptance contract; continue only necessary operations, then submit complete_task.\n");
         /* stall detection: the LLM proposed the exact same plan twice — no
          * progress is possible. Give ONE recovery nudge ("the actions already
          * succeeded; answer from the observations instead of repeating them")
@@ -4829,19 +4356,10 @@ restart_planning:
     int cancelled = (r->run_task && r->run_task->cancel_flag) ||
                     (r->abort_parent && r->abort_parent->cancel_flag);
     int timed_out = !cancelled && run_aborted(r);
-    if(!cancelled&&!timed_out&&r->file_equalities)verify_completion_files(r,NULL);
-    /* A read-only final round may exhaust the budget without ever reaching
-     * the no-plan guard above. It is still incomplete if a write was asked. */
-    if (!planner_uses_native_tools(r->llm) && prompt_requires_mutation(completion_instruction(r,prompt)) && !run_has_mutating_action(r))
-        unfinished = 1;
-    int html_missing=prompt_requires_html_artifact(completion_instruction(r,prompt)) && !run_has_verified_html(r);
-    if(html_missing)unfinished=1;
-    if (stalled || synthesized || fail_aborted || r->tool_fail_aborted ||
-        r->file_checks_failed || r->unresolved_failed_tool_count > 0 || r->unresolved_failed_tools_overflow ||
-        (!planner_uses_native_tools(r->llm) && prompt_requires_full_read(completion_instruction(r,prompt)) &&
-         (required_pending_reads(r,completion_instruction(r,prompt)) || r->read_tracking_overflow ||
-          answer_reports_required_unread(r,completion_instruction(r,prompt),final_text))))
-        unfinished = 1;
+    if(!cancelled&&!timed_out&&(r->file_equalities||r->acceptance||r->acceptance_invalid))verify_completion_files(r,NULL);
+    if(stalled || synthesized || fail_aborted || r->tool_fail_aborted ||
+       r->file_checks_failed || r->acceptance_invalid || required_pending_reads(r) ||
+       r->unresolved_failed_tool_count>0 || r->unresolved_failed_tools_overflow)unfinished=1;
     /* Cover plain answers, native complete_task, continued/truncated output
      * and fallback summaries with the same final delivery gate. Do not feed
      * degraded output back to the model or initiate unbounded paid retries. */
@@ -4865,7 +4383,6 @@ restart_planning:
     } else if (unfinished) {
         strbuf_append(&out, "任务未完成：尚未完成请求的阅读、操作或验证，当前结果仅为部分进展。");
         int explained=0;
-        if(html_missing){strbuf_append(&out,"\n原因：缺少本次任务写入并读回的非空 HTML 文件，未通过产物验收。");explained=1;}
         if(no_action_stalled){strbuf_append(&out,"\n原因：恢复阶段连续两次没有返回可执行动作或合法完成声明，且没有新增执行进展，已停止重复规划。");explained=1;}
         if(r->file_checks_failed){strbuf_appendf(&out,"\n原因：%s",r->file_check_error);explained=1;}
         if (output_repeated) {
@@ -4881,23 +4398,6 @@ restart_planning:
         }
         if (output_truncated_unresolved) {
             strbuf_append(&out,"\n原因：模型连续达到输出 token 上限，已尝试续写但答复仍不完整；保留部分内容，请恢复任务继续生成。");
-            explained=1;
-        }
-        const char *instruction=completion_instruction(r,prompt);
-        if (!planner_uses_native_tools(r->llm) && prompt_requires_mutation(instruction) && !run_has_mutating_action(r)) {
-            strbuf_append(&out,"\n原因：尚无成功执行所请求操作的工具记录；读取文件或加载技能指令不能代替实际操作。");
-            if ((strstr(instruction,"注册") || strstr(instruction,"register ")) &&
-                (strstr(instruction,"skill") || strstr(instruction,"技能")))
-                strbuf_append(&out," 请使用 skill_manage 注册技能并核对结果。");
-            explained=1;
-        }
-        if (!planner_uses_native_tools(r->llm) && required_pending_reads(r,instruction)) {
-            strbuf_append(&out,"\n原因：以下文件尚未连续读取到 EOF；继续使用 file_read 和所列 offset_bytes：");
-            for(int i=0,shown=0;i<r->pending_reads_n && shown<8;i++) {
-                if(!path_requires_full_read(r,instruction,r->pending_reads[i].path)) continue;
-                strbuf_appendf(&out,"\n- %s：offset_bytes=%llu",r->pending_reads[i].path,r->pending_reads[i].next);
-                shown++;
-            }
             explained=1;
         }
         if (r->tool_fail_aborted) { strbuf_append(&out,"\n原因：相同工具连续失败3次；请查看最后一次失败的工具结果，修正参数或环境后恢复任务。"); explained=1; }

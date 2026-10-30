@@ -2505,6 +2505,7 @@ static void test_session_memory(void) {
 typedef struct {
     int compactions, continued, missing_constraint, final_has_constraint;
 } rolling_summary_fixture;
+static void fixture_final_decision(const llm_request *req,llm_response *resp,int final);
 static int rolling_summary_chat(llm *self, const llm_request *req, llm_response *resp) {
     rolling_summary_fixture *s=self->impl;
     const char *system=req->num_messages ? req->messages[0].content : "";
@@ -2527,7 +2528,7 @@ static int rolling_summary_chat(llm *self, const llm_request *req, llm_response 
             s->final_has_constraint=strstr(input.buf,"NO_EDIT_RUNTIME_73C9") && strstr(input.buf,"RUN_ALL_TESTS_91AD");
         resp->content=xstrdup("ACK");
     }
-    strbuf_free(&input);return resp->content ? 0 : -1;
+    strbuf_free(&input);fixture_final_decision(req,resp,1); return resp->content ? 0 : -1;
 }
 static void test_rolling_compaction(void) {
     section("500-turn rolling compaction input continuity");
@@ -2656,7 +2657,7 @@ static int recovery_fixture_chat(llm *self, const llm_request *req, llm_response
         strstr(text,"退出码") && strstr(text,"重新运行原命令") && strstr(text,"预期产物确实存在");
     strbuf_free(&prompt);
     resp->content=xstrdup("已分析错误并完成重试验证。");
-    return resp->content ? 0 : -1;
+    fixture_final_decision(req,resp,1); return resp->content ? 0 : -1;
 }
 
 static tool_result *fixture_python_failure(const tool *self, const tool_ctx *ctx, const char *args) {
@@ -2675,7 +2676,7 @@ static tool_result *fixture_retryable_failure(const tool *self, const tool_ctx *
 static int utf8_step_fixture_chat(llm *self, const llm_request *req, llm_response *resp) {
     (void)req; int *calls=self->impl;
     resp->content=xstrdup((*calls)++==0 ? "[{\"tool\":\"fixture_utf8_output\",\"args\":{}}]" : "工具采样完成，诊断已汇总。");
-    return resp->content ? 0 : -1;
+    fixture_final_decision(req,resp,1); return resp->content ? 0 : -1;
 }
 static tool_result *utf8_step_fixture_exec(const tool *self, const tool_ctx *ctx, const char *args) {
     (void)ctx;(void)args;size_t n=*(int *)self->ud ? 70000 : 64;
@@ -2754,7 +2755,7 @@ static int unresolved_tool_chat(llm *self, const llm_request *req, llm_response 
     } else {
         resp->content = xstrdup("任务已完成，所有检查均通过。");
     }
-    return resp->content ? 0 : -1;
+    fixture_final_decision(req,resp,1); return resp->content ? 0 : -1;
 }
 
 static tool_result *unresolved_tool_execute(const tool *self, const tool_ctx *ctx, const char *args) {
@@ -2803,6 +2804,7 @@ static int rate_limit_fixture_chat(llm *self, const llm_request *req, llm_respon
     rate_limit_fixture_state *state=(rate_limit_fixture_state *)self->impl;
     state->calls++;
     resp->error=xstrdup("openai http 429: Rate limit exceeded: free-models-per-day");
+    resp->http_status=429;
     return -1;
 }
 static void test_rate_limit_stops_without_retry(void) {
@@ -2908,6 +2910,19 @@ static void test_git_empty_args_checks_status(void) {
     tool_registry_free(reg);
 }
 
+/* Fixtures declare finality explicitly; production never classifies these words. */
+static void fixture_final_decision(const llm_request *req,llm_response *resp,int final) {
+    if(!req->structured_decision || !final || !resp->content || resp->tool_actions_json)return;
+    const char *p=resp->content;while(*p==' ' || *p=='\n' || *p=='\r' || *p=='\t')p++;
+    if(*p=='[' || *p=='{' || *p=='<')return;
+    cJSON *array=cJSON_CreateArray(),*call=cJSON_CreateObject();
+    cJSON_AddStringToObject(call,"tool","complete_task");cJSON *args=cJSON_AddObjectToObject(call,"args");
+    cJSON_AddStringToObject(args,"status","complete");cJSON_AddBoolToObject(args,"requires_tools",0);
+    cJSON_AddStringToObject(args,"answer",resp->content);cJSON_AddObjectToObject(args,"acceptance");
+    cJSON_AddItemToArray(array,call);char *encoded=cJSON_PrintUnformatted(array);cJSON_Delete(array);
+    if(encoded){free(resp->content);if(req->tools_json){resp->content=xstrdup("");resp->tool_actions_json=encoded;}else resp->content=encoded;}
+}
+
 typedef struct progress_fixture {
     int mode, calls, saw_fold, saw_recovery, recovered;
     int max_tokens[8];
@@ -3006,7 +3021,7 @@ static int progress_fixture_chat(llm *self,const llm_request *req,llm_response *
             resp->content = xstrdup("[{\"tool\":\"file_read\",\"args\":{\"path\":\"new.txt\"}}]");
         else resp->content = xstrdup("记忆模型分析完成：已读取实际内容，缓存和持久化的职责分别是复用与保存。");
     } else if(f->mode==19) {
-        resp->content=xstrdup(f->calls==1 ? "前半段：架构由三层构成" : "后半段，下面说明验证方式。任务完成。");
+        resp->content=xstrdup(f->calls==1 ? "前半段：架构由三层构成" : "前半段：架构由三层构成。后半段，下面说明验证方式。任务完成。");
         resp->truncated=f->calls==1;
     } else if(f->mode==18) {
         if(f->calls==1) resp->content=xstrdup("[{\"tool\":\"fixture_retryable\",\"args\":{}}]");
@@ -3127,6 +3142,11 @@ static int progress_fixture_chat(llm *self,const llm_request *req,llm_response *
             f->calls%2 ? "a":"b",f->calls%2 ? "b":"a");
         resp->content=xstrdup(plan);
     }
+    int commentary=((f->mode==20 || f->mode==21 || f->mode==22) && f->calls==2) ||
+        (f->mode==22 && f->calls>2) || ((f->mode==9 || f->mode==10) && f->calls==3) ||
+        (f->mode==10 && f->calls>3) || ((f->mode==11 || f->mode==12) && f->calls==4) ||
+        (f->mode==12 && f->calls>4) || (f->mode==18 && f->calls==2);
+    fixture_final_decision(req,resp,!commentary);
     return resp->content ? 0:-1;
 }
 static void test_cross_round_progress(void) {
@@ -3164,7 +3184,10 @@ static void test_cross_round_progress(void) {
         CHECK(tool_register(reg,&retryable)==0);
         if(mode==18) fixture_retryable_failures=0;
         reasoning_config cfg={0}; cfg.llm=&provider; cfg.tools=reg;
-        cfg.workspace="state-test/progress-loop"; cfg.max_rounds=-1;
+        cfg.workspace="state-test/progress-loop"; cfg.max_rounds=mode==5?120:-1;
+        if(mode==5 || mode==6 || mode==15)cfg.acceptance_json="{\"requires_action\":true}";
+        else if(mode==41 || mode==43)cfg.acceptance_json="{\"full_reads\":[\"paged.txt\",\"long.txt\"]}";
+        else if(mode==13 || mode==16 || mode==17 || mode>=36)cfg.acceptance_json="{\"full_reads\":[\"paged.txt\"]}";
         trace *plan_trace=(mode>=24 && mode<=31) ? trace_new(32):NULL;
         cfg.trace=plan_trace;
         reasoning *r=reasoning_new(&cfg); CHECK(r!=NULL);
@@ -3184,6 +3207,7 @@ static void test_cross_round_progress(void) {
                 mode==13 ? "完整阅读文件paged.txt并总结" : (mode==11 || mode==12) ? "继续执行" :
                 (mode==7 || mode==9 || mode==10) ? "查看系统状态" : mode==8 ? "查看一下windows机器的状态" :
                 mode>=5 ? "根据源码生成一份深度PPT文件" : "分析资料并提供结论";
+            int fail_before=g_fail;
             int rc=reasoning_run(r,prompt,&answer);
             if(plan_trace && mode!=26 && mode!=31) {
                 char *json=trace_json(plan_trace);cJSON *spans=cJSON_Parse(json),*span;
@@ -3198,27 +3222,27 @@ static void test_cross_round_progress(void) {
                 CHECK(plans>=2);cJSON_Delete(spans);free(json);
             }
             if (mode >= 46) {
-                CHECK(rc==0 && f.calls==4 && answer && strstr(answer,"路径别名分页分析完成"));
+                CHECK(rc==0 && f.calls==5 && answer && strstr(answer,"路径别名分页分析完成"));
             } else if (mode >= 36) {
                 if(mode==37 || mode==41 || mode==43 || mode==45) {
-                    CHECK(rc!=0 && f.calls==((mode==37 || mode==45) ? 3:5) && answer && strstr(answer,"offset_bytes="));
+                    CHECK(rc!=0 && f.calls==((mode==37 || mode==45) ? 4:6) && answer && strstr(answer,"EOF"));
                     if(mode==37 || mode==45) CHECK(answer && !strstr(answer,"long.txt：offset_bytes="));
-                } else CHECK(rc==0 && f.calls==(mode==42 ? 6:4) && answer && strstr(answer,"完成"));
+                } else CHECK(rc==0 && f.calls==(mode==42 ? 7:5) && answer && strstr(answer,"完成"));
                 if(mode!=41 && mode!=43) CHECK(!f.saw_fold);
             } else if (mode >= 32) {
-                if (mode == 32 || mode == 33) CHECK(rc == 0 && f.calls == (mode==32?4:3) && answer && strstr(answer,"嵌套源码分析完成"));
-                else CHECK(rc != 0 && f.calls == (mode == 34 ? 5 : 4) && answer && strstr(answer,"file_read"));
+                if (mode == 32 || mode == 33) CHECK(rc == 0 && f.calls == (mode==32?5:4) && answer && strstr(answer,"嵌套源码分析完成"));
+                else CHECK(rc != 0 && f.calls == (mode == 34 ? 6 : 5) && answer && strstr(answer,"file_read"));
             } else if (mode >= 24) {
                 if (mode == 25 || mode == 26 || mode == 27 || mode == 28)
-                    CHECK(rc != 0 && f.calls == (mode==26 ? 4:5) && answer && strstr(answer,"任务未完成"));
-                else CHECK(rc == 0 && f.calls == (mode==31 ? 3:4) && answer && strstr(answer,"上下文工程分析完成"));
+                    CHECK(rc != 0 && f.calls == 5 && answer && strstr(answer,"任务未完成"));
+                else CHECK(rc == 0 && f.calls == 4 && answer && strstr(answer,"上下文工程分析完成"));
             } else if (mode >= 20) {
                 if (mode == 22) CHECK(rc != 0 && f.calls == 3 && answer && strstr(answer,"任务未完成"));
-                else if (mode == 23) CHECK(rc == 0 && f.calls == 2 && answer && strstr(answer,"当前结构已核对"));
-                else CHECK(rc == 0 && f.calls == 4 && answer && strstr(answer,"记忆模型分析完成"));
+                else if (mode == 23) CHECK(rc == 0 && f.calls == 3 && answer && strstr(answer,"当前结构已核对"));
+                else CHECK(rc == 0 && f.calls == 5 && answer && strstr(answer,"记忆模型分析完成"));
             } else if (mode==18) {
                 CHECK(rc==0 && answer && strstr(answer,"分析与验证均已完成"));
-                CHECK(f.calls==4 && fixture_retryable_failures==2);
+                CHECK(f.calls==5 && fixture_retryable_failures==2);
             } else if (mode==19) {
                 CHECK(rc==0 && answer && strstr(answer,"前半段：架构由三层构成"));
                 CHECK(answer && strstr(answer,"后半段，下面说明验证方式。任务完成"));
@@ -3230,52 +3254,53 @@ static void test_cross_round_progress(void) {
                 CHECK(f.calls<=12);
             } else if (mode==5) {
                 CHECK(rc!=0 && answer && strstr(answer,"未完成"));
-                CHECK(f.calls>=16 && f.calls<=17);
+                CHECK(f.calls>=89 && f.calls<=90);
             } else if (mode==6) {
                 CHECK(rc==0 && answer && strstr(answer,"已生成并核对"));
-                CHECK(f.calls==83 && fs_exists("state-test/progress-loop/draft.ppt"));
+                CHECK(f.calls==84 && fs_exists("state-test/progress-loop/draft.ppt"));
             } else if (mode==7) {
                 long long elapsed=0, in=0, out=0; int round=0, calls=0; const char *last_tool=NULL;
                 reasoning_progress(r,&elapsed,&round,&calls,&last_tool,&in,&out);
                 CHECK(rc==0 && answer && strstr(answer,"完成系统状态检查"));
-                CHECK(f.calls==3 && calls==1);
+                CHECK(f.calls==4 && calls==1);
             } else if (mode==8) {
                 long long elapsed=0, in=0, out=0; int round=0, calls=0; const char *last_tool=NULL;
                 reasoning_progress(r,&elapsed,&round,&calls,&last_tool,&in,&out);
                 CHECK(rc==0 && answer && strstr(answer,"系统运行正常"));
-                CHECK(f.calls==2 && round==2 && calls==1);
+                CHECK(f.calls==3 && round==3 && calls==1);
             } else if (mode==9) {
                 long long elapsed=0, in=0, out=0; int round=0, calls=0; const char *last_tool=NULL;
                 reasoning_progress(r,&elapsed,&round,&calls,&last_tool,&in,&out);
                 /* An unrelated successful read does not verify the failed tool. */
                 CHECK(rc!=0 && answer && strstr(answer,"fixture_loop_error"));
-                CHECK(f.calls==5 && calls==3);
+                CHECK(f.calls==7 && calls==3);
             } else if (mode==10) {
                 CHECK(rc!=0 && answer && strstr(answer,"任务未完成"));
-                CHECK(f.calls==5);
+                CHECK(f.calls==4);
             } else if (mode==11) {
                 CHECK(rc!=0 && answer && strstr(answer,"fixture_loop_error"));
-                CHECK(f.calls==6);
+                CHECK(f.calls==8);
             } else if (mode==12) {
                 CHECK(rc!=0 && answer && strstr(answer,"任务未完成"));
-                CHECK(f.calls==6);
+                CHECK(f.calls==5);
             } else if (mode==3) {
                 CHECK(rc==0 && f.saw_recovery && f.recovered && f.calls<12 && answer);
             } else if (mode==13) {
-                CHECK(rc==0 && f.calls==4 && answer && strstr(answer,"完整分页审核完成"));
+                CHECK(rc==0 && f.calls==5 && answer && strstr(answer,"完整分页审核完成"));
             } else if (mode==14) {
-                CHECK(rc==0 && f.calls==2 && answer && strstr(answer,"只读分析完成"));
+                CHECK(rc==0 && f.calls==3 && answer && strstr(answer,"只读分析完成"));
             } else if (mode==15) {
                 CHECK(rc!=0 && answer && strstr(answer,"任务未完成"));
             } else if (mode==16) {
-                CHECK(rc==0 && f.calls==5 && answer && strstr(answer,"全文审核及片段复核已完成"));
+                CHECK(rc==0 && f.calls==6 && answer && strstr(answer,"全文审核及片段复核已完成"));
             } else if (mode==17) {
-                CHECK(rc!=0 && f.calls==6 && answer && strstr(answer,"offset_bytes=4000"));
+                CHECK(rc!=0 && f.calls==7 && answer && strstr(answer,"EOF"));
             } else {
                 CHECK(rc==0 && answer);
-                if (mode==1) CHECK(f.calls==81 && strstr(answer,"正常长任务已完成"));
-                if (mode==2) CHECK(f.calls==13 && strstr(answer,"变化资料读取完成"));
+                if (mode==1) CHECK(f.calls==82 && strstr(answer,"正常长任务已完成"));
+                if (mode==2) CHECK(f.calls==14 && strstr(answer,"变化资料读取完成"));
             }
+            if(g_fail!=fail_before)fprintf(stderr,"progress fixture mode=%d rc=%d calls=%d\n",mode,rc,f.calls);
             free(answer); reasoning_free(r);
         }
         trace_free(plan_trace);tool_registry_free(reg);
@@ -6656,7 +6681,7 @@ cleanup:
 static int caller_cancel_fixture(void *context){return *(int *)context;}
 static int block_run_fixture(const char *event,const char *json,void *context){(void)event;(void)json;(void)context;return 1;}
 static int restored_provider_fixture(llm *provider,const llm_request *req,llm_response *resp){
-    (void)req;(*(int *)provider->impl)++;memset(resp,0,sizeof(*resp));resp->content=xstrdup("Hello.");return 0;
+    (void)req;(*(int *)provider->impl)++;memset(resp,0,sizeof(*resp));resp->content=xstrdup("Hello.");fixture_final_decision(req,resp,1);return 0;
 }
 static void test_nested_run_cleanup(void){
     section("nested reasoning restores caller cancellation, provider and blocked status");

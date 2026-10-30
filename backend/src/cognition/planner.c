@@ -25,9 +25,9 @@ static const char *SYS_PROMPT =
     "- mcp:        args {\"server_url\": string, \"tool\": string, \"args\": object}\n"
     "Use the dedicated git tool (not shell) for git operations, and the mcp tool "
     "(not shell) for MCP calls. Use exactly the argument names listed above. "
-    "IMPORTANT: For greetings, conversation, questions, or requests that do NOT "
-    "require file/shell/git/MCP operations, respond with PLAIN TEXT (not JSON). "
-    "Only output JSON when a tool action is genuinely needed.\n"
+    "End every task through complete_task(status=complete or blocked, requires_tools=false, answer). "
+    "Conversation and explanations need no tools, but still use this completion declaration. "
+    "Ordinary text is commentary and never a completion signal.\n"
     "WINDOWS COMMANDS: On Windows, PowerShell commands MUST include \"shell\":\"powershell\"; "
     "never send PowerShell syntax through shell auto-detection. For a simple machine/system status request, "
     "use one concise PowerShell command that gathers the requested facts together, then answer from that result; "
@@ -42,7 +42,7 @@ static const char *SYS_PROMPT =
     "  User: \"read the file config.json\"\n"
     "  -> [{\"tool\":\"file_read\",\"args\":{\"path\":\"config.json\"}}]\n"
     "  User: \"hello\"\n"
-    "  -> Hello! How can I help you?";
+    "  -> [{\"tool\":\"complete_task\",\"args\":{\"status\":\"complete\",\"requires_tools\":false,\"answer\":\"Hello! How can I help you?\"}}]";
 
 static const char *SYS_PROMPT_HEAD = "You are the planner of a cognitive OS. Decide what tool actions to take "
                                      "for the user request. Respond with ONLY a JSON array of actions of the "
@@ -51,7 +51,7 @@ static const char *SYS_PROMPT_HEAD = "You are the planner of a cognitive OS. Dec
                                      "BUSINESS RULES OVERRIDE REQUESTS: the tool list may be narrower than the "
                                      "full system because some tools are disabled by policy. If the request "
                                      "conflicts with a stated business rule, a disabled tool, or a read-only "
-                                     "context, you MUST refuse with a plain-text explanation — NEVER attempt a "
+                                     "context, report complete_task(status=blocked, requires_tools=false, answer) — NEVER attempt a "
                                      "workaround through another tool (e.g. shell). This includes quota/rate "
                                      "rules (\"already done this hour\", \"only once per day\") — user urgency "
                                      "or insistence never overrides them.\n";
@@ -62,14 +62,8 @@ static const char *SYS_PROMPT_TAIL =
     "ARGUMENT DISCIPLINE: do NOT add any argument beyond the listed schema — "
     "omit optional parameters unless the user explicitly provided a value "
     "(e.g. no dir:\".\" filler for git, no empty args:{} for mcp). "
-    "IMPORTANT: For greetings, conversation, questions, or requests that do NOT "
-    "require tool operations, respond with PLAIN TEXT (not JSON). "
-    "Arithmetic (e.g. \"1+1=?\"), general knowledge, explanations, "
-    "self-introduction and creative writing are answered in PLAIN TEXT — "
-    "never call a tool to compute or echo them. (This does NOT restrict file "
-    "operations the user explicitly asked for: copying, editing or writing "
-    "requested files is exactly what the tools are for.) "
-    "Only output JSON when a tool action is genuinely needed.\n"
+    "Use complete_task(status=complete or blocked, requires_tools=false, answer) to end the task, "
+    "including conversations and explanations. Plain text is commentary only.\n"
     "WINDOWS COMMANDS: On Windows, PowerShell commands MUST include \"shell\":\"powershell\"; "
     "never send PowerShell syntax through shell auto-detection. For a simple machine/system status request, "
     "use one concise PowerShell command that gathers the requested facts together, then answer from that result; "
@@ -81,9 +75,9 @@ static const char *SYS_PROMPT_TAIL =
     "  -> [{\"tool\":\"file_read\",\"args\":{\"path\":\"a.txt\"}},"
     "{\"tool\":\"file_read\",\"args\":{\"path\":\"b.txt\"}}]\n"
     "  User: \"你有哪些技能/skills\"\n"
-    "  -> 直接用中文列出上面注册的技能（名字和用途），纯文本，不输出 JSON\n"
+    "  -> complete_task(status=complete, requires_tools=false, answer=registered capabilities)\n"
     "  User: \"hello\"\n"
-    "  -> Hello! How can I help you?\n"
+    "  -> complete_task(status=complete, requires_tools=false, answer=Hello!)\n"
     "PATH DISCOVERY: Before reading or writing a file whose exact location you "
     "are unsure of, first call file_read on its PARENT DIRECTORY (which returns "
     "a listing) so you use the correct, full path. Avoid guessing paths: a wrong "
@@ -140,6 +134,7 @@ static char *build_catalog_prompt(const tool_registry *tools, struct skill_regis
         return NULL;
     strbuf_init(&b);
     strbuf_append(&b, native ? SYS_NATIVE_HEAD:SYS_PROMPT_HEAD);
+    strbuf_append(&b,"\nControl decisions: declare_task({acceptance:{requires_action:boolean,requires_observation:boolean,artifacts:[path],full_reads:[path]}}) records requirements before operations. Artifact paths require a real nonempty write and later readback; full_reads require contiguous EOF. Requirements accumulate and cannot be omitted later. complete_task may append acceptance. Use complete_task(status=complete or blocked,requires_tools=false,answer) for every final answer, including tool-free conversation. Plain text is commentary.\n");
     strbuf_append(&b,"\nFor a guessed exploratory file_read path that does not exist and is not required for the requested result, verify absence with list_dir of its exact parent after the failure. Then complete_task may include unavailable_optional_reads:[{path,reason,evidence_step_id}], using the successful directory step ID from Current execution state. Explain the omitted source and base conclusions on sources actually read. Do not retry an absent path indefinitely. Never use this for required source/deliverable reads, existing unread files, failed writes or commands.\n");
     for (size_t i = 0; i < (size_t)tool_registry_count(tools); i++) {
         const tool *t = tool_registry_get(tools, i);
@@ -186,10 +181,7 @@ static char *build_catalog_prompt(const tool_registry *tools, struct skill_regis
             strbuf_appendf(&b, "  * %s (%s): %s\n", s->name, s->kind ? s->kind : "",
                                s->description ? s->description : "");
         }
-        if(native)strbuf_append(&b,"Explain registered capabilities via complete_task when no operations are required.\n");
-        else strbuf_append(&b, "When the user ASKS what skills/tools you have (e.g. \"你有哪些skills\", "
-                              "\"list your skills\"), answer in PLAIN TEXT listing these skill names and "
-                              "their use. Do NOT call any tool or skill to answer such a question.\n");
+        strbuf_append(&b,"Explain registered capabilities via complete_task when no operations are required.\n");
     }
 
     strbuf_append(&b, native ? SYS_NATIVE_TAIL:SYS_PROMPT_TAIL);
@@ -453,6 +445,9 @@ static const char *next_tool_markup(const char *text, int include_dsml) {
  * block locally; otherwise the reply is mistaken for prose and the model can
  * repeat it forever without executing anything. */
 static int parse_tagged_tool_calls(const char *plan, planned_action **actions, int *n_actions) {
+    const char *root=plan;while(isspace((unsigned char)*root))root++;
+    const char *first=next_tool_markup(root,0);
+    if(first && first!=root)return 0;
     const char *p = plan;
     while(isspace((unsigned char)*p))++p;
     /* A tag in JSON arguments is literal tool data. Parse that envelope below. */
@@ -582,36 +577,9 @@ static int dsml_tag_read(const char **cursor, dsml_tag *tag) {
 /* 0 = another format, 1 = valid DSML, -1 = broken DSML (no partial execution). */
 static int parse_dsml_tool_calls(const char *plan, planned_action **actions, int *n_actions) {
     const char *p=dsml_space(plan);
-    /* Some compatible models explain the repair before emitting the actual
-     * calls. Accept one complete DSML envelope after plain-text preamble, but
-     * never skip over another markup block: that could turn a quoted example
-     * into an executable plan. The envelope parser below still requires the
-     * entire remainder to be valid and consumes every invoke atomically. */
-    if (strncmp(p,"<｜",4) && strncmp(p,"<|",2) && strncmp(p,"<||",3)) {
-        const char *marker=p, *open=NULL;
-        while ((marker=strstr(marker,"DSML"))!=NULL) {
-            const char *tag_name=marker;
-            while (tag_name>p && tag_name[-1]!='<') tag_name--;
-            if (tag_name>p && tag_name[-1]=='<') { open=tag_name-1; break; }
-            marker+=4;
-        }
-        if (!open) return 0;
-        /* Do not execute an envelope shown as an example or embedded in a
-         * JSON/code reply. A real preamble is plain explanatory text. */
-        for (const char *q=p;q<open;q++)
-            if (*q=='<' || *q=='{' || *q=='}' || *q=='[' || *q==']' ||
-                *q=='"' || (*q=='\'' && !(q>p && isalpha((unsigned char)q[-1]) && isalpha((unsigned char)q[1]))) || *q=='`') return 0;
-        size_t preamble_len=(size_t)(open-p);
-        char *preamble=malloc(preamble_len+1);
-        if (!preamble) return -1;
-        memcpy(preamble,p,preamble_len); preamble[preamble_len]=0;
-        int example = strstr(preamble,"Example") || strstr(preamble,"example") ||
-                      strstr(preamble,"For example") || strstr(preamble,"for example") ||
-                      strstr(preamble,"示例") || strstr(preamble,"例如") || strstr(preamble,"比如");
-        free(preamble);
-        if (example) return 0;
-        p=open;
-    }
+    /* A protocol envelope must be structurally top-level. Free prose cannot
+     * authorize execution, regardless of words such as "example". */
+    if(strncmp(p,"<｜",4) && strncmp(p,"<|",2) && strncmp(p,"<||",3))return 0;
     dsml_tag tag;
     if (!strstr(p,"DSML")) return 0;
     if (!dsml_tag_read(&p,&tag)) return -1;
@@ -718,6 +686,9 @@ size_t planner_input_budget_bytes(llm *l, const tool_registry *tools,
     return planner_input_budget_bytes_with_output(l, tools, skills, policy, 0);
 }
 
+static cJSON *acceptance_schema(void) {
+    return cJSON_Parse("{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"requires_action\":{\"type\":\"boolean\"},\"requires_observation\":{\"type\":\"boolean\"},\"artifacts\":{\"type\":\"array\",\"maxItems\":64,\"items\":{\"type\":\"string\"}},\"full_reads\":{\"type\":\"array\",\"maxItems\":64,\"items\":{\"type\":\"string\"}}}}");
+}
 static char *native_tool_catalog(const tool_registry *tools, struct policy_engine *policy) {
     if (!tools) return NULL;
     cJSON *list=cJSON_CreateArray();
@@ -747,6 +718,7 @@ static char *native_tool_catalog(const tool_registry *tools, struct policy_engin
     if(finish){
         cJSON *properties=cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(
             cJSON_GetObjectItemCaseSensitive(finish,"function"),"parameters"),"properties");
+        cJSON_AddItemToObject(properties,"acceptance",acceptance_schema());
         cJSON *optional=cJSON_Parse("{\"type\":\"array\",\"description\":\"Only for absent exploratory file_read paths that are not required deliverables: cite a later successful list_dir of the exact parent to verify absence. Never waive required reads or failed writes/commands.\",\"items\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"reason\":{\"type\":\"string\"},\"evidence_step_id\":{\"type\":\"integer\"}},\"required\":[\"path\",\"reason\",\"evidence_step_id\"]}}");
         if(properties && optional)cJSON_AddItemToObject(properties,"unavailable_optional_reads",optional);
         else cJSON_Delete(optional);
@@ -754,6 +726,8 @@ static char *native_tool_catalog(const tool_registry *tools, struct policy_engin
         if(properties&&equalities)cJSON_AddItemToObject(properties,"file_equalities",equalities);else cJSON_Delete(equalities);
         cJSON_AddItemToArray(list,finish);
     }
+    cJSON *declare=cJSON_Parse("{\"type\":\"function\",\"function\":{\"name\":\"declare_task\",\"description\":\"Declare explicit task acceptance before executing operations. Requirements accumulate; later empty declarations cannot erase them.\",\"parameters\":{\"type\":\"object\",\"properties\":{},\"required\":[\"acceptance\"]}}}");
+    if(declare){cJSON *props=cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(declare,"function"),"parameters"),"properties");cJSON_AddItemToObject(props,"acceptance",acceptance_schema());cJSON_AddItemToArray(list,declare);}
     char *result=cJSON_GetArraySize(list)?cJSON_PrintUnformatted(list):NULL;cJSON_Delete(list);return result;
 }
 
@@ -867,6 +841,7 @@ static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_act
     if (planner_uses_native_tools(llm))
         native_tools=native_tool_catalog(tools,policy);
     req.tools_json=native_tools;
+    req.structured_decision=native_tools!=NULL || require_completion;
     char *native_system=NULL;
     if(native_tools) {
         strbuf system;strbuf_init(&system);strbuf_append(&system,sys_prompt ? sys_prompt:SYS_NATIVE_HEAD);
@@ -919,7 +894,7 @@ static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_act
     if(using_native) {
         cJSON *calls=resp.tool_actions_json?cJSON_Parse(resp.tool_actions_json):NULL;
         cJSON *finish=NULL;
-        int finishes=0;
+        int finishes=0, declaring=0, has_declaration=0;
         cJSON *candidate;
         cJSON_ArrayForEach(candidate,calls) {
             const char *name=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(candidate,"tool"));
@@ -932,7 +907,7 @@ static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_act
          * invalid parameter object is a planning error, not a failed file read. */
         cJSON_ArrayForEach(candidate,calls) {
             const char *name=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(candidate,"tool"));
-            if(!strcmp(name,"complete_task"))continue;
+            if(!strcmp(name,"complete_task") || !strcmp(name,"declare_task"))continue;
             const tool *definition=tools ? tool_find((tool_registry *)tools,name):NULL;
             char *args=cJSON_PrintUnformatted(cJSON_GetObjectItemCaseSensitive(candidate,"args")),*error=NULL;
             if(definition && tool_validate_args(definition,args,&error)) {
@@ -944,10 +919,16 @@ static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_act
         for(int i=cJSON_GetArraySize(calls)-1;i>=0;--i) {
             cJSON *call=cJSON_GetArrayItem(calls,i);
             const char *name=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(call,"tool"));
-            if(name && !strcmp(name,"complete_task")) {
-                if(!finish)finish=cJSON_Duplicate(cJSON_GetObjectItemCaseSensitive(call,"args"),1);
+            if(name && (!strcmp(name,"complete_task") || !strcmp(name,"declare_task"))) {
+                if(!strcmp(name,"declare_task"))has_declaration=1;
+                if(!finish){finish=cJSON_Duplicate(cJSON_GetObjectItemCaseSensitive(call,"args"),1);declaring=!strcmp(name,"declare_task");}
                 finishes++;cJSON_DeleteItemFromArray(calls,i);
             }
+        }
+        if(has_declaration && (finishes!=1 || cJSON_GetArraySize(calls)>0)) {
+            if(err_out)*err_out=xstrdup("declare_task must be a separate control decision; no actions executed");
+            free(resp.content);free(resp.tool_actions_json);free(resp.error);
+            cJSON_Delete(calls);cJSON_Delete(finish);return -1;
         }
         if(cJSON_GetArraySize(calls)>0) {
             /* A finish declaration cannot outrun pending tools in the same response. */
@@ -958,20 +939,27 @@ static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_act
             cJSON *needs=cJSON_GetObjectItemCaseSensitive(finish,"requires_tools");
             int valid=finishes==1 && status && (!strcmp(status,"complete") || !strcmp(status,"blocked")) &&
                 cJSON_IsFalse(needs) && answer && *answer;
-            if(valid && next_tool_markup(answer,1)) {
+            if(declaring)valid=finishes==1 && cJSON_IsObject(cJSON_GetObjectItemCaseSensitive(finish,"acceptance"));
+            if(valid && !declaring && next_tool_markup(answer,1)) {
                 if(err_out)*err_out=xstrdup("completion contains unexecuted tool-call markup; do not return pending calls inside the answer. Emit the next necessary tool using the configured tool protocol, or provide the delivered result with examples inside Markdown code spans/fences.");
                 free(resp.content);free(resp.tool_actions_json);free(resp.error);
                 cJSON_Delete(calls);cJSON_Delete(finish);return -1;
             }
             if(valid) {
-                log_info("planner: native completion status=%s requires_tools=false",status);
+                log_info("planner: structured decision=%s",declaring?"declare_task":status);
                 if(completion_out)*completion_out=cJSON_PrintUnformatted(finish);
-                if(native_end_out)*native_end_out=!strcmp(status,"blocked")?2:1;
-                if(raw_out)*raw_out=xstrdup(answer);
+                if(native_end_out)*native_end_out=declaring?3:!strcmp(status,"blocked")?2:1;
+                if(raw_out)*raw_out=declaring?cJSON_PrintUnformatted(finish):xstrdup(answer);
                 free(resp.content);free(resp.tool_actions_json);free(resp.error);
                 cJSON_Delete(calls);cJSON_Delete(finish);return 0;
             }
             if(diagnostic)diagnostic->no_action_response=finishes==0 && resp.content && *resp.content;
+            if(!finishes && resp.content && *resp.content && !resp.truncated) {
+                if(native_end_out)*native_end_out=4;
+                if(raw_out)*raw_out=xstrdup(resp.content);
+                free(resp.content);free(resp.tool_actions_json);free(resp.error);
+                cJSON_Delete(calls);cJSON_Delete(finish);return 0;
+            }
             if(err_out)*err_out=xstrdup("native turn has no executable tool calls or valid complete_task declaration; call the required tools, or complete_task(status, requires_tools=false, answer) only after work is finished");
             free(resp.content);free(resp.tool_actions_json);free(resp.error);
             cJSON_Delete(calls);cJSON_Delete(finish);return -1;
@@ -1025,8 +1013,8 @@ static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_act
      * prose, and sometimes emit structurally invalid JSON (mis-ordered
      * brackets), which used to silently demote a real plan to a plain-text
      * answer — the agent then "answered" instead of acting. */
-    looks_like_plan = strstr(plan, "\"tool\"") != NULL || strstr(plan, "'tool'") != NULL ||
-                      next_tool_markup(plan,0) != NULL;
+    const char *shape=plan;while(*shape && isspace((unsigned char)*shape))shape++;
+    looks_like_plan = *shape=='[' || *shape=='{' || !strncmp(shape,"```",3) || next_tool_markup(plan,0)==shape;
     have = parse_dsml_tool_calls(plan, actions, n_actions);
     if (have<0) {
         if (err_out) *err_out=xstrdup("invalid or incomplete DSML tool-call response; no actions executed");
@@ -1143,29 +1131,37 @@ static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_act
         if (raw_out) plan = *raw_out;
         int finish_count = 0;
         for (int i=0; i<*n_actions; i++)
-            if (!strcmp((*actions)[i].tool,"complete_task")) finish_count++;
+            if (!strcmp((*actions)[i].tool,"complete_task") || !strcmp((*actions)[i].tool,"declare_task")) finish_count++;
         if (finish_count == 1 && *n_actions == 1 && !resp.truncated) {
+            int declaring=!strcmp((*actions)[0].tool,"declare_task");
             cJSON *finish=cJSON_Parse((*actions)[0].args_json);
             const char *status=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(finish,"status"));
             const char *answer=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(finish,"answer"));
             int valid=status && (!strcmp(status,"complete") || !strcmp(status,"blocked")) &&
                 cJSON_IsFalse(cJSON_GetObjectItemCaseSensitive(finish,"requires_tools")) && answer && *answer;
-            if(valid && next_tool_markup(answer,1)) {
+            if(declaring)valid=cJSON_IsObject(cJSON_GetObjectItemCaseSensitive(finish,"acceptance"));
+            if(valid && !declaring && next_tool_markup(answer,1)) {
                 planner_actions_free(*actions,*n_actions);*actions=NULL;*n_actions=0;
                 cJSON_Delete(finish);
                 if(err_out)*err_out=xstrdup("completion contains unexecuted tool-call markup; emit the next necessary tool as a valid JSON action array, not inside the answer. Put literal protocol examples inside Markdown code spans/fences.");
                 if(raw_out)*raw_out=NULL;free(plan);return -1;
             }
             if (valid) {
-                if (native_end_out) *native_end_out=!strcmp(status,"blocked") ? 2 : 1;
+                if (native_end_out) *native_end_out=declaring?3:!strcmp(status,"blocked") ? 2 : 1;
                 if(completion_out)*completion_out=cJSON_PrintUnformatted(finish);
-                char *final=xstrdup(answer);
+                char *final=declaring?cJSON_PrintUnformatted(finish):xstrdup(answer);
                 planner_actions_free(*actions,*n_actions); *actions=NULL; *n_actions=0;
                 cJSON_Delete(finish);
                 if (raw_out) *raw_out=final; else free(final);
                 free(plan); return 0;
             }
             cJSON_Delete(finish);
+        }
+        if(!finish_count && require_completion && !*n_actions && !resp.truncated) {
+            if(diagnostic)diagnostic->no_action_response=1;
+            if(native_end_out)*native_end_out=4;
+            if(!raw_out)free(plan);
+            return 0;
         }
         if (finish_count || (require_completion && !*n_actions)) {
             if(diagnostic)diagnostic->no_action_response=!finish_count && !*n_actions;
