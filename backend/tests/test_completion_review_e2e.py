@@ -169,7 +169,7 @@ def exercise(protocol, mode):
                         assert task['output'] == ANSWER, task
                         assert all(marker in task['steps'][-1]['out'] for marker in ['JOURNAL_REPLAY', 'DISK_FLUSH']), task
                     if protocol == 'legacy' and mode not in ['chat', 'budget']:
-                        assert Provider.reviews == Provider.calls - 2, Provider.reviews
+                        assert 1 <= Provider.reviews <= Provider.calls - 2, Provider.reviews
                     history = request('/v1/chat/history?session=review-case')
                     if task['status'] == 'DONE':
                         assert history['turns'][-1]['a'] == task['output'], history

@@ -2145,11 +2145,16 @@ static int h_reason(state_machine *sm, void *ud, const char *input, char **out) 
     int output_override = r->planner_output_escalated ? 65536 : 0;
     planner_model_diagnostic diagnostic = {0};
     char *completion_json=NULL;
+    int review_requested=r->completion_review_required;
     int rc = planner_plan_turn_diagnostic(r->llm, r->tools, r->skills, r->policy,
                                  aug ? aug : input, &r->actions, &r->n_actions,
                                  &raw, &plan_err, r->run_task ? r->run_task->attachments_json : NULL,
                                  &r->planner_response_truncated, output_override, &r->planner_native_end_turn, &diagnostic,
                                  r->completion_review_required,&completion_json);
+    /* A valid tool plan has recovered the legacy wire protocol. Do not keep
+     * treating later final text as malformed because an earlier call failed. */
+    if(rc==0 && r->n_actions>0 && !planner_uses_native_tools(r->llm))
+        r->completion_review_required=0;
     /* A successful HTTP/planner span is not task completion. Preserve the
      * parsed decision so exported traces explain why no tool ran. Never store
      * the request context, credentials or provider headers here. The trace
@@ -2159,7 +2164,7 @@ static int h_reason(state_machine *sm, void *ud, const char *input, char **out) 
         cJSON_AddNumberToObject(decision,"round",r->round_idx);
         cJSON_AddNumberToObject(decision,"max_rounds",r->max_rounds);
         cJSON_AddStringToObject(decision,"tool_protocol",planner_uses_native_tools(r->llm)?"native":"legacy");
-        cJSON_AddBoolToObject(decision,"completion_review_required",r->completion_review_required);
+        cJSON_AddBoolToObject(decision,"completion_review_required",review_requested);
         cJSON_AddStringToObject(decision,"completion_declaration",r->planner_native_end_turn==1?"complete":r->planner_native_end_turn==2?"blocked":"none");
         cJSON_AddNumberToObject(decision,"planned_actions",r->n_actions);
         cJSON_AddStringToObject(decision,"stop_reason",diagnostic.stop_reason);

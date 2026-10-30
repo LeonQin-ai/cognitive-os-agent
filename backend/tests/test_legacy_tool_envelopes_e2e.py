@@ -110,7 +110,7 @@ def exercise(mode,protocol='legacy'):
       assert (work/'comparison.html').read_text(encoding='utf8')==expected_html
       steps=task['steps']
       if mode=='trace_after_error_progress':
-       assert calls==12 and task['model_failures']==3,task
+       assert calls==12 and task['model_failures']==2,task
        assert [s['tool'] for s in steps[-4:]]==['file_read','file_read','file_write','file_read'],steps
        steps=steps[-4:]
       elif mode in ('trace_resume','trace_after_error'):
@@ -142,9 +142,11 @@ def exercise(mode,protocol='legacy'):
        assert all(d['max_rounds']==16 and d['tool_protocol']=='legacy' for d in decisions),decisions
        if mode=='trace_after_error_progress':
         assert 'invalid or incomplete tagged tool-call response' in decisions[3]['error'],decisions[3]
-        assert all(d['completion_review_required'] for d in decisions[4:]),decisions
+        assert decisions[4]['completion_review_required'],decisions
+        assert not decisions[5]['completion_review_required'] and not decisions[6]['completion_review_required'],decisions
         assert [d['planned_actions'] for d in decisions[4:6]]==[1,1],decisions[4:6]
-        assert all('error' in d for d in decisions[6:8]),decisions[6:8]
+        assert decisions[6]['parsed_response']==narration and 'error' not in decisions[6],decisions[6]
+        assert decisions[7]['completion_review_required'] and 'error' in decisions[7],decisions[7]
         assert decisions[-1]['completion_declaration']=='complete',decisions[-1]
         return
        if mode=='trace_after_error':
