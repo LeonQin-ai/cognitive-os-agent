@@ -27,7 +27,9 @@ class Provider(BaseHTTPRequestHandler):
     def do_POST(self):
         self.rfile.read(int(self.headers['Content-Length']))
         Provider.calls += 1
-        message = {'role': 'assistant', 'content': self.answer}
+        message = {'role': 'assistant', 'content': json.dumps([{
+            'tool':'complete_task','args':{'status':'complete',
+            'requires_tools':False,'answer':self.answer}}])}
         if self.native:
             message = {'role': 'assistant', 'content': '', 'tool_calls': [{
                 'id': 'completion', 'type': 'function', 'function': {
