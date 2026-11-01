@@ -64,6 +64,16 @@ and a small model's context-derived bound applies with either setting. Request
 size assertions and the 30 actual read receipts remain required. All eight
 OpenAI/Anthropic cases pass locally; this change does not raise runtime limits.
 
+The browser regressions were also run locally, including workspace selection,
+Flow progress/resume, permissions, uploads, copy/Trace rendering, group panels,
+model metadata and markets. The metadata fixture now asserts that estimated
+context is explicitly unverified, rather than matching superseded copy. The
+actual-backend paging fixture waits for the independent list refresh to include
+the newly created session before capturing its cursor; otherwise it could
+compare a stale pre-refresh cursor with the cursor actually clicked. It passed
+with 3,000 migrated sessions, 160 REST-created sessions, history isolation and
+restart recovery. No production server or running task was restarted.
+
 An additional negative fixture also fails against the original binary: create
 a file in one shell action without an output receipt, then merely cat it with
 outputs declared and read it back. The original gate returns DONE; the fixed
