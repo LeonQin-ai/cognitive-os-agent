@@ -156,7 +156,7 @@ def exercise(mode,protocol='legacy'):
      elif mode=='completion':
       assert task['status']=='DONE' and task['output']=='你好。' and task['tool_calls']==0 and calls==1,task
      elif mode in ('false_done','preexisting','write_only','stale_read'):
-      assert task['status']=='FAILED' and 'Artifact acceptance requires a nonempty file written and read back' in task['output'] and not history,task
+      assert task['status']=='FAILED' and 'Artifact acceptance requires' in task['output'] and 'comparison.html' in task['output'] and not history,task
       assert task['tool_calls']==({'write_only':3,'stale_read':5}.get(mode,2)),task
      elif mode=='unrelated_schema':
       assert task['status']=='FAILED' and 'grep' in task['output'] and task['tool_calls']==1 and not history,task
