@@ -10,6 +10,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import urllib.error
 import urllib.request
+from fixture_completion import reviewed_answer
 
 BACKEND = Path(__file__).resolve().parents[1]
 captures=[]
@@ -20,6 +21,7 @@ class Provider(BaseHTTPRequestHandler):
         body=json.loads(self.rfile.read(int(self.headers['Content-Length'])))
         text=body['messages'][-1]['content']; captures.append(text)
         answer='我的职责是讨论注册、保存和写入方案。' if 'You are alpha ' in text else '我的职责是讨论这些操作的验收标准。'
+        answer=reviewed_answer(body,answer)
         data=json.dumps({'choices':[{'message':{'role':'assistant','content':answer},'finish_reason':'stop'}]}).encode()
         self.send_response(200); self.send_header('Content-Type','application/json')
         self.send_header('Content-Length',str(len(data))); self.end_headers(); self.wfile.write(data)
