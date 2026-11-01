@@ -26,13 +26,13 @@ class Provider(BaseHTTPRequestHandler):
         if n==0:args['max_bytes']=32
         if n==1 and self.protocol=='native':
             context=json.dumps(body,ensure_ascii=False)
-            assert 'Observed incomplete file coverage' in context
+            assert 'next_offset_bytes=32' in context
             assert '不是待办事项，不要求读到 EOF' not in context, 'native cursor falsely waives original reading scope'
         if n==5:name,args='file_read',{'path':'source2.c'}
         if n==6 and self.protocol=='native':
             context=json.dumps(body,ensure_ascii=False)
             assert '立即用纯文本交付答案' not in context, 'cached read recovery contradicts native completion'
-            assert 'Native completion requires complete_task' in context
+            assert 'configured native tool protocol' in context
         if n>=5:assert 'FINAL_SOURCE' in json.dumps(body),'final delivery skipped actual source'
         if self.protocol=='native':
             message={'content':'','tool_calls':[{'id':f'call-{n}','type':'function','function':{'name':name,'arguments':json.dumps(args)}}]}

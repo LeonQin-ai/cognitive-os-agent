@@ -4267,7 +4267,7 @@ restart_planning:
                                 "仅在仍缺少明确必需事实时才查询新的目标；不得为了继续执行而列目录、扩大范围或无条件翻页。"
                                 "复用结果不能代替用户要求但尚未完成的写入或验证。");
             if (planner_uses_native_tools(r->llm))
-                round_log_append(r,"[system] Native completion requires complete_task(status=complete, requires_tools=false, answer). Plain text cannot complete this task. If requested work remains, call the necessary tool instead.");
+                round_log_append(r,"[system] Use the configured native tool protocol: if requested work remains, call the necessary tool. If all work and acceptance checks are satisfied, return the full final answer or complete_task(status=complete, requires_tools=false, answer). Do not repeat unchanged checks merely for reassurance.");
             /* Use the evidence-based recovery window above. A separate
              * two-round cutoff used to abort before its recovery prompt. */
             free(r->prev_plan); r->prev_plan = NULL;
