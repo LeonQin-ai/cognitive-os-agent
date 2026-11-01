@@ -62,6 +62,9 @@ class Provider(BaseHTTPRequestHandler):
                         if case[1] in current)
             self.calls[case[0]] = self.calls.get(case[0], 0) + 1
             answer = case[2]
+            if case[3]=='DONE':
+                answer=json.dumps([{'tool':'complete_task','args':{
+                    'status':'complete','requires_tools':False,'answer':answer}}])
             data = json.dumps({'choices': [{'message': {
                 'role': 'assistant', 'content': answer}, 'finish_reason': 'stop'}]}).encode()
             self.send_response(200)
