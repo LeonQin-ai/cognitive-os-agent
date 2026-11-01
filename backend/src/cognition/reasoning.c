@@ -4106,7 +4106,7 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     int unfinished = 0; /* text described future work, or requested write never ran */
     int output_repeated = 0;
     int search_only_rounds = 0;
-    int failure_recovery_nudges = 0, truncated_response_nudges = 0;
+    int failure_recovery_nudges = 0, truncated_response_nudges = 0, visual_retry_nudges = 0;
     int completion_reviewed = 0;
     int completion_grace = 0;
     const char *completion_reserve_note = "[system] Finalization-only reserve: the configured tool-execution budget is exhausted. Assess the ORIGINAL request against existing successful observations. Do not reread or execute extra checks solely for reassurance; no executable tool actions can run in this reserve. If the requested work is already delivered and verified, call complete_task(status=complete, requires_tools=false, answer=full_result). If essential work remains, call complete_task(status=blocked, requires_tools=false, answer=what_is_missing). This is the single reserved finalization request, not additional work budget.";
@@ -4228,6 +4228,19 @@ restart_planning:
                 continue;
             }
             if (r->visual_request_failed) {
+                /* A response-stage visual failure (hidden reasoning consumed
+                 * the output budget; no visible content or tool calls) is
+                 * transient: regenerate like the truncated path above.
+                 * Transport/http failures (endpoint down, no image support)
+                 * stay terminal — retrying those only burns latency. */
+                if (!strcmp(r->last_model_failure.stage,"response") &&
+                    visual_retry_nudges < 2 && r->round_idx < r->max_rounds) {
+                    visual_retry_nudges++;
+                    round_log_append(r,"[system] 图片请求的模型响应没有可见内容：输出预算被隐藏推理耗尽（finish=length）。"
+                        "请重新生成完整的下一步动作或最终答案，压缩推理开销，不要重复已完成的工具调用。最多两次重新生成机会。");
+                    progress_emit(r,"reconnecting");
+                    continue;
+                }
                 final_text=xstrdup(result && *result ? result:"图片模型请求失败");
                 fail_aborted = 1;
                 break;
