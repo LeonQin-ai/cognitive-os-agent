@@ -2598,7 +2598,7 @@ static void test_planner_dsml(void) {
         "<|DSML|calls><|DSML|invoke name='file_write'><|DSML|parameter name='args' string='false'>{}</|DSML|parameter><|DSML|parameter name='path' string='true'>ignored.txt</|DSML|parameter></|DSML|invoke></|DSML|calls>",
         "<|DSML|calls><|DSML|invoke name='list_dir'><|DSML|parameter name='args' string='false'>{}garbage</|DSML|parameter></|DSML|invoke></|DSML|calls>",
         "<|DSML|calls>",
-        "Example only: <|DSML|calls><|DSML|invoke name='shell'></|DSML|invoke></|DSML|calls>",
+        "Example only: `<|DSML|calls><|DSML|invoke name='shell'></|DSML|invoke></|DSML|calls>`",
         "[{\"tool\":\"file_write\",\"args\":{\"content\":\"<|DSML|calls>\",\"path\":\"example.txt\"}}]",
         "<|DSML|calls><|DSML|invoke name='file_write'><|DSML|parameter name='content' string='true'>tail\\</|DSML|parameter></|DSML|invoke></|DSML|calls>",
         "<｜｜DSML｜｜ calls>\n<｜｜DSML｜｜ invoke name=\"list_dir\">\n<｜｜DSML｜｜ parameter name=\"args\" string=\"false\">{\"path\":\"D:/AI/code/cognitive-os\"}</｜｜DSML｜｜ parameter>\n</｜｜DSML｜｜ invoke>\n<｜｜DSML｜｜ invoke name=\"list_dir\">\n<｜｜DSML｜｜ parameter name=\"args\" string=\"false\">{\"path\":\"D:/AI/code/cognitive-os/deliverables\"}</｜｜DSML｜｜ parameter>\n</｜｜DSML｜｜ invoke>\n<｜｜DSML｜｜ invoke name=\"glob\">\n<｜｜DSML｜｜ parameter name=\"args\" string=\"false\">{\"pattern\":\"backend/**/*\"}</｜｜DSML｜｜ parameter>\n</｜｜DSML｜｜ invoke>\n</｜｜DSML｜｜ calls>",
@@ -2607,7 +2607,7 @@ static void test_planner_dsml(void) {
          * serialization escapes the closing DSML tags. */
         "脚本里中文全角冒号误当成了键值分隔符，需要用逗号替换。先写一个修复脚本并确认条目解析方式。\n\n<｜｜DSML｜｜ calls>\n<｜｜DSML｜｜ invoke name=\"file_write\">\n<｜｜DSML｜｜ parameter name=\"args\" string=\"false\">{\"path\":\"_fix_deck.py\",\"content\":\"print('fix and verify')\\n\"}\\</｜｜DSML｜｜ parameter>\n</｜｜DSML｜｜ invoke>\n<｜｜DSML｜｜ invoke name=\"grep\">\n<｜｜DSML｜｜ parameter name=\"args\" string=\"false\">{\"pattern\":\"content_slide\",\"path\":\"_generate_interview_deck.py\"}</｜｜DSML｜｜ parameter>\n</｜｜DSML｜｜ invoke>\n</｜｜DSML｜｜ calls>"
     };
-    int expected[]={4,2,1,1,-1,-1,-1,-1,0,1,1,3,0};
+    int expected[]={4,2,1,1,-1,-1,-1,-1,0,1,1,3,2};
     for (size_t i=0;i<sizeof(cases)/sizeof(*cases);i++) {
         llm provider={.vt=&vt,.impl=(void *)cases[i]};
         planned_action *actions=NULL; int n=0; char *raw=NULL,*err=NULL;
@@ -3241,7 +3241,7 @@ static void test_cross_round_progress(void) {
                     const char *name=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(span,"name"));
                     if(!name || strcmp(name,"llm.plan"))continue;
                     cJSON *decision=cJSON_Parse(cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(span,"result")));
-                    if(mode==1) CHECK(cJSON_GetNumberValue(cJSON_GetObjectItemCaseSensitive(decision,"max_rounds"))==128);
+                    if(mode==1) CHECK(cJSON_GetNumberValue(cJSON_GetObjectItemCaseSensitive(decision,"max_rounds"))==1000000);
                     if(++plans==2) CHECK(cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(decision,"completion_review_required")));
                     cJSON_Delete(decision);
                 }

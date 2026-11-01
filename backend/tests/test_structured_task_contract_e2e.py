@@ -18,7 +18,8 @@ def exercise(protocol,mode,prompt='Verify the requested result.'):
     write=action('file_write',path='report.any',content=CONTENT)
     read=action('file_read',path='report.any')
     done=finish()
-    if mode=='chat':replies=[done];expected='DONE'
+    if mode=='plain_final':replies=[FINAL];expected='DONE'
+    elif mode=='chat':replies=[done];expected='DONE'
     elif mode=='prefixed':replies=['我先检查文件。<tool_call>file_read{\"path\":\"tiny\"}',done];expected='DONE'
     elif mode=='quoted_commentary':replies=['Example: `<tool_call>shell{} `. Next I will read.',action('file_read',path='tiny'),done];expected='DONE'
     elif mode=='commentary':replies=['Changing wording does not finish a task.','I will inspect the file.',action('file_read',path='tiny'),done];expected='DONE'
@@ -69,6 +70,8 @@ def exercise(protocol,mode,prompt='Verify the requested result.'):
                         try:api('/v1/scheduler');break
                         except OSError:assert proc.poll() is None;time.sleep(.05)
                     body={'message':prompt,'session':'contract'}
+                    if protocol=='native' and mode in ('commentary','quoted_commentary','stuck'):
+                        body['acceptance']={'requires_observation':True}
                     if acceptance is not None:body['acceptance']=acceptance
                     tid=api('/v1/chat',body)['id']
                     while True:
@@ -93,6 +96,7 @@ def exercise(protocol,mode,prompt='Verify the requested result.'):
     finally:server.shutdown();server.server_close()
 
 if __name__=='__main__':
+    exercise('native','plain_final')
     exercise('legacy','prefixed')
     for protocol in ('legacy','native'):
         for mode in ('chat','commentary','quoted_commentary','stuck','artifact','missing','erase','preexisting','write_only','stale','full','partial','small','optional','api_missing','observation','mutation','failed_tool'):

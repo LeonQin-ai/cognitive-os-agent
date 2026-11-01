@@ -11,6 +11,10 @@ def reviewed_answer(request, answer):
     system = request['messages'][0]['content']
     if 'COMPLETION REVIEW PROTOCOL:' not in system:
         return answer
+    # Tagged plans are executable wire fixtures, not final prose. Preserve
+    # them so the real planner, rather than this helper, validates the calls.
+    if '<｜｜DSML｜｜ calls>' in answer or '<tool_call>' in answer:
+        return answer
     try:
         actions = json.loads(answer)
         if isinstance(actions, list) and actions and all(

@@ -78,6 +78,13 @@ def exercise(mode,protocol):
      else:
       assert 'STORE_ATOMIC_PROOF' in text and 'LOCK_MUTEX_PROOF' in text
       answer=finish(REVIEW)
+     if mode=='stuck' and role=='REVIEWER' and n>=8:
+      # Both protocols express unfinished work structurally. The wording of
+      # an answer must not decide whether a node may complete.
+      actions=json.loads(answer)
+      for action in actions:
+       if action['tool']=='complete_task':action['args']['requires_tools']=True
+      answer=json.dumps(actions)
      if protocol=='native':
       actions=json.loads(answer)
       if mode=='stuck' and role=='REVIEWER' and n>=8:

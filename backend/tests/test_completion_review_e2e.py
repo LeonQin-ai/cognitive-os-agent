@@ -134,7 +134,10 @@ def exercise(protocol, mode):
                             assert process.poll() is None and time.monotonic() < deadline
                             time.sleep(.03)
                     message = '你好' if mode == 'chat' else '分析这份代码中进程重启和单板重启的持久化能力。'
-                    submitted = request('/v1/chat', {'message': message, 'session': 'review-case'})
+                    payload={'message':message,'session':'review-case'}
+                    if protocol=='native' and mode in ('recover','commentary','stuck'):
+                        payload['acceptance']={'full_reads':['process_state.cpp']}
+                    submitted = request('/v1/chat', payload)
                     while True:
                         task = request(f'/v1/tasks/{submitted["id"]}')
                         if task['status'] in ['DONE', 'FAILED', 'CANCELLED', 'TIMEOUT']:
@@ -162,7 +165,7 @@ def exercise(protocol, mode):
                     if protocol=='native' and mode=='budget':
                         expected=(3,1,'FAILED') # final review cannot perform the missing read
                     if protocol=='native' and mode=='stuck':
-                        expected=(5,1,'FAILED') # three commentary turns after the candidate review
+                        expected=(4,1,'FAILED') # three rejected candidates lack the declared source receipt
                     assert (task['llm_calls'], task['tool_calls'], task['status']) == expected, task
                     assert Provider.calls == expected[0], Provider.calls
                     if expected[1]:

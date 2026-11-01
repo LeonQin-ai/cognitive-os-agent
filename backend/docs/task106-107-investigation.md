@@ -6,11 +6,10 @@ AccountQuotaExceeded. Both used a recorded work budget of 1,000,000 rounds.
 The latter executed repeated diagnostic/test commands, not just prose turns.
 An executable tool call alone does not establish useful task progress.
 
-Negative/default round settings now resolve to 128 work rounds rather than a
-million. Explicit positive limits remain available. This bounds overall work;
-it does not prove every run makes useful progress, fix provider availability,
-or eliminate the existing request timeout. The trace regression also checks
-the effective budget while retaining an 80-page successful reading task.
+The proposed 128-round default was withdrawn at the user's request. Negative
+settings retain unlimited compatibility behavior. Completion instead follows
+actual native tool blocks, complete transport responses, structured acceptance
+receipts and stop review; legacy responses retain their explicit contract.
 
 CI run 41268354560 exposed fixtures still relying on the removed prose
 classifiers: scoped source-reading cases now supply explicit full_reads

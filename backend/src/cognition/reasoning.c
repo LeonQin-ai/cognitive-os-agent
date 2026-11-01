@@ -3162,11 +3162,10 @@ reasoning *reasoning_new(const reasoning_config *cfg) {
     r->plugin_registry = cfg->plugin_registry;
     r->state_root = cfg->state_root ? xstrdup(cfg->state_root) : NULL;
     if(!cfg->defer_session_load)meta_load(r); /* runtime lanes load shared index once */
-    /* Legacy negative/default settings need a real work budget. Explicit
-     * positive budgets remain available for deliberately longer tasks. */
+    /* Negative settings preserve the explicitly unlimited compatibility mode. */
     r->max_rounds = cfg->max_rounds != 0 ? cfg->max_rounds : AGENT_LOOP_MAX_ROUNDS;
     if (r->max_rounds < 0)
-        r->max_rounds = 128;
+        r->max_rounds = 1000000;
     r->hooks = cfg->hooks;
     r->usage_acc = cfg->usage_acc; /* borrowed per-model token ledger */
     if (r->hooks)

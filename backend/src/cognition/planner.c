@@ -134,7 +134,8 @@ static char *build_catalog_prompt(const tool_registry *tools, struct skill_regis
         return NULL;
     strbuf_init(&b);
     strbuf_append(&b, native ? SYS_NATIVE_HEAD:SYS_PROMPT_HEAD);
-    strbuf_append(&b,"\nControl decisions: declare_task({acceptance:{requires_action:boolean,requires_observation:boolean,artifacts:[path],full_reads:[path]}}) records requirements before operations. Artifact paths require a real nonempty write and later readback; full_reads require contiguous EOF. Requirements accumulate and cannot be omitted later. complete_task may append acceptance. Use complete_task(status=complete or blocked,requires_tools=false,answer) for every final answer, including tool-free conversation. Plain text is commentary.\n");
+    strbuf_append(&b,"\nControl decisions: declare_task({acceptance:{requires_action:boolean,requires_observation:boolean,artifacts:[path],full_reads:[path]}}) records requirements before operations. Artifact paths require a real nonempty write and later readback; full_reads require contiguous EOF. Requirements accumulate and cannot be omitted later. complete_task may append acceptance.\n");
+    strbuf_append(&b,native ? "Native turns with tools continue execution; a complete tool-free answer enters delivery review. Use complete_task to declare explicit status or acceptance.\n" : "Legacy final answers require complete_task(status=complete or blocked,requires_tools=false,answer). Plain text is commentary.\n");
     strbuf_append(&b,"\nFor a guessed exploratory file_read path that does not exist and is not required for the requested result, verify absence with list_dir of its exact parent after the failure. Then complete_task may include unavailable_optional_reads:[{path,reason,evidence_step_id}], using the successful directory step ID from Current execution state. Explain the omitted source and base conclusions on sources actually read. Do not retry an absent path indefinitely. Never use this for required source/deliverable reads, existing unread files, failed writes or commands.\n");
     for (size_t i = 0; i < (size_t)tool_registry_count(tools); i++) {
         const tool *t = tool_registry_get(tools, i);
@@ -583,8 +584,13 @@ static int dsml_tag_read(const char **cursor, dsml_tag *tag) {
 /* 0 = another format, 1 = valid DSML, -1 = broken DSML (no partial execution). */
 static int parse_dsml_tool_calls(const char *plan, planned_action **actions, int *n_actions) {
     const char *p=dsml_space(plan);
-    /* A protocol envelope must be structurally top-level. Free prose cannot
-     * authorize execution, regardless of words such as "example". */
+    const char *markup=(*p=='[' || *p=='{') ? NULL:next_tool_markup(p,1);
+    if(markup && (strstr(markup,"DSML")==markup+strlen("<｜｜") ||
+                  strstr(markup,"DSML")==markup+strlen("<||") ||
+                  strstr(markup,"DSML")==markup+strlen("<｜") ||
+                  strstr(markup,"DSML")==markup+strlen("<|")))p=markup;
+    /* Skip visible commentary only through the markup scanner, which excludes
+     * Markdown code spans and fences. Validate the entire following envelope. */
     if(strncmp(p,"<｜",4) && strncmp(p,"<|",2) && strncmp(p,"<||",3))return 0;
     dsml_tag tag;
     if (!strstr(p,"DSML")) return 0;
@@ -851,7 +857,7 @@ static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_act
     char *native_system=NULL;
     if(native_tools) {
         strbuf system;strbuf_init(&system);strbuf_append(&system,sys_prompt ? sys_prompt:SYS_NATIVE_HEAD);
-        strbuf_append(&system,"\nNATIVE TOOL PROTOCOL: When further operations are needed, emit native tool calls using the supplied function schemas. Any text alongside a tool call is commentary, never completion. After all operations and verification finish, call complete_task with status=complete, requires_tools=false, and the final answer. If blocked with no actionable tool recovery, use status=blocked. Plain text is commentary, never a completion declaration. Never set requires_tools=false when operations remain. Never call complete_task together with other tools. Tool errors are observations to diagnose and correct.\n");
+        strbuf_append(&system,"\nNATIVE TOOL PROTOCOL: When operations remain, emit native calls using the supplied schemas. Text alongside tool calls is commentary. A complete response without tool calls enters delivery review against actual receipts. Use complete_task for explicit complete/blocked status and acceptance. Never set requires_tools=false when operations remain. Never combine complete_task with other tools. Tool errors are observations to diagnose and correct.\n");
         native_system=strbuf_detach(&system);msgs[0].content=native_system;
     }
     char *review_system = NULL;
@@ -969,7 +975,18 @@ static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_act
             }
             if(diagnostic)diagnostic->no_action_response=finishes==0 && resp.content && *resp.content;
             if(!finishes && resp.content && *resp.content && !resp.truncated) {
-                if(native_end_out)*native_end_out=4;
+                /* Native tool blocks, not prose wording, own continuation.
+                 * A complete tool-free turn is a candidate for runtime receipt
+                 * validation and stop review, just like an explicit completion. */
+                if(native_end_out)*native_end_out=1;
+                if(completion_out) {
+                    cJSON *candidate=cJSON_CreateObject();
+                    cJSON_AddStringToObject(candidate,"status","complete");
+                    cJSON_AddBoolToObject(candidate,"requires_tools",0);
+                    cJSON_AddStringToObject(candidate,"answer",resp.content);
+                    *completion_out=cJSON_PrintUnformatted(candidate);
+                    cJSON_Delete(candidate);
+                }
                 if(raw_out)*raw_out=xstrdup(resp.content);
                 free(resp.content);free(resp.tool_actions_json);free(resp.error);
                 cJSON_Delete(calls);cJSON_Delete(finish);return 0;
