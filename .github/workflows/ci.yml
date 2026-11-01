@@ -123,6 +123,8 @@ jobs:
           sleep 1
       - name: Unit tests
         run: ./build/cognitive-os-agent-test
+      - name: Markdown image preview regression
+        run: node tests/test_chat_markdown.js
       - name: Isolated memory lifecycle baseline
         run: python3 tests/run_memory_baseline.py
       - name: Planner duplicate-read recovery regression
