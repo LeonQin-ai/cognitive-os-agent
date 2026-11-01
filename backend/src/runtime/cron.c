@@ -318,6 +318,17 @@ int cron_remove(cron_mgr *c, long long id) {
     return rc;
 }
 
+int cron_rename(cron_mgr *c, long long id, const char *name) {
+    if(!c || !name || !*name || strlen(name)>=CRON_NAME_MAX)return -2;
+    int rc=-1;
+    mutex_lock(&c->mtx);
+    for(size_t i=0;i<c->n;i++)if(c->jobs[i].id==id){
+        snprintf(c->jobs[i].name,sizeof(c->jobs[i].name),"%s",name);
+        cron_save_locked(c);rc=0;break;
+    }
+    mutex_unlock(&c->mtx);return rc;
+}
+
 int cron_set_enabled(cron_mgr *c, long long id, int enabled) {
     int rc = -1;
 

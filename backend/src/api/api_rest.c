@@ -2359,6 +2359,19 @@ static int h_cron_delete(const http_request *req, http_response *resp, void *ud)
     return 0;
 }
 
+static int h_cron_rename(const http_request *req,http_response *resp,void *ud) {
+    runtime_ctx *ctx=ud;
+    if(!authz_ok(ctx,req,resp))return 0;
+    const char *p=req->path+strlen("/v1/cron/");char *end=NULL;
+    long long id=strtoll(p,&end,10);
+    if(end==p || *end || id<0){resp->status=400;http_resp_json(resp,"{\"error\":\"invalid job id\"}");return 0;}
+    char *body=body_str(req);cJSON *root=body?cJSON_Parse(body):NULL;free(body);
+    cJSON *name=root?cJSON_GetObjectItemCaseSensitive(root,"name"):NULL;
+    int rc=cJSON_IsString(name)?cron_rename(ctx->cron,id,name->valuestring):-2;
+    cJSON_Delete(root);resp->status=rc==0?200:rc==-2?400:404;
+    http_resp_json(resp,rc==0?"{\"ok\":true}":"{\"error\":\"invalid name or unknown job\"}");return 0;
+}
+
 /* POST /v1/cron/<id>/toggle {"enabled":bool} — enable/disable a job */
 static int h_cron_toggle(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
@@ -5699,6 +5712,7 @@ int api_attach(runtime_ctx *ctx) {
     http_server_route(ctx->http, "GET", "/v1/cron", h_cron_list, ctx);
     http_server_route(ctx->http, "POST", "/v1/cron", h_cron_add, ctx);
     http_server_route(ctx->http, "DELETE", "/v1/cron/", h_cron_delete, ctx);
+    http_server_route(ctx->http, "PUT", "/v1/cron/", h_cron_rename, ctx);
     http_server_route(ctx->http, "POST", "/v1/cron/", h_cron_toggle, ctx);
     http_server_route(ctx->http, "DELETE", "/v1/routes/", h_route_delete, ctx);
     http_server_route(ctx->http, "GET", "/v1/config/llm", h_config_llm_get, ctx);

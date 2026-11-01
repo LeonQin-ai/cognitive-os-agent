@@ -8506,6 +8506,16 @@ static void test_http_api_contracts(uint16_t port) {
         j = api_request_json(port, "POST", path, "{\"enabled\":false}", 200);
         cJSON_Delete(j);
         snprintf(path, sizeof path, "/v1/cron/%lld", id);
+        j = api_request_json(port,"PUT",path,"{\"name\":\"renamed-topic\"}",200);
+        cJSON_Delete(j);
+        j = api_request_json(port,"PUT",path,"{\"name\":\"\"}",400);
+        cJSON_Delete(j);
+        j = api_request_json(port,"GET","/v1/cron",NULL,200);
+        cJSON *renamed=cJSON_GetArrayItem(j,0);
+        CHECK_STR(cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(renamed,"name")),"renamed-topic");
+        CHECK_STR(cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(renamed,"prompt")),"test");
+        CHECK(cJSON_IsFalse(cJSON_GetObjectItemCaseSensitive(renamed,"enabled")));
+        cJSON_Delete(j);
         j = api_request_json(port, "DELETE", path, NULL, 200);
         cJSON_Delete(j);
     }
