@@ -3213,7 +3213,7 @@ static void test_cross_round_progress(void) {
         if(mode==5 || mode==6 || mode==15)cfg.acceptance_json="{\"requires_action\":true}";
         else if(mode==41 || mode==43)cfg.acceptance_json="{\"full_reads\":[\"paged.txt\",\"long.txt\"]}";
         else if(mode==13 || mode==16 || mode==17 || mode>=36)cfg.acceptance_json="{\"full_reads\":[\"paged.txt\"]}";
-        trace *plan_trace=(mode>=24 && mode<=31) ? trace_new(32):NULL;
+        trace *plan_trace=(mode==1 || (mode>=24 && mode<=31)) ? trace_new(32):NULL;
         cfg.trace=plan_trace;
         reasoning *r=reasoning_new(&cfg); CHECK(r!=NULL);
         if (r) {
@@ -3241,6 +3241,7 @@ static void test_cross_round_progress(void) {
                     const char *name=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(span,"name"));
                     if(!name || strcmp(name,"llm.plan"))continue;
                     cJSON *decision=cJSON_Parse(cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(span,"result")));
+                    if(mode==1) CHECK(cJSON_GetNumberValue(cJSON_GetObjectItemCaseSensitive(decision,"max_rounds"))==128);
                     if(++plans==2) CHECK(cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(decision,"completion_review_required")));
                     cJSON_Delete(decision);
                 }
