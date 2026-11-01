@@ -75,7 +75,7 @@ with tempfile.TemporaryDirectory(prefix='coa-vision-wait-') as folder:
             headers={'Content-Type':'application/json'}),timeout=5) as response: return json.load(response)
     binary=backend/os.environ.get('COA_BUILD_DIR','build')/('cognitive-os-agent.exe' if os.name=='nt' else 'cognitive-os-agent')
     with (binary.parent/'vision-wait-e2e.log').open('w',encoding='utf-8') as log:
-        env=os.environ.copy(); env['COA_LLM_VISION_TIMEOUT_MS']='1000';env['COA_TOOL_PROTOCOL']='legacy'
+        env=os.environ.copy(); env['COA_LLM_VISION_TIMEOUT_MS']='1000';env['COA_TOOL_PROTOCOL']=os.environ.get('COA_VISION_TEST_PROTOCOL','legacy')
         process=subprocess.Popen([str(binary),'--state',str(state),'--workspace',str(state),'serve',str(port)],
             cwd=backend,env=env,stdout=log,stderr=log,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
         try:
@@ -130,11 +130,12 @@ with tempfile.TemporaryDirectory(prefix='coa-vision-wait-') as folder:
             assert delivered['model_failures']==1,delivered
             # Preserve compatibility recovery even when the provider returned
             # visible, incomplete tool JSON (a protocol-stage parse failure).
-            mode='length_partial';remaining_lengths=1;before=len(captures)
-            partial,_=chat([])
-            assert partial['status']=='DONE' and partial['tool_calls']==0 and not (state/'partial.txt').exists(),partial
-            assert any('No actions from this response executed.' in json.dumps(c) for c in captures[before+1:]),captures[before:]
-            print('PASS: text/image length recovery, bounded repeated length, invalid image response, and real write/readback after recovery')
+            if env['COA_TOOL_PROTOCOL']=='legacy':
+                mode='length_partial';remaining_lengths=1;before=len(captures)
+                partial,_=chat([])
+                assert partial['status']=='DONE' and partial['tool_calls']==0 and not (state/'partial.txt').exists(),partial
+                assert any('No actions from this response executed.' in json.dumps(c) for c in captures[before+1:]),captures[before:]
+            print('PASS:',env['COA_TOOL_PROTOCOL'],'text/image length recovery, bounded repeated length, invalid image response, and real write/readback after recovery')
             print('PASS: permanently silent and trickling providers fail without retry/synthesis; image retry and text succeed; payload and budgets verified')
         finally:
             process.terminate()

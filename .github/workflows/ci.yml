@@ -47,7 +47,9 @@ jobs:
       - name: Actual process crash recovery
         run: COA_BUILD_DIR=build-macos python3 tests/test_crash_recovery_e2e.py
       - name: Visual provider timeout and recovery regression
-        run: COA_BUILD_DIR=build-macos python3 tests/test_vision_wait_e2e.py
+        run: |
+          COA_BUILD_DIR=build-macos python3 tests/test_vision_wait_e2e.py
+          COA_BUILD_DIR=build-macos COA_VISION_TEST_PROTOCOL=native python3 tests/test_vision_wait_e2e.py
       - name: Durable session scale and cursor regression
         run: |
           ./build-macos/cognitive-os-agent-test --session-scale 300 state-test/session-scale-ci
@@ -146,7 +148,9 @@ jobs:
       - name: Actual process crash recovery
         run: python3 tests/test_crash_recovery_e2e.py
       - name: Visual provider timeout and recovery regression
-        run: python3 tests/test_vision_wait_e2e.py
+        run: |
+          python3 tests/test_vision_wait_e2e.py
+          COA_VISION_TEST_PROTOCOL=native python3 tests/test_vision_wait_e2e.py
       - name: Durable session scale and cursor regression
         run: |
           ./build/cognitive-os-agent-test --session-scale 300 state-test/session-scale-ci
@@ -355,7 +359,9 @@ jobs:
       - name: Information answer completion regression
         run: python tests/test_information_answers_e2e.py
       - name: Visual provider timeout and recovery regression
-        run: python tests/test_vision_wait_e2e.py
+        run: |
+          python tests/test_vision_wait_e2e.py
+          COA_VISION_TEST_PROTOCOL=native python tests/test_vision_wait_e2e.py
       - name: Complete browser MCP results API regression
         run: python tests/test_browser_results_e2e.py
       - name: Actual process crash recovery
