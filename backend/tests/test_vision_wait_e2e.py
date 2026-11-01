@@ -24,14 +24,15 @@ class Provider(BaseHTTPRequestHandler):
             if mode=='silent':
                 release_silent.wait(30)
                 return
-        else: assert body['max_tokens']==32768
-        if mode in ('length_once','length_tools','length_forever','invalid_response'):
+        else: assert body['max_tokens'] in ((32768,65536) if mode=='length_partial' else (32768,))
+        if mode in ('length_once','length_tools','length_partial','length_forever','invalid_response'):
             global remaining_lengths,produced_actions
             if mode=='invalid_response':
                 data=json.dumps({'choices':[{'message':{'content':None},'finish_reason':'stop'}]}).encode()
             elif mode=='length_forever' or remaining_lengths:
                 remaining_lengths=max(0,remaining_lengths-1)
-                data=json.dumps({'choices':[{'message':{'content':None,'reasoning_content':'private reasoning'},'finish_reason':'length'}]}).encode()
+                message={'content':'[{"tool":"file_write","args":{"path":"partial.txt","content":"unfinished'} if mode=='length_partial' else {'content':None,'reasoning_content':'private reasoning'}
+                data=json.dumps({'choices':[{'message':message,'finish_reason':'length'}]}).encode()
             else:
                 reply={'content':reviewed_answer(body,'VISION_WAIT_OK')}
                 if mode=='length_tools' and produced_actions<2:
@@ -74,7 +75,7 @@ with tempfile.TemporaryDirectory(prefix='coa-vision-wait-') as folder:
             headers={'Content-Type':'application/json'}),timeout=5) as response: return json.load(response)
     binary=backend/os.environ.get('COA_BUILD_DIR','build')/('cognitive-os-agent.exe' if os.name=='nt' else 'cognitive-os-agent')
     with (binary.parent/'vision-wait-e2e.log').open('w',encoding='utf-8') as log:
-        env=os.environ.copy(); env['COA_LLM_VISION_TIMEOUT_MS']='1000'
+        env=os.environ.copy(); env['COA_LLM_VISION_TIMEOUT_MS']='1000';env['COA_TOOL_PROTOCOL']='legacy'
         process=subprocess.Popen([str(binary),'--state',str(state),'--workspace',str(state),'serve',str(port)],
             cwd=backend,env=env,stdout=log,stderr=log,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
         try:
@@ -127,6 +128,12 @@ with tempfile.TemporaryDirectory(prefix='coa-vision-wait-') as folder:
             assert delivered['status']=='DONE' and (state/'delivered.txt').read_text()=='VERIFIED_VISUAL_DELIVERY',delivered
             assert [s['tool'] for s in delivered['steps']]==['file_write','file_read'],delivered
             assert delivered['model_failures']==1,delivered
+            # Preserve compatibility recovery even when the provider returned
+            # visible, incomplete tool JSON (a protocol-stage parse failure).
+            mode='length_partial';remaining_lengths=1;before=len(captures)
+            partial,_=chat([])
+            assert partial['status']=='DONE' and partial['tool_calls']==0 and not (state/'partial.txt').exists(),partial
+            assert any('No actions from this response executed.' in json.dumps(c) for c in captures[before+1:]),captures[before:]
             print('PASS: text/image length recovery, bounded repeated length, invalid image response, and real write/readback after recovery')
             print('PASS: permanently silent and trickling providers fail without retry/synthesis; image retry and text succeed; payload and budgets verified')
         finally:

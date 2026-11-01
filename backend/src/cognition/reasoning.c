@@ -4238,7 +4238,7 @@ restart_planning:
              * Empty reasoning-only responses need the same bounded recovery.
              * This shares the existing two-continuation allowance. */
             if (!r->had_plan && r->planner_response_truncated &&
-                !strcmp(r->last_model_failure.stage,"response")) {
+                (!r->visual_request_failed || !strcmp(r->last_model_failure.stage,"response"))) {
                 if (truncated_response_nudges >= 2 || r->round_idx >= r->max_rounds) {
                     output_truncated_unresolved = fail_aborted = unfinished = 1;
                     break;

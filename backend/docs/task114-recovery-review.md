@@ -89,6 +89,11 @@ externally forced provider truncation. Fixed-response HTTP tests exercise the
 specific truncation and exhaustion branches deterministically. It does not
 claim that arbitrary long UI modification tasks or all providers are proven.
 
+Compatibility mode also covers visible incomplete tool JSON with finish=length:
+the partial file_write never executes, the ordinary regeneration observation is
+preserved, and the next complete response can finish. The visual extension does
+not narrow the pre-existing nonvisual protocol-stage truncation recovery.
+
 After adding per-command before/after output fingerprints, a second bounded
 real API test exercised that exact producer path. The Agent authored report.py,
 executed it with declared comparison.html output, and read back the generated
