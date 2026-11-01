@@ -95,6 +95,10 @@
   /* ---------- 自选壁纸：让聊天区与左侧工作栏半透明，壁纸透出 ---------- */
   body.has-wallpaper{background:var(--bg)}
   body.has-wallpaper main{background:transparent}
+  /* 图片层自身只有 5–65% 强度，浅色主题底色又接近纯白，直接叠加会变成一层“白雾”，
+     面板看起来还是白的。这里按主题底色提亮图片层，强度滑杆仍决定最终观感。 */
+  body.has-wallpaper::before{opacity:calc(var(--wallpaper-opacity,0) * 2.2)}
+  body[data-theme=light].has-wallpaper::before{opacity:calc(var(--wallpaper-opacity,0) * 3)}
   /* 壁纸模式下所有面板改为磨砂玻璃，避免整片白底把图片挡住 */
   body.has-wallpaper aside{
     background:color-mix(in srgb,var(--sidebar) 42%,transparent);
@@ -151,6 +155,16 @@
     backdrop-filter:blur(16px);
     -webkit-backdrop-filter:blur(16px);
   }
+  /* 浅色主题的 --card 是纯白，任何仍直接用 var(--card) 的面板都会在壁纸模式下变成白块；
+     这里整体把浅色调色板调成半透明，作为遗漏面板的兜底（不影响其它主题）。 */
+  body[data-theme=light].has-wallpaper{
+    --card:rgba(255,255,255,.5);
+    --sidebar:rgba(233,237,244,.45);
+    --input:rgba(255,255,255,.55);
+    --nav-hover:rgba(255,255,255,.55);
+    --nav-on:rgba(255,255,255,.65);
+    --card-hover:rgba(255,255,255,.55);
+  }
   /* 浅色主题本身接近纯白，需要更低的填充比例，否则壁纸会被“白雾”盖住 */
   body[data-theme=light].has-wallpaper aside{
     background:color-mix(in srgb,var(--sidebar) 30%,transparent);
@@ -182,6 +196,21 @@
   body[data-theme=light].has-wallpaper #chat-hero .chip,
   body[data-theme=light].has-wallpaper .chat-copy{
     background:color-mix(in srgb,var(--card) 36%,transparent);
+  }
+  /* 聊天工具栏按钮/下拉、侧栏底部区域：避免纯白实心控件在壁纸上变成白色色块 */
+  body.has-wallpaper .chat-toolbar .sec,
+  body.has-wallpaper .chat-toolbar select,
+  body.has-wallpaper .usercard,
+  body.has-wallpaper .side-foot{
+    background:color-mix(in srgb,var(--card) 40%,transparent);
+    backdrop-filter:blur(12px);
+    -webkit-backdrop-filter:blur(12px);
+  }
+  body[data-theme=light].has-wallpaper .chat-toolbar .sec,
+  body[data-theme=light].has-wallpaper .chat-toolbar select,
+  body[data-theme=light].has-wallpaper .usercard,
+  body[data-theme=light].has-wallpaper .side-foot{
+    background:color-mix(in srgb,var(--card) 30%,transparent);
   }
 
   *{box-sizing:border-box}
@@ -910,9 +939,6 @@ function appearanceAdjust(){
   const shell = document.body;
   shell.style.setProperty('--wallpaper-opacity',String(opacity / 100));
   shell.style.setProperty('--wallpaper-blur',blur + 'px');
-  const main = document.querySelector('main');
-  main.style.setProperty('--wallpaper-opacity',String(opacity / 100));
-  main.style.setProperty('--wallpaper-blur',blur + 'px');
   try { localStorage.setItem('cognitive-os-appearance-settings',JSON.stringify({opacity,blur})); } catch(e) {}
 }
 async function appearanceChoose(input){
