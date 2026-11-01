@@ -52,6 +52,15 @@ session baselines, 64 full-read obligations plus artifact acceptance, current
 version/producer ordering, valid script rewrites, and Git search invalidation.
 The structured contract suite is included in platform CI and ASAN jobs.
 
+The first remote run also exposed an existing observation-retention fixture
+inconsistency after commit 7062875 introduced the 96KiB default ceiling. The
+fixture still expected every large-context model to retain more than 96KiB.
+It now checks four independent cases per adapter: default ceiling folds older
+evidence even with a large context, an explicitly larger ceiling retains it,
+and a small model's context-derived bound applies with either setting. Request
+size assertions and the 30 actual read receipts remain required. All eight
+OpenAI/Anthropic cases pass locally; this change does not raise runtime limits.
+
 ## Real configured API run
 
 An isolated native DeepSeek v4.1 Flash run uploaded a synthetic PNG, read two
