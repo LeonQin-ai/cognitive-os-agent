@@ -901,7 +901,12 @@ static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_act
     free(sys_prompt);
     if (rc != 0) {
         if (err_out) {
-            if(visual) {
+            if(visual && resp.truncated && resp.http_status==200) {
+                strbuf diagnostic; strbuf_init(&diagnostic);
+                strbuf_appendf(&diagnostic,"图片/视频帧模型输出达到 token 上限（模型 %s）：%s。未执行本次响应中的任何动作；需要重新生成完整响应。",
+                    llm->model ? llm->model:"unknown",resp.error ? resp.error:"incomplete response");
+                *err_out=strbuf_detach(&diagnostic);
+            } else if(visual) {
                 strbuf diagnostic; strbuf_init(&diagnostic);
                 strbuf_appendf(&diagnostic,"图片/视频帧模型请求失败（模型 %s，HTTP 等待超时配置 %ld ms）：%s。请检查接口是否支持图片输入；慢响应可调整 COA_LLM_VISION_TIMEOUT_MS。",
                     llm->model ? llm->model:"unknown",req.timeout_ms,resp.error ? resp.error:"LLM call failed");

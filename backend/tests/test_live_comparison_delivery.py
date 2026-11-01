@@ -3,18 +3,20 @@
 Explicit protocol selection exercises native or compatibility review; this does not
 claim the remote issue reporter's unavailable GLM deployment was reproduced.
 """
-import argparse,json,os,socket,subprocess,tempfile,time,urllib.request,uuid
+import argparse,base64,json,os,socket,subprocess,tempfile,time,urllib.request,uuid
 from pathlib import Path
 root=Path(__file__).resolve().parents[1]
 p=argparse.ArgumentParser(__doc__);p.add_argument('--config',required=True,type=Path)
 p.add_argument('--report',type=Path,default=root/'build/live-comparison-delivery.json')
 p.add_argument('--protocol',choices=('native','legacy'),default='legacy')
 p.add_argument('--paged-sources',action='store_true')
+p.add_argument('--visual',action='store_true',help='upload a synthetic PNG and run the real artifact task through the visual request path')
 p.add_argument('--accept-recovery',action='store_true',help='verify actual delivery after at most three recorded model failures; strict zero-failure mode remains default');a=p.parse_args()
 raw=json.loads(a.config.read_text(encoding='utf-8-sig'));cfg={k:v for k,v in raw.items() if k.startswith('llm.')}
 cfg.update({'http.bind':'127.0.0.1','reasoning.max_rounds':16,'scheduler.workers':1,'llm.timeout_ms':60000})
 report={'model':cfg.get('llm.model'),'protocol':a.protocol,'passed':False,'scope':'synthetic code comparison + actual HTML artifact; reporter GLM endpoint/source unavailable'}
 report['accept_recovery']=a.accept_recovery
+report['visual']=a.visual
 a.report.parent.mkdir(parents=True,exist_ok=True)
 with tempfile.TemporaryDirectory(prefix='coa-live-comparison-') as folder:
  state=Path(folder);left,right=uuid.uuid4().hex[:14],uuid.uuid4().hex[:14]
@@ -28,7 +30,7 @@ with tempfile.TemporaryDirectory(prefix='coa-live-comparison-') as folder:
  (state/'cognitive-os-agent.json').write_text(json.dumps(cfg),encoding='utf8')
  with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
  def api(method,path,body=None):
-  req=urllib.request.Request(f'http://127.0.0.1:{port}'+path,method=method,data=json.dumps(body).encode() if body is not None else None,headers={'Content-Type':'application/json'})
+  req=urllib.request.Request(f'http://127.0.0.1:{port}'+path,method=method,data=body if isinstance(body,bytes) else json.dumps(body).encode() if body is not None else None,headers={'Content-Type':'application/octet-stream' if isinstance(body,bytes) else 'application/json'})
   with urllib.request.urlopen(req,timeout=10) as response:return json.load(response)
  with a.report.with_suffix('.log').open('w',encoding='utf8') as log:
   proc=subprocess.Popen([str(root/'build'/('cognitive-os-agent.exe' if os.name=='nt' else 'cognitive-os-agent')),'--state',folder,'--workspace',folder,'serve',str(port)],cwd=root,stdout=log,stderr=log,env={**os.environ,'COA_TOOL_PROTOCOL':a.protocol},creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
@@ -42,7 +44,12 @@ with tempfile.TemporaryDirectory(prefix='coa-live-comparison-') as folder:
     '报告必须包含两个源码中的完整 PROJECT_A_MARKER/PROJECT_B_MARKER 值，以及 scaling_cur_freq、cpuinfo_cur_freq 和单位换算 1000。'
     '最终答复也必须包含两个完整 Marker 值和报告文件名。只使用 list_dir、file_read、file_write，不执行 shell，不修改原始两份代码。'
     '继续完成阅读、分析、写入与校验，不要只交付阶段性计划。')
-   started=time.monotonic();tid=api('POST','/v1/tasks',{'prompt':prompt})['id']
+   started=time.monotonic()
+   if a.visual:
+    png=base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=')
+    uploaded=api('POST','/v1/upload?name=synthetic.png&session=live-visual',png)
+    tid=api('POST','/v1/chat',{'message':prompt+' 附件为透明测试图片，代码事实只依据实际源码读取。','session':'live-visual','attachments':[uploaded['id']]})['id']
+   else:tid=api('POST','/v1/tasks',{'prompt':prompt})['id']
    while True:
     observed=api('GET',f'/v1/tasks/{tid}')
     if observed.get('status') not in ('RUNNING','QUEUED'):break

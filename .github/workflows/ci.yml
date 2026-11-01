@@ -58,6 +58,8 @@ jobs:
         run: COA_BUILD_DIR=build-macos python3 tests/test_model_capabilities_e2e.py
       - name: Native tool block continuation regression
         run: COA_BUILD_DIR=build-macos python3 tests/test_native_tool_loop.py
+      - name: Structured acceptance and cross-run artifact regression
+        run: COA_BUILD_DIR=build-macos python3 tests/test_structured_task_contract_e2e.py
       - name: Model finalization and provider diagnostics regression
         run: COA_BUILD_DIR=build-macos python3 tests/test_model_finalization_e2e.py
       - name: Command execution Trace and persistence
@@ -155,6 +157,8 @@ jobs:
         run: python tests/test_model_capabilities_e2e.py
       - name: Native tool block continuation regression
         run: python tests/test_native_tool_loop.py
+      - name: Structured acceptance and cross-run artifact regression
+        run: python tests/test_structured_task_contract_e2e.py
       - name: Model finalization and provider diagnostics regression
         run: python tests/test_model_finalization_e2e.py
       - name: Command execution Trace and persistence
@@ -216,6 +220,8 @@ jobs:
           LD_PRELOAD=$(gcc -print-file-name=libasan.so) ASAN_OPTIONS=detect_leaks=0 ./build/cognitive-os-agent-test
       - name: Native tool block continuation under ASAN
         run: ASAN_OPTIONS=detect_leaks=0 python3 tests/test_native_tool_loop.py
+      - name: Structured acceptance under ASAN
+        run: ASAN_OPTIONS=detect_leaks=0 python3 tools/run_ci_regression.py tests/test_structured_task_contract_e2e.py
       - name: ASAN completion review e2e
         run: ASAN_OPTIONS=detect_leaks=0 python3 tools/run_ci_regression.py tests/test_completion_review_e2e.py
       - name: ASAN embedded tool completion e2e
@@ -327,6 +333,8 @@ jobs:
         run: python tests/test_model_capabilities_e2e.py
       - name: Native tool block continuation regression
         run: python tests/test_native_tool_loop.py
+      - name: Structured acceptance and cross-run artifact regression
+        run: python tests/test_structured_task_contract_e2e.py
       - name: Model finalization and provider diagnostics regression
         run: python tests/test_model_finalization_e2e.py
       - name: Command execution Trace and persistence

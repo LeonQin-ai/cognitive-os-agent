@@ -9,6 +9,8 @@ backend=Path(__file__).resolve().parents[1]
 captures=[]
 release_silent=threading.Event()
 mode='silent'
+remaining_lengths=0
+produced_actions=0
 class Provider(BaseHTTPRequestHandler):
     def log_message(self,*args): pass
     def do_POST(self):
@@ -23,6 +25,24 @@ class Provider(BaseHTTPRequestHandler):
                 release_silent.wait(30)
                 return
         else: assert body['max_tokens']==32768
+        if mode in ('length_once','length_tools','length_forever','invalid_response'):
+            global remaining_lengths,produced_actions
+            if mode=='invalid_response':
+                data=json.dumps({'choices':[{'message':{'content':None},'finish_reason':'stop'}]}).encode()
+            elif mode=='length_forever' or remaining_lengths:
+                remaining_lengths=max(0,remaining_lengths-1)
+                data=json.dumps({'choices':[{'message':{'content':None,'reasoning_content':'private reasoning'},'finish_reason':'length'}]}).encode()
+            else:
+                reply={'content':reviewed_answer(body,'VISION_WAIT_OK')}
+                if mode=='length_tools' and produced_actions<2:
+                    name,args=(('file_write',{'path':'delivered.txt','content':'VERIFIED_VISUAL_DELIVERY'}) if produced_actions==0 else ('file_read',{'path':'delivered.txt'}))
+                    produced_actions+=1
+                    if body.get('tools'):
+                        reply={'content':'','tool_calls':[{'id':f'visual-{produced_actions}','type':'function','function':{'name':name,'arguments':json.dumps(args)}}]}
+                    else:reply={'content':json.dumps([{'tool':name,'args':args}])}
+                data=json.dumps({'choices':[{'message':reply,'finish_reason':'tool_calls' if reply.get('tool_calls') else 'stop'}]}).encode()
+            self.send_response(200);self.send_header('Content-Length',str(len(data)));self.end_headers();self.wfile.write(data)
+            return
         answer=reviewed_answer(body,'VISION_WAIT_OK') if mode=='ready' else 'VISION_WAIT_OK'
         data=json.dumps({'choices':[{'message':{'content':answer}}]}).encode()
         self.send_response(200); self.send_header('Content-Length',str(len(data))); self.end_headers()
@@ -86,6 +106,28 @@ with tempfile.TemporaryDirectory(prefix='coa-vision-wait-') as folder:
             done,_=chat([uploaded['id']]); assert done['status']=='DONE',done
             plain,_=chat([]); assert plain['status']=='DONE',plain
             assert len(captures)==4,len(captures)
+            # The same HTTP-200 length response used to kill a visual task on
+            # its first failure. Both modalities share one bounded recovery.
+            for attachments in ([uploaded['id']],[]):
+                mode='length_once';remaining_lengths=1;before=len(captures)
+                recovered,_=chat(attachments)
+                assert recovered['status']=='DONE' and recovered['output']=='VISION_WAIT_OK',recovered
+                assert len(captures)-before==2,(len(captures)-before,recovered)
+            mode='length_forever';before=len(captures)
+            exhausted,_=chat([uploaded['id']])
+            assert exhausted['status']=='FAILED' and len(captures)-before==3,exhausted
+            assert 'token' in exhausted['output'].lower() and '120000 ms' not in exhausted['output'],exhausted
+            mode='invalid_response';before=len(captures)
+            invalid,_=chat([uploaded['id']])
+            assert invalid['status']=='FAILED' and len(captures)-before==1,invalid
+            mode='ready'
+            after,_=chat([uploaded['id']]);assert after['status']=='DONE',after
+            mode='length_tools';remaining_lengths=1;produced_actions=0
+            delivered,_=chat([uploaded['id']])
+            assert delivered['status']=='DONE' and (state/'delivered.txt').read_text()=='VERIFIED_VISUAL_DELIVERY',delivered
+            assert [s['tool'] for s in delivered['steps']]==['file_write','file_read'],delivered
+            assert delivered['model_failures']==1,delivered
+            print('PASS: text/image length recovery, bounded repeated length, invalid image response, and real write/readback after recovery')
             print('PASS: permanently silent and trickling providers fail without retry/synthesis; image retry and text succeed; payload and budgets verified')
         finally:
             process.terminate()
