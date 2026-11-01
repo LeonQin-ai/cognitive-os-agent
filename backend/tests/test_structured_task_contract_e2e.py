@@ -37,6 +37,18 @@ def exercise(protocol,mode,prompt='Verify the requested result.'):
         if mode=='full':replies += [action('file_read',path=path,offset_bytes=4000),action('file_read',path=path,offset_bytes=8000)]
         replies += [done];expected='FAILED' if mode=='partial' else 'DONE'
     elif mode=='api_missing':acceptance={'artifacts':['report.any']};replies=[done];expected='FAILED'
+    elif mode=='script_output':
+        # Shell-declared artifact: the command writes the file and declares it
+        # in outputs[]; the version-matched read back must satisfy acceptance.
+        replies=[declare(artifacts=['report.any']),
+                 action('shell',command="printf 'ACTUAL_ARTIFACT_PROOF' > report.any",outputs=['report.any']),
+                 read,done];expected='DONE'
+    elif mode=='script_unchanged':
+        # Declaring outputs on a read-only command must not fake a write: the
+        # file never changed after the obligation was merged, so the gate holds.
+        replies=[declare(artifacts=['report.any']),
+                 action('shell',command='cat report.any',outputs=['report.any']),
+                 read,done];expected='FAILED'
     elif mode=='observation':acceptance={'requires_observation':True};replies=[done];expected='FAILED'
     elif mode=='mutation':acceptance={'requires_action':True};replies=[action('file_read',path='tiny'),done];expected='FAILED'
     elif mode=='failed_tool':replies=[action('file_read',path='missing'),done];expected='FAILED'
@@ -56,7 +68,7 @@ def exercise(protocol,mode,prompt='Verify the requested result.'):
     try:
         with tempfile.TemporaryDirectory(prefix='coa-contract-') as folder:
             work=Path(folder);(work/'tiny').write_text('TINY_SOURCE_PROOF',encoding='utf8');(work/'long.dat').write_text('x'*9001,encoding='utf8')
-            if mode in ('preexisting','stale'):(work/'report.any').write_text('OLD_ARTIFACT',encoding='utf8')
+            if mode in ('preexisting','stale','script_unchanged'):(work/'report.any').write_text('OLD_ARTIFACT',encoding='utf8')
             (work/'cognitive-os-agent.json').write_text(json.dumps({'llm.provider':'openai','llm.model':'contract-fixture','llm.api_key':'fixture','llm.base_url':f'http://127.0.0.1:{server.server_port}','reasoning.max_rounds':16}))
             with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
             def api(path,body=None):
@@ -83,6 +95,7 @@ def exercise(protocol,mode,prompt='Verify the requested result.'):
                     if expected=='DONE':
                         assert task['output']==FINAL,task
                         if mode=='artifact':assert (work/'report.any').read_text()==CONTENT
+                        if mode=='script_output':assert (work/'report.any').read_text()==CONTENT
                     else:assert not api('/v1/chat/history?session=contract')['turns']
                     if mode=='prefixed':assert task['tool_calls']==1 and task['model_failures']==0,task
                     if mode=='quoted_commentary':assert task['tool_calls']==1 and task['model_failures']==0,task
@@ -99,7 +112,7 @@ if __name__=='__main__':
     exercise('native','plain_final')
     exercise('legacy','prefixed')
     for protocol in ('legacy','native'):
-        for mode in ('chat','commentary','quoted_commentary','stuck','artifact','missing','erase','preexisting','write_only','stale','full','partial','small','optional','api_missing','observation','mutation','failed_tool'):
+        for mode in ('chat','commentary','quoted_commentary','stuck','artifact','missing','erase','preexisting','write_only','stale','script_output','script_unchanged','full','partial','small','optional','api_missing','observation','mutation','failed_tool'):
             exercise(protocol,mode)
         for prompt in ('为什么帮我解释如何修改代码并完整读取文件，输出HTML报告。','Do not read. Read all source. I will write. Help install fix create.','Прочитайте исходники. 完整读文件只是引用。'):
             exercise(protocol,'chat',prompt)

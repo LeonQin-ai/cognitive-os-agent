@@ -263,6 +263,12 @@ struct reasoning {
      * not make alternating old reads look like newly discovered evidence. */
     struct { char path[2048]; uint64_t version, digest; } artifact_seen[128];
     int artifact_seen_n;
+    /* Pre-work fingerprint per accepted artifact, captured when the
+     * obligation is first merged. A later version change proves the run
+     * itself produced the current bytes, so script-mediated artifacts
+     * (shell outputs[]) can satisfy acceptance with a version-matched read. */
+    struct { char path[2048]; uint64_t version; } artifact_baseline[64];
+    int artifact_baseline_n;
     uint64_t artifact_versions_seen[2048];
     int artifact_versions_seen_n;
     struct opaque_observation opaque_seen[256];
@@ -560,6 +566,7 @@ static int completion_file_read_allowed(reasoning *r,const char *path){
 }
 static int full_read_verified(reasoning *r,const char *path);
 static int run_has_verified_artifact(reasoning *r,const char *path);
+static uint64_t artifact_baseline_of(reasoning *r,const char *path);
 int reasoning_acceptance_validate(const char *json) {
     cJSON *o=cJSON_ParseWithOpts(json?json:"{}",NULL,1);int valid=cJSON_IsObject(o);cJSON *field;
     if(!valid){cJSON_Delete(o);return -1;}
@@ -596,6 +603,7 @@ static void merge_acceptance(reasoning *r,const cJSON *input) {
                 if(!found) {
                     cJSON *entry=cJSON_CreateString(full);
                     if(cJSON_GetArraySize(paths)>=64||!entry||!cJSON_AddItemToArray(paths,entry)){cJSON_Delete(entry);cJSON_Delete(next);r->acceptance_invalid=1;return;}
+                    artifact_baseline_of(r,full); /* pre-work fingerprint at obligation time */
                 }
             }
         }
@@ -644,7 +652,7 @@ static void verify_completion_files(reasoning *r,const char *completion_json){
     if(!r->file_checks_failed && cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(r->acceptance,"requires_action")) && !r->run_mutated){r->file_checks_failed=1;snprintf(r->file_check_error,sizeof(r->file_check_error),"Acceptance requires a successful action; no committed action receipt is present.");}
     if(!r->file_checks_failed && cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(r->acceptance,"requires_observation")) && !r->run_successful_tools){r->file_checks_failed=1;snprintf(r->file_check_error,sizeof(r->file_check_error),"Acceptance requires a successful tool observation.");}
     cJSON_ArrayForEach(entry,cJSON_GetObjectItemCaseSensitive(r->acceptance,"artifacts"))
-        if(!r->file_checks_failed && !run_has_verified_artifact(r,entry->valuestring)){r->file_checks_failed=1;snprintf(r->file_check_error,sizeof(r->file_check_error),"Artifact acceptance requires a nonempty file written and read back in this run: %.200s",entry->valuestring);}
+        if(!r->file_checks_failed && !run_has_verified_artifact(r,entry->valuestring)){r->file_checks_failed=1;snprintf(r->file_check_error,sizeof(r->file_check_error),"Artifact acceptance requires the file produced and read back in this run: %.200s. Use file_write, or run the producing shell command with the path declared in its outputs array and then file_read the file back.",entry->valuestring);}
     cJSON_ArrayForEach(entry,cJSON_GetObjectItemCaseSensitive(r->acceptance,"full_reads"))
         if(!r->file_checks_failed && (r->read_tracking_overflow || !full_read_verified(r,entry->valuestring))){r->file_checks_failed=1;snprintf(r->file_check_error,sizeof(r->file_check_error),"Full-read acceptance has not reached contiguous EOF: %.200s",entry->valuestring);}
     if(!r->file_checks_failed)r->file_check_rejections=0;
@@ -3333,6 +3341,26 @@ static int required_pending_reads(reasoning *r) {
         if(!full_read_verified(r,item->valuestring))pending++;
     return pending;
 }
+/* Fingerprint of an accepted artifact when its obligation was first merged.
+ * Later gate checks reuse the stored value; a differing current version
+ * proves the run itself changed the file. */
+static uint64_t artifact_baseline_of(reasoning *r,const char *path) {
+    for(int i=0;i<r->artifact_baseline_n;i++)
+        if(!strcmp(r->artifact_baseline[i].path,path))return r->artifact_baseline[i].version;
+    if(r->artifact_baseline_n>=(int)(sizeof(r->artifact_baseline)/sizeof(r->artifact_baseline[0])))return 0;
+    int i=r->artifact_baseline_n++;
+    snprintf(r->artifact_baseline[i].path,sizeof(r->artifact_baseline[i].path),"%s",path);
+    r->artifact_baseline[i].version=fs_file_version(path);
+    return r->artifact_baseline[i].version;
+}
+/* A shell action declared this path in outputs[] and its recorded post-action
+ * version equals the file's current version: the declared command produced
+ * the current bytes. Explicit declarations only, never command-name guessing. */
+static int declared_output_current(reasoning *r,const char *path,uint64_t current) {
+    for(int i=0;i<r->artifact_seen_n;i++)
+        if(!strcmp(r->artifact_seen[i].path,path) && r->artifact_seen[i].version && r->artifact_seen[i].version==current)return 1;
+    return 0;
+}
 static int run_has_verified_artifact(reasoning *r,const char *target) {
     for(int i=r->n_steps-1;i>=0;i--) {
         struct run_step *read=&r->steps[i];
@@ -3342,6 +3370,13 @@ static int run_has_verified_artifact(reasoning *r,const char *target) {
             struct run_step *write=&r->steps[j];
             if(write->ok==1 && !strcmp(write->tool,"file_write") && write->evidence_path && !strcmp(write->evidence_path,target))return j<i;
         }
+        /* Script-mediated artifact: a shell command that declared the path in
+         * outputs[] produced the current bytes (the file changed after the
+         * obligation was merged), and the version-matched read above proves
+         * the agent verified the final content. Same evidence, different
+         * producer — generated artifacts must not force fake file_write calls. */
+        if(artifact_baseline_of(r,target)!=read->evidence_version && declared_output_current(r,target,read->evidence_version))return 1;
+        return 0;
     }
     return 0;
 }
