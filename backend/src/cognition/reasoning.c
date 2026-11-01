@@ -272,6 +272,8 @@ struct reasoning {
      * not make alternating old reads look like newly discovered evidence. */
     struct { char path[2048]; uint64_t version, digest; unsigned producer_step; } artifact_seen[128];
     int artifact_seen_n;
+    uint64_t action_output_versions_before[16];
+    int action_outputs_captured;
     /* Pre-work fingerprint per accepted artifact, captured when the
      * obligation is first merged. A later version change proves the run
      * itself produced the current bytes, so script-mediated artifacts
@@ -2503,6 +2505,20 @@ static void observation_sketch(struct opaque_observation *shape,const char *text
 /* Explicit tool effects, never command-name guessing. Small artifacts use
  * content fingerprints so touching/rewriting identical files is not progress;
  * large artifacts use the OS revision fingerprint without loading whole files. */
+static void capture_action_output_versions(reasoning *r,const char *args_json) {
+    r->action_outputs_captured=0;
+    cJSON *args=cJSON_Parse(args_json?args_json:"{}"),*item;
+    cJSON_ArrayForEach(item,cJSON_GetObjectItemCaseSensitive(args,"outputs")) {
+        if(r->action_outputs_captured==16)break;
+        uint64_t before=0;
+        if(cJSON_IsString(item)) {
+            char path[2048];normalized_evidence_path(r,item->valuestring,path,sizeof(path));
+            before=fs_file_version(path);
+        }
+        r->action_output_versions_before[r->action_outputs_captured++]=before;
+    }
+    cJSON_Delete(args);
+}
 static int declared_artifact_progress(reasoning *r,const char *args_json) {
     cJSON *args=cJSON_Parse(args_json?args_json:"{}");
     cJSON *outputs=cJSON_GetObjectItemCaseSensitive(args,"outputs"),*item;
@@ -2514,6 +2530,10 @@ static int declared_artifact_progress(reasoning *r,const char *args_json) {
         char path[2048];normalized_evidence_path(r,item->valuestring,path,sizeof(path));
         if(fs_is_dir(path))continue;
         uint64_t version=fs_file_version(path);if(!version)continue;
+        /* A declaration is not a production receipt. A successful command
+         * must actually change this version, not adopt another action's or
+         * another task's pre-existing output by listing it in outputs[]. */
+        if(checked>r->action_outputs_captured || r->action_output_versions_before[checked-1]==version)continue;
         int i=0;while(i<r->artifact_seen_n && strcmp(r->artifact_seen[i].path,path))i++;
         if(i<r->artifact_seen_n && r->artifact_seen[i].version==version)continue;
         long long size=fs_file_size(path);uint64_t digest=version;
@@ -2924,6 +2944,7 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
         }
         r->prog_tool_calls++;
         long long t_tool0 = time_now_ms();
+        capture_action_output_versions(r,r->actions[i].args_json);
         char span_name[64] = "tool.";
         size_t span_len = strlen(span_name);
         const unsigned char *tool_name = (const unsigned char *)r->actions[i].tool;

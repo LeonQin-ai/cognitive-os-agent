@@ -59,6 +59,10 @@ def exercise(protocol,mode,prompt='Verify the requested result.'):
         replies=[declare(artifacts=['report.any']),
                  action('shell',command="printf 'UNRECEIPTED_VERSION' > report.any"),read,
                  action('shell',command='cat report.any',outputs=['report.any']),done];expected='FAILED'
+    elif mode=='nonproducing_output_declaration':
+        replies=[declare(artifacts=['report.any']),
+                 action('shell',command="printf 'UNRECEIPTED_VERSION' > report.any"),
+                 action('shell',command='cat report.any',outputs=['report.any']),read,done];expected='FAILED'
     elif mode=='baseline_capacity':
         sources=[f'source-{i}.txt' for i in range(64)]
         replies=[declare(full_reads=sources,artifacts=['report.any'])]
@@ -169,7 +173,7 @@ if __name__=='__main__':
         exercise('native',mode)
     for protocol in ('native','legacy'):exercise(protocol,'baseline_capacity')
     for protocol in ('native','legacy'):
-        for mode in ('unreceipted_rewrite','late_output_declaration'):exercise(protocol,mode)
+        for mode in ('unreceipted_rewrite','late_output_declaration','nonproducing_output_declaration'):exercise(protocol,mode)
     if os.name!='nt':exercise('native','cache_shell_env')
     for protocol in ('legacy','native'):
         for mode in ('chat','commentary','quoted_commentary','stuck','artifact','missing','erase','preexisting','write_only','stale','script_output','script_reuse','script_unchanged','script_rewrite','full','partial','small','optional','api_missing','observation','mutation','failed_tool'):

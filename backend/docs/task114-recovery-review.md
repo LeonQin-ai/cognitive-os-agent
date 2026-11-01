@@ -27,6 +27,9 @@ response does not by itself prove the original UI task has been delivered.
 - Artifact production/readback receipts must match the current file version
   and their actual execution order. An earlier file_write cannot vouch for a
   later version; declared shell production followed by readback remains valid.
+- Declared shell outputs are fingerprinted immediately before and after the
+  actual command. Listing a file in outputs without changing it is not a
+  production receipt, even if a different action created it earlier this run.
 - Shell/Git cache exemptions are exact conservative forms, rather than whole
   subcommand prefixes. Mutating branch/tag commands, arbitrary env programs,
   options such as git log --output, newline chaining, and declared outputs
@@ -61,6 +64,11 @@ and a small model's context-derived bound applies with either setting. Request
 size assertions and the 30 actual read receipts remain required. All eight
 OpenAI/Anthropic cases pass locally; this change does not raise runtime limits.
 
+An additional negative fixture also fails against the original binary: create
+a file in one shell action without an output receipt, then merely cat it with
+outputs declared and read it back. The original gate returns DONE; the fixed
+gate rejects it because the purported producer did not change the file.
+
 ## Real configured API run
 
 An isolated native DeepSeek v4.1 Flash run uploaded a synthetic PNG, read two
@@ -80,3 +88,16 @@ This validates the configured provider's visual tool/artifact path, not an
 externally forced provider truncation. Fixed-response HTTP tests exercise the
 specific truncation and exhaustion branches deterministically. It does not
 claim that arbitrary long UI modification tasks or all providers are proven.
+
+After adding per-command before/after output fingerprints, a second bounded
+real API test exercised that exact producer path. The Agent authored report.py,
+executed it with declared comparison.html output, and read back the generated
+HTML under caller-supplied artifact and source-read acceptance obligations.
+The harness rejected direct HTML file_write as an alternative producer.
+
+- Result: DONE, 12 requests, 9 tools, 0 model failures, 34.304 seconds.
+- Actual generated artifact: 6,346 bytes, source markers and answer verified.
+- Usage: 110,813 prompt + 5,340 visible completion + 1,480 reasoning = 117,633
+  tokens. Both live tests together used **204,384 tokens**, with no failed
+  requests and no automatic task reruns. No monetary estimate is invented.
+- Local evidence: build/task114-live-script.json, .log, and .html (ignored).
