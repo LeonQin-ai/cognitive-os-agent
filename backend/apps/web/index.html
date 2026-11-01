@@ -1159,7 +1159,9 @@ async function loadCron(){
     const del = document.createElement('button');
     del.className = 'sec sm'; del.textContent = '删除';
     del.onclick = async () => { if(!confirm('删除定时任务 ' + (j.name || j.id) + '?')) return; await call('DELETE', '/v1/cron/' + j.id); loadCron(); };
-    row.appendChild(tgl); row.appendChild(del);
+    const rename=document.createElement('button'); rename.className='sec sm'; rename.textContent='修改主题';
+    rename.onclick=async()=>{const name=prompt('定时任务主题',j.name||'');if(name===null)return;const value=name.trim();if(!value){alert('主题不能为空');return;}const r=await call('PUT','/v1/cron/'+j.id,{name:value});if(r.status!==200){alert(r.obj?.error||'修改失败');return;}loadCron();};
+    row.appendChild(rename); row.appendChild(tgl); row.appendChild(del);
     box.appendChild(row);
   });
 }
@@ -4099,7 +4101,7 @@ function chatImageButton(src,name){
   };
   return button;
 }
-function chatRenderText(el,text){
+function chatRenderInline(el,text){
   const pattern=/!\[([^\]\n]*)\]\(([^\s)]+)\)/g;
   let start=0, match;
   while((match=pattern.exec(text || ''))){
@@ -4107,6 +4109,29 @@ function chatRenderText(el,text){
     el.append(document.createTextNode(text.slice(start,match.index)),chatImageButton(src,match[1])); start=pattern.lastIndex;
   }
   el.append(document.createTextNode((text || '').slice(start)));
+}
+function chatRenderText(el,text){
+  const lines=String(text||'').split('\n');let code=null;
+  for(const line of lines){
+    if(/^\s*```/.test(line)){
+      if(code){el.append(code);code=null;}else{code=document.createElement('code');code.style.cssText='display:block;white-space:pre-wrap;background:var(--bg);padding:12px;border-radius:8px';}
+      continue;
+    }
+    if(code){code.append(document.createTextNode(line+'\n'));continue;}
+    const heading=/^(#{1,6})\s+(.*)$/.exec(line);
+    const row=document.createElement(heading?'h'+heading[1].length:'div');
+    row.style.whiteSpace='pre-wrap';
+    const content=heading?heading[2]:line;
+    const parts=content.split(/(\*\*[^*]+\*\*|`[^`]+`)/g);
+    for(const part of parts){
+      if(part.startsWith('**')&&part.endsWith('**')){const strong=document.createElement('strong');strong.textContent=part.slice(2,-2);row.append(strong);}
+      else if(part.startsWith('`')&&part.endsWith('`')){const span=document.createElement('code');span.textContent=part.slice(1,-1);row.append(span);}
+      else chatRenderInline(row,part);
+    }
+    if(!content)row.append(document.createElement('br'));
+    el.append(row);
+  }
+  if(code)el.append(code);
 }
 function chatRenderImages(wrap,images){
   if(!wrap || !images?.length) return;
