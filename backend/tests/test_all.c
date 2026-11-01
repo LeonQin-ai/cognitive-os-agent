@@ -3262,7 +3262,7 @@ static void test_cross_round_progress(void) {
                     CHECK(rc != 0 && f.calls == 5 && answer && strstr(answer,"任务未完成"));
                 else CHECK(rc == 0 && f.calls == 4 && answer && strstr(answer,"上下文工程分析完成"));
             } else if (mode >= 20) {
-                if (mode == 22) CHECK(rc != 0 && f.calls == 3 && answer && strstr(answer,"任务未完成"));
+                if (mode == 22) CHECK(rc != 0 && f.calls == 4 && answer && strstr(answer,"任务未完成"));
                 else if (mode == 23) CHECK(rc == 0 && f.calls == 3 && answer && strstr(answer,"当前结构已核对"));
                 else CHECK(rc == 0 && f.calls == 5 && answer && strstr(answer,"记忆模型分析完成"));
             } else if (mode==18) {
@@ -3301,13 +3301,13 @@ static void test_cross_round_progress(void) {
                 CHECK(f.calls==7 && calls==3);
             } else if (mode==10) {
                 CHECK(rc!=0 && answer && strstr(answer,"任务未完成"));
-                CHECK(f.calls==4);
+                CHECK(f.calls==5);
             } else if (mode==11) {
                 CHECK(rc!=0 && answer && strstr(answer,"fixture_loop_error"));
                 CHECK(f.calls==8);
             } else if (mode==12) {
                 CHECK(rc!=0 && answer && strstr(answer,"任务未完成"));
-                CHECK(f.calls==5);
+                CHECK(f.calls==6);
             } else if (mode==3) {
                 CHECK(rc==0 && f.saw_recovery && f.recovered && f.calls<12 && answer);
             } else if (mode==13) {
