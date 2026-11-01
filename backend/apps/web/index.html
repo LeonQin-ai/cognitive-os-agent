@@ -92,6 +92,98 @@
   body[data-theme=dragongirl] .card{background:color-mix(in srgb,#1e1d1e 84%,transparent)}
   body[data-theme=dragongirl] aside{background:color-mix(in srgb,#191819 88%,transparent)}
 
+  /* ---------- 自选壁纸：让聊天区与左侧工作栏半透明，壁纸透出 ---------- */
+  body.has-wallpaper{background:var(--bg)}
+  body.has-wallpaper main{background:transparent}
+  /* 壁纸模式下所有面板改为磨砂玻璃，避免整片白底把图片挡住 */
+  body.has-wallpaper aside{
+    background:color-mix(in srgb,var(--sidebar) 42%,transparent);
+    backdrop-filter:blur(22px) saturate(1.12);
+    -webkit-backdrop-filter:blur(22px) saturate(1.12);
+    border-right-color:color-mix(in srgb,var(--border) 55%,transparent);
+  }
+  body.has-wallpaper .top{
+    background:color-mix(in srgb,var(--card) 38%,transparent);
+    backdrop-filter:blur(18px) saturate(1.1);
+    -webkit-backdrop-filter:blur(18px) saturate(1.1);
+  }
+  body.has-wallpaper .card,
+  body.has-wallpaper .stat,
+  body.has-wallpaper .im-run-controls,
+  body.has-wallpaper .chat-tab.on,
+  body.has-wallpaper .chat-toolbar{
+    background:color-mix(in srgb,var(--card) 46%,transparent);
+    backdrop-filter:blur(16px);
+    -webkit-backdrop-filter:blur(16px);
+  }
+  body.has-wallpaper .plaza .item,
+  body.has-wallpaper .market-entry,
+  body.has-wallpaper .im-session,
+  body.has-wallpaper .im-msg.assistant,
+  body.has-wallpaper .agent-preset,
+  body.has-wallpaper .chat-tab{
+    background:color-mix(in srgb,var(--card) 46%,transparent);
+    backdrop-filter:blur(14px);
+    -webkit-backdrop-filter:blur(14px);
+  }
+  body.has-wallpaper .pillbar{
+    background:color-mix(in srgb,var(--card) 40%,transparent);
+    backdrop-filter:blur(20px) saturate(1.1);
+    -webkit-backdrop-filter:blur(20px) saturate(1.1);
+    border-color:color-mix(in srgb,var(--border) 55%,var(--accent));
+  }
+  body.has-wallpaper .chat-message.user{
+    background:color-mix(in srgb,var(--card) 48%,transparent);
+    backdrop-filter:blur(14px);
+    -webkit-backdrop-filter:blur(14px);
+  }
+  body.has-wallpaper #chat-hero .chip,
+  body.has-wallpaper .chat-copy{
+    background:color-mix(in srgb,var(--card) 50%,transparent);
+    backdrop-filter:blur(12px);
+    -webkit-backdrop-filter:blur(12px);
+  }
+  body.has-wallpaper #chat-settings,
+  body.has-wallpaper .run-files,
+  body.has-wallpaper .run-actions,
+  body.has-wallpaper .run-card{
+    background:color-mix(in srgb,var(--card) 46%,transparent);
+    backdrop-filter:blur(16px);
+    -webkit-backdrop-filter:blur(16px);
+  }
+  /* 浅色主题本身接近纯白，需要更低的填充比例，否则壁纸会被“白雾”盖住 */
+  body[data-theme=light].has-wallpaper aside{
+    background:color-mix(in srgb,var(--sidebar) 30%,transparent);
+  }
+  body[data-theme=light].has-wallpaper .top{
+    background:color-mix(in srgb,var(--card) 26%,transparent);
+  }
+  body[data-theme=light].has-wallpaper .card,
+  body[data-theme=light].has-wallpaper .stat,
+  body[data-theme=light].has-wallpaper .im-run-controls,
+  body[data-theme=light].has-wallpaper .chat-tab.on,
+  body[data-theme=light].has-wallpaper .chat-toolbar,
+  body[data-theme=light].has-wallpaper .plaza .item,
+  body[data-theme=light].has-wallpaper .market-entry,
+  body[data-theme=light].has-wallpaper .im-session,
+  body[data-theme=light].has-wallpaper .im-msg.assistant,
+  body[data-theme=light].has-wallpaper .agent-preset,
+  body[data-theme=light].has-wallpaper .chat-tab,
+  body[data-theme=light].has-wallpaper #chat-settings,
+  body[data-theme=light].has-wallpaper .run-files,
+  body[data-theme=light].has-wallpaper .run-actions,
+  body[data-theme=light].has-wallpaper .run-card{
+    background:color-mix(in srgb,var(--card) 32%,transparent);
+  }
+  body[data-theme=light].has-wallpaper .pillbar{
+    background:color-mix(in srgb,var(--card) 30%,transparent);
+  }
+  body[data-theme=light].has-wallpaper .chat-message.user,
+  body[data-theme=light].has-wallpaper #chat-hero .chip,
+  body[data-theme=light].has-wallpaper .chat-copy{
+    background:color-mix(in srgb,var(--card) 36%,transparent);
+  }
+
   *{box-sizing:border-box}
   ::selection{background:var(--accent-ring)}
   ::-webkit-scrollbar{width:10px;height:10px}
@@ -102,7 +194,9 @@
   aside{
     width:var(--side-w); flex-shrink:0; height:100vh;
     background:var(--sidebar); border-right:1px solid var(--border);
-    display:flex; flex-direction:column; z-index:30; transition:transform var(--tr-dur) ease;
+    display:flex; flex-direction:column;
+    /* 需要定位才能让 z-index 生效：否则壁纸层(body::before)会盖住左侧工作栏 */
+    position:relative; z-index:30; transition:transform var(--tr-dur) ease;
   }
   /* ChatGPT 风格：圆角导航项 + “新聊天”首项 + 最近会话区 */
   nav button{
@@ -225,7 +319,8 @@
   @keyframes blink{0%,100%{opacity:1}50%{opacity:.35}}
 
   main{flex:1; display:flex; flex-direction:column; min-width:0; height:100vh;position:relative;isolation:isolate;background:var(--bg);overflow:hidden}
-  main::before{content:"";position:absolute;inset:-18px;background-image:var(--wallpaper-image,none);background-size:cover;background-position:center;filter:blur(var(--wallpaper-blur,0px));opacity:var(--wallpaper-opacity,0);pointer-events:none;z-index:0;transition:opacity .25s ease}
+  /* 壁纸铺满整个窗口（含左侧工作栏），而不再只覆盖聊天区 */
+  body::before{content:"";position:fixed;inset:-18px;background-image:var(--wallpaper-image,none);background-size:cover;background-position:center;filter:blur(var(--wallpaper-blur,0px));opacity:var(--wallpaper-opacity,0);pointer-events:none;z-index:0;transition:opacity .25s ease}
   main>.top,main>.content{position:relative;z-index:1}
   .top{
     display:flex; align-items:center; justify-content:space-between; gap:12px;
@@ -516,6 +611,11 @@
 .run-dot{width:7px;height:7px;border-radius:50%;background:var(--ok);flex-shrink:0}
 .run-dot.active{background:var(--accent);animation:run-breathe 1.8s ease-in-out infinite}.run-dot.error{background:var(--danger)}
 .run-context{margin:8px 0 16px;color:var(--muted);font-size:12px;line-height:1.7}
+.run-plan>summary{cursor:pointer;font-size:12px;font-weight:600;color:var(--muted);padding:6px 0;list-style:none}
+.run-plan>summary::-webkit-details-marker{display:none}
+.run-plan>summary::before{content:'▸ ';color:var(--muted)}
+.run-plan[open]>summary::before{content:'▾ '}
+.run-plan>summary:hover{color:var(--fg)}
 .run-outline{list-style:none;padding:0;margin:0;display:grid;gap:0}
 .run-outline>li{position:relative;padding:0 0 15px 23px;min-width:0}
 .run-outline>li:last-child{padding-bottom:0}
@@ -794,7 +894,9 @@ async function appearanceDelete(){
 function appearanceApplyImage(blob){
   if(APPEARANCE_URL) URL.revokeObjectURL(APPEARANCE_URL);
   APPEARANCE_URL = blob ? URL.createObjectURL(blob) : null;
-  document.querySelector('main').style.setProperty('--wallpaper-image',APPEARANCE_URL ? 'url("' + APPEARANCE_URL + '")' : 'none');
+  const shell = document.body;
+  shell.style.setProperty('--wallpaper-image',APPEARANCE_URL ? 'url("' + APPEARANCE_URL + '")' : 'none');
+  shell.classList.toggle('has-wallpaper',!!APPEARANCE_URL);
   const preview = $('appearance-preview');
   preview.style.backgroundImage = APPEARANCE_URL ? 'url("' + APPEARANCE_URL + '")' : 'none';
   preview.textContent = APPEARANCE_URL ? '' : '尚未设置背景图片';
@@ -804,6 +906,10 @@ function appearanceAdjust(){
   const blur = Number($('appearance-blur').value);
   $('appearance-opacity-value').textContent = opacity + '%';
   $('appearance-blur-value').textContent = blur + 'px';
+  /* 壁纸层现在挂在 body 上，变量也必须设在 body 上，main 无法向父级传递自定义属性 */
+  const shell = document.body;
+  shell.style.setProperty('--wallpaper-opacity',String(opacity / 100));
+  shell.style.setProperty('--wallpaper-blur',blur + 'px');
   const main = document.querySelector('main');
   main.style.setProperty('--wallpaper-opacity',String(opacity / 100));
   main.style.setProperty('--wallpaper-blur',blur + 'px');
@@ -1593,27 +1699,13 @@ panels.im = `
   </div>`;
 
 panels.models = `
-  <div class="card">
-    <h2>本地模型（免费 · 无需 key）</h2>
-    <div class="hint">Ollama 未安装时会从官方地址自动下载、安装并启动；llama.cpp / vLLM 需先自行安装并配置启动命令。服务就绪后可在下方卡片里<b>配置并设为当前</b>。</div>
-    <div class="row" style="gap:8px;align-items:center;flex-wrap:wrap">
-      <span>Ollama（:11434）</span>
-      <span id="loc-ollama" class="badge">检测中…</span>
-      <button class="sec sm" onclick="localStatus('ollama')">检测</button>
-      <button class="sm" onclick="localStart('ollama')">一键下载并启动</button>
-      <span style="width:18px"></span>
-      <span id="loc-llamacpp-label">llama.cpp / vLLM（:8081）</span>
-      <span id="loc-llamacpp" class="badge">检测中…</span>
-      <button class="sec sm" onclick="localStatus('llamacpp')">检测</button>
-      <button class="sm" onclick="localStart('llamacpp')">启动已配置服务</button>
+  <details class="market-fold">
+    <summary>免费模型广场（一键配置模板）</summary>
+    <div class="market-fold-body">
+      <div class="hint">市面上免费/低价模型一键配置。包含 NVIDIA NIM 托管模型；<b>配置</b> 填入表单后 Add route；<b>配置并设为当前</b> 直接切换（需要 key 的模型点卡片里的<b>申请 key</b>链接到对应平台）。</div>
+      <div id="model-plaza" class="plaza">加载中…</div>
     </div>
-    <div id="loc-msg" class="muted" style="margin-top:6px">检测本地运行时…</div>
-  </div>
-  <div class="card">
-    <h2>免费模型广场</h2>
-    <div class="hint">市面上免费/低价模型一键配置。包含 NVIDIA NIM 托管模型；<b>配置</b> 填入表单后 Add route；<b>配置并设为当前</b> 直接切换（需要 key 的模型点卡片里的<b>申请 key</b>链接到对应平台）。</div>
-    <div id="model-plaza" class="plaza">加载中…</div>
-  </div>
+  </details>
   <div class="card">
     <h2>Model routes</h2>
     <div class="hint">管理 LLM 路由：点 <b>Set active</b> 把某条路由设为当前活跃模型（实时切换并持久化到 state/cognitive-os-agent.json）；<b>Delete</b> 移除一条路由。</div>
@@ -5018,7 +5110,6 @@ async function loadModelPlaza(){
     '<button class="sec sm" onclick="modelPlazaTest(' + i + ')">测试</button>' +
     '<button class="sm" onclick="modelPlazaSet(' + i + ')">配置并设为当前</button></div></div>'
   ).join('');
-  localStatus(null); /* refresh the local-runtime badges */
 }
 
 function modelPlazaFill(i){
@@ -5050,65 +5141,6 @@ async function modelPlazaTest(i){
 }
 
 function sleep(ms){ return new Promise(r => setTimeout(r, ms)); }
-
-let LOCAL_ST = {};
-async function localStatus(engine){
-  const r = await call('GET', '/v1/local/status');
-  LOCAL_ST = (r.obj && typeof r.obj === 'object') ? r.obj : {};
-  const o = LOCAL_ST.ollama || {}, l = LOCAL_ST.llamacpp || {};
-  const ll = $('loc-llamacpp-label');
-  if(ll) ll.textContent = 'llama.cpp / vLLM（:' + (Number(l.port) || 8081) + '）';
-  const b1 = $('loc-ollama');
-  if(b1){
-    b1.textContent = o.running ? '● 运行中' : (o.installed ? '已安装 · 未运行' : '未安装');
-    b1.className = 'badge ' + (o.running ? 'badge-ok' : (o.installed ? 'badge-warn' : 'badge-err'));
-  }
-  const b2 = $('loc-llamacpp');
-  if(b2){
-    b2.textContent = l.running ? '● 运行中' : '未检测到';
-    b2.className = 'badge ' + (l.running ? 'badge-ok' : 'badge-err');
-  }
-  const m = $('loc-msg');
-  if(m && engine) m.textContent = engine + ' 检测完成';
-}
-
-async function localStart(engine){
-  const m = $('loc-msg');
-  if(m) m.textContent = '正在启动 ' + engine + '…';
-  const r = await call('POST', '/v1/local/start', {engine});
-  const o = r.obj || {};
-  if(o.ok){
-    if(o.already_running){
-      if(m) m.textContent = engine + ' 已在运行';
-      toast(engine + ' 已在运行');
-      await localStatus(null);
-      return;
-    }
-    if(m) m.textContent = o.note || (o.installing ? '正在下载并安装 Ollama…' : ('正在启动 ' + engine + '…'));
-    toast(o.installing ? '已开始下载并安装 Ollama' : ('已发送启动命令：' + engine));
-    /* Installations can take minutes. Verify the service itself becomes ready;
-       a successfully spawned process is not proof that the runtime started. */
-    const waitLimit = o.installing ? 180 : 20;
-    for(let i = 0; i < waitLimit; i++){
-      await sleep(1000);
-      await localStatus(null);
-      const status = engine === 'ollama' ? (LOCAL_ST.ollama || {}) : (LOCAL_ST.llamacpp || {});
-      if(status.running){
-        if(m) m.textContent = engine + ' 已就绪';
-        toast(engine + ' 已就绪');
-        return;
-      }
-      if(m && (i % 5 === 4)) m.textContent = (o.installing ? '正在下载/安装并等待 Ollama 服务启动' : ('等待 ' + engine + ' 服务就绪')) + '… ' + (i + 1) + ' 秒';
-    }
-    if(m) m.textContent = o.installing
-      ? '安装器已启动，但尚未检测到 Ollama 服务。请检查网络或安装窗口，再点检测。'
-      : '启动命令已发送，但尚未检测到服务；请检查启动命令与端口配置。';
-  } else {
-    const note = o.error || ('启动 ' + engine + ' 失败');
-    if(m) m.textContent = note;
-    toast(note);
-  }
-}
 
 async function loadModels(){
   const r   = await call('GET', '/v1/routes');
@@ -5149,6 +5181,7 @@ async function loadModels(){
       + '<td>' + (x.calls != null ? x.calls : 0) + '</td>'
       + '<td><button onclick="testRoute(' + i + ')" class="sec sm">Test</button> '
       + '<button onclick="editRouteKey(' + i + ')" class="sec sm">改Key</button> '
+      + '<button onclick="setRouteContext(' + i + ')" class="sec sm">上下文</button> '
       + '<button onclick="setActive(' + i + ')" class="sec sm"' + (isActive ? ' disabled' : '') + '>Set active</button> '
       + '<button onclick="deleteRoute(' + i + ')" class="sec sm danger">Delete</button></td></tr>';
   }).join('');
@@ -5186,14 +5219,36 @@ async function editRouteKey(i){
   loadModels();
 }
 
+/* 手动设置路由的真实上下文窗口：供应商元数据/目录都拿不到时的兜底，
+ * 经 POST /v1/routes 以 context_source=configured 持久化 */
+async function setRouteContext(i){
+  const x = ROUTES[i]; if(!x) return;
+  const cur = Number(x.context_window || x.context_window_tokens) || '';
+  const k = prompt('路由 ' + x.name + ' 的真实上下文窗口（tokens，1024–4000000）：', cur);
+  if(k === null) return;
+  const v = Number(String(k).trim().replace(/[,，\s_]/g, ''));
+  if(!Number.isInteger(v) || v < 1024 || v > 4000000){ toast('无效的上下文窗口值（需 1024–4000000 的整数）'); return; }
+  const st = $('models-stat'); if(st) st.textContent = 'updating context…';
+  const r = await call('POST', '/v1/routes', {
+    name: x.name, provider: x.provider, base_url: x.base_url || '', model: x.model || '',
+    api_key: x.api_key || '', weight: x.weight != null ? x.weight : 1,
+    context_window: v, context_source: 'configured', max_output_tokens: Number(x.max_output_tokens) || 0
+  });
+  if(st) st.textContent = (r.status < 300) ? '上下文窗口已更新' : 'error ' + r.status;
+  loadModels();
+}
+
 /* ===== 拉取供应商可用模型列表（issue #18）===== */
 let FETCHED_MODELS = [];
 
 function routeContextLabel(model){
-  const value = Number(model && (model.context_window || model.context_window_tokens)) || 262144;
+  const raw = Number(model && (model.context_window || model.context_window_tokens));
   const source = model && model.context_source || 'fallback';
-  const labels = {provider_metadata:'供应商元数据', catalog:'已核实能力目录', configured:'已有配置', fallback:'未获取，默认回退'};
-  return esc(value.toLocaleString() + ' tokens · ' + (labels[source] || labels.fallback));
+  /* fallback 值是路由默认 262144，并非模型真实窗口——不得当作已测得的值展示 */
+  if(!(Number.isInteger(raw) && raw >= 1024) || source === 'fallback')
+    return esc('上下文未核实 · 默认按 262,144 预估');
+  const labels = {provider_metadata:'供应商元数据', catalog:'已核实能力目录', configured:'已有配置'};
+  return esc(raw.toLocaleString() + ' tokens · ' + (labels[source] || '已配置'));
 }
 function fetchedModelMetadata(model){
   const value = Number(model && (model.context_window || model.context_window_tokens));
@@ -5526,6 +5581,16 @@ function progressPhase(stage){
   if(['response_ready','summarizing','completed'].includes(stage)) return 3;
   return 0;
 }
+function currentCommandNote(step){
+  let detail = '';
+  try {
+    const a = typeof step.args === 'string' ? JSON.parse(step.args) : (step.args || {});
+    detail = a.command || a.path || a.pattern || a.query || '';
+  } catch(e) { /* args unavailable: fall back to the tool label */ }
+  const label = toolLabel(step.tool);
+  detail = String(detail || '').trim();
+  return detail ? label + '：' + (detail.length > 140 ? detail.slice(0,140) + '…' : detail) : label;
+}
 function progressOutline(entry,p){
   const steps = Array.isArray(p.steps) ? p.steps : [];
   const events = entry.progressEvents || [];
@@ -5537,6 +5602,7 @@ function progressOutline(entry,p){
   const failed = steps.filter(s => s.ok === 0).length;
   const plans = (p.planned_tools || [...events].reverse().find(e => e.planned_tools?.length)?.planned_tools || []).map(toolLabel);
   const lastTarget = [...steps].reverse().find(s => s.target)?.target;
+  const lastStep = !terminal && steps.length ? steps[steps.length-1] : null;
   const planNote = p.stage === 'planning'
     ? '等待 ' + (p.model || '模型') + ' 回复' + (p.model_call ? ' · 第 ' + p.model_call + ' 次请求' : '')
     : plans.length ? '计划：' + [...new Set(plans)].join('、') : '结合任务要求与执行结果，确定下一步。';
@@ -5549,7 +5615,7 @@ function progressOutline(entry,p){
   if(!actionNote) actionNote = terminal ? '本次未调用工具。' : '收到计划后开始操作，结果会持续记录。';
   const rows = [
     ['梳理目标与上下文','整理当前要求、会话信息和可用能力。'],
-    [p.stage === 'replanning' || p.stage === 'steering' ? '根据补充调整计划' : '规划下一步',planNote],
+    [p.stage === 'replanning' || p.stage === 'steering' ? '根据补充调整计划' : '规划下一步',lastStep ? currentCommandNote(lastStep) : planNote],
     ['执行与核对',actionNote],
     ['整理结果',terminal ? STAGE_NOTES[p.stage] : '根据实际执行结果整理答复和未完成项。']
   ];
@@ -5568,7 +5634,7 @@ function chatProgressClock(entry){
 function chatPersist(){
   try {
     const records = Object.entries(CHAT_CACHE).slice(-12).map(([session, msgs]) => [session,
-      msgs.slice(-40).map(({role,text,images,pending,progress,progressEvents,taskId,detailsOpen,timelineOpen,actionsOpen,expandedSteps,stageSince,timestamp_ms}) => ({role,text,images,pending,progress,progressEvents,taskId,detailsOpen,timelineOpen,actionsOpen,expandedSteps,stageSince,timestamp_ms}))]);
+      msgs.slice(-40).map(({role,text,images,pending,progress,progressEvents,taskId,detailsOpen,outlineOpen,timelineOpen,actionsOpen,expandedSteps,stageSince,timestamp_ms}) => ({role,text,images,pending,progress,progressEvents,taskId,detailsOpen,outlineOpen,timelineOpen,actionsOpen,expandedSteps,stageSince,timestamp_ms}))]);
     sessionStorage.setItem('cognitive-progress-v1', JSON.stringify({records,tasks:CHAT_TASKS}));
   } catch(e) { /* storage quota/private mode: in-memory state remains usable */ }
 }
@@ -5608,6 +5674,7 @@ function renderChatEntry(entry){
   const follow = CHAT_FOLLOW || chatNearBottom();
   const previous = el.querySelector('.run-details');
   const wasOpen = previous?.open ?? entry.detailsOpen ?? false;
+  const wasOutlineOpen = el.querySelector('.run-plan')?.open ?? entry.outlineOpen ?? true;
   const actionsOpen = previous?.querySelector('.run-actions')?.open ?? entry.actionsOpen ?? true;
   const timelineOpen = previous?.querySelector('.run-timeline')?.open ?? entry.timelineOpen ?? true;
   const expandedSteps = new Set(entry.expandedSteps || []);
@@ -5643,7 +5710,11 @@ function renderChatEntry(entry){
       const note = document.createElement('p'); note.className = 'run-outline-note'; note.textContent = row.note;
       item.append(title,note); outline.append(item);
     }
-    panel.append(outline);
+    const plan = document.createElement('details'); plan.className = 'run-plan'; plan.open = wasOutlineOpen;
+    const planSummary = document.createElement('summary'); planSummary.textContent = '思考与执行脉络';
+    plan.append(planSummary,outline);
+    plan.addEventListener('toggle',() => { if(plan.isConnected){entry.outlineOpen = plan.open; chatPersist();} });
+    panel.append(plan);
     const detailBody = document.createElement('details'); detailBody.className = 'run-details'; detailBody.open = wasOpen;
     const detailSummary = document.createElement('summary');
     detailSummary.textContent = '详细执行记录' + (p.tool_calls ? ' · ' + p.tool_calls + ' 个动作' : '');

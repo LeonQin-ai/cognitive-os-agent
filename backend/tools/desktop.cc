@@ -30,6 +30,7 @@
 #include <winsock2.h>
 #include <windows.h>
 #include <windowsx.h>
+#include <shellapi.h>
 #include <shlwapi.h>
 #include <unknwn.h>
 
@@ -164,6 +165,88 @@ public:
         ctrl = controller;
         if (ctrl) ctrl->AddRef();
         done = true;
+        return S_OK;
+    }
+};
+
+/* ---- external link handlers ----
+ * Market cards link to github.com and the model plaza links to provider
+ * sites. Without these handlers WebView2 either navigates the whole console
+ * away or silently drops target=_blank requests, so the repo links in the
+ * plugins/skills markets were not clickable inside the desktop shell.
+ * External URLs now open in the user's default browser instead. */
+
+static bool is_local_url(LPCWSTR url) {
+    return url && (wcsncmp(url, L"http://localhost", 16) == 0 ||
+                   wcsncmp(url, L"http://127.0.0.1", 15) == 0 ||
+                   wcsncmp(url, L"data:", 5) == 0 ||
+                   wcsncmp(url, L"about:", 6) == 0);
+}
+
+class NavStartHandler : public ICoreWebView2NavigationStartingEventHandler {
+    LONG ref_ = 1;
+public:
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **ppv) override {
+        if (!ppv) return E_POINTER;
+        if (riid == IID_IUnknown || riid == IID_ICoreWebView2NavigationStartingEventHandler)
+            *ppv = static_cast<ICoreWebView2NavigationStartingEventHandler *>(this);
+        else
+            return E_NOINTERFACE;
+        AddRef();
+        return S_OK;
+    }
+    ULONG STDMETHODCALLTYPE AddRef() override { return InterlockedIncrement(&ref_); }
+    ULONG STDMETHODCALLTYPE Release() override {
+        ULONG r = InterlockedDecrement(&ref_);
+        if (!r) delete this;
+        return r;
+    }
+    HRESULT STDMETHODCALLTYPE Invoke(ICoreWebView2 *sender,
+                                     ICoreWebView2NavigationStartingEventArgs *args) override {
+        (void)sender;
+        if (!args) return S_OK;
+        LPWSTR uri = nullptr;
+        if (SUCCEEDED(args->get_Uri(&uri)) && uri) {
+            /* External top-level navigation must never replace the console. */
+            if (!is_local_url(uri)) {
+                ShellExecuteW(nullptr, L"open", uri, nullptr, nullptr, SW_SHOWNORMAL);
+                args->put_Cancel(TRUE);
+            }
+            CoTaskMemFree(uri);
+        }
+        return S_OK;
+    }
+};
+
+class NewWindowHandler : public ICoreWebView2NewWindowRequestedEventHandler {
+    LONG ref_ = 1;
+public:
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **ppv) override {
+        if (!ppv) return E_POINTER;
+        if (riid == IID_IUnknown || riid == IID_ICoreWebView2NewWindowRequestedEventHandler)
+            *ppv = static_cast<ICoreWebView2NewWindowRequestedEventHandler *>(this);
+        else
+            return E_NOINTERFACE;
+        AddRef();
+        return S_OK;
+    }
+    ULONG STDMETHODCALLTYPE AddRef() override { return InterlockedIncrement(&ref_); }
+    ULONG STDMETHODCALLTYPE Release() override {
+        ULONG r = InterlockedDecrement(&ref_);
+        if (!r) delete this;
+        return r;
+    }
+    HRESULT STDMETHODCALLTYPE Invoke(ICoreWebView2 *sender,
+                                     ICoreWebView2NewWindowRequestedEventArgs *args) override {
+        (void)sender;
+        if (!args) return S_OK;
+        LPWSTR uri = nullptr;
+        if (SUCCEEDED(args->get_Uri(&uri)) && uri) {
+            if (!is_local_url(uri))
+                ShellExecuteW(nullptr, L"open", uri, nullptr, nullptr, SW_SHOWNORMAL);
+            CoTaskMemFree(uri);
+        }
+        args->put_Handled(TRUE);
         return S_OK;
     }
 };
@@ -806,6 +889,16 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
         MessageBoxW(nullptr, L"WebView2 object unavailable.",
                     L"cognitive-os-agent", MB_ICONERROR);
         return 1;
+    }
+
+    /* Repo/provider links open in the default browser; local console
+     * navigation (including the boot data: pages) proceeds in-frame. */
+    {
+        NavStartHandler *nav = new NavStartHandler();
+        NewWindowHandler *win = new NewWindowHandler();
+        EventRegistrationToken token_nav, token_win;
+        g_web->add_NavigationStarting(nav, &token_nav);
+        g_web->add_NewWindowRequested(win, &token_win);
     }
 
     RECT rc;
