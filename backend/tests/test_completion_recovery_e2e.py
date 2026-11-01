@@ -124,31 +124,31 @@ with tempfile.TemporaryDirectory(prefix='coa-completion-recovery-') as folder:
             print('PASS: same header basename in a different repository does not clear failed reads')
             artifact=finished(request('/v1/tasks',{'prompt':'输出一个html的报告文档，整理对应的架构和流程图 HTML177'})['id'])
             assert artifact['status']=='DONE' and counts['html177']==5 and (state/'report177.html').exists(),artifact
-            false_report=finished(request('/v1/tasks',{'prompt':'输出一个html的报告文档 HTML_FALSE177'})['id'])
+            false_report=finished(request('/v1/tasks',{'prompt':'输出一个html的报告文档 HTML_FALSE177','acceptance':{'artifacts':['missing-report.html']}})['id'])
             assert false_report['status']=='FAILED',false_report
             print('PASS: issue177 requires an actual HTML artifact; no-write completion is rejected')
             tool_needed=finished(request('/v1/tasks',{'prompt':'分析当前架构 USE_TOOLS176'})['id'])
             assert tool_needed['status']=='DONE' and counts['tools176']==4,tool_needed
             print('PASS: explicit remaining tool need after observations continues tool execution')
-            html=finished(request('/v1/tasks',{'prompt':'输出一个html报告并检查内容 HTML_RECOVERY'})['id'])
+            html=finished(request('/v1/tasks',{'prompt':'输出一个html报告并检查内容 HTML_RECOVERY','acceptance':{'artifacts':['report.html']}})['id'])
             assert html['status']=='DONE' and counts.get('html')==6,html
             assert (state/'report.html').exists()
             assert any(step.get('tool')=='file_read' for step in html.get('steps',[])),html
             print('PASS: HTML write followed by two narration rounds recovers to actual read and final delivery')
-            stalled=finished(request('/v1/tasks',{'prompt':'输出HTML报告 HTML_STALL'})['id'])
+            stalled=finished(request('/v1/tasks',{'prompt':'输出HTML报告 HTML_STALL','acceptance':{'artifacts':['stall.html']}})['id'])
             # Physical artifact rejection stops three invalid completion attempts.
-            assert stalled['status']=='FAILED' and counts['stall']==4,stalled
+            assert stalled['status']=='FAILED' and counts['stall']==3,stalled
             print('PASS: narration without any progress stops after bounded recovery; no false DONE')
-            no_action=finished(request('/v1/tasks',{'prompt':'注册这些skills REGISTER_DIAGNOSTIC'})['id'])
-            assert no_action['status']=='FAILED' and 'skill_manage' in no_action['output'],no_action
+            no_action=finished(request('/v1/tasks',{'prompt':'注册这些skills REGISTER_DIAGNOSTIC','acceptance':{'requires_action':True}})['id'])
+            assert no_action['status']=='FAILED' and 'Acceptance' in no_action['output'],no_action
             (state/'partial.txt').write_text('x'*7500+'EOF_DIAGNOSTIC',encoding='utf-8')
             analysis=finished(request('/v1/tasks',{'prompt':'分析代码中的上下文工程怎么实现 ANALYSIS_175'})['id'])
             assert analysis['status']=='DONE' and counts['analysis175']==5,analysis
             assert 'EOF_DIAGNOSTIC' in analysis['output'] and '让我读取' not in analysis['output'],analysis
             print('PASS: issue175 progress preamble is not final analysis; remaining read and actual answer execute')
-            started=request('/v1/tasks',{'prompt':'完整读取文件 partial.txt READ_DIAGNOSTIC'})
+            started=request('/v1/tasks',{'prompt':'完整读取文件 partial.txt READ_DIAGNOSTIC','acceptance':{'full_reads':['partial.txt']}})
             partial=finished(started['id'])
-            assert partial['status']=='FAILED' and 'offset_bytes=4000' in partial['output'] and 'partial.txt' in partial['output'],partial
+            assert partial['status']=='FAILED' and 'EOF' in partial['output'] and 'partial.txt' in partial['output'],partial
             counts['recover']=True; counts['read']=0
             resumed=finished(request('/v1/tasks/'+str(started['id'])+'/resume',{})['id'])
             assert resumed['status']=='DONE' and 'EOF_DIAGNOSTIC' in resumed['output'],resumed
