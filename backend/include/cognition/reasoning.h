@@ -57,6 +57,9 @@ typedef struct reasoning_config {
     int budget_hot;  /* conversation history (default 8192) */
     int budget_warm; /* summary + session notes (default 3072) */
     int budget_cold; /* retrieved context + code index (default 4096) */
+    int observation_budget; /* absolute cap (bytes) on the per-round observation
+                             * log; 0 = default 96KB (window-derived budgets can
+                             * otherwise re-ship huge stale tool dumps) */
     int hyde;        /* 1 = HyDE retrieval: one LLM call per run
                       * generates a hypothetical answer passage
                       * used as the cold-tier query (default off) */

@@ -173,6 +173,16 @@ static char *build_catalog_prompt(const tool_registry *tools, struct skill_regis
         "after the requested content loads. Follow actual site pagination/scroll loading when needed. "
         "If a tool returns [full tool result saved], read its local file in 4000-byte pages to EOF; "
         "the preview is not the complete result. Do not repeatedly navigate to the same page for missing text.\n");
+#if defined(_WIN32)
+    /* Windows hosts: this build has no bash. Modeling commands on a Unix
+     * shell wastes rounds on heredoc/CLIXML/parsing failures; keep the
+     * environment constraints visible to the planner up front. */
+    strbuf_append(&b, "Shell environment: Windows host, NO bash. shell accepts only auto/cmd/powershell. "
+        "Forbidden in shell commands: heredocs (<<), $(), pipes into sed/awk/grep -v chains, multi-line input. "
+        "For file search use the grep/glob tools, for file content use file_read paging, "
+        "and for text processing write a python file with file_write then run `python script.py` (single-line -c only). "
+        "Redirect output with > file when a tool result needs to become a file artifact.\n");
+#endif
     if (skills) skill_registry_refresh(skills);
     if (have_skill_tool && skills && skill_count(skills) > 0) {
         strbuf_append(&b, "Registered skills (capabilities you can RUN via the skill tool):\n");

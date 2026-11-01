@@ -259,6 +259,15 @@ struct reasoning {
     uint64_t versioned_seen[512]; /* file pages and directory contents survive opaque tools */
     int versioned_seen_n;
     int round_search_skips;
+    /* Same-target grep cadence: the engine appends a file_read guidance note
+     * when one tree is searched piecemeal over and over. */
+    struct { char path[1024]; int count; } grep_path[8];
+    int grep_path_n;
+    /* Absolute ceiling for the model-facing observation log. Window-derived
+     * budgets let large-context models re-ship hundreds of KB of stale tool
+     * dumps every round; the cap keeps per-round prompts bounded regardless
+     * of the catalog window (config: context.observation_budget). */
+    size_t observation_budget_cap;
     /* Independent of the bounded prompt log/cache: folding observations must
      * not make alternating old reads look like newly discovered evidence. */
     struct { char path[2048]; uint64_t version, digest; } artifact_seen[128];
@@ -1683,8 +1692,10 @@ static void record_read_page(reasoning *r, const char *args_json, const char *ou
 
 static void round_log_append(reasoning *r, const char *text) {
     mutex_lock(&r->progress_mtx);
-    if (log_append_entries(r, &r->round_log, &r->round_log_len, &r->round_log_cap, text))
+    if (log_append_entries(r, &r->round_log, &r->round_log_len, &r->round_log_cap, text)) {
         r->search_seen_n = r->versioned_seen_n = 0; /* folded observations can be read again */
+        r->grep_path_n = 0;
+    }
     mutex_unlock(&r->progress_mtx);
 }
 
@@ -1848,6 +1859,11 @@ static char *build_context(reasoning *r, const char *prompt) {
      * observation partition; folding at a fixed 64KB caused reread loops
      * even when the selected model had ample available context. */
     r->observation_budget_bytes = input_budget / 2;
+    /* Absolute ceiling regardless of the catalog window: large-context models
+     * otherwise re-ship hundreds of KB of stale tool dumps every round, which
+     * burns tokens and latency without adding new evidence. */
+    if (r->observation_budget_cap && r->observation_budget_bytes > r->observation_budget_cap)
+        r->observation_budget_bytes = r->observation_budget_cap;
     if (!r->observation_budget_bytes) r->observation_budget_bytes = 1;
     size_t warm_used = 0;
     size_t hot_mark;
@@ -2604,6 +2620,67 @@ static void observe_action_progress(reasoning *r,const planned_action *action,ui
     r->round_new_observations++;
 }
 
+/* Read-only shell probes (git status/log/diff, ls, cat...) cannot change the
+ * files being searched, so they must not flush the read/search dedup cache.
+ * Conservative allowlist: every whitespace-separated segment must match, and
+ * anything with redirection, pipes, substitution or chaining re-flushes. */
+static int git_action_read_only(const char *args){
+    static const char *const ok[] = {
+        "status","log","diff","show","branch","rev-parse","ls-files","ls-tree",
+        "blame","describe","tag","shortlog","remote","config --get","symbolic-ref",
+        "for-each-ref","cat-file","count-objects","version",NULL
+    };
+    if (!args) return 1;
+    while (*args==' '||*args=='-') args++; /* e.g. "-C path status" won't match below: conservative */
+    for (const char *const *p=ok; *p; p++){
+        size_t n=strlen(*p);
+        if (strncmp(args,*p,n)==0 && (args[n]==0||args[n]==' '||args[n]=='\t'))
+            return 1;
+    }
+    return 0;
+}
+static int shell_segment_read_only(const char *s){
+    static const char *const ok[] = {
+        "git","ls","dir","cat","type","head","tail","pwd","echo","where","which",
+        "wc","findstr","stat","du","df","file","whoami","hostname","date","env",
+        "printenv","uname","systeminfo","ver","set",NULL
+    };
+    while (*s==' '||*s=='\t') s++;
+    if (!*s) return 1;
+    for (const char *const *p=ok; *p; p++){
+        size_t n=strlen(*p);
+        if (strncmp(s,*p,n)==0 && (s[n]==0||s[n]==' '||s[n]=='\t')){
+            if (strcmp(*p,"git")==0){ /* read-only depends on the subcommand */
+                const char *args=s+n;
+                while (*args==' '||*args=='\t') args++;
+                return git_action_read_only(args);
+            }
+            return 1;
+        }
+    }
+    return 0;
+}
+static int shell_command_read_only(const char *cmd){
+    if (!cmd) return 0;
+    char buf[4096];
+    size_t n=strlen(cmd); if (n>=sizeof buf) return 0;
+    memcpy(buf,cmd,n+1);
+    for (char *p=buf; *p; p++)
+        if (*p=='>'||*p=='<'||*p=='|'||*p=='`'||*p=='$'||*p==';') return 0;
+    /* manual '&' split: strtok_r is not declared under strict -std=c11 on
+     * every toolchain here (see note at line ~1414). Consecutive '&' (&&)
+     * simply yields empty segments, which pass as no-ops. */
+    for (char *seg=buf, *p=buf; ; p++){
+        if (*p=='&' || *p=='\0'){
+            char c=*p; *p='\0';
+            if (!shell_segment_read_only(seg)) return 0;
+            if (c=='\0') break;
+            seg=p+1;
+        }
+    }
+    return 1;
+}
+
 static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
     reasoning *r = ud;
     strbuf b;
@@ -2826,9 +2903,21 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
                              "previous search result reused", 1, 0);
                 continue;
             }
-        } else if (!is_search) {
-            /* A write or opaque tool could change the files being searched. */
-            r->search_seen_n = 0;
+        } else {
+            /* A write or opaque tool could change the files being searched.
+             * Read-only probes (git status/log/diff, ls, cat...) cannot, so
+             * they keep prior read/search discoveries valid. */
+            int probe_only = 0;
+            if (!strcmp(r->actions[i].tool, "shell")) {
+                cJSON *sa = cJSON_Parse(r->actions[i].args_json);
+                probe_only = shell_command_read_only(cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(sa,"command")));
+                cJSON_Delete(sa);
+            } else if (!strcmp(r->actions[i].tool, "git")) {
+                cJSON *sa = cJSON_Parse(r->actions[i].args_json);
+                probe_only = git_action_read_only(cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(sa,"args")));
+                cJSON_Delete(sa);
+            }
+            if (!probe_only) { r->search_seen_n = 0; r->grep_path_n = 0; }
         }
         r->prog_tool_calls++;
         long long t_tool0 = time_now_ms();
@@ -2962,6 +3051,25 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
                 seen[(*count)++] = !strcmp(r->actions[i].tool,"file_read")
                     ? file_read_signature(r,r->actions[i].args_json)
                     : !strcmp(r->actions[i].tool,"list_dir") ? directory_signature(r,r->actions[i].args_json) : action_sig;
+                if (!strcmp(r->actions[i].tool, "grep")) {
+                    /* Same-tree grep cadence: piecemeal searching of one tree
+                     * usually means the model should page through the file. */
+                    cJSON *ga = cJSON_Parse(r->actions[i].args_json);
+                    const char *gp = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(ga,"path"));
+                    if (!gp || !*gp) gp = ".";
+                    int slot=-1;
+                    for (int k=0;k<r->grep_path_n;k++)
+                        if (!strcmp(r->grep_path[k].path,gp)){ slot=k; break; }
+                    if (slot<0 && r->grep_path_n<(int)(sizeof(r->grep_path)/sizeof(r->grep_path[0]))){
+                        slot=r->grep_path_n++;
+                        snprintf(r->grep_path[slot].path,sizeof(r->grep_path[slot].path),"%s",gp);
+                        r->grep_path[slot].count=0;
+                    }
+                    if (slot>=0 && ++r->grep_path[slot].count%20==0)
+                        strbuf_appendf(&b,"[system] grep 已对 %s 执行 %d 次：反复碎片化搜索不如用 file_read 分页通读（offset_bytes/limit），或收窄匹配条件。\n",
+                                       gp,r->grep_path[slot].count);
+                    cJSON_Delete(ga);
+                }
             }
             strbuf_appendf(&b, "[%s] ok\n", r->actions[i].tool);
             if (r->hooks)
@@ -3161,6 +3269,8 @@ reasoning *reasoning_new(const reasoning_config *cfg) {
     r->budget_hot = cfg->budget_hot > 0 ? cfg->budget_hot : HIST_BUDGET;
     r->budget_warm = cfg->budget_warm > 0 ? cfg->budget_warm : 3072;
     r->budget_cold = cfg->budget_cold > 0 ? cfg->budget_cold : 4096;
+    r->observation_budget_cap = cfg->observation_budget > 0
+        ? (size_t)cfg->observation_budget : 98304;
     r->hyde = cfg->hyde ? 1 : 0;
     r->exec_backend = (cfg->exec_backend && *cfg->exec_backend) ? cfg->exec_backend : NULL;
     r->exec_host = (cfg->exec_host && *cfg->exec_host) ? cfg->exec_host : NULL;
@@ -3971,6 +4081,7 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     r->run_mutated = 0;
     r->run_successful_tools = 0;
     r->search_seen_n = r->versioned_seen_n = 0;
+    r->grep_path_n = 0;
     r->round_search_skips = 0;
     r->observation_seen_n = 0;
     r->opaque_seen_n = 0;r->artifact_seen_n=0;r->artifact_versions_seen_n=0;
@@ -4021,6 +4132,7 @@ restart_planning:
             r->stall_nudged = 0;
             r->invalid_args_n = 0;
             r->search_seen_n = r->versioned_seen_n = 0;
+            r->grep_path_n = 0;
             search_only_rounds = 0;
             no_progress_rounds = cycle_reads = cycle_nudged = cycle_aborted = 0;
             no_action_rounds = no_action_stalled = 0;

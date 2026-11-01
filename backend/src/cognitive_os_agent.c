@@ -1146,6 +1146,9 @@ int init(runtime_ctx *ctx, const config *cfg) {
             rc.budget_hot = config_get_int(ctx->config, "context.budget_hot", 0);
             rc.budget_warm = config_get_int(ctx->config, "context.budget_warm", 0);
             rc.budget_cold = config_get_int(ctx->config, "context.budget_cold", 0);
+            /* Observation log ceiling: keep large-context models from
+             * re-shipping hundreds of KB of stale tool dumps per round */
+            rc.observation_budget = (int)config_get_int(ctx->config, "context.observation_budget", 0);
             /* HyDE retrieval: hypothetical answer passage as cold-tier query */
             rc.hyde = (int)config_get_int(ctx->config, "retrieval.hyde", 0);
             /* Execution backend: local (default) | wsl | remote:<host> via
