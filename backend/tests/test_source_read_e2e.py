@@ -183,7 +183,10 @@ with tempfile.TemporaryDirectory(prefix='coa-source-read-') as directory:
                 ('路径别名分页回归测试：完整阅读文件source.c。', 'DONE', '路径别名'),
             ]
             for index, (message, expected, marker) in enumerate(cases):
-                started = request('/v1/chat', {'message': message, 'session': f'read-test-{index}'})
+                payload = {'message': message, 'session': f'read-test-{index}'}
+                if index in (11, 12, 13):
+                    payload['acceptance'] = {'full_reads': ['source.c']}
+                started = request('/v1/chat', payload)
                 deadline = time.monotonic()+20
                 while True:
                     task = request('/v1/tasks/'+str(started['id']))

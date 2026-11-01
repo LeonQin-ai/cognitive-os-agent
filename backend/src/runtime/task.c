@@ -27,6 +27,7 @@ void task_free(task *t) {
     free(t->attachments_json);
     free(t->workspace);
     free(t->llm_config);
+    free(t->acceptance_json);
     strbuf_free(&t->preview_text);
     free(t->input);
     free(t->output);

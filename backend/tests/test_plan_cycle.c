@@ -9,6 +9,29 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "cJSON.h"
+
+/* The legacy protocol requires an explicit completion declaration; plain
+ * prose is only commentary. Fixtures therefore mark their intended final
+ * answer, exactly like a real model answering under this protocol. */
+static void fixture_final_decision(const llm_request *req, llm_response *resp) {
+    if (!req->structured_decision || !resp->content || resp->tool_actions_json) return;
+    const char *p = resp->content;
+    while (*p==' ' || *p=='\n' || *p=='\r' || *p=='\t') p++;
+    if (*p=='[' || *p=='{' || *p=='<') return;
+    cJSON *array=cJSON_CreateArray(), *call=cJSON_CreateObject();
+    cJSON_AddStringToObject(call,"tool","complete_task");
+    cJSON *args=cJSON_AddObjectToObject(call,"args");
+    cJSON_AddStringToObject(args,"status","complete");
+    cJSON_AddBoolToObject(args,"requires_tools",0);
+    cJSON_AddStringToObject(args,"answer",resp->content);
+    cJSON_AddObjectToObject(args,"acceptance");
+    cJSON_AddItemToArray(array,call);
+    char *encoded=cJSON_PrintUnformatted(array);
+    cJSON_Delete(array);
+    if (encoded) { free(resp->content); resp->content=encoded; }
+}
+
 typedef struct cycle_fixture {
     int calls;
 } cycle_fixture;
@@ -56,6 +79,7 @@ static int repeated_read_chat(llm *self, const llm_request *req, llm_response *r
             ? "[{\"tool\":\"file_read\",\"args\":{\"path\":\"new.txt\"}}]"
             : "复核完成：已继续读取另一份证据。";
     resp->content = copy_text(answer);
+    if (fixture->calls > 7) fixture_final_decision(req, resp);
     return resp->content ? 0 : -1;
 }
 
@@ -73,6 +97,7 @@ static int recovery_chat(llm *self, const llm_request *req, llm_response *resp) 
     default: answer = "失败原因已核对并继续执行成功"; break;
     }
     resp->content = copy_text(answer);
+    if (fixture->calls >= 5) fixture_final_decision(req, resp);
     return resp->content ? 0 : -1;
 }
 
@@ -176,7 +201,7 @@ int main(void) {
     int read_rc = reasoning_run(read_engine, "复核源码并根据证据汇报", &read_answer);
     failures += check(read_rc == 0 && read_answer && strstr(read_answer, "复核完成"),
                       "duplicate-read recovery can continue to a later valid evidence step");
-    failures += check(repeated.calls == 8,
+    failures += check(repeated.calls == 9,
                       "planner does not abort after two repeated-read rounds");
     free(read_answer);
     reasoning_free(read_engine);
@@ -224,7 +249,7 @@ int main(void) {
     failures += check(recovery_rc == 0 && recovery_answer &&
                       strstr(recovery_answer, "失败原因已核对并继续执行成功"),
                       "planner resumes after narration following a failed action");
-    failures += check(recovery.failed_actions == 2 && recovery.calls == 5,
+    failures += check(recovery.failed_actions == 2 && recovery.calls == 6,
                       "recovery retries the failed action and continues after it succeeds");
     free(recovery_answer);
     reasoning_free(recovery_engine);

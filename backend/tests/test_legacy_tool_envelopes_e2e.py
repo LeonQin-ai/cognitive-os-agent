@@ -19,7 +19,7 @@ def exercise(mode,protocol='legacy'):
  if mode in ('generic_recovery','generic_delayed','generic_stuck','generic_blocked','generic_progress','generic_cached','generic_task110','chat_plain'):
   finish={'tool':'complete_task','args':{'status':'blocked' if mode=='generic_blocked' else 'complete','requires_tools':False,'answer':'没有可用证据，无法继续核对。' if mode=='generic_blocked' else '证据核对完成：LEFT_WIRE_PROOF、RIGHT_WIRE_PROOF。'}}
   replies=['<tool_call>file_read{invalid arguments</tool_call>']
-  if mode=='chat_plain':replies=['你好。']
+  if mode=='chat_plain':replies=[{'tool':'complete_task','args':{'status':'complete','requires_tools':False,'answer':'你好。'}}]
   elif mode=='generic_blocked':replies += [finish]
   elif mode in ('generic_progress','generic_cached'):
    replies += ['准备检查。',{'tool':'file_read','args':{'path':'left.c'}},'需要继续推进。','正在核对。',{'tool':'file_read','args':{'path':'left.c' if mode=='generic_cached' else 'right.c'}},finish]
@@ -102,7 +102,10 @@ def exercise(mode,protocol='legacy'):
      for _ in range(150):
       try:api('/v1/scheduler');break
       except OSError:assert proc.poll() is None;time.sleep(.05)
-     tid=api('/v1/chat',{'message':'你好' if mode in ('completion','chat_plain') else '核对 left.c 和 right.c 的证据并给出结论。' if mode.startswith('generic_') else '分析 required 目录的代码。' if mode=='unrelated_schema' else '对比一下 left 和 right 两个项目的代码，详细解释差异与优缺点，最后也输出一个html来对比说明。','session':'wire'})['id']
+     payload={'message':'你好' if mode in ('completion','chat_plain') else '核对 left.c 和 right.c 的证据并给出结论。' if mode.startswith('generic_') else '分析 required 目录的代码。' if mode=='unrelated_schema' else '对比一下 left 和 right 两个项目的代码，详细解释差异与优缺点，最后也输出一个html来对比说明。','session':'wire'}
+     if not mode.startswith('generic_') and mode not in ('completion','chat_plain','unrelated_schema'):
+      payload['acceptance']={'artifacts':['comparison.html']}
+     tid=api('/v1/chat',payload)['id']
      while True:
       task=api(f'/v1/tasks/{tid}')
       if task['status'] not in ('RUNNING','QUEUED'):break
@@ -111,34 +114,34 @@ def exercise(mode,protocol='legacy'):
      assert not (work/'must-not-exist.txt').exists(),('invalid batch executed a prefix',mode,task)
      history=api('/v1/chat/history?session=wire')['turns']
      if mode=='generic_recovery':
-      assert task['status']=='DONE' and calls==5 and task['model_failures']==2 and task['tool_calls']==2,task
+      assert task['status']=='DONE' and calls==5 and task['model_failures']==1 and task['tool_calls']==2,task
       assert [s['tool'] for s in task['steps']]==['file_read','file_read'],task
       assert task['output']==finish['args']['answer'] and history[-1]['a']==task['output'],task
       assert not (work/'comparison.html').exists()
      elif mode in ('generic_stuck','generic_delayed','generic_blocked','generic_cached','generic_task110'):
-      expected_calls={'generic_blocked':2,'generic_cached':7,'generic_task110':6}.get(mode,3)
+      expected_calls={'generic_blocked':2,'generic_cached':7,'generic_task110':6}.get(mode,4)
       expected_tools={'generic_cached':1,'generic_task110':4}.get(mode,0)
       assert task['status']=='FAILED' and calls==expected_calls and task['tool_calls']==expected_tools and not history,task
       if mode!='generic_blocked':
-       assert '恢复阶段连续两次' in task['output'],task
+       assert '没有新增执行进展' in task['output'],task
        decisions=[json.loads(s['result']) for s in api(f'/v1/trace?task_id={tid}') if s['name']=='llm.plan']
        assert decisions[-1]['no_action_response'],decisions[-1]
      elif mode=='generic_progress':
-      assert task['status']=='DONE' and calls==8 and task['tool_calls']==2 and task['model_failures']==3,task
+      assert task['status']=='DONE' and calls==8 and task['tool_calls']==2 and task['model_failures']==1,task
       assert task['output']==finish['args']['answer'],task
      elif mode=='chat_plain':
       assert task['status']=='DONE' and calls==1 and task['tool_calls']==0 and task['output']=='你好。',task
      elif mode in ('trace_after_error','trace_107','trace_narration_recovery'):
-      expected={'trace_after_error':(4,2),'trace_107':(7,3),'trace_narration_recovery':(6,2)}[mode]
+      expected={'trace_after_error':(5,2),'trace_107':(7,3),'trace_narration_recovery':(5,2)}[mode]
       assert task['status']=='FAILED' and (calls,task['tool_calls'])==expected and not history,task
-      assert '恢复阶段连续两次' in task['output'] and not (work/'comparison.html').exists(),task
+      assert '没有新增执行进展' in task['output'] and not (work/'comparison.html').exists(),task
      elif mode in ('envelopes','recover_schema','large_html','trace_resume','trace_after_error_progress'):
       if mode=='recover_schema':assert task['model_failures']==1,task
       assert task['status']=='DONE' and task['output']==FINAL,task
       assert (work/'comparison.html').read_text(encoding='utf8')==expected_html
       steps=task['steps']
       if mode=='trace_after_error_progress':
-       assert calls==12 and task['model_failures']==2,task
+       assert calls==12 and task['model_failures']==1,task
        assert [s['tool'] for s in steps[-4:]]==['file_read','file_read','file_write','file_read'],steps
        steps=steps[-4:]
       elif mode=='trace_resume':
@@ -149,11 +152,11 @@ def exercise(mode,protocol='legacy'):
       assert 'LEFT_WIRE_PROOF' in steps[0]['out'] and 'RIGHT_WIRE_PROOF' in steps[1]['out'] and HTML in steps[3]['out'],steps
       assert history[-1]['a']==FINAL,history
      elif mode=='trace_stuck':
-      assert calls==6 and task['status']=='FAILED' and task['tool_calls']==8 and '产物验收' in task['output'] and not history,task
+      assert calls==6 and task['status']=='FAILED' and task['tool_calls']==8 and not history,task
      elif mode=='completion':
       assert task['status']=='DONE' and task['output']=='你好。' and task['tool_calls']==0 and calls==1,task
      elif mode in ('false_done','preexisting','write_only','stale_read'):
-      assert task['status']=='FAILED' and '产物验收' in task['output'] and not history,task
+      assert task['status']=='FAILED' and 'Artifact acceptance requires a nonempty file written and read back' in task['output'] and not history,task
       assert task['tool_calls']==({'write_only':3,'stale_read':5}.get(mode,2)),task
      elif mode=='unrelated_schema':
       assert task['status']=='FAILED' and 'grep' in task['output'] and task['tool_calls']==1 and not history,task
@@ -169,8 +172,8 @@ def exercise(mode,protocol='legacy'):
        assert [d['round'] for d in decisions]==list(range(1,calls+1)),decisions
        assert all(d['max_rounds']==16 and d['tool_protocol']=='legacy' for d in decisions),decisions
        if mode=='trace_narration_recovery':
-        assert not decisions[3]['completion_review_required'] and decisions[4]['completion_review_required'],decisions
-        assert decisions[5]['completion_review_required'] and decisions[5]['no_action_response'],decisions
+        assert all(d['completion_review_required'] for d in decisions),decisions
+        assert decisions[-1]['completion_declaration']=='commentary' and decisions[-1]['no_action_response'],decisions
         return
        if mode=='trace_107':
         assert [d['planned_actions'] for d in decisions]==[2,0,0,1,0,0,0],decisions
@@ -180,20 +183,20 @@ def exercise(mode,protocol='legacy'):
        if mode=='trace_after_error_progress':
         assert 'invalid or incomplete tagged tool-call response' in decisions[3]['error'],decisions[3]
         assert decisions[4]['completion_review_required'],decisions
-        assert not decisions[5]['completion_review_required'] and not decisions[6]['completion_review_required'],decisions
+        assert decisions[5]['completion_review_required'] and decisions[6]['completion_review_required'],decisions
         assert [d['planned_actions'] for d in decisions[4:6]]==[1,1],decisions[4:6]
         assert decisions[6]['parsed_response']==narration and 'error' not in decisions[6],decisions[6]
-        assert decisions[7]['completion_review_required'] and 'error' in decisions[7],decisions[7]
+        assert decisions[7]['completion_review_required'] and decisions[7]['completion_declaration']=='commentary',decisions[7]
         assert decisions[-1]['completion_declaration']=='complete',decisions[-1]
         return
        if mode=='trace_after_error':
         assert decisions[1]['error']=='invalid or incomplete tagged tool-call response; no actions executed; use the configured tool protocol with a valid identifier and complete JSON object',decisions[1]
         assert decisions[2]['completion_review_required'],decisions[2]
         assert all(d['completion_review_required'] and d['no_action_response'] for d in decisions[2:4]),decisions[2:4]
-        assert task['model_failures']==3,task
+        assert task['model_failures']==1,task
         return
-       assert decisions[3]['parsed_response']==narration and decisions[3]['completion_declaration']=='none',decisions[3]
-       assert decisions[4]['completion_review_required'] and 'error' in decisions[4] and plans[4]['status']==-1,decisions[4]
+       assert decisions[3]['parsed_response']==narration and decisions[3]['completion_declaration']=='commentary',decisions[3]
+       assert decisions[4]['completion_review_required'] and decisions[4]['no_action_response'] and plans[4]['status']==1,decisions[4]
        if mode=='trace_resume':assert decisions[-1]['completion_declaration']=='complete',decisions[-1]
       check_decisions(api(f'/v1/trace?task_id={tid}'))
       while True:

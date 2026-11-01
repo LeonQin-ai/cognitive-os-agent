@@ -43,12 +43,13 @@ typedef struct reasoning_config {
     trace *trace;                            /* optional live execution spans */
     const char *workspace;                       /* base dir for relative tool paths */
     int use_transaction;                         /* wrap actions in a tx when snapshot present */
+    const char *acceptance_json; /* explicit default contract, copied; no natural-language inference */
     struct skill_registry *skills;           /* advertised to the planner + skill tool (may be NULL) */
     struct mcp_manager *mcp;                 /* MCP connections for the mcp tool + sync (may be NULL) */
     struct ret_index *index;                  /* code index; touched files are indexed (may be NULL) */
     struct plugin_registry *plugin_registry; /* for missing-capability auto-generation */
     const char *state_root;                      /* state dir for plugin generation (may be NULL) */
-    int max_rounds;                              /* agent-loop rounds per run (<0 = unlimited, default; 1 = single-shot) */
+    int max_rounds;                              /* <0/default = unlimited; positive = explicit work budget; 1 = single-shot */
     hook_registry *hooks;                    /* horizontal hook system (may be NULL) */
     /* Context MMU budgets (chars per prompt section; 0 = default). Over budget
      * a section degrades automatically: hot drops oldest turns to one line,
@@ -86,6 +87,8 @@ void reasoning_set_completion_prompt(reasoning *r, const char *prompt);
 /* Associate a Flow node's reasoning with its parent scheduler task. */
 void reasoning_set_trace_task_id(reasoning *r, int64_t task_id);
 reasoning *reasoning_new(const reasoning_config *cfg);
+/* Validate explicit acceptance JSON without inspecting task/answer prose. */
+int reasoning_acceptance_validate(const char *json);
 void reasoning_free(reasoning *r);
 
 /* Run the full RECEIVE..LEARN pipeline on `prompt`.

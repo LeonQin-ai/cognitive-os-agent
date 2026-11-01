@@ -300,7 +300,10 @@ for provider_name in ('openai','anthropic'):
     blocked=run('NATIVE_BLOCKED','处理任务')
     assert blocked['status']=='FAILED' and counts['NATIVE_BLOCKED']==1 and 'Missing provider credential' in blocked['output'],blocked
     chatter=run('NATIVE_CHATTER','处理任务')
-    assert chatter['status']=='FAILED' and 2<=counts['NATIVE_CHATTER']<=5 and not chatter['steps'],chatter
+    # Complete native text without tool blocks is a tool-free answer, regardless
+    # of its vocabulary. Explicit unmet obligations are covered separately.
+    assert chatter['status']=='DONE' and counts['NATIVE_CHATTER']==1 and not chatter['steps'],chatter
+    assert chatter['output']=='Zyxwv alpha beta gamma',chatter
     assert catalogs and all(catalogs)
     for catalog in catalogs:
      write=next(t.get('function',t) for t in catalog if t.get('function',t).get('name')=='file_write')

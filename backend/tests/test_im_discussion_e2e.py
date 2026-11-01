@@ -115,6 +115,9 @@ def make_provider(fixture):
             try:
                 body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
                 answer, status = fixture.answer(body['messages'][-1]['content'])
+                if status==200 and PROTOCOL!='native':
+                    from fixture_completion import reviewed_answer
+                    answer=reviewed_answer(body,answer)
                 result = ({'usage': {'prompt_tokens': 17, 'completion_tokens': 3}, 'choices': [{'message': {'role': 'assistant', 'content': answer},
                                        'finish_reason': 'stop'}]} if status == 200 else answer)
                 if status==200 and PROTOCOL=='native':

@@ -247,6 +247,23 @@ done:
     cJSON_Delete(o);mutex_unlock(&ctx->workspace_lock);free(path);cJSON_Delete(body);return 0;
 }
 
+static char *journal_acceptance(runtime_ctx *ctx,int64_t id,const char *session) {
+    char *raw=tasklog_json(ctx->tasklog,0),*result=NULL;
+    cJSON *records=raw?cJSON_Parse(raw):NULL,*record;free(raw);
+    int64_t selected=-1;
+    cJSON_ArrayForEach(record,records) {
+        int64_t rid=(int64_t)cJSON_GetNumberValue(cJSON_GetObjectItemCaseSensitive(record,"id"));
+        const char *sid=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(record,"session"));
+        if(id>=0 ? rid!=id : (!sid||!session||strcmp(sid,session)))continue;
+        if(rid<selected)continue;selected=rid;free(result);result=NULL;
+        cJSON *entry;cJSON_ArrayForEach(entry,cJSON_GetObjectItemCaseSensitive(record,"trace")) {
+            cJSON *contract=cJSON_GetObjectItemCaseSensitive(entry,"acceptance");
+            if(cJSON_IsObject(contract)){free(result);result=cJSON_PrintUnformatted(contract);}
+        }
+    }
+    cJSON_Delete(records);return result;
+}
+
 static int h_task_create(const http_request *req, http_response *resp, void *ud) {
     runtime_ctx *ctx = (runtime_ctx *)ud;
     char *b;
@@ -284,7 +301,10 @@ static int h_task_create(const http_request *req, http_response *resp, void *ud)
     }
     char *directory=workspace_pick(ctx,root,NULL);
     if(!directory){free(safe_prompt);cJSON_Delete(root);resp->status=400;http_resp_json(resp,"{\"error\":\"workspace must be registered and available\"}");return 0;}
-    id = scheduler_submit_workspace(ctx->scheduler,0,safe_prompt,NULL,0,NULL,0,NULL,directory);
+    cJSON *acceptance_value=cJSON_GetObjectItemCaseSensitive(root,"acceptance");
+    char *acceptance=acceptance_value?cJSON_PrintUnformatted(acceptance_value):NULL;
+    if(acceptance_value && (!acceptance||reasoning_acceptance_validate(acceptance))){free(acceptance);free(directory);free(safe_prompt);cJSON_Delete(root);resp->status=400;http_resp_json(resp,"{\"error\":\"invalid structured acceptance\"}");return 0;}
+    id = scheduler_submit_configured_acceptance(ctx->scheduler,0,safe_prompt,NULL,0,NULL,0,NULL,directory,0,0,NULL,acceptance);free(acceptance);
     if(id>=0)workspace_bind(ctx,NULL,directory,id);free(directory);
     snprintf(prompt_copy, sizeof(prompt_copy), "%s", safe_prompt);
     free(safe_prompt);
@@ -566,7 +586,8 @@ static int h_task_resume(const http_request *req, http_response *resp, void *ud)
     task *previous=scheduler_acquire(ctx->scheduler,id);
     int access_mode=previous?previous->permission_mode:tasklog_permission_mode(ctx->tasklog,id);
     scheduler_release(ctx->scheduler,previous);
-    int64_t nid = scheduler_submit_access(ctx->scheduler,0,input,NULL,0,session,0,NULL,directory,0,access_mode);
+    char *acceptance=journal_acceptance(ctx,id,NULL);
+    int64_t nid = scheduler_submit_configured_acceptance(ctx->scheduler,0,input,NULL,0,session,0,NULL,directory,0,access_mode,NULL,acceptance);free(acceptance);
     if(nid>=0)workspace_bind(ctx,NULL,directory,nid);free(directory);
     if (nid < 0) {
         scheduler_submit_error(resp, nid);
@@ -679,8 +700,13 @@ static int h_chat(const http_request *req, http_response *resp, void *ud) {
         else if(strcmp(access,"full")){free(directory);free(safe_msg);free(attachments);cJSON_Delete(root);resp->status=400;http_resp_json(resp,"{\"error\":\"invalid permission mode\"}");return 0;}}
     int invalid_route=0;char *model=chat_route_snapshot(ctx,root,&invalid_route);
     if(invalid_route){free(directory);free(safe_msg);free(attachments);cJSON_Delete(root);resp->status=400;http_resp_json(resp,"{\"error\":\"unknown chat model route\"}");return 0;}
-    id = scheduler_submit_configured(ctx->scheduler,0,safe_msg,NULL,0,session,thinking,attachments,directory,
-        cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(root,"stream")),mode,model);free(model);
+    cJSON *acceptance_value=cJSON_GetObjectItemCaseSensitive(root,"acceptance");
+    char *acceptance=acceptance_value?cJSON_PrintUnformatted(acceptance_value):NULL;
+    if(acceptance_value && (!acceptance||reasoning_acceptance_validate(acceptance))){
+        free(acceptance);free(model);free(directory);free(safe_msg);free(attachments);cJSON_Delete(root);resp->status=400;http_resp_json(resp,"{\"error\":\"invalid structured acceptance\"}");return 0;
+    }
+    id = scheduler_submit_configured_acceptance(ctx->scheduler,0,safe_msg,NULL,0,session,thinking,attachments,directory,
+        cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(root,"stream")),mode,model,acceptance);free(model);free(acceptance);
     if(id>=0)workspace_bind(ctx,NULL,directory,id);free(directory);
     if (id >= 0)
         reasoning_session_note_prompt(ctx->reasoning, session, safe_msg);
@@ -842,7 +868,8 @@ static int h_chat_session_post(const http_request *req, http_response *resp, voi
         if(invalid || (access && strcmp(access,"full") && strcmp(access,"ask") && strcmp(access,"auto"))){
             free(model);free(input);free(directory);cJSON_Delete(settings);resp->status=400;http_resp_json(resp,"{\"error\":\"invalid session execution settings\"}");return 0;
         }
-        int64_t nid = scheduler_submit_configured(ctx->scheduler,0,input,NULL,0,sid,cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(settings,"thinking")),NULL,directory,0,mode,model);
+        char *acceptance=journal_acceptance(ctx,-1,sid);
+        int64_t nid = scheduler_submit_configured_acceptance(ctx->scheduler,0,input,NULL,0,sid,cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(settings,"thinking")),NULL,directory,0,mode,model,acceptance);free(acceptance);
         free(model);cJSON_Delete(settings);
         if(nid>=0)workspace_bind(ctx,NULL,directory,nid);free(directory);
         free(input);
@@ -2330,6 +2357,19 @@ static int h_cron_delete(const http_request *req, http_response *resp, void *ud)
     }
     http_resp_json(resp, "{\"ok\":true}");
     return 0;
+}
+
+static int h_cron_rename(const http_request *req,http_response *resp,void *ud) {
+    runtime_ctx *ctx=ud;
+    if(!authz_ok(ctx,req,resp))return 0;
+    const char *p=req->path+strlen("/v1/cron/");char *end=NULL;
+    long long id=strtoll(p,&end,10);
+    if(end==p || *end || id<0){resp->status=400;http_resp_json(resp,"{\"error\":\"invalid job id\"}");return 0;}
+    char *body=body_str(req);cJSON *root=body?cJSON_Parse(body):NULL;free(body);
+    cJSON *name=root?cJSON_GetObjectItemCaseSensitive(root,"name"):NULL;
+    int rc=cJSON_IsString(name)?cron_rename(ctx->cron,id,name->valuestring):-2;
+    cJSON_Delete(root);resp->status=rc==0?200:rc==-2?400:404;
+    http_resp_json(resp,rc==0?"{\"ok\":true}":"{\"error\":\"invalid name or unknown job\"}");return 0;
 }
 
 /* POST /v1/cron/<id>/toggle {"enabled":bool} — enable/disable a job */
@@ -5672,6 +5712,7 @@ int api_attach(runtime_ctx *ctx) {
     http_server_route(ctx->http, "GET", "/v1/cron", h_cron_list, ctx);
     http_server_route(ctx->http, "POST", "/v1/cron", h_cron_add, ctx);
     http_server_route(ctx->http, "DELETE", "/v1/cron/", h_cron_delete, ctx);
+    http_server_route(ctx->http, "PUT", "/v1/cron/", h_cron_rename, ctx);
     http_server_route(ctx->http, "POST", "/v1/cron/", h_cron_toggle, ctx);
     http_server_route(ctx->http, "DELETE", "/v1/routes/", h_route_delete, ctx);
     http_server_route(ctx->http, "GET", "/v1/config/llm", h_config_llm_get, ctx);

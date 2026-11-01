@@ -43,7 +43,7 @@ class Provider(BaseHTTPRequestHandler):
             'status': status, 'requires_tools': False, 'answer': answer})
         if self.mode == 'chat':
             text = '你好！可以交流技术问题。'
-            calls = [finish(text)] if self.protocol == 'native' else []
+            calls = [finish(text)]
         elif self.mode.startswith('dir_'):
             target = 'nested/src/context' if self.mode != 'dir_unrelated' else 'other/context'
             if n == 0:
@@ -134,7 +134,10 @@ def exercise(protocol, mode):
                             assert process.poll() is None and time.monotonic() < deadline
                             time.sleep(.03)
                     message = '你好' if mode == 'chat' else '分析这份代码中进程重启和单板重启的持久化能力。'
-                    submitted = request('/v1/chat', {'message': message, 'session': 'review-case'})
+                    payload={'message':message,'session':'review-case'}
+                    if protocol=='native' and mode in ('recover','commentary','stuck'):
+                        payload['acceptance']={'full_reads':['process_state.cpp']}
+                    submitted = request('/v1/chat', payload)
                     while True:
                         task = request(f'/v1/tasks/{submitted["id"]}')
                         if task['status'] in ['DONE', 'FAILED', 'CANCELLED', 'TIMEOUT']:
@@ -161,6 +164,8 @@ def exercise(protocol, mode):
                         expected=(expected[0]+1,expected[1],expected[2])
                     if protocol=='native' and mode=='budget':
                         expected=(3,1,'FAILED') # final review cannot perform the missing read
+                    if protocol=='native' and mode=='stuck':
+                        expected=(4,1,'FAILED') # three rejected candidates lack the declared source receipt
                     assert (task['llm_calls'], task['tool_calls'], task['status']) == expected, task
                     assert Provider.calls == expected[0], Provider.calls
                     if expected[1]:
@@ -169,7 +174,9 @@ def exercise(protocol, mode):
                         assert task['output'] == ANSWER, task
                         assert all(marker in task['steps'][-1]['out'] for marker in ['JOURNAL_REPLAY', 'DISK_FLUSH']), task
                     if protocol == 'legacy' and mode not in ['chat', 'budget']:
-                        assert 1 <= Provider.reviews <= Provider.calls - 2, Provider.reviews
+                        # Legacy structured decisions apply to tool requests as
+                        # well as final review; every request carries the contract.
+                        assert Provider.reviews == Provider.calls, Provider.reviews
                     history = request('/v1/chat/history?session=review-case')
                     if task['status'] == 'DONE':
                         assert history['turns'][-1]['a'] == task['output'], history

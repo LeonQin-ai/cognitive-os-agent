@@ -41,6 +41,7 @@ typedef struct task {
     int execution_failed; /* runner result; scheduler publishes terminal status */
     char *attachments_json; /* owned immutable task snapshot; never in history */
     char *llm_config; /* owned task-local provider snapshot; never serialized */
+    char *acceptance_json; /* owned structured task obligations, captured before enqueue */
     char *workspace; /* owned immutable execution directory, never process chdir */
     int stream_preview;
     int permission_mode; /* 0 existing policy, 1 approve every tool, 2 approve risky tools */
@@ -77,6 +78,8 @@ int64_t scheduler_submit_preview(scheduler *s,int priority,const char *input,voi
 
 int64_t scheduler_submit_configured(scheduler *s,int priority,const char *input,void *userdata,
     int64_t timeout_ms,const char *tag,int thinking_mode,const char *attachments,const char *workspace,int stream_preview,int permission_mode,const char *llm_config);
+int64_t scheduler_submit_configured_acceptance(scheduler *s,int priority,const char *input,void *userdata,
+    int64_t timeout_ms,const char *tag,int thinking_mode,const char *attachments,const char *workspace,int stream_preview,int permission_mode,const char *llm_config,const char *acceptance_json);
 
 /* Runs a task; set output / execution_failed, leaving status RUNNING until
  * scheduler finalization. Legacy runners may still set status directly. */

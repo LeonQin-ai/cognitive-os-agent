@@ -3,6 +3,7 @@ import base64, json, os, socket, subprocess, tempfile, threading, time
 import urllib.request
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from fixture_completion import reviewed_answer
 
 backend=Path(__file__).resolve().parents[1]
 captures=[]
@@ -22,7 +23,8 @@ class Provider(BaseHTTPRequestHandler):
                 release_silent.wait(30)
                 return
         else: assert body['max_tokens']==32768
-        data=json.dumps({'choices':[{'message':{'content':'VISION_WAIT_OK'}}]}).encode()
+        answer=reviewed_answer(body,'VISION_WAIT_OK') if mode=='ready' else 'VISION_WAIT_OK'
+        data=json.dumps({'choices':[{'message':{'content':answer}}]}).encode()
         self.send_response(200); self.send_header('Content-Length',str(len(data))); self.end_headers()
         try:
             if images and mode=='trickle':

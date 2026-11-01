@@ -36,6 +36,7 @@ int cron_remove(cron_mgr *c, long long id);
 
 /* Enable/disable without deleting (0 on success, -1 unknown id). */
 int cron_set_enabled(cron_mgr *c, long long id, int enabled);
+int cron_rename(cron_mgr *c, long long id, const char *name);
 
 /* JSON array of jobs (caller frees): [{id,name,prompt,session,every_sec,at,
  * enabled,next_run_ms,last_run_ms}...] */
