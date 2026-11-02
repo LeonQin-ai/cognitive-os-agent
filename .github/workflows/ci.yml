@@ -139,6 +139,11 @@ jobs:
         run: make build/cognitive-os-agent-test-plan-cycle && ./build/cognitive-os-agent-test-plan-cycle
       - name: Source read completion API regressions
         run: python3 tests/test_source_read_e2e.py
+      - name: Linux folder chooser fallback and provider rate-limit diagnosis
+        run: |
+          python3 tests/test_folder_picker_linux_e2e.py
+          python3 tests/test_workspace_directory_e2e.py
+          python3 tests/test_rate_limit_e2e.py
       - name: Completion review delivery regression
         run: |
           python3 tests/test_completion_review_e2e.py
@@ -287,6 +292,10 @@ jobs:
           "$env:RUNNER_TEMP\zig\zig-x86_64-windows-0.14.1" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
       - name: Build
         run: ./build.sh
+      - name: Desktop watchdog process-liveness regression
+        run: |
+          zig c++ -std=c++17 -O1 -Wno-nullability-completeness -I third_party/webview -o build/desktop-watchdog-test.exe tests/test_desktop_watchdog.cc -lole32 -loleaut32 -luuid -lshlwapi -luser32 -lgdi32 -lws2_32 -lshell32 -lversion -ladvapi32
+          ./build/desktop-watchdog-test.exe
       - name: Unit tests
         run: ./build/cognitive-os-agent-test.exe
       - name: Independent todo-cli acceptance verifier regression
@@ -304,6 +313,10 @@ jobs:
           python tests/test_ssh_password_e2e.py
       - name: Source read completion API regressions
         run: python tests/test_source_read_e2e.py
+      - name: Provider rate-limit diagnosis
+        run: |
+          python tests/test_rate_limit_e2e.py
+          python tests/test_workspace_directory_e2e.py
       - name: Completion review delivery regression
         run: |
           python tests/test_completion_review_e2e.py
