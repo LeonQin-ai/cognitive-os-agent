@@ -85,6 +85,7 @@ tool_result *tool_result_new(int ok, const char *output);
 
 /* Built-in tool factories (defined in action/). Return static tools. */
 const tool *tool_file_read(void);
+const char *tool_file_image_mime(const unsigned char *bytes, size_t length);
 const tool *tool_list_dir(void);
 const tool *tool_file_write(void);
 const tool *tool_file_edit(void);

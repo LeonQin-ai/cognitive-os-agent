@@ -4,11 +4,13 @@
 #include "infra/util.h"
 #include "os/os_thread.h"
 #include "runtime/policy_engine.h"
+#include "api/attachment.h"
 
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
 #include <stdatomic.h>
+#include <ctype.h>
 #include "cJSON.h"
 
 /* Bounded process-local LRU of immutable file pages. The backing file remains
@@ -134,7 +136,7 @@ char *tool_file_cached_content(const char *session_id, const char *absolute_path
         file_page_lock();
         for(size_t i=0;i<FILE_PAGE_CACHE_ENTRIES;++i){
             file_page_entry *e=&g_file_pages[i];
-            if(e->used && e->version==version && e->offset==offset &&
+            if(e->used && e->page_bytes && e->version==version && e->offset==offset &&
                !strcmp(e->session,session_id) && !strcmp(e->path,absolute_path)){
                 copy=malloc(e->length+1);
                 if(copy){memcpy(copy,e->data,e->length+1);len=e->length;more=e->has_more;e->tick=++g_file_page_tick;found=1;}
@@ -192,7 +194,7 @@ char *tool_file_cache_context_excluding(const char *session_id, const char *quer
     file_page_lock();
     for (size_t i=0;i<FILE_PAGE_CACHE_ENTRIES && out.len<max_bytes;++i) {
         file_page_entry *e=&g_file_pages[i];
-        if (!e->used || strcmp(e->session,session_id) || !e->length) continue;
+        if (!e->used || !e->page_bytes || strcmp(e->session,session_id) || !e->length) continue;
         if (fs_file_version(e->path) != e->version) { file_page_drop(e); continue; }
         const char *p=e->data; size_t line_no=0;
         while (*p && out.len<max_bytes) {
@@ -228,6 +230,45 @@ static char *resolve_path(const tool_ctx *ctx, const char *path) {
     return xstrdup(full);
 }
 
+const char *tool_file_image_mime(const unsigned char *p,size_t n) {
+    if(n>=24 && !memcmp(p,"\x89PNG\r\n\x1a\n",8) && !memcmp(p+12,"IHDR",4))return "image/png";
+    if(n>=4 && p[0]==255 && p[1]==216 && p[2]==255)return "image/jpeg";
+    if(n>=12 && !memcmp(p,"RIFF",4) && !memcmp(p+8,"WEBP",4))return "image/webp";
+    return NULL;
+}
+static tool_result *read_image(const tool_ctx *ctx,const char *path) {
+    if(!ctx || !ctx->state_root)return tool_result_new(0,"file_read: image preview requires runtime state");
+    size_t n=0;int more=0;uint64_t before=fs_file_version(path);
+    const char *session=ctx->session_id?ctx->session_id:"default";char *cached=NULL;
+    if(before && file_page_get(session,path,before,0,0,&cached,&n,&more)) {
+        tool_result *result=tool_result_new(1,cached);free(cached);return result;
+    }
+    char *bytes=fs_read_file_slice(path,0,8*1024*1024,&n,&more);
+    const char *mime=bytes?tool_file_image_mime((unsigned char *)bytes,n):NULL;
+    int complete=mime && ((!strcmp(mime,"image/png") && n>=33 && !memcmp(bytes+n-8,"IEND",4)) ||
+        (!strcmp(mime,"image/jpeg") && n>=16 && (unsigned char)bytes[n-2]==255 && (unsigned char)bytes[n-1]==217) ||
+        (!strcmp(mime,"image/webp") && n>=20));
+    if(!complete || more || !before || before!=fs_file_version(path)) {
+        free(bytes);return tool_result_new(0,"file_read: image is unavailable, changed during read, or exceeds the 8 MiB preview limit; create a smaller PNG/JPEG/WebP preview");
+    }
+    const char *name=strrchr(path,'/'),*back=strrchr(path,'\\');
+    if(back && (!name || back>name))name=back;
+    name=name?name+1:path;
+    cJSON *stored=attachment_store(ctx->state_root,NULL,name,ctx->session_id,bytes,n);free(bytes);
+    if(!stored)return tool_result_new(0,"file_read: could not persist session-scoped image preview");
+    cJSON *o=cJSON_CreateObject(),*preview=cJSON_AddObjectToObject(o,"image_preview");
+    cJSON_AddStringToObject(o,"kind","image");cJSON_AddStringToObject(o,"path",path);
+    cJSON_AddStringToObject(o,"mime",mime);cJSON_AddNumberToObject(o,"bytes",(double)n);
+    char revision[32];snprintf(revision,sizeof revision,"%llu",(unsigned long long)before);
+    cJSON_AddStringToObject(o,"file_version",revision);
+    cJSON_AddStringToObject(preview,"id",cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(stored,"id")));
+    cJSON_AddStringToObject(preview,"name",name);
+    cJSON_AddStringToObject(preview,"session",ctx->session_id?ctx->session_id:"default");
+    cJSON_AddStringToObject(o,"note","Image bytes loaded for visual inspection; the chat displays the session-scoped preview directly. Do not read image bytes as text or embed base64 in the answer.");
+    char *text=cJSON_PrintUnformatted(o);tool_result *result=tool_result_new(text!=NULL,text?text:"image preview allocation failed");
+    if(text)file_page_put(session,path,before,0,0,text,strlen(text),0);
+    free(text);cJSON_Delete(o);cJSON_Delete(stored);return result;
+}
 static tool_result *file_read_exec(const tool *self, const tool_ctx *ctx, const char *args_json) {
     cJSON *args;
     cJSON *path_j;
@@ -305,6 +346,11 @@ static tool_result *file_read_exec(const tool *self, const tool_ctx *ctx, const 
      * budget. A page must reach the model intact, rather than lose its middle. */
     const char *session = ctx && ctx->session_id && *ctx->session_id ? ctx->session_id : "";
     uint64_t version = fs_file_version(rp);
+    const char *extension=strrchr(rp,'.');char ext[8]={0};
+    if(extension && strlen(extension)<sizeof(ext))for(size_t i=0;extension[i];i++)ext[i]=(char)tolower((unsigned char)extension[i]);
+    if(!strcmp(ext,".png") || !strcmp(ext,".jpg") || !strcmp(ext,".jpeg") || !strcmp(ext,".webp")) {
+        cJSON_Delete(args);tool_result *image=read_image(ctx,rp);free(rp);return image;
+    }
     if (version && *session)
         cache_hit = file_page_get(session, rp, version, offset, page_bytes,
                                   &content, &read_bytes, &has_more);
@@ -324,6 +370,9 @@ static tool_result *file_read_exec(const tool *self, const tool_ctx *ctx, const 
         return tool_result_new(0, msg);
     }
 
+    if(tool_file_image_mime((unsigned char *)content,read_bytes)) {
+        free(content);tool_result *image=read_image(ctx,rp);free(rp);return image;
+    }
     if (memchr(content, '\0', read_bytes)) {
         free(rp); free(content);
         return tool_result_new(0, "file_read: binary file; use a format-specific extractor");
@@ -679,6 +728,7 @@ const tool *tool_file_read(void) {
     static const tool t = {
         "file_read",
         "Read text in pages of 4..4000 bytes (default 4000). Oversized integer max_bytes is capped to 4000. "
+        "PNG/JPEG/WebP images up to 8 MiB are inspected as complete images, sent to the next visual model request, and displayed in chat; do not paginate binary images or copy base64 into the answer. "
         "Continue using the returned next_offset_bytes, never offset + requested max_bytes. "
         "Pass discovered absolute paths unchanged. Directories return listings.",
         "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"format\":\"file-path\"},\"offset_bytes\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":9007199254740991},\"max_bytes\":{\"type\":\"integer\",\"minimum\":4,\"maximum\":4000,\"default\":4000}},\"required\":[\"path\"]}",

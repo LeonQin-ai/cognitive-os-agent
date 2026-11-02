@@ -5859,6 +5859,11 @@ function renderChatEntry(entry){
     chatAppendCopy(el, () => entry.text);
   }
   chatRenderTimestamp(entry);
+  if(entry.role==='bot'){
+    const images=[...(entry.progress?.images || []),...(entry.progress?.steps || []).filter(s=>s.ok===1 && s.image_preview).map(s=>s.image_preview)];
+    const merged=new Map([...(entry.images || []),...images].filter(i=>i?.id && i?.session).map(i=>[i.session+':'+i.id,i]));
+    if(merged.size){entry.images=[...merged.values()];chatRenderImages(el,entry.images);}
+  }
   if(follow) chatScroll(true);
 }
 function chatNearBottom(){

@@ -64,6 +64,8 @@ jobs:
         run: COA_BUILD_DIR=build-macos python3 tests/test_native_tool_loop.py
       - name: Structured acceptance and cross-run artifact regression
         run: COA_BUILD_DIR=build-macos python3 tests/test_structured_task_contract_e2e.py
+      - name: Generated image readback and vision delivery
+        run: COA_BUILD_DIR=build-macos python3 tests/test_generated_image_e2e.py
       - name: Model finalization and provider diagnostics regression
         run: COA_BUILD_DIR=build-macos python3 tests/test_model_finalization_e2e.py
       - name: Command execution Trace and persistence
@@ -165,6 +167,8 @@ jobs:
         run: python tests/test_native_tool_loop.py
       - name: Structured acceptance and cross-run artifact regression
         run: python tests/test_structured_task_contract_e2e.py
+      - name: Generated image readback and vision delivery
+        run: python tests/test_generated_image_e2e.py
       - name: Model finalization and provider diagnostics regression
         run: python tests/test_model_finalization_e2e.py
       - name: Command execution Trace and persistence
@@ -228,6 +232,8 @@ jobs:
         run: ASAN_OPTIONS=detect_leaks=0 python3 tests/test_native_tool_loop.py
       - name: Structured acceptance under ASAN
         run: ASAN_OPTIONS=detect_leaks=0 python3 tools/run_ci_regression.py tests/test_structured_task_contract_e2e.py
+      - name: Image readback under ASAN
+        run: ASAN_OPTIONS=detect_leaks=0 python3 tools/run_ci_regression.py tests/test_generated_image_e2e.py
       - name: ASAN completion review e2e
         run: ASAN_OPTIONS=detect_leaks=0 python3 tools/run_ci_regression.py tests/test_completion_review_e2e.py
       - name: ASAN embedded tool completion e2e
@@ -341,6 +347,8 @@ jobs:
         run: python tests/test_native_tool_loop.py
       - name: Structured acceptance and cross-run artifact regression
         run: python tests/test_structured_task_contract_e2e.py
+      - name: Generated image readback and vision delivery
+        run: python tests/test_generated_image_e2e.py
       - name: Model finalization and provider diagnostics regression
         run: python tests/test_model_finalization_e2e.py
       - name: Command execution Trace and persistence
@@ -388,6 +396,7 @@ jobs:
           NODE_PATH="$PWD/webarena/node_modules" node tests/test_folder_picker_timeout_ui.cjs
           NODE_PATH="$PWD/webarena/node_modules" node tests/test_session_options_ui.cjs
           NODE_PATH="$PWD/webarena/node_modules" node tests/test_image_chat_ui.cjs
+          NODE_PATH="$PWD/webarena/node_modules" node tests/test_generated_image_ui.cjs
           NODE_PATH="$PWD/webarena/node_modules" node tests/test_answer_copy_ui.cjs
           NODE_PATH="$PWD/webarena/node_modules" node tests/test_chat_timestamps_ui.cjs
           NODE_PATH="$PWD/webarena/node_modules" COA_BROWSER_CHANNEL=msedge node tests/test_trace_render.cjs
