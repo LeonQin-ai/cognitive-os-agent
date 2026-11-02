@@ -17,6 +17,8 @@ typedef struct tasklog tasklog;
 
 tasklog *tasklog_new(const char *state_root);
 void tasklog_free(tasklog *tl);
+/* Alternating validated snapshots retain one prior record on a torn write. */
+int tasklog_checkpoint(tasklog *tl,int64_t id,unsigned seq,const char *trace);
 /* Startup: mark latest nonterminal records INTERRUPTED; compute a safe next ID. */
 int tasklog_recover(tasklog *tl, int64_t *next_id);
 

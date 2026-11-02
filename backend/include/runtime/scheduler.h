@@ -57,6 +57,12 @@ typedef struct task {
     /* Sanitized execution timeline kept in memory while the task runs. It is
      * written to the durable journal only after the terminal transition. */
     char *trace_json;
+    void (*checkpoint)(struct task *,void *);
+    mutex_t checkpoint_mtx;
+    void *checkpoint_ud;
+    int64_t checkpoint_ms;
+    unsigned checkpoint_seq;
+    int checkpoint_calls,checkpoint_tools;
     char *pending_input; /* steering messages, protected by progress_mtx */
     int updates_closed;
     unsigned update_count;

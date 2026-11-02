@@ -12,6 +12,7 @@ task *task_new(int64_t id, int priority, const char *input, int64_t timeout_ms) 
     if (!t)
         return NULL;
     if (mutex_init(&t->progress_mtx) != 0) { free(t); return NULL; }
+    if (mutex_init(&t->checkpoint_mtx) != 0) { mutex_destroy(&t->progress_mtx);free(t);return NULL; }
     t->id = id;
     t->priority = priority;
     t->timeout_ms = timeout_ms;
@@ -36,6 +37,7 @@ void task_free(task *t) {
     free(t->trace_json);
     free(t->pending_input);
     mutex_destroy(&t->progress_mtx);
+    mutex_destroy(&t->checkpoint_mtx);
     free(t);
 }
 
@@ -98,6 +100,7 @@ void task_set_progress(task *t, const char *json) {
     free(t->progress_json);
     t->progress_json = copy;
     mutex_unlock(&t->progress_mtx);
+    task_trace_add(t,json);
 }
 char *task_progress_copy(task *t) {
     if (!t) return NULL;
@@ -123,7 +126,7 @@ void task_trace_add(task *t, const char *json) {
     const char *names[] = {"stage", "activity", "model", "thinking", "model_call", "model_failures", "seq",
                            "tool_protocol", "completion_declaration",
                            "elapsed_ms", "round", "tool_calls", "cur_tool", "llm_ms", "tool_ms",
-                           "llm_calls", "applied_updates"};
+                           "llm_calls", "applied_updates", "tokens_in", "tokens_out", "tokens_reasoning", "usage_available"};
     for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
         field = cJSON_GetObjectItemCaseSensitive(snapshot, names[i]);
         if (field)
@@ -165,6 +168,7 @@ void task_trace_add(task *t, const char *json) {
     cJSON_Delete(timeline);
     if (next) { free(t->trace_json); t->trace_json = next; }
     mutex_unlock(&t->progress_mtx);
+    if(t->checkpoint)t->checkpoint(t,t->checkpoint_ud);
 }
 
 char *task_trace_copy(task *t) {
