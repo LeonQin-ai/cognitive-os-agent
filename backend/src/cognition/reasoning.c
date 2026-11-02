@@ -270,8 +270,10 @@ struct reasoning {
     size_t observation_budget_cap;
     /* Independent of the bounded prompt log/cache: folding observations must
      * not make alternating old reads look like newly discovered evidence. */
-    struct { char path[2048]; uint64_t version, digest; } artifact_seen[128];
+    struct { char path[2048]; uint64_t version, digest; unsigned producer_step; } artifact_seen[128];
     int artifact_seen_n;
+    uint64_t action_output_versions_before[16];
+    int action_outputs_captured;
     /* Pre-work fingerprint per accepted artifact, captured when the
      * obligation is first merged. A later version change proves the run
      * itself produced the current bytes, so script-mediated artifacts
@@ -612,7 +614,7 @@ static void merge_acceptance(reasoning *r,const cJSON *input) {
                 if(!found) {
                     cJSON *entry=cJSON_CreateString(full);
                     if(cJSON_GetArraySize(paths)>=64||!entry||!cJSON_AddItemToArray(paths,entry)){cJSON_Delete(entry);cJSON_Delete(next);r->acceptance_invalid=1;return;}
-                    artifact_baseline_of(r,full); /* pre-work fingerprint at obligation time */
+                    if(!strcmp(field->string,"artifacts"))artifact_baseline_of(r,full);
                 }
             }
         }
@@ -2503,6 +2505,20 @@ static void observation_sketch(struct opaque_observation *shape,const char *text
 /* Explicit tool effects, never command-name guessing. Small artifacts use
  * content fingerprints so touching/rewriting identical files is not progress;
  * large artifacts use the OS revision fingerprint without loading whole files. */
+static void capture_action_output_versions(reasoning *r,const char *args_json) {
+    r->action_outputs_captured=0;
+    cJSON *args=cJSON_Parse(args_json?args_json:"{}"),*item;
+    cJSON_ArrayForEach(item,cJSON_GetObjectItemCaseSensitive(args,"outputs")) {
+        if(r->action_outputs_captured==16)break;
+        uint64_t before=0;
+        if(cJSON_IsString(item)) {
+            char path[2048];normalized_evidence_path(r,item->valuestring,path,sizeof(path));
+            before=fs_file_version(path);
+        }
+        r->action_output_versions_before[r->action_outputs_captured++]=before;
+    }
+    cJSON_Delete(args);
+}
 static int declared_artifact_progress(reasoning *r,const char *args_json) {
     cJSON *args=cJSON_Parse(args_json?args_json:"{}");
     cJSON *outputs=cJSON_GetObjectItemCaseSensitive(args,"outputs"),*item;
@@ -2514,6 +2530,10 @@ static int declared_artifact_progress(reasoning *r,const char *args_json) {
         char path[2048];normalized_evidence_path(r,item->valuestring,path,sizeof(path));
         if(fs_is_dir(path))continue;
         uint64_t version=fs_file_version(path);if(!version)continue;
+        /* A declaration is not a production receipt. A successful command
+         * must actually change this version, not adopt another action's or
+         * another task's pre-existing output by listing it in outputs[]. */
+        if(checked>r->action_outputs_captured || r->action_output_versions_before[checked-1]==version)continue;
         int i=0;while(i<r->artifact_seen_n && strcmp(r->artifact_seen[i].path,path))i++;
         if(i<r->artifact_seen_n && r->artifact_seen[i].version==version)continue;
         long long size=fs_file_size(path);uint64_t digest=version;
@@ -2531,6 +2551,7 @@ static int declared_artifact_progress(reasoning *r,const char *args_json) {
             snprintf(r->artifact_seen[i].path,sizeof(r->artifact_seen[i].path),"%s",path);
         }
         r->artifact_seen[i].version=version;r->artifact_seen[i].digest=digest;
+        r->artifact_seen[i].producer_step=r->step_sequence;
         uint64_t revision=hash64(path,strlen(path)) ^ (digest*UINT64_C(0x9e3779b185ebca87));
         int known=0;
         for(int v=0;v<r->artifact_versions_seen_n;v++)if(r->artifact_versions_seen[v]==revision){known=1;break;}
@@ -2626,15 +2647,15 @@ static void observe_action_progress(reasoning *r,const planned_action *action,ui
  * anything with redirection, pipes, substitution or chaining re-flushes. */
 static int git_action_read_only(const char *args){
     static const char *const ok[] = {
-        "status","log","diff","show","branch","rev-parse","ls-files","ls-tree",
-        "blame","describe","tag","shortlog","remote","config --get","symbolic-ref",
-        "for-each-ref","cat-file","count-objects","version",NULL
+        "status","status --short","status --porcelain","log --oneline",
+        "log --oneline -3","rev-parse HEAD","ls-files","version",NULL
     };
     if (!args) return 1;
-    while (*args==' '||*args=='-') args++; /* e.g. "-C path status" won't match below: conservative */
+    while (*args==' '||*args=='\t') args++;
     for (const char *const *p=ok; *p; p++){
-        size_t n=strlen(*p);
-        if (strncmp(args,*p,n)==0 && (args[n]==0||args[n]==' '||args[n]=='\t'))
+        /* Options can write files (e.g. log --output), so matching only a
+         * subcommand prefix is insufficient. Unknown variants invalidate. */
+        if (!strcmp(args,*p))
             return 1;
     }
     return 0;
@@ -2642,8 +2663,8 @@ static int git_action_read_only(const char *args){
 static int shell_segment_read_only(const char *s){
     static const char *const ok[] = {
         "git","ls","dir","cat","type","head","tail","pwd","echo","where","which",
-        "wc","findstr","stat","du","df","file","whoami","hostname","date","env",
-        "printenv","uname","systeminfo","ver","set",NULL
+        "wc","findstr","stat","du","df","file","whoami",
+        "printenv","uname","systeminfo","ver",NULL
     };
     while (*s==' '||*s=='\t') s++;
     if (!*s) return 1;
@@ -2655,7 +2676,7 @@ static int shell_segment_read_only(const char *s){
                 while (*args==' '||*args=='\t') args++;
                 return git_action_read_only(args);
             }
-            return 1;
+            return s[n]==0; /* arguments may execute programs or alter state */
         }
     }
     return 0;
@@ -2666,7 +2687,7 @@ static int shell_command_read_only(const char *cmd){
     size_t n=strlen(cmd); if (n>=sizeof buf) return 0;
     memcpy(buf,cmd,n+1);
     for (char *p=buf; *p; p++)
-        if (*p=='>'||*p=='<'||*p=='|'||*p=='`'||*p=='$'||*p==';') return 0;
+        if (*p=='>'||*p=='<'||*p=='|'||*p=='`'||*p=='$'||*p==';'||*p=='\n'||*p=='\r') return 0;
     /* manual '&' split: strtok_r is not declared under strict -std=c11 on
      * every toolchain here (see note at line ~1414). Consecutive '&' (&&)
      * simply yields empty segments, which pass as no-ops. */
@@ -2911,16 +2932,19 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
             if (!strcmp(r->actions[i].tool, "shell")) {
                 cJSON *sa = cJSON_Parse(r->actions[i].args_json);
                 probe_only = shell_command_read_only(cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(sa,"command")));
+                if(cJSON_GetArraySize(cJSON_GetObjectItemCaseSensitive(sa,"outputs")))probe_only=0;
                 cJSON_Delete(sa);
             } else if (!strcmp(r->actions[i].tool, "git")) {
                 cJSON *sa = cJSON_Parse(r->actions[i].args_json);
                 probe_only = git_action_read_only(cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(sa,"args")));
+                if(cJSON_GetArraySize(cJSON_GetObjectItemCaseSensitive(sa,"outputs")))probe_only=0;
                 cJSON_Delete(sa);
             }
             if (!probe_only) { r->search_seen_n = 0; r->grep_path_n = 0; }
         }
         r->prog_tool_calls++;
         long long t_tool0 = time_now_ms();
+        capture_action_output_versions(r,r->actions[i].args_json);
         char span_name[64] = "tool.";
         size_t span_len = strlen(span_name);
         const unsigned char *tool_name = (const unsigned char *)r->actions[i].tool;
@@ -3466,9 +3490,9 @@ static uint64_t artifact_baseline_of(reasoning *r,const char *path) {
 /* A shell action declared this path in outputs[] and its recorded post-action
  * version equals the file's current version: the declared command produced
  * the current bytes. Explicit declarations only, never command-name guessing. */
-static int declared_output_current(reasoning *r,const char *path,uint64_t current) {
+static int declared_output_current(reasoning *r,const char *path,uint64_t current,unsigned read_step) {
     for(int i=0;i<r->artifact_seen_n;i++)
-        if(!strcmp(r->artifact_seen[i].path,path) && r->artifact_seen[i].version && r->artifact_seen[i].version==current)return 1;
+        if(!strcmp(r->artifact_seen[i].path,path) && r->artifact_seen[i].version && r->artifact_seen[i].version==current && r->artifact_seen[i].producer_step<read_step)return 1;
     return 0;
 }
 static int run_has_verified_artifact(reasoning *r,const char *target) {
@@ -3478,14 +3502,17 @@ static int run_has_verified_artifact(reasoning *r,const char *target) {
         if(!read->evidence_version || read->evidence_version!=fs_file_version(target) || fs_is_dir(target) || fs_file_size(target)<=0)return 0;
         for(int j=r->n_steps-1;j>=0;j--) {
             struct run_step *write=&r->steps[j];
-            if(write->ok==1 && !strcmp(write->tool,"file_write") && write->evidence_path && !strcmp(write->evidence_path,target))return j<i;
+            if(write->ok==1 && !strcmp(write->tool,"file_write") && write->evidence_path && !strcmp(write->evidence_path,target)) {
+                if(write->evidence_version==read->evidence_version)return j<i;
+                break; /* a later shell producer may own the current version */
+            }
         }
         /* Script-mediated artifact: a shell command that declared the path in
          * outputs[] produced the current bytes (the file changed after the
          * obligation was merged), and the version-matched read above proves
          * the agent verified the final content. Same evidence, different
          * producer — generated artifacts must not force fake file_write calls. */
-        if(artifact_baseline_of(r,target)!=read->evidence_version && declared_output_current(r,target,read->evidence_version))return 1;
+        if(artifact_baseline_of(r,target)!=read->evidence_version && declared_output_current(r,target,read->evidence_version,read->id))return 1;
         return 0;
     }
     return 0;
@@ -3957,6 +3984,7 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     r->last_model_failure_call=0;
     r->completion_review_required=1;
     cJSON_Delete(r->acceptance);r->acceptance=NULL;r->acceptance_invalid=0;
+    r->artifact_baseline_n=0; /* per-run obligations cannot inherit another task's baseline */
     r->prog_llm_ms = r->prog_tool_ms = 0;
     r->last_model_error[0]=0;
     r->planner_output_escalated = 0;
@@ -4099,7 +4127,7 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     int unfinished = 0; /* text described future work, or requested write never ran */
     int output_repeated = 0;
     int search_only_rounds = 0;
-    int failure_recovery_nudges = 0, truncated_response_nudges = 0, visual_retry_nudges = 0;
+    int failure_recovery_nudges = 0, truncated_response_nudges = 0;
     int completion_reviewed = 0;
     int completion_grace = 0;
     const char *completion_reserve_note = "[system] Finalization-only reserve: the configured tool-execution budget is exhausted. Assess the ORIGINAL request against existing successful observations. Do not reread or execute extra checks solely for reassurance; no executable tool actions can run in this reserve. If the requested work is already delivered and verified, call complete_task(status=complete, requires_tools=false, answer=full_result). If essential work remains, call complete_task(status=blocked, requires_tools=false, answer=what_is_missing). This is the single reserved finalization request, not additional work budget.";
@@ -4209,7 +4237,8 @@ restart_planning:
              * a JSON suffix or misdiagnose this as a failed tool operation.
              * Empty reasoning-only responses need the same bounded recovery.
              * This shares the existing two-continuation allowance. */
-            if (!r->had_plan && r->planner_response_truncated && !r->visual_request_failed) {
+            if (!r->had_plan && r->planner_response_truncated &&
+                (!r->visual_request_failed || !strcmp(r->last_model_failure.stage,"response"))) {
                 if (truncated_response_nudges >= 2 || r->round_idx >= r->max_rounds) {
                     output_truncated_unresolved = fail_aborted = unfinished = 1;
                     break;
@@ -4220,19 +4249,6 @@ restart_planning:
                 continue;
             }
             if (r->visual_request_failed) {
-                /* A response-stage visual failure (hidden reasoning consumed
-                 * the output budget; no visible content or tool calls) is
-                 * transient: regenerate like the truncated path above.
-                 * Transport/http failures (endpoint down, no image support)
-                 * stay terminal — retrying those only burns latency. */
-                if (!strcmp(r->last_model_failure.stage,"response") &&
-                    visual_retry_nudges < 2 && r->round_idx < r->max_rounds) {
-                    visual_retry_nudges++;
-                    round_log_append(r,"[system] 图片请求的模型响应没有可见内容：输出预算被隐藏推理耗尽（finish=length）。"
-                        "请重新生成完整的下一步动作或最终答案，压缩推理开销，不要重复已完成的工具调用。最多两次重新生成机会。");
-                    progress_emit(r,"reconnecting");
-                    continue;
-                }
                 final_text=xstrdup(result && *result ? result:"图片模型请求失败");
                 fail_aborted = 1;
                 break;

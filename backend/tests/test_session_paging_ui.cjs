@@ -13,6 +13,9 @@ const assert=require('node:assert/strict');
   await page.waitForFunction(id=>CHAT_SESSION!==id && CHAT_NEW_SESSION_REQUEST===null,first);
   const second=await page.evaluate(()=>CHAT_SESSION);assert.notEqual(first,second);
   assert.equal(await page.locator('#chat-box .chat-message').count(),0);
+  // New Chat unlocks before its independent recent-list refresh completes.
+  // Capture a cursor only after that list contains the newly created session.
+  await page.waitForFunction(id=>CHAT_TABS_CACHE.some(s=>s.id===id),second);
   await page.waitForFunction(()=>!!CHAT_SESSION_NEXT);
   const next=await page.evaluate(()=>CHAT_SESSION_NEXT);
   await page.locator('#recent-older').click();

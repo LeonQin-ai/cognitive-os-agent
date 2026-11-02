@@ -1,0 +1,124 @@
+# Task 114: recover output truncation without weakening delivery checks
+
+## Observed failure
+
+The supplied task 114 trace contains 35 model requests and 69 tool actions in
+546,479 ms. The last request returned `finish_reason=length` with private
+reasoning but no visible answer or executable tool arguments. The configured
+million-round ceiling was not reached. The visual-error branch terminated the
+run before the ordinary truncated-response recovery branch could run.
+
+All five recorded file writes targeted helper scripts under `.tool-results`;
+the trace does not show a modification to the requested application source.
+Three attempted reads targeted helper output files that did not exist, and one
+Python console read failed on GBK output encoding. Recovering the last model
+response does not by itself prove the original UI task has been delivered.
+
+## Runtime changes
+
+- HTTP-success response-stage truncation shares the existing two-regeneration
+  allowance across visual and text requests. Incomplete calls execute no tools.
+  Network errors, HTTP failures, and non-truncated invalid visual replies do not
+  enter that retry branch. A final truncated response stays failed.
+- Visual truncation diagnostics identify the output-token limit rather than
+  suggesting that a 120-second HTTP wait expired.
+- Artifact baselines reset at each run, including reused session lanes. Full
+  reads do not consume the separate 64-entry artifact baseline table.
+- Artifact production/readback receipts must match the current file version
+  and their actual execution order. An earlier file_write cannot vouch for a
+  later version; declared shell production followed by readback remains valid.
+- Declared shell outputs are fingerprinted immediately before and after the
+  actual command. Listing a file in outputs without changing it is not a
+  production receipt, even if a different action created it earlier this run.
+- Shell/Git cache exemptions are exact conservative forms, rather than whole
+  subcommand prefixes. Mutating branch/tag commands, arbitrary env programs,
+  options such as git log --output, newline chaining, and declared outputs
+  invalidate unversioned searches. Versioned reads retain their existing
+  version checks.
+
+The configured default/million-round budget and structural completion protocol
+are unchanged. New helper files are not automatically classified as successful
+delivery of an undeclared user objective; semantic intent cannot be established
+from a successful file_write receipt alone.
+
+## Regression evidence
+
+The new same-process/two-task test fails against the original local binary:
+the second task only cats and reads the first task's artifact, yet returns DONE.
+The original binary also reuses an empty glob result after creating a Git branch.
+Both tests pass against the isolated fixed build.
+
+Automated coverage includes text/visual reasoning-only length recovery, repeated
+length exhaustion, invalid visual responses without length, actual file_write
+then file_read after visual recovery, silent/trickling provider timeouts, reused
+session baselines, 64 full-read obligations plus artifact acceptance, current
+version/producer ordering, valid script rewrites, and Git search invalidation.
+The structured contract suite is included in platform CI and ASAN jobs.
+
+The first remote run also exposed an existing observation-retention fixture
+inconsistency after commit 7062875 introduced the 96KiB default ceiling. The
+fixture still expected every large-context model to retain more than 96KiB.
+It now checks four independent cases per adapter: default ceiling folds older
+evidence even with a large context, an explicitly larger ceiling retains it,
+and a small model's context-derived bound applies with either setting. Request
+size assertions and the 30 actual read receipts remain required. All eight
+OpenAI/Anthropic cases pass locally; this change does not raise runtime limits.
+
+The browser regressions were also run locally, including workspace selection,
+Flow progress/resume, permissions, uploads, copy/Trace rendering, group panels,
+model metadata and markets. The metadata fixture now asserts that estimated
+context is explicitly unverified, rather than matching superseded copy. The
+actual-backend paging fixture waits for the independent list refresh to include
+the newly created session before capturing its cursor; otherwise it could
+compare a stale pre-refresh cursor with the cursor actually clicked. It passed
+with 3,000 migrated sessions, 160 REST-created sessions, history isolation and
+restart recovery. No production server or running task was restarted.
+
+One complete remote run passed Linux gcc, Linux ASAN, macOS ARM and Windows.
+macOS Intel reached the last Flow suite with passing cases but was cancelled
+at the job's 30-minute cutoff. Its job allowance is now 45 minutes; other macOS
+jobs retain 30 minutes. All test assertions, scenario counts, request budgets
+and the Agent's configured million-round behavior are unchanged.
+
+An additional negative fixture also fails against the original binary: create
+a file in one shell action without an output receipt, then merely cat it with
+outputs declared and read it back. The original gate returns DONE; the fixed
+gate rejects it because the purported producer did not change the file.
+
+## Real configured API run
+
+An isolated native DeepSeek v4.1 Flash run uploaded a synthetic PNG, read two
+synthetic source files with random proof markers, wrote comparison.html, and
+read the HTML back. The test independently checked both random markers, the
+source facts, final answer, and write/readback order. The assistant did not
+generate the delivered HTML.
+
+- Result: DONE; 10 model requests, 6 tools, 0 model failures; 29.971 seconds.
+- Delivered artifact: 6,804 bytes.
+- Actual usage: 80,115 prompt + 5,652 visible completion + 984 reasoning =
+  **86,751 tokens**. No failed requests occurred in this live run. Monetary
+  cost is not computed because no verified route pricing is configured.
+- Local evidence: build/task114-live-visual.json, .log, and .html (ignored).
+
+This validates the configured provider's visual tool/artifact path, not an
+externally forced provider truncation. Fixed-response HTTP tests exercise the
+specific truncation and exhaustion branches deterministically. It does not
+claim that arbitrary long UI modification tasks or all providers are proven.
+
+Compatibility mode also covers visible incomplete tool JSON with finish=length:
+the partial file_write never executes, the ordinary regeneration observation is
+preserved, and the next complete response can finish. The visual extension does
+not narrow the pre-existing nonvisual protocol-stage truncation recovery.
+
+After adding per-command before/after output fingerprints, a second bounded
+real API test exercised that exact producer path. The Agent authored report.py,
+executed it with declared comparison.html output, and read back the generated
+HTML under caller-supplied artifact and source-read acceptance obligations.
+The harness rejected direct HTML file_write as an alternative producer.
+
+- Result: DONE, 12 requests, 9 tools, 0 model failures, 34.304 seconds.
+- Actual generated artifact: 6,346 bytes, source markers and answer verified.
+- Usage: 110,813 prompt + 5,340 visible completion + 1,480 reasoning = 117,633
+  tokens. Both live tests together used **204,384 tokens**, with no failed
+  requests and no automatic task reruns. No monetary estimate is invented.
+- Local evidence: build/task114-live-script.json, .log, and .html (ignored).
