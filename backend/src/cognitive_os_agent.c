@@ -76,20 +76,22 @@ static void task_done(task *t, void *ud) {
 
 static void checkpoint_progress(task *t,void *ud) {
     runtime_ctx *ctx=ud;
-    mutex_lock(&t->checkpoint_mtx);
-    char *progress=task_progress_copy(t);cJSON *o=progress?cJSON_Parse(progress):NULL;free(progress);
+    /* All scheduler allocation paths initialize progress_mtx. Hold it through
+     * the bounded checkpoint write so concurrent Flow observers serialize. */
+    mutex_lock(&t->progress_mtx);
+    cJSON *o=t->progress_json?cJSON_Parse(t->progress_json):NULL;
     cJSON *calls=cJSON_GetObjectItemCaseSensitive(o,"model_call"),*tools=cJSON_GetObjectItemCaseSensitive(o,"tool_calls");
     int c=cJSON_IsNumber(calls)?calls->valueint:0,k=cJSON_IsNumber(tools)?tools->valueint:0;
     int64_t now=time_now_ms();
     if(!t->checkpoint_seq || now-t->checkpoint_ms>=1000 || c!=t->checkpoint_calls || k!=t->checkpoint_tools) {
-        char *trace=task_trace_copy(t);
+        char *trace=t->trace_json?xstrdup(t->trace_json):NULL;
         if(!tasklog_checkpoint(ctx->tasklog,t->id,t->checkpoint_seq+1,trace)) {
             t->checkpoint_seq++;t->checkpoint_ms=now;t->checkpoint_calls=c;t->checkpoint_tools=k;
         }
         free(trace);
     }
     cJSON_Delete(o);
-    mutex_unlock(&t->checkpoint_mtx);
+    mutex_unlock(&t->progress_mtx);
 }
 static int task_http_cancel(void *context){return task_should_abort((task *)context);}
 

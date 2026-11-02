@@ -58,7 +58,6 @@ typedef struct task {
      * written to the durable journal only after the terminal transition. */
     char *trace_json;
     void (*checkpoint)(struct task *,void *);
-    mutex_t checkpoint_mtx;
     void *checkpoint_ud;
     int64_t checkpoint_ms;
     unsigned checkpoint_seq;

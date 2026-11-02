@@ -12,7 +12,6 @@ task *task_new(int64_t id, int priority, const char *input, int64_t timeout_ms) 
     if (!t)
         return NULL;
     if (mutex_init(&t->progress_mtx) != 0) { free(t); return NULL; }
-    if (mutex_init(&t->checkpoint_mtx) != 0) { mutex_destroy(&t->progress_mtx);free(t);return NULL; }
     t->id = id;
     t->priority = priority;
     t->timeout_ms = timeout_ms;
@@ -37,7 +36,6 @@ void task_free(task *t) {
     free(t->trace_json);
     free(t->pending_input);
     mutex_destroy(&t->progress_mtx);
-    mutex_destroy(&t->checkpoint_mtx);
     free(t);
 }
 
