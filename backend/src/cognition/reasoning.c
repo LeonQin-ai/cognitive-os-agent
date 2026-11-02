@@ -4186,6 +4186,7 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     int consec_fail = 0; /* consecutive stage failures → circuit breaker */
     int transport_fail_streak = 0;
     int fail_aborted = 0;
+    int provider_rate_limited = 0;
     int no_action_rounds = 0, no_action_stalled = 0;
     int unfinished = 0; /* text described future work, or requested write never ran */
     int output_repeated = 0;
@@ -4318,6 +4319,7 @@ restart_planning:
             }
             if (!r->had_plan && r->last_model_failure.http_status==429 && r->last_model_failure_call==r->prog_llm_calls) {
                 round_log_append(r, "[system] 模型服务返回 HTTP 429（请求限额或速率限制）；停止自动重试，避免继续消耗请求额度。修复限额或等待重置后，可由用户重新发起任务。");
+                provider_rate_limited = 1;
                 fail_aborted = 1;
                 break;
             }
@@ -4653,7 +4655,8 @@ restart_planning:
         if (stalled) { strbuf_append(&out,cycle_aborted ?
             "\n原因：多轮交替读取或检查持续返回已有结果；循环恢复提示后仍无新增进展，已停止重复调用并保留记录。" :
             "\n原因：重复工具动作没有新增进展；需调整路径、分页参数或执行方案。"); explained=1; }
-        if (fail_aborted && !r->visual_request_failed) { strbuf_append(&out,"\n原因：模型规划或执行验证连续失败；请核对执行记录中的最后一条错误。"); explained=1; }
+        if (provider_rate_limited) { strbuf_append(&out,"\n原因：供应商返回 HTTP 429，当前模型请求被限流；等待额度或速率窗口恢复后可继续任务。已停止自动重试，避免额外消耗。"); explained=1; }
+        else if (fail_aborted && !r->visual_request_failed) { strbuf_append(&out,"\n原因：模型规划或执行验证连续失败；请核对执行记录中的最后一条错误。"); explained=1; }
         if (r->visual_request_failed) explained=1;
         if (r->round_idx>=r->max_rounds) { strbuf_appendf(&out,"\n原因：达到配置的最大规划轮数 %d；当前步骤未全部完成。",r->max_rounds); explained=1; }
         if (!explained) strbuf_append(&out,"\n原因：模型仍在描述待执行工作，尚未提交可验证的最终结果；请根据保留的执行记录继续任务。");

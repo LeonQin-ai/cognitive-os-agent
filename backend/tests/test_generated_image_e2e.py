@@ -20,6 +20,9 @@ def exercise(protocol,mode):
         def do_POST(self):
             try:
                 body=json.loads(self.rfile.read(int(self.headers['Content-Length'])));n=len(calls);calls.append(body)
+                if n==0 and mode=='generated':
+                    prompt=json.dumps(body.get('system',''))+' '+json.dumps(body['messages'][0]['content'])
+                    assert 'image preview' in prompt, 'planner omitted image readback guidance'
                 images=[]
                 for message in body['messages']:
                     for block in message['content'] if isinstance(message['content'],list) else []:
