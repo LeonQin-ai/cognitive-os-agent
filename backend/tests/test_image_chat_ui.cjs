@@ -35,12 +35,37 @@ const http=require('node:http');
     });
     await page.goto(`http://127.0.0.1:${server.address().port}`);
     await page.waitForTimeout(250);
+    const dragonTheme=await page.evaluate(()=>{
+      document.body.dataset.theme='dragongirl';
+      const selectors=['aside','.top','.pillbar','.card','#chat-hero'];
+      const added=[];
+      const surfaces=Object.fromEntries(selectors.map(selector=>{
+        let element=document.querySelector(selector);
+        if(!element){
+          element=document.createElement('div');
+          if(selector[0]==='.') element.className=selector.slice(1);
+          else if(selector[0]==='#') element.id=selector.slice(1);
+          document.body.appendChild(element);added.push(element);
+        }
+        const style=getComputedStyle(element);
+        return [selector,{background:style.backgroundColor,backdrop:style.backdropFilter}];
+      }));
+      added.forEach(element=>element.remove());
+      return {surfaces,artworkOpacity:getComputedStyle(document.body,'::after').opacity};
+    });
+    for(const [selector,style] of Object.entries(dragonTheme.surfaces)){
+      assert.equal(style.background,'rgba(0, 0, 0, 0)',`${selector} must not veil the Dragon Girl artwork`);
+      assert.equal(style.backdrop,'none',`${selector} must not blur the Dragon Girl artwork`);
+    }
+    assert.equal(dragonTheme.artworkOpacity,'1','Dragon Girl artwork must render at full opacity');
     await page.locator('#chat-input').fill('请描述这张图片');
     const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aK1sAAAAASUVORK5CYII=','base64');
     await page.locator('#chat-file').setInputFiles({name:'fixture.png',mimeType:'image/png',buffer:png});
     await page.waitForFunction(()=>CHAT_ATTACH.some(item=>item.kind==='image'&&item.status==='ready'));
     await page.locator('#chat-attach img[alt="fixture.png"]').waitFor();
     await page.waitForFunction(()=>document.querySelector('#chat-attach img')?.naturalWidth===1);
+    const sendBox=await page.locator('#chat-send').boundingBox();
+    assert.ok(sendBox && sendBox.y+sendBox.height<=800,'image draft must not push the send control outside the composer viewport');
     await page.evaluate(()=>chatSubmit());
     await page.locator('#chat-box .user img[alt="fixture.png"]').waitFor();
     assert.equal(posts.length,1);
