@@ -1,10 +1,19 @@
 """End-to-end metadata migration, provenance and restart regression (no model API)."""
-import json,os,socket,subprocess,tempfile,time,urllib.request
+import json,os,socket,subprocess,tempfile,time,urllib.request,threading
+from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
 from pathlib import Path
 backend=Path(__file__).resolve().parents[1]
 build=backend/os.environ.get('COA_BUILD_DIR','build')
 build.mkdir(parents=True,exist_ok=True)
 ark='https://ark.cn-beijing.volces.com/api/plan/v3'
+class Provider(BaseHTTPRequestHandler):
+ def log_message(self,*_):pass
+ def do_GET(self):
+  assert self.headers.get('Authorization')=='Bearer fixture-key'
+  data={'data':[{'id':f'noise-{i}'} for i in range(250)]+[{'id':'discovered','top_provider':{'context_length':1048576,'max_completion_tokens':32768}}]}
+  encoded=json.dumps(data).encode();self.send_response(200);self.send_header('Content-Length',str(len(encoded)));self.end_headers();self.wfile.write(encoded)
+provider=ThreadingHTTPServer(('127.0.0.1',0),Provider)
+threading.Thread(target=provider.serve_forever,daemon=True).start()
 with tempfile.TemporaryDirectory(prefix='coa-capabilities-') as tmp:
  state=Path(tmp)
  (state/'routes.json').write_text(json.dumps([{'name':'legacy','provider':'openai','model':'deepseek-v4.1-flash','base_url':ark,'context_window':262144}]),encoding='utf-8')
@@ -44,5 +53,25 @@ with tempfile.TemporaryDirectory(prefix='coa-capabilities-') as tmp:
    x=route('legacy');assert x['context_window']==1500000 and x['max_output_tokens']==4096 and x['context_source']=='provider_metadata',x
    api('/v1/routes',{'name':'unknown','provider':'openai','base_url':ark,'model':'unlisted-model'})
    x=route('unknown');assert x['context_window']==262144 and x['context_source']=='fallback',x
+   api('/v1/routes',{'name':'nim','provider':'openai','base_url':'https://integrate.api.nvidia.com/v1','model':'z-ai/glm-5.3-flash'})
+   assert route('nim')['context_window']==1048576 and route('nim')['context_source']=='catalog'
+   api('/v1/routes',{'name':'nim-proxy','provider':'openai','base_url':'https://proxy.invalid/v1','model':'z-ai/glm-5.3-flash'})
+   assert route('nim-proxy')['context_source']=='fallback'
+   for name in ('auto','manual'):
+    body={'name':name,'provider':'openai','base_url':f'http://127.0.0.1:{provider.server_port}','model':'discovered','api_key':'fixture-key'}
+    if name=='manual':body.update(context_window=65536,context_source='configured')
+    api('/v1/routes',body)
+   api('/v1/routes/models',{'route_name':'auto'})
+   for _ in range(100):
+    result=api('/v1/routes/models')
+    if not result.get('pending'):break
+    time.sleep(.05)
+   assert result['ok'] and len(result['models'])==251,result
+   x=route('auto');assert x['context_window']==1048576 and x['max_output_tokens']==32768 and x['context_source']=='provider_metadata',x
+   assert route('manual')['context_window']==65536
   finally:stop(p)
+  p=start(log)
+  try:assert route('auto')['context_window']==1048576 and route('manual')['context_window']==65536
+  finally:stop(p)
+provider.shutdown();provider.server_close()
 print('PASS: old fallback migration, metadata priority, key-only update, missing metadata retention, persistence and unknown-model provenance')
