@@ -9698,12 +9698,25 @@ static void test_crash_journal(void) {
     tasklog_record(log,1,"RUNNING",NULL,"completed task",NULL,NULL,NULL);
     tasklog_record(log,1,"DONE",NULL,"completed task","done",NULL,NULL);
     tasklog_record(log,7,"QUEUED",NULL,"queued task",NULL,NULL,NULL);
+    CHECK(tasklog_checkpoint(log,0,1,"[{\"tool_calls\":1,\"tokens_in\":123}]")==0);
+    CHECK(tasklog_checkpoint(log,0,2,"[{\"tool_calls\":2,\"tokens_in\":456}]")==0);
+    /* Crash during the newest write: retain the previous complete snapshot. */
+    fs_write_file("state-crash-journal-test/journal/tasks.jsonl.0.progress.0","{",1);
     fs_append_file("state-crash-journal-test/journal/tasks.jsonl","{\"id\":",6);
     int64_t next=0; CHECK(tasklog_recover(log,&next)==2); CHECK(next==8);
     char *status=NULL;
     CHECK(tasklog_find(log,0,&status,NULL,NULL,NULL)==1 && status && !strcmp(status,"INTERRUPTED")); free(status); status=NULL;
     CHECK(tasklog_find(log,1,&status,NULL,NULL,NULL)==1 && status && !strcmp(status,"DONE")); free(status);
     CHECK(tasklog_recover(log,&next)==0 && next==8);
+    char *history=tasklog_json(log,20);cJSON *entries=history?cJSON_Parse(history):NULL,*entry;
+    int restored_usage=0;
+    cJSON_ArrayForEach(entry,entries) {
+        cJSON *trace=cJSON_GetObjectItemCaseSensitive(entry,"trace");
+        if(cJSON_GetNumberValue(cJSON_GetObjectItemCaseSensitive(entry,"id"))==0 && cJSON_IsArray(trace))
+            restored_usage=cJSON_GetNumberValue(cJSON_GetObjectItemCaseSensitive(cJSON_GetArrayItem(trace,0),"tokens_in"))==123;
+    }
+    CHECK(restored_usage);CHECK(!fs_exists("state-crash-journal-test/journal/tasks.jsonl.0.progress.1"));
+    free(history);cJSON_Delete(entries);
     scheduler *sched=scheduler_new(1,NULL,NULL);
     scheduler_ensure_next_id(sched,next); CHECK(scheduler_submit(sched,0,"first recovered",NULL,0)==8);
     CHECK(scheduler_wait_idle(sched,2000)==0); scheduler_ensure_next_id(sched,0);

@@ -24,7 +24,7 @@ class Provider(BaseHTTPRequestHandler):
                 writes.append('COMPLETE_STAGE'); answer=json.dumps([{'tool':'file_write','args':{'path':'recover.txt','content':'COMPLETE_STAGE'}}])
             else: answer='文件已生成。'
         answer=reviewed_answer(body,answer)
-        data=json.dumps({'choices':[{'message':{'content':answer}}]}).encode()
+        data=json.dumps({'choices':[{'message':{'content':answer}}], 'usage':{'prompt_tokens':123,'completion_tokens':45,'total_tokens':168}}).encode()
         try:
             self.send_response(200); self.send_header('Content-Type','application/json')
             self.send_header('Content-Length',str(len(data))); self.end_headers(); self.wfile.write(data)
@@ -83,6 +83,11 @@ with tempfile.TemporaryDirectory(prefix='coa-crash-recovery-') as folder:
                 time.sleep(.05)
             detected_at=time.perf_counter()
             assert not any(x['id']==0 and x['status']=='DONE' for x in records)
+            saved=found[-1].get('trace',[])
+            assert saved and any(e.get('tool_calls',0)>=1 for e in saved),found
+            assert any(e.get('tokens_in',0)>=123 for e in saved),found
+            assert 'unreported cost' in found[-1]['output'],found
+            assert not list((state/'journal').glob('tasks.jsonl.0.progress.*')),'checkpoint not retired after durable interruption'
             restore_start=time.perf_counter()
             restored=request('/v1/snapshots/rollback',{'id':checkpoint['id'],'paths':checkpoint['paths']})
             assert restored['ok'] and (state/'recover.txt').read_text()==original,restored

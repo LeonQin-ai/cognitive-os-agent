@@ -811,6 +811,14 @@ int catalog_model_capabilities(const char *provider, const char *base_url, const
     if (!out) return 0;
     memset(out, 0, sizeof(*out));
     if (!provider || strcmp(provider,"openai") || !base_url || !model) return 0;
+    /* Deployment-specific model card; never infer proxy/alias capacities. */
+    if ((!strcmp(base_url,"https://integrate.api.nvidia.com/v1") ||
+         !strcmp(base_url,"https://integrate.api.nvidia.com/v1/")) &&
+        !strcmp(model,"z-ai/glm-5.3-flash")) {
+        out->context_window=1048576;
+        out->source_url="https://build.nvidia.com/z-ai/glm-5-3-flash/modelcard";
+        return 1;
+    }
     const char *bases[] = {"https://ark.cn-beijing.volces.com/api/plan/v3",
                            "https://ark.cn-beijing.volces.com/api/v3"};
     int endpoint = 0;
@@ -945,6 +953,7 @@ char *catalog_provider_models_json(const char *provider, const char *base_url, c
         if (!context_window && has_known) context_window=known.context_window;
         cJSON *output=cJSON_GetObjectItemCaseSensitive(it,"max_output_tokens");
         if(!cJSON_IsNumber(output)) output=cJSON_GetObjectItemCaseSensitive(it,"max_tokens");
+        if(!cJSON_IsNumber(output)) output=cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(it,"top_provider"),"max_completion_tokens");
         long long max_output=cJSON_IsNumber(output) && output->valuedouble>=1024 && output->valuedouble<=4000000
             ? (long long)output->valuedouble : has_known ? known.max_output_tokens : 0;
         cJSON *entry=cJSON_CreateObject();
@@ -961,7 +970,7 @@ char *catalog_provider_models_json(const char *provider, const char *base_url, c
         if(n)out[off++]=',';
         memcpy(out+off,encoded,blen);off+=blen;free(encoded);
         n++;
-        if (n >= 200)
+        if (n >= 10000)
             break;
     }
     cJSON_Delete(root);

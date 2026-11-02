@@ -16,6 +16,7 @@
 #include "runtime/scheduler.h"
 #include "llm/llm.h"
 #include "action/tools.h"
+#include "api/attachment.h"
 #include "action/skill.h"
 #include "plugin_intelligence/generator.h"
 #include "memory/memory.h"
@@ -132,6 +133,7 @@ struct sess_store {
 
 /* One executed action of the current/most recent run (step registry). */
 struct run_step {
+    char *image_preview;
     char *evidence_path; /* canonical tool target, independent of UI argument caps */
     uint64_t evidence_version;
     unsigned id;
@@ -319,6 +321,7 @@ struct reasoning {
     int planner_output_escalated; /* one bounded 32K -> 64K retry after truncation */
     int completion_review_required; /* legacy review must make an explicit decision */
     cJSON *acceptance; /* monotonic structured obligations, never inferred from prose */
+    cJSON *tool_images; /* bounded session-scoped visual observations, never tool text */
     char *default_acceptance_json;
     int acceptance_invalid;
     char last_model_error[1024];
@@ -815,6 +818,18 @@ static void progress_emit(reasoning *r, const char *stage) {
     cJSON_AddBoolToObject(o, "usage_available", reports > r->run_usage_reports);
     cJSON_AddNumberToObject(o, "tokens_in", (double)tin);
     cJSON_AddNumberToObject(o, "tokens_out", (double)tout);
+    if(cJSON_GetArraySize(r->tool_images)) {
+        cJSON *images=cJSON_AddArrayToObject(o,"images"),*image;
+        cJSON_ArrayForEach(image,r->tool_images) {
+            cJSON *item=cJSON_CreateObject();
+            const char *keys[]={"id","name","session"};
+            for(int k=0;k<3;k++) {
+                cJSON *value=cJSON_GetObjectItemCaseSensitive(image,keys[k]);
+                if(cJSON_IsString(value))cJSON_AddStringToObject(item,keys[k],value->valuestring);
+            }
+            cJSON_AddItemToArray(images,item);
+        }
+    }
     char *steps = reasoning_steps_json(r);
     cJSON *arr = steps ? cJSON_Parse(steps) : NULL;
     free(steps);
@@ -2189,6 +2204,16 @@ static char *build_context(reasoning *r, const char *prompt) {
 static uint64_t plan_action_signature(const planned_action *actions, int n_actions);
 static uint64_t observation_json_hash(const cJSON *item);
 
+static char *planning_images(reasoning *r) {
+    const char *original=r->run_task?r->run_task->attachments_json:NULL;
+    if(!cJSON_GetArraySize(r->tool_images))return original?xstrdup(original):NULL;
+    cJSON *all=cJSON_Duplicate(r->tool_images,1),*base=original?cJSON_Parse(original):NULL,*item;
+    cJSON_ArrayForEach(item,base) {
+        if(cJSON_GetArraySize(all)>=4)break;
+        cJSON_AddItemToArray(all,cJSON_Duplicate(item,1));
+    }
+    char *text=cJSON_PrintUnformatted(all);cJSON_Delete(base);cJSON_Delete(all);return text;
+}
 /* REASON: ask the LLM for a plan (JSON array of actions, or plain text). */
 static int h_reason(state_machine *sm, void *ud, const char *input, char **out) {
     reasoning *r = ud;
@@ -2218,11 +2243,13 @@ static int h_reason(state_machine *sm, void *ud, const char *input, char **out) 
     planner_model_diagnostic diagnostic = {0};
     char *completion_json=NULL;
     int review_requested=r->completion_review_required;
+    char *images=planning_images(r);
     int rc = planner_plan_turn_diagnostic(r->llm, r->tools, r->skills, r->policy,
                                  aug ? aug : input, &r->actions, &r->n_actions,
-                                 &raw, &plan_err, r->run_task ? r->run_task->attachments_json : NULL,
+                                 &raw, &plan_err, images,
                                  &r->planner_response_truncated, output_override, &r->planner_native_end_turn, &diagnostic,
                                  r->completion_review_required,&completion_json);
+    free(images);
     if(rc==0 && r->planner_native_end_turn==3) {
         cJSON *control=cJSON_Parse(completion_json?completion_json:"{}");
         merge_acceptance(r,cJSON_GetObjectItemCaseSensitive(control,"acceptance"));cJSON_Delete(control);
@@ -2347,7 +2374,7 @@ static void utf8_head_copy(char *dst, size_t cap, const char *src) {
 
 /* Record one executed action in the step registry (Claude-Code style
  * "● Tool(args) ⎿ out-head" display; args/out are truncated heads). */
-static void step_strings_free(struct run_step *step) { free(step->args); free(step->out); free(step->evidence_path); }
+static void step_strings_free(struct run_step *step) { free(step->image_preview); free(step->args); free(step->out); free(step->evidence_path); }
 static void run_step_add(reasoning *r, const char *tool, const char *args, const char *out, int ok, int ms) {
     struct run_step *st;
 
@@ -2383,7 +2410,7 @@ static void run_step_add(reasoning *r, const char *tool, const char *args, const
         cJSON *path = parsed ? cJSON_GetObjectItemCaseSensitive(parsed, "path") : NULL;
         if (cJSON_IsString(path) && path->valuestring)
             utf8_head_copy(st->target, sizeof(st->target), path->valuestring);
-        if(ok==1 && cJSON_IsString(path) && (!strcmp(tool,"file_read") || !strcmp(tool,"file_write"))) {
+        if(ok==1 && cJSON_IsString(path) && (!strcmp(tool,"file_read") || !strcmp(tool,"file_write") || !strcmp(tool,"file_edit"))) {
             char canonical[2048];normalized_evidence_path(r,path->valuestring,canonical,sizeof(canonical));
             st->evidence_path=xstrdup(canonical);
             st->evidence_version=fs_file_version(canonical);
@@ -2702,6 +2729,39 @@ static int shell_command_read_only(const char *cmd){
     return 1;
 }
 
+static void remember_tool_image(reasoning *r,struct run_step *step) {
+    if(!step || step->ok!=1 || strcmp(step->tool,"file_read") || !step->out || !step->evidence_path)return;
+    const char *start=strchr(step->out,'{');cJSON *o=start?cJSON_Parse(start):NULL;
+    const char *kind=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(o,"kind"));
+    cJSON *preview=cJSON_GetObjectItemCaseSensitive(o,"image_preview");
+    const char *id=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(preview,"id"));
+    if(!kind || strcmp(kind,"image") || !id){cJSON_Delete(o);return;}
+    size_t n=0;int more=0;char *head=fs_read_file_slice(step->evidence_path,0,32,&n,&more);
+    const char *actual=head?tool_file_image_mime((unsigned char *)head,n):NULL;
+    const char *mime=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(o,"mime"));
+    if(!actual || !mime || strcmp(actual,mime)){free(head);cJSON_Delete(o);return;}
+    free(head);
+    const char *version=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(o,"file_version"));
+    if(version){mutex_lock(&r->progress_mtx);step->evidence_version=strtoull(version,NULL,10);mutex_unlock(&r->progress_mtx);}
+    cJSON *ids=cJSON_CreateArray();cJSON_AddItemToArray(ids,cJSON_CreateString(id));
+    char *snapshot=attachment_snapshot(r->state_root,r->cur?r->cur->id:"default",ids);cJSON_Delete(ids);
+    cJSON *images=snapshot?cJSON_Parse(snapshot):NULL;free(snapshot);
+    if(cJSON_GetArraySize(images)) {
+        char *descriptor=cJSON_PrintUnformatted(preview);
+        mutex_lock(&r->progress_mtx);step->image_preview=descriptor;mutex_unlock(&r->progress_mtx);
+        if(!r->tool_images)r->tool_images=cJSON_CreateArray();
+        int duplicate=0;cJSON *item;
+        cJSON_ArrayForEach(item,r->tool_images) {
+            const char *old=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(item,"id"));
+            if(old && !strcmp(old,id))duplicate=1;
+        }
+        if(!duplicate) {
+            if(cJSON_GetArraySize(r->tool_images)>=4)cJSON_DeleteItemFromArray(r->tool_images,0);
+            cJSON_AddItemToArray(r->tool_images,cJSON_Duplicate(cJSON_GetArrayItem(images,0),1));
+        }
+    }
+    cJSON_Delete(images);cJSON_Delete(o);
+}
 static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
     reasoning *r = ud;
     strbuf b;
@@ -3025,6 +3085,7 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
         r->prog_tool_ms += time_now_ms() - t_tool0;
         run_step_add(r, r->actions[i].tool, r->actions[i].args_json, full_step_out ? full_step_out : step_out, rc == 0 ? 1 : 0,
                      (int)(time_now_ms() - t_tool0));
+        if(r->n_steps)remember_tool_image(r,&r->steps[r->n_steps-1]);
         if (rc == 0) record_discovered_read_paths(r, r->actions[i].tool, r->actions[i].args_json, full_step_out ? full_step_out : step_out);
         if(rc==0)observe_action_progress(r,&r->actions[i],output_hash,is_search,full_step_out?full_step_out:step_out);
         free(full_step_out);
@@ -3353,6 +3414,7 @@ void reasoning_free(reasoning *r) {
     free(r->obs_log);
     cJSON_Delete(r->file_equalities);
     cJSON_Delete(r->acceptance);free(r->default_acceptance_json);
+    cJSON_Delete(r->tool_images);
     attention_free(r->attention);
     state_machine_free(r->sm);
     evaluator_free(r->eval);
@@ -3502,7 +3564,7 @@ static int run_has_verified_artifact(reasoning *r,const char *target) {
         if(!read->evidence_version || read->evidence_version!=fs_file_version(target) || fs_is_dir(target) || fs_file_size(target)<=0)return 0;
         for(int j=r->n_steps-1;j>=0;j--) {
             struct run_step *write=&r->steps[j];
-            if(write->ok==1 && !strcmp(write->tool,"file_write") && write->evidence_path && !strcmp(write->evidence_path,target)) {
+            if(write->ok==1 && (!strcmp(write->tool,"file_write") || !strcmp(write->tool,"file_edit")) && write->evidence_path && !strcmp(write->evidence_path,target)) {
                 if(write->evidence_version==read->evidence_version)return j<i;
                 break; /* a later shell producer may own the current version */
             }
@@ -3985,6 +4047,7 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     r->completion_review_required=1;
     cJSON_Delete(r->acceptance);r->acceptance=NULL;r->acceptance_invalid=0;
     r->artifact_baseline_n=0; /* per-run obligations cannot inherit another task's baseline */
+    cJSON_Delete(r->tool_images);r->tool_images=NULL;
     r->prog_llm_ms = r->prog_tool_ms = 0;
     r->last_model_error[0]=0;
     r->planner_output_escalated = 0;
@@ -4813,6 +4876,7 @@ char *reasoning_steps_json(reasoning *r) {
         char *output = secret_redact_ssh_passwords(st->out ? st->out : "", st->out ? strlen(st->out) : 0, NULL);
         cJSON_AddStringToObject(o, "args", args ? args : "");
         cJSON_AddStringToObject(o, "out", output ? output : "");
+        if(st->image_preview)cJSON_AddItemToObject(o,"image_preview",cJSON_Parse(st->image_preview));
         if (st->target[0]) {
             char *target = secret_redact_ssh_passwords(st->target, strlen(st->target), NULL);
             cJSON_AddStringToObject(o, "target", target ? target : "");

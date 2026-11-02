@@ -16,4 +16,10 @@ assert.match(context.routeContextLabel({context_window:1048576,context_source:'p
 assert.equal(context.fetchedModelMetadata({id:'unknown'}).context_source,'fallback');
 assert.equal(context.fetchedModelMetadata({context_window:1048576}).context_source,'provider_metadata');
 assert.equal(context.fetchedModelMetadata({context_window:-1}).context_source,'fallback');
-(async()=>{await context.editRouteKey(0);assert.equal(posts.length,1);assert.ok(!('context_window' in posts[0]));assert.ok(!('max_output_tokens' in posts[0]));console.log('PASS: context source labels, missing discovery and key update preserve server metadata');})().catch(e=>{console.error(e);process.exitCode=1});
+(async()=>{
+ await context.editRouteKey(0);assert.equal(posts.length,1);assert.ok(!('context_window' in posts[0]));assert.ok(!('max_output_tokens' in posts[0]));
+ const calls=[];context.setTimeout=fn=>fn();context.call=async(method,path,body)=>{calls.push({method,path,body});return {status:200,obj:method==='POST'?{pending:true}:{ok:true}}};
+ vm.runInContext(extract('refreshRouteContext'),context);await context.refreshRouteContext(0);
+ assert.equal(calls[0].body.route_name,'ark');assert.ok(!('api_key' in calls[0].body));assert.equal(calls[1].method,'GET');
+ console.log('PASS: context provenance, key update and existing-route metadata refresh');
+})().catch(e=>{console.error(e);process.exitCode=1});

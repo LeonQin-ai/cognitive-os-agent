@@ -2985,9 +2985,10 @@ static int h_config_llm_test(const http_request *req, http_response *resp, void 
 static struct {
     volatile int phase; /* 0 = idle, 1 = running, 2 = result ready */
     int ok;
-    char models_json[131072]; /* model ids and optional provider context metadata */
+    char models_json[1048576]; /* full large-provider listings, no JSON truncation */
     char error[256];
 } g_models_fetch;
+static char g_models_provider[64], g_models_base[1024];
 
 static void models_fetch_thread(void *arg) {
     llm_probe_cfg *cfg = (llm_probe_cfg *)arg;
@@ -3000,11 +3001,13 @@ static void models_fetch_thread(void *arg) {
                                        sizeof(g_models_fetch.error));
     if (arr) {
         size_t len = strlen(arr);
-        if (len >= sizeof(g_models_fetch.models_json))
-            len = sizeof(g_models_fetch.models_json) - 1;
-        memcpy(g_models_fetch.models_json, arr, len);
-        g_models_fetch.models_json[len] = '\0';
-        g_models_fetch.ok = 1;
+        if (len >= sizeof(g_models_fetch.models_json)) {
+            snprintf(g_models_fetch.error,sizeof(g_models_fetch.error),"model listing exceeds 1 MiB");
+        } else {
+            memcpy(g_models_fetch.models_json, arr, len);
+            g_models_fetch.models_json[len] = '\0';
+            g_models_fetch.ok = 1;
+        }
         free(arr);
     }
     free(cfg);
@@ -3031,6 +3034,27 @@ static int h_routes_models(const http_request *req, http_response *resp, void *u
                 cJSON *arr = cJSON_Parse(g_models_fetch.models_json);
                 if (!arr)
                     arr = cJSON_CreateArray();
+                /* Discovery refreshes matching existing routes as well as the
+                 * add-model picker. Snapshot names before mutating metadata. */
+                char *saved=ctx->router ? router_json(ctx->router) : NULL;
+                cJSON *routes=saved ? cJSON_Parse(saved) : NULL;
+                cJSON *route_item,*model_item;
+                free(saved);
+                cJSON_ArrayForEach(route_item,routes) {
+                    const char *provider=json_str(route_item,"provider"),*base=json_str(route_item,"base_url"),*model=json_str(route_item,"model"),*name=json_str(route_item,"name");
+                    if(!name || !provider || !base || !model || strcmp(provider,g_models_provider) || strcmp(base,g_models_base))continue;
+                    cJSON_ArrayForEach(model_item,arr) {
+                        const char *id=json_str(model_item,"id");
+                        if(id && !strcmp(id,model))router_set_model_metadata(ctx->router,name,
+                            (long long)json_dbl(model_item,"context_window",0),
+                            (long long)json_dbl(model_item,"max_output_tokens",0),json_str(model_item,"context_source"));
+                    }
+                }
+                cJSON_Delete(routes);
+                if(ctx->router && ctx->state_root) {
+                    char path[600];path_join(path,sizeof(path),ctx->state_root,"routes.json");
+                    router_save_file(ctx->router,path);
+                }
                 cJSON_AddItemToObject(o, "models", arr);
             } else {
                 cJSON_AddStringToObject(o, "error", g_models_fetch.error);
@@ -3079,6 +3103,24 @@ static int h_routes_models(const http_request *req, http_response *resp, void *u
         snprintf(cfg->base_url, sizeof(cfg->base_url), "%s", v ? v : "");
         v = json_str(root, "api_key");
         snprintf(cfg->api_key, sizeof(cfg->api_key), "%s", v ? v : "");
+        const char *route_name=json_str(root,"route_name");
+        if(route_name && ctx->router) {
+            char *saved=router_json(ctx->router);cJSON *routes=saved?cJSON_Parse(saved):NULL,*item;
+            free(saved);
+            cJSON_ArrayForEach(item,routes) {
+                const char *name=json_str(item,"name");
+                if(name && !strcmp(name,route_name)) {
+                    const char *p=json_str(item,"provider"),*b=json_str(item,"base_url"),*k=json_str(item,"api_key");
+                    snprintf(cfg->provider,sizeof(cfg->provider),"%s",p?p:"");
+                    snprintf(cfg->base_url,sizeof(cfg->base_url),"%s",b?b:"");
+                    snprintf(cfg->api_key,sizeof(cfg->api_key),"%s",k?k:"");
+                    break;
+                }
+            }
+            cJSON_Delete(routes);
+        }
+        snprintf(g_models_provider,sizeof(g_models_provider),"%s",cfg->provider);
+        snprintf(g_models_base,sizeof(g_models_base),"%s",cfg->base_url);
         cJSON_Delete(root);
         if (!cfg->provider[0] || !cfg->base_url[0]) {
             free(cfg);
