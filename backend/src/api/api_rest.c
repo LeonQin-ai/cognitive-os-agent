@@ -205,6 +205,11 @@ static char *workspace_previous_task(runtime_ctx *ctx,int64_t task_id,const char
 }
 static int h_workspace_browse(const http_request *req,http_response *resp,void *ud){
     runtime_ctx *ctx=ud;if(!authz_ok(ctx,req,resp))return 0;
+#if !defined(_WIN32) && !defined(__APPLE__)
+    if(!getenv("DISPLAY")&&!getenv("WAYLAND_DISPLAY")){
+        resp->status=503;http_resp_json(resp,"{\"error\":\"native folder dialog unavailable in headless session\"}");return 0;
+    }
+#endif
     static atomic_flag busy=ATOMIC_FLAG_INIT;
     if(atomic_flag_test_and_set(&busy)){resp->status=409;http_resp_json(resp,"{\"error\":\"folder picker already open\"}");return 0;}
 #ifdef _WIN32
@@ -212,7 +217,7 @@ static int h_workspace_browse(const http_request *req,http_response *resp,void *
 #elif defined(__APPLE__)
     const char *command="osascript -e 'POSIX path of (choose folder with prompt \"Select Cognitive OS workspace\")'";
 #else
-    const char *command="zenity --file-selection --directory --title='Select Cognitive OS workspace'";
+    const char *command="if [ -n \"$KDE_FULL_SESSION\" ] && command -v kdialog >/dev/null 2>&1; then kdialog --getexistingdirectory; elif command -v zenity >/dev/null 2>&1; then zenity --file-selection --directory --title='Select Cognitive OS workspace'; elif command -v kdialog >/dev/null 2>&1; then kdialog --getexistingdirectory; elif command -v yad >/dev/null 2>&1; then yad --file-selection --directory --title='Select Cognitive OS workspace'; else exit 127; fi";
 #endif
     proc_result *result=proc_run_native_in(command,120000,NULL);
     atomic_flag_clear(&busy);
@@ -221,6 +226,33 @@ static int h_workspace_browse(const http_request *req,http_response *resp,void *
         if(path && *path)cJSON_AddStringToObject(o,"path",path);else cJSON_AddBoolToObject(o,"cancelled",1);
     }else{resp->status=503;cJSON_AddStringToObject(o,"error","Folder selection cancelled or unavailable; enter the folder path manually.");}
     char *json=cJSON_PrintUnformatted(o);http_resp_json(resp,json?json:"{}");free(json);cJSON_Delete(o);proc_result_free(result);return 0;
+}
+/* Browser-side directory navigation also works for a headless Linux server.
+ * Every returned entry is checked as an existing directory on the host. */
+static int h_workspace_directories(const http_request *req,http_response *resp,void *ud){
+    runtime_ctx *ctx=ud;if(!authz_ok(ctx,req,resp))return 0;
+    char requested[4096];query_param(req,"path",requested,sizeof requested);
+    const char *start=*requested?requested:ctx->workspace;
+    char *path=fs_absolute_path(start&&*start?start:".");
+    dir_list entries={0};
+    if(!path||!fs_is_dir(path)||fs_list_dir(path,&entries)){
+        resp->status=400;http_resp_json(resp,"{\"error\":\"directory unavailable\"}");free(path);return 0;
+    }
+    cJSON *o=cJSON_CreateObject(),*dirs=cJSON_AddArrayToObject(o,"directories");
+    cJSON_AddStringToObject(o,"path",path);
+    char *parent=fs_absolute_path(*path?path:".");
+    if(parent){size_t len=strlen(parent);if(len+4<4096){char candidate[4096];snprintf(candidate,sizeof candidate,"%s/..",parent);char *up=fs_absolute_path(candidate);if(up){cJSON_AddStringToObject(o,"parent",up);free(up);}}free(parent);}
+    for(size_t i=0;i<entries.count&&i<1000;i++){
+        const char *name=entries.items[i].name;
+        if(!name||!strcmp(name,".")||!strcmp(name,".."))continue;
+        size_t n=strlen(path)+strlen(name)+2;
+        char *child=malloc(n);if(!child)continue;
+        snprintf(child,n,"%s/%s",path,name);
+        if(fs_is_dir(child))cJSON_AddItemToArray(dirs,cJSON_CreateString(name));
+        free(child);
+    }
+    char *json=cJSON_PrintUnformatted(o);http_resp_json(resp,json?json:"{}");
+    free(json);cJSON_Delete(o);fs_list_free(&entries);free(path);return 0;
 }
 static int h_workspaces(const http_request *req,http_response *resp,void *ud) {
     runtime_ctx *ctx=ud;if(!authz_ok(ctx,req,resp))return 0;
@@ -5777,6 +5809,7 @@ int api_attach(runtime_ctx *ctx) {
     http_server_route(ctx->http, "GET", "/v1/chat/history", h_chat_history, ctx);
     http_server_route(ctx->http, "GET", "/v1/chat/sessions", h_chat_sessions, ctx);
     http_server_route_concurrent(ctx->http,"POST","/v1/workspaces/browse",h_workspace_browse,ctx);
+    http_server_route(ctx->http,"GET","/v1/workspaces/directories",h_workspace_directories,ctx);
     http_server_route(ctx->http,"GET","/v1/workspaces",h_workspaces,ctx);
     http_server_route(ctx->http,"POST","/v1/workspaces",h_workspaces,ctx);
     http_server_route(ctx->http, "POST", "/v1/chat/sessions", h_chat_session_post, ctx);
