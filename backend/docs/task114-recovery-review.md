@@ -74,6 +74,12 @@ compare a stale pre-refresh cursor with the cursor actually clicked. It passed
 with 3,000 migrated sessions, 160 REST-created sessions, history isolation and
 restart recovery. No production server or running task was restarted.
 
+One complete remote run passed Linux gcc, Linux ASAN, macOS ARM and Windows.
+macOS Intel reached the last Flow suite with passing cases but was cancelled
+at the job's 30-minute cutoff. Its job allowance is now 45 minutes; other macOS
+jobs retain 30 minutes. All test assertions, scenario counts, request budgets
+and the Agent's configured million-round behavior are unchanged.
+
 An additional negative fixture also fails against the original binary: create
 a file in one shell action without an output receipt, then merely cat it with
 outputs declared and read it back. The original gate returns DONE; the fixed

@@ -18,7 +18,9 @@ jobs:
       matrix:
         runner: [macos-15, macos-15-intel]
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 30
+    # Expanded integration coverage reaches the old cutoff on Intel runners.
+    # Keep all per-test/call bounds; only give that CI job time to finish.
+    timeout-minutes: ${{ matrix.runner == 'macos-15-intel' && 45 || 30 }}
     defaults:
       run:
         working-directory: backend
