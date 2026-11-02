@@ -34,7 +34,7 @@ with tempfile.TemporaryDirectory(prefix='coa-directory-browser-') as tmp:
             url = base + '/v1/workspaces/directories?path=' + urllib.parse.quote(tmp, safe='')
             with urllib.request.urlopen(url, timeout=5) as response:
                 result = json.load(response)
-            assert result['path'].replace('\\', '/').casefold() == str(state.resolve()).replace('\\', '/').casefold(), result
+            assert os.path.samefile(result['path'], state), result
             assert 'child' in result['directories'] and 'ordinary.txt' not in result['directories'], result
             assert result['parent'] != result['path'], result
             print('PASS: server directory navigation returns directories only')
