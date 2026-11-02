@@ -41,6 +41,10 @@ const http=require('node:http');
     await page.waitForFunction(()=>CHAT_ATTACH.some(item=>item.kind==='image'&&item.status==='ready'));
     await page.locator('#chat-attach img[alt="fixture.png"]').waitFor();
     await page.waitForFunction(()=>document.querySelector('#chat-attach img')?.naturalWidth===1);
+    const sendBox=await page.locator('#chat-send').boundingBox();
+    const viewport=page.viewportSize();
+    assert.ok(sendBox && viewport && sendBox.y>=0 && sendBox.y+sendBox.height<=viewport.height,
+      'adding an image must keep the send button inside the viewport');
     await page.evaluate(()=>chatSubmit());
     await page.locator('#chat-box .user img[alt="fixture.png"]').waitFor();
     assert.equal(posts.length,1);
