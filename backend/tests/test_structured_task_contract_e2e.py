@@ -30,6 +30,10 @@ def exercise(protocol,mode,prompt='Verify the requested result.'):
         if mode in ('artifact','preexisting','stale'):replies += [read]
         if mode=='stale':replies += [action('file_write',path='report.any',content=CONTENT+' changed')]
         replies += [done];expected='DONE' if mode=='artifact' else 'FAILED'
+    elif mode in ('edit','edit_failed','edit_stale'):
+        replies=[declare(artifacts=['report.any']),action('file_edit',path='report.any',old_string='OLD_ARTIFACT' if mode!='edit_failed' else 'ABSENT',new_string=CONTENT),read]
+        if mode=='edit_stale':replies += [action('file_edit',path='report.any',old_string=CONTENT,new_string='LATER_VERSION')]
+        replies += [done];expected='DONE' if mode=='edit' else 'FAILED'
     elif mode in ('full','partial','small','optional'):
         path='tiny' if mode=='small' else 'long.dat'
         if mode!='optional':acceptance={'full_reads':[path]}
@@ -104,7 +108,7 @@ def exercise(protocol,mode,prompt='Verify the requested result.'):
                 else:
                     subprocess.run(['git','init','-q',str(work)],check=True)
                     subprocess.run(['git','-C',str(work),'-c','user.name=Fixture','-c','user.email=fixture@example.invalid','-c','commit.gpgsign=false','commit','--allow-empty','-qm','fixture'],check=True)
-            if mode in ('preexisting','stale','script_unchanged','baseline_capacity'):(work/'report.any').write_text('OLD_ARTIFACT',encoding='utf8')
+            if mode in ('edit','edit_failed','edit_stale','preexisting','stale','script_unchanged','baseline_capacity'):(work/'report.any').write_text('OLD_ARTIFACT',encoding='utf8')
             if mode=='baseline_capacity':
                 for path in sources:(work/path).write_text('SOURCE',encoding='utf8')
             (work/'cognitive-os-agent.json').write_text(json.dumps({'llm.provider':'openai','llm.model':'contract-fixture','llm.api_key':'fixture','llm.base_url':f'http://127.0.0.1:{server.server_port}','reasoning.max_rounds':16}))
@@ -167,6 +171,8 @@ def exercise(protocol,mode,prompt='Verify the requested result.'):
     finally:server.shutdown();server.server_close()
 
 if __name__=='__main__':
+    for protocol in ('native','legacy'):
+        for mode in ('edit','edit_failed','edit_stale'):exercise(protocol,mode)
     exercise('native','plain_final')
     exercise('legacy','prefixed')
     for mode in ('cache_shell_branch','cache_git_tag'):

@@ -2410,7 +2410,7 @@ static void run_step_add(reasoning *r, const char *tool, const char *args, const
         cJSON *path = parsed ? cJSON_GetObjectItemCaseSensitive(parsed, "path") : NULL;
         if (cJSON_IsString(path) && path->valuestring)
             utf8_head_copy(st->target, sizeof(st->target), path->valuestring);
-        if(ok==1 && cJSON_IsString(path) && (!strcmp(tool,"file_read") || !strcmp(tool,"file_write"))) {
+        if(ok==1 && cJSON_IsString(path) && (!strcmp(tool,"file_read") || !strcmp(tool,"file_write") || !strcmp(tool,"file_edit"))) {
             char canonical[2048];normalized_evidence_path(r,path->valuestring,canonical,sizeof(canonical));
             st->evidence_path=xstrdup(canonical);
             st->evidence_version=fs_file_version(canonical);
@@ -3564,7 +3564,7 @@ static int run_has_verified_artifact(reasoning *r,const char *target) {
         if(!read->evidence_version || read->evidence_version!=fs_file_version(target) || fs_is_dir(target) || fs_file_size(target)<=0)return 0;
         for(int j=r->n_steps-1;j>=0;j--) {
             struct run_step *write=&r->steps[j];
-            if(write->ok==1 && !strcmp(write->tool,"file_write") && write->evidence_path && !strcmp(write->evidence_path,target)) {
+            if(write->ok==1 && (!strcmp(write->tool,"file_write") || !strcmp(write->tool,"file_edit")) && write->evidence_path && !strcmp(write->evidence_path,target)) {
                 if(write->evidence_version==read->evidence_version)return j<i;
                 break; /* a later shell producer may own the current version */
             }
