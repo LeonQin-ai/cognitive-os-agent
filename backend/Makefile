@@ -12,6 +12,7 @@ LDLIBS  := $(shell uname | grep -qi 'mingw\|msys\|cygwin' && echo '-lws2_32 -lwi
 ifeq ($(shell uname | grep -qiE 'mingw|msys|cygwin' && echo win),win)
 PLAT  := src/os/windows
 POSIX :=
+MEMBENCH_LIBS := -lpsapi
 else ifeq (Darwin,$(shell uname -s))
 PLAT  := src/os/macos
 POSIX := src/os/posix
@@ -95,3 +96,7 @@ build/cognitive-os-agent build/cognitive-os-agent-test build/cognitive-os-agent-
 build/bench-runtime: $(SRCS) tests/bench_runtime.c include/api/attachment_extractor.h
 	@mkdir -p build
 	$(CC) $(CFLAGS) -o $@ $(SRCS) tests/bench_runtime.c $(LDLIBS)
+
+build/bench-memory-scale: $(SRCS) tests/bench_memory_scale.c include/api/attachment_extractor.h
+	@mkdir -p build
+	$(CC) $(CFLAGS) -o $@ $(SRCS) tests/bench_memory_scale.c $(LDLIBS) $(MEMBENCH_LIBS)
