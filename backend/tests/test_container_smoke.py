@@ -22,7 +22,10 @@ try:
  docker('exec',container,'python3','-c',"from pathlib import Path;Path('/workspace/proof').write_text('persisted');Path('/state/proof').write_text('retained');assert not Path('/src').exists()")
  denied=subprocess.run(['docker','exec',container,'python3','-c',"open('/etc/coa-write-test','w').write('bad')"],capture_output=True)
  assert denied.returncode!=0,'root filesystem writable'
- docker('restart',container);wait()
+ docker('restart',container)
+ # Docker may allocate a different ephemeral host port after restarting.
+ port=json.loads(docker('inspect',container))[0]['NetworkSettings']['Ports']['18300/tcp'][0]['HostPort']
+ wait()
  docker('exec',container,'python3','-c',"from pathlib import Path;assert Path('/workspace/proof').read_text()=='persisted';assert Path('/state/proof').read_text()=='retained'")
  print('PASS: non-root, read-only root, capabilities dropped, HTTP access, persistent state/workspace and restart')
 finally:
