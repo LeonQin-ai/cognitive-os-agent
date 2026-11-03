@@ -54,7 +54,8 @@ const http=require('node:http');
       return {surfaces,artworkOpacity:getComputedStyle(document.body,'::after').opacity};
     });
     for(const [selector,style] of Object.entries(dragonTheme.surfaces)){
-      assert.equal(style.background,'rgba(0, 0, 0, 0)',`${selector} must not veil the Dragon Girl artwork`);
+      if(['aside','.pillbar'].includes(selector))assert.notEqual(style.background,'rgba(0, 0, 0, 0)',`${selector} must provide readable contrast`);
+      else assert.equal(style.background,'rgba(0, 0, 0, 0)',`${selector} leaves the artwork visible`);
       assert.equal(style.backdrop,'none',`${selector} must not blur the Dragon Girl artwork`);
     }
     assert.equal(dragonTheme.artworkOpacity,'1','Dragon Girl artwork must render at full opacity');
@@ -68,7 +69,7 @@ const http=require('node:http');
       themeLayer:getComputedStyle(document.body,'::after').display,
       wallpaper:getComputedStyle(document.body,'::before').backgroundImage
     }));
-    assert.equal(wallpaper.bubble,'rgba(0, 0, 0, 0)','user bubbles must not cover the chosen wallpaper');
+    assert.equal(wallpaper.bubble,'rgba(60, 31, 58, 0.88)','user bubbles provide contrast over bright artwork');
     assert.equal(wallpaper.themeLayer,'none','theme artwork must not cover the chosen wallpaper');
     assert.ok(wallpaper.wallpaper.includes('linear-gradient'),'chosen wallpaper remains present');
     await page.locator('#chat-input').fill('请描述这张图片');
