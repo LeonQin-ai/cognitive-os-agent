@@ -18,6 +18,7 @@ typedef struct llm llm;
 typedef struct tool_registry tool_registry;
 typedef struct memory memory;
 typedef struct memory_service memory_service;
+typedef struct memory_runtime memory_runtime;
 typedef struct policy_engine policy_engine;
 typedef struct snapshot snapshot;
 typedef struct event_bus event_bus;
@@ -36,6 +37,8 @@ typedef struct reasoning_config {
     tool_registry *tools;                    /* required */
     memory *memory;                          /* may be NULL */
     memory_service *memory_service;          /* optional Memory OS interface */
+    memory_runtime *memory_runtime;          /* optional records + Context MMU bridge */
+    int memory_mmu_enabled;                  /* use MMU records instead of legacy retrieval */
     policy_engine *policy;                   /* may be NULL = allow all */
     snapshot *snapshot;                      /* may be NULL = no rollback */
     event_bus *bus;                          /* may be NULL */

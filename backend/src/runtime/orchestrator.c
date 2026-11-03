@@ -355,6 +355,7 @@ int orchestrate_task(runtime_ctx *ctx, const char *task,int64_t task_id, char **
         log_info("orchestrator: no multi-agent plan, running single-agent");
         struct task *parent=task_id>=0?scheduler_acquire(ctx->scheduler,task_id):NULL;
         reasoning_config config={0};config.llm=ctx->llm;config.tools=ctx->tools;config.memory=ctx->memory;
+        config.memory_runtime=ctx->memory_v3;config.memory_mmu_enabled=ctx->config?(int)config_get_int(ctx->config,"context.mmu.enabled",1):1;
         config.policy=ctx->policy;config.bus=ctx->bus;config.metrics=ctx->metrics;config.trace=ctx->trace;
         config.workspace=parent && parent->workspace?parent->workspace:ctx->workspace;
         config.skills=ctx->skills;config.mcp=ctx->mcp;config.state_root=ctx->state_root;

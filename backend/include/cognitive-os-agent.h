@@ -30,6 +30,7 @@
 #include "infra/metrics.h"
 #include "os/os_thread.h"
 #include "memory/memory.h"
+#include "memory/runtime.h"
 #include "retrieval/context_builder.h"
 #include "cognition/reasoning.h"
 #include "cognition/planner.h"
@@ -80,6 +81,7 @@ typedef struct runtime_ctx {
     metrics *metrics;
     policy_engine *policy;
     memory *memory;
+    memory_runtime *memory_v3;
     snapshot *snapshot;
     tool_registry *tools;
     llm *llm;

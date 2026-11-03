@@ -25,10 +25,38 @@ The broad query `Project storage engine SQLite` did not find the unique SQLite
 record in the top five at either scale. Including the exact project identifier
 did. This shows a retrieval quality limit as well as the insertion cost.
 
-This harness does **not** measure Context MMU's effect on Agent success or
-provider token use. `ctx_mmu_recall` is exercised in unit tests, but no call
-from `reasoning.c` or `memory/service.c` currently invokes it in the task
-path. A same-task MMU on/off trial would therefore compare identical task
-paths and cannot establish an MMU benefit yet. Wire the MMU into the task
-context path, then run fixed-task API A/B trials with usage and outcome capture
-before closing issue #248.
+## Agent-path wiring and live A/B
+
+The production Runtime now owns a thread-safe `memory_runtime` bridge over the
+canonical Markdown records and rebuildable vector mirror. Completed tasks with
+successful tool receipts pass through the promotion gate. `reasoning_run_ex`,
+Flow nodes and orchestrator fallback recall through Context MMU when
+`context.mmu.enabled=1` (the default); `0` retains the legacy retrieval path
+for comparison. Private records use exact `session/<id>` scope matching;
+`global` and `user/global` remain explicitly shareable.
+
+`tests/test_live_memory_ab.py` is an opt-in paid regression. It seeds legacy
+and V3 stores once using a successful real Agent task, removes conversation
+history, clones identical state per trial, and interleaves MMU off/on queries.
+It records status, actual provider usage, calls, failures and elapsed time
+without writing credentials to the report.
+
+Windows, `deepseek-v4.1-flash`, 2026-11-03, three trials per arm:
+
+| Path | Success | Input tokens | Output tokens | Total tokens | Model failures |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Legacy retrieval | 3/3 | 17,046 | 1,425 | 18,471 | 0 |
+| Context MMU | 3/3 | 17,169 | 879 | 18,048 | 0 |
+
+Both paths succeeded in one model call per trial. MMU used 423 fewer total
+tokens (2.29%) in this small fact-recall sample. This is evidence for this
+fixed task only, not a general task-success claim; larger multi-task samples
+and confidence intervals remain future benchmark work.
+
+The first live run also exposed a double-truncation defect: MMU produced a
+budgeted L1/L2 item, then the legacy renderer cut every item to 300 bytes,
+discarding the verified result after a long task description. MMU items now
+render directly under the cold-tier total budget. The anti-pollution prompt
+also distinguishes factual recall from claims that an operation was performed:
+facts may use scoped memory, while file changes and other delivery claims still
+require tool evidence from the current run.

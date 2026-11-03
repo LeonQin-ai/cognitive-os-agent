@@ -910,6 +910,7 @@ int init(runtime_ctx *ctx, const config *cfg) {
     }
 
     ctx->memory = memory_new(ctx->state_root);
+    ctx->memory_v3 = memory_runtime_new(ctx->state_root);
     {
         /* memory lifecycle (reinforce/decay/forget/archive): off by default;
          * enable via memory.half_life_ms + memory.min_strength (flat keys) */
@@ -1148,6 +1149,8 @@ int init(runtime_ctx *ctx, const config *cfg) {
             rc.tools = ctx->tools;
             rc.memory = ctx->memory;
             rc.memory_service = ctx->memsvc;
+            rc.memory_runtime = ctx->memory_v3;
+            rc.memory_mmu_enabled = (int)config_get_int(ctx->config, "context.mmu.enabled", 1);
             rc.policy = ctx->policy;
             rc.snapshot = ctx->snapshot;
             rc.bus = ctx->bus;
@@ -1323,6 +1326,9 @@ void runtime_shutdown(runtime_ctx *ctx) {
     if (ctx->memory)
         memory_free(ctx->memory);
     ctx->memory = NULL;
+    if (ctx->memory_v3)
+        memory_runtime_free(ctx->memory_v3);
+    ctx->memory_v3 = NULL;
     if (ctx->policy)
         policy_engine_free(ctx->policy);
     ctx->policy = NULL;
