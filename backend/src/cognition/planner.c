@@ -82,7 +82,8 @@ static const char *SYS_PROMPT_TAIL =
     "are unsure of, first call file_read on its PARENT DIRECTORY (which returns "
     "a listing) so you use the correct, full path. Avoid guessing paths: a wrong "
     "path makes the action fail.\n"
-    "DOCUMENT HANDLING: file_read works only for text files. Binary document "
+    "IMAGE DELIVERY: when the user asks to see a created or downloaded image, read the actual image file with file_read before completing. The read produces a validated image preview for the chat; a filename in the answer alone does not display pixels. "
+    "DOCUMENT HANDLING: file_read handles text files and supported images, but binary document "
     "formats (.docx, .xlsx, .pptx, .pdf, zip) return unreadable bytes like "
     "\"PK...\" — NEVER re-read them with file_read. Instead use the shell tool "
     "with python to extract the text, e.g. for .docx: "
@@ -118,7 +119,7 @@ static const char *SYS_NATIVE_TAIL=
     "For a missing input path, discover its real location; for an explicitly requested new output file, create it "
     "rather than repeatedly reading the absent file. Read requested source scope and follow page offsets when needed. "
     "On Windows explicitly select PowerShell for PowerShell syntax. Binary documents require extraction tools "
-    "or appropriate Python libraries, not repeated raw text reads.\n";
+    "or appropriate Python libraries, not repeated raw text reads. If the user asks to see an image file, call file_read on that file to attach a validated preview; a path in complete_task alone is not an image preview.\n";
 
 /* Build the system prompt from the ACTUAL tool + skill registries. Returns a
  * malloc'd prompt, or NULL when no registry is available (caller falls back
@@ -901,7 +902,12 @@ static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_act
     free(sys_prompt);
     if (rc != 0) {
         if (err_out) {
-            if(visual) {
+            if(visual && resp.truncated && resp.http_status==200) {
+                strbuf diagnostic; strbuf_init(&diagnostic);
+                strbuf_appendf(&diagnostic,"图片/视频帧模型输出达到 token 上限（模型 %s）：%s。未执行本次响应中的任何动作；需要重新生成完整响应。",
+                    llm->model ? llm->model:"unknown",resp.error ? resp.error:"incomplete response");
+                *err_out=strbuf_detach(&diagnostic);
+            } else if(visual) {
                 strbuf diagnostic; strbuf_init(&diagnostic);
                 strbuf_appendf(&diagnostic,"图片/视频帧模型请求失败（模型 %s，HTTP 等待超时配置 %ld ms）：%s。请检查接口是否支持图片输入；慢响应可调整 COA_LLM_VISION_TIMEOUT_MS。",
                     llm->model ? llm->model:"unknown",req.timeout_ms,resp.error ? resp.error:"LLM call failed");

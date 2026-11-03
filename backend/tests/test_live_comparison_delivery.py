@@ -3,18 +3,22 @@
 Explicit protocol selection exercises native or compatibility review; this does not
 claim the remote issue reporter's unavailable GLM deployment was reproduced.
 """
-import argparse,json,os,socket,subprocess,tempfile,time,urllib.request,uuid
+import argparse,base64,json,os,socket,subprocess,tempfile,time,urllib.request,uuid
 from pathlib import Path
 root=Path(__file__).resolve().parents[1]
 p=argparse.ArgumentParser(__doc__);p.add_argument('--config',required=True,type=Path)
 p.add_argument('--report',type=Path,default=root/'build/live-comparison-delivery.json')
 p.add_argument('--protocol',choices=('native','legacy'),default='legacy')
 p.add_argument('--paged-sources',action='store_true')
+p.add_argument('--visual',action='store_true',help='upload a synthetic PNG and run the real artifact task through the visual request path')
+p.add_argument('--script-producer',action='store_true',help='require the Agent to create and execute a Python report generator with declared outputs')
 p.add_argument('--accept-recovery',action='store_true',help='verify actual delivery after at most three recorded model failures; strict zero-failure mode remains default');a=p.parse_args()
 raw=json.loads(a.config.read_text(encoding='utf-8-sig'));cfg={k:v for k,v in raw.items() if k.startswith('llm.')}
 cfg.update({'http.bind':'127.0.0.1','reasoning.max_rounds':16,'scheduler.workers':1,'llm.timeout_ms':60000})
 report={'model':cfg.get('llm.model'),'protocol':a.protocol,'passed':False,'scope':'synthetic code comparison + actual HTML artifact; reporter GLM endpoint/source unavailable'}
 report['accept_recovery']=a.accept_recovery
+report['visual']=a.visual
+report['script_producer']=a.script_producer
 a.report.parent.mkdir(parents=True,exist_ok=True)
 with tempfile.TemporaryDirectory(prefix='coa-live-comparison-') as folder:
  state=Path(folder);left,right=uuid.uuid4().hex[:14],uuid.uuid4().hex[:14]
@@ -28,7 +32,7 @@ with tempfile.TemporaryDirectory(prefix='coa-live-comparison-') as folder:
  (state/'cognitive-os-agent.json').write_text(json.dumps(cfg),encoding='utf8')
  with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
  def api(method,path,body=None):
-  req=urllib.request.Request(f'http://127.0.0.1:{port}'+path,method=method,data=json.dumps(body).encode() if body is not None else None,headers={'Content-Type':'application/json'})
+  req=urllib.request.Request(f'http://127.0.0.1:{port}'+path,method=method,data=body if isinstance(body,bytes) else json.dumps(body).encode() if body is not None else None,headers={'Content-Type':'application/octet-stream' if isinstance(body,bytes) else 'application/json'})
   with urllib.request.urlopen(req,timeout=10) as response:return json.load(response)
  with a.report.with_suffix('.log').open('w',encoding='utf8') as log:
   proc=subprocess.Popen([str(root/'build'/('cognitive-os-agent.exe' if os.name=='nt' else 'cognitive-os-agent')),'--state',folder,'--workspace',folder,'serve',str(port)],cwd=root,stdout=log,stderr=log,env={**os.environ,'COA_TOOL_PROTOCOL':a.protocol},creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
@@ -40,9 +44,23 @@ with tempfile.TemporaryDirectory(prefix='coa-live-comparison-') as folder:
    prompt=('分析当前目录 frontend.c 和 hardware.c 两个虚构测试项目的采样来源、频率单位、差异及优缺点。'
     '实际读取这两份源码，生成 comparison.html 对比报告并写入当前工作区，再实际读取该 HTML 校验。'
     '报告必须包含两个源码中的完整 PROJECT_A_MARKER/PROJECT_B_MARKER 值，以及 scaling_cur_freq、cpuinfo_cur_freq 和单位换算 1000。'
-    '最终答复也必须包含两个完整 Marker 值和报告文件名。只使用 list_dir、file_read、file_write，不执行 shell，不修改原始两份代码。'
+    '最终答复也必须包含两个完整 Marker 值和报告文件名。不修改原始两份代码。'
     '继续完成阅读、分析、写入与校验，不要只交付阶段性计划。')
-   started=time.monotonic();tid=api('POST','/v1/tasks',{'prompt':prompt})['id']
+   if a.script_producer:
+    prompt+=('允许 list_dir、file_read、file_write、shell。必须由你编写 report.py，实际执行 python report.py 生成 comparison.html；'
+             '执行命令的 shell 参数必须声明 outputs:["comparison.html"]，再 file_read comparison.html 验证。'
+             '不要用 file_write 直接写 HTML，不要只写脚本却不执行。若使用 declare_task，必须单独调用并等待回执，再调用其他工具。')
+   else:prompt+='只使用 list_dir、file_read、file_write，不执行 shell。'
+   started=time.monotonic()
+   if a.visual:
+    png=base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=')
+    uploaded=api('POST','/v1/upload?name=synthetic.png&session=live-visual',png)
+    body={'message':prompt+' 附件为透明测试图片，代码事实只依据实际源码读取。','session':'live-visual','attachments':[uploaded['id']]}
+    if a.script_producer:body['acceptance']={'artifacts':['comparison.html'],'full_reads':['frontend.c','hardware.c'],'requires_action':True}
+    tid=api('POST','/v1/chat',body)['id']
+   elif a.script_producer:
+    tid=api('POST','/v1/chat',{'message':prompt,'session':'live-script','acceptance':{'artifacts':['comparison.html'],'full_reads':['frontend.c','hardware.c'],'requires_action':True}})['id']
+   else:tid=api('POST','/v1/tasks',{'prompt':prompt})['id']
    while True:
     observed=api('GET',f'/v1/tasks/{tid}')
     if observed.get('status') not in ('RUNNING','QUEUED'):break
@@ -65,9 +83,14 @@ with tempfile.TemporaryDirectory(prefix='coa-live-comparison-') as folder:
    report['artifact_passed']=all(x in html for x in (left,right,'scaling_cur_freq','cpuinfo_cur_freq','1000')) and '<html' in html.lower()
    assert report['artifact_passed'],'actual HTML artifact missing required source proofs/comparison'
    assert all(x in observed.get('output','') for x in (left,right,'comparison.html')),'final answer did not deliver verified result'
-   steps=observed.get('steps',[]);writes=[i for i,s in enumerate(steps) if s.get('tool')=='file_write' and 'comparison.html' in s.get('args','') and s.get('ok')]
+   steps=observed.get('steps',[])
+   if a.script_producer:
+    writes=[i for i,s in enumerate(steps) if s.get('tool')=='shell' and 'comparison.html' in json.loads(s.get('args','{}')).get('outputs',[]) and s.get('ok')]
+    assert (state/'report.py').exists(),'Agent did not create its generator'
+    assert not any(s.get('tool')=='file_write' and json.loads(s.get('args','{}')).get('path')=='comparison.html' for s in steps),'Agent bypassed the script producer'
+   else:writes=[i for i,s in enumerate(steps) if s.get('tool')=='file_write' and 'comparison.html' in s.get('args','') and s.get('ok')]
    assert writes and any(i>writes[-1] and s.get('tool')=='file_read' and 'comparison.html' in s.get('args','') and s.get('ok') for i,s in enumerate(steps)),'artifact was not read back after write'
-   assert all(s.get('tool') in ('list_dir','file_read','file_write') for s in steps)
+   assert all(s.get('tool') in (('list_dir','file_read','file_write','shell') if a.script_producer else ('list_dir','file_read','file_write')) for s in steps)
    assert left in (state/'frontend.c').read_text() and right in (state/'hardware.c').read_text()
    assert observed.get('tool_protocol')==a.protocol;report['passed']=True
   except Exception as error:

@@ -134,6 +134,7 @@ int router_set_model_metadata(router *r,const char *name,long long tokens,long l
         route *e=&r->routes[i];
         /* Missing discovery metadata must not overwrite a cached known capacity. */
         int weaker = (!strcmp(source,"fallback") && strcmp(e->context_source,"fallback")) ||
+                     (strcmp(source,"configured") && !strcmp(e->context_source,"configured")) ||
                      (!strcmp(source,"catalog") && !strcmp(e->context_source,"provider_metadata"));
         if(!weaker) {
             e->context_window_tokens=tokens;

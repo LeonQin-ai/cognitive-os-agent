@@ -48,6 +48,34 @@ void tasklog_free(tasklog *tl) {
     free(tl);
 }
 
+static void checkpoint_path(tasklog *tl,int64_t id,unsigned slot,char *path,size_t size) {
+    snprintf(path,size,"%s.%lld.progress.%u",tl->path,(long long)id,slot);
+}
+int tasklog_checkpoint(tasklog *tl,int64_t id,unsigned seq,const char *trace) {
+    if(!tl || id<0 || !trace)return -1;
+    cJSON *array=cJSON_Parse(trace),*o=cJSON_CreateObject();
+    if(!cJSON_IsArray(array) || !o){cJSON_Delete(array);cJSON_Delete(o);return -1;}
+    cJSON_AddNumberToObject(o,"id",(double)id);cJSON_AddNumberToObject(o,"seq",seq);
+    cJSON_AddItemToObject(o,"trace",array);char *text=cJSON_PrintUnformatted(o);cJSON_Delete(o);
+    if(!text)return -1;
+    char path[700];checkpoint_path(tl,id,seq%2,path,sizeof(path));
+    mutex_lock(&tl->mtx);int rc=fs_write_file(path,text,strlen(text));mutex_unlock(&tl->mtx);
+    free(text);return rc;
+}
+static char *checkpoint_read(tasklog *tl,int64_t id) {
+    cJSON *best=NULL;double seq=-1;
+    for(unsigned i=0;i<2;i++) {
+        char path[700];checkpoint_path(tl,id,i,path,sizeof(path));char *text=fs_read_file(path);
+        cJSON *o=text?cJSON_Parse(text):NULL;free(text);
+        cJSON *key=cJSON_GetObjectItemCaseSensitive(o,"id"),*version=cJSON_GetObjectItemCaseSensitive(o,"seq");
+        if(cJSON_IsNumber(key) && key->valuedouble==(double)id && cJSON_IsNumber(version) && version->valuedouble>seq && cJSON_IsArray(cJSON_GetObjectItemCaseSensitive(o,"trace"))) {
+            cJSON_Delete(best);best=o;seq=version->valuedouble;
+        } else cJSON_Delete(o);
+    }
+    char *text=best?cJSON_PrintUnformatted(cJSON_GetObjectItemCaseSensitive(best,"trace")):NULL;
+    cJSON_Delete(best);return text;
+}
+
 void tasklog_record(tasklog *tl, int64_t id, const char *status, const char *session, const char *input,
                     const char *output, const char *trace_json, const char *spans_json) {
     tasklog_record_access(tl,id,status,session,input,output,trace_json,spans_json,0);
@@ -111,6 +139,9 @@ void tasklog_record_access(tasklog *tl,int64_t id,const char *status,const char 
         fputs(line, f);
         fputc('\n', f);
         fclose(f);
+        if(status && strcmp(status,"RUNNING") && strcmp(status,"QUEUED")) {
+            for(unsigned i=0;i<2;i++){char path[700];checkpoint_path(tl,id,i,path,sizeof(path));fs_remove(path);}
+        }
         if(tl->session_states)session_state_set(tl,id,session,status);
     }
     mutex_unlock(&tl->mtx);
@@ -264,11 +295,13 @@ int tasklog_recover(tasklog *tl,int64_t *next_id) {
         const char *status=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(o,"status"));
         if(status && (!strcmp(status,"RUNNING") || !strcmp(status,"QUEUED"))) {
             cJSON *access=cJSON_GetObjectItemCaseSensitive(o,"permission_mode");
+            char *checkpoint=checkpoint_read(tl,records[i].id);
             tasklog_record_access(tl,records[i].id,"INTERRUPTED",
                 cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(o,"session")),
                 cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(o,"input")),
-                "Runtime restarted before task completion; inspect checkpoint and explicitly resume.",NULL,NULL,
+                "Runtime restarted before task completion; inspect checkpoint and explicitly resume. Saved usage is last-known only; an in-flight request may have unreported cost.",checkpoint,NULL,
                 !access?0:(cJSON_IsNumber(access)&&access->valuedouble>=0&&access->valuedouble<=2&&access->valuedouble==access->valueint?access->valueint:1));
+            free(checkpoint);
             interrupted++;
         }
     }

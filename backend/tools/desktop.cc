@@ -464,9 +464,10 @@ static HANDLE spawn_server(const wchar_t *exe, const wchar_t *dir) {
     sa.lpSecurityDescriptor = nullptr;
     sa.bInheritHandle = TRUE;
 
-    HANDLE logf = CreateFileW(log.c_str(), GENERIC_WRITE,
+    /* Preserve the previous backend's last messages across a genuine crash. */
+    HANDLE logf = CreateFileW(log.c_str(), FILE_APPEND_DATA,
                               FILE_SHARE_READ | FILE_SHARE_WRITE, &sa,
-                              CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+                              OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
 
     STARTUPINFOW si;
     PROCESS_INFORMATION pi;
@@ -492,6 +493,12 @@ static HANDLE spawn_server(const wchar_t *exe, const wchar_t *dir) {
     return pi.hProcess;
 }
 
+/* TCP reachability is not process liveness. A full listen queue or a busy
+ * accept thread may reject a probe while an Agent task is still running. */
+static bool backend_restart_required(DWORD process_wait) {
+    return process_wait == WAIT_OBJECT_0;
+}
+
 /* Worker thread: wait for the backend; if it dies while booting (it has a
  * known intermittent crash), restart it a few times before giving up. Once
  * up, keep watching — a crash mid-session is recovered the same way (server
@@ -508,15 +515,16 @@ static DWORD WINAPI boot_waiter(LPVOID) {
                 PostMessageA(g_hwnd, WM_APP_NAV, 1, 0);
             ever_up = true;
         } else {
+            if (g_server && !backend_restart_required(WaitForSingleObject(g_server, 0))) {
+                OutputDebugStringA("Cognitive OS: startup HTTP probe timed out; backend is alive, preserving running tasks.\n");
+                continue;
+            }
             if (restarts >= 3) {
                 PostMessageA(g_hwnd, WM_APP_NAV, 2, 0);
                 return 0;
             }
             restarts++;
-            if (g_server) {
-                TerminateProcess(g_server, 0);
-                CloseHandle(g_server);
-            }
+            if (g_server) CloseHandle(g_server);
             std::wstring dir = exe_dir();
             std::wstring exe = dir + L"\\cognitive-os-agent.exe";
             g_server = spawn_server(exe.c_str(), dir.c_str());
@@ -528,9 +536,10 @@ static DWORD WINAPI boot_waiter(LPVOID) {
         /* Steady state: watch the server process; recover from crashes. */
         ULONGLONG healthy_since = GetTickCount64();
         int probes = 0;
+        unsigned failed_probes = 0;
         for (;;) {
             DWORD wait = WaitForSingleObject(g_server, 2000);
-            if (wait == WAIT_OBJECT_0) {
+            if (backend_restart_required(wait)) {
                 /* server process exited (crash or clean stop). If the window
                  * is gone too, exit; otherwise restart the backend. */
                 if (!IsWindow(g_hwnd) || restarts >= 3)
@@ -544,19 +553,14 @@ static DWORD WINAPI boot_waiter(LPVOID) {
                     return 0;
                 break; /* re-enter wait_server loop, then reload the page */
             }
-            /* A hung-but-alive server is also recovered: probe every ~6s. */
-            if (++probes % 3 == 0 && !wait_server(kPort, 1000)) {
-                if (restarts >= 3)
-                    return 0;
-                restarts++;
-                TerminateProcess(g_server, 0);
-                CloseHandle(g_server);
-                std::wstring dir = exe_dir();
-                std::wstring exe = dir + L"\\cognitive-os-agent.exe";
-                g_server = spawn_server(exe.c_str(), dir.c_str());
-                if (!g_server)
-                    return 0;
-                break;
+            /* Probe failure alone cannot authorize killing a live backend. */
+            if (++probes % 3 == 0) {
+                if (wait_server(kPort, 1000)) {
+                    failed_probes = 0;
+                    continue;
+                }
+                if (++failed_probes == 10)
+                    OutputDebugStringA("Cognitive OS: backend still alive but HTTP probe failed repeatedly; preserving running tasks.\n");
             }
             /* Five stable minutes restore the full crash budget. */
             if (GetTickCount64() - healthy_since > 300000)

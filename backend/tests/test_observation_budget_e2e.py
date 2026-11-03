@@ -5,7 +5,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 backend=Path(__file__).resolve().parents[1]
 build=backend/os.environ.get('COA_BUILD_DIR','build')
 for provider in ('openai','anthropic'):
- for window in (65536,1048576):
+ # The default 96KiB observation ceiling is independent of a large model's
+ # context window. Explicitly raising it may retain more evidence, but must
+ # still respect a small model's context-derived bound.
+ for window,budget,retain in ((65536,0,False),(1048576,0,False),
+                              (1048576,262144,True),(65536,262144,False)):
     count=0; errors=[]; marker=secrets.token_hex(20)
     class Provider(BaseHTTPRequestHandler):
         def log_message(self,*args):pass
@@ -20,7 +24,7 @@ for provider in ('openai','anthropic'):
                 if n<30:calls=[('file_read',{'path':f'part-{n}.txt','max_bytes':4000})]
                 else:
                     prompt=body['messages'][-1]['content']
-                    assert (marker in prompt)==(window>65536), (provider,window,'early evidence retention wrong')
+                    assert (marker in prompt)==retain, (provider,window,budget,'early evidence retention wrong')
                     calls=[('complete_task',{'status':'complete','requires_tools':False,'answer':'Evidence collected and analyzed.'})]
                 if provider=='openai':
                     response={'choices':[{'message':{'content':'','tool_calls':[{'id':'c','type':'function','function':{'name':name,'arguments':json.dumps(args)}} for name,args in calls]},'finish_reason':'tool_calls'}]}
@@ -36,12 +40,12 @@ for provider in ('openai','anthropic'):
             (state/f'part-{i}.txt').write_text(text,encoding='utf-8')
         route={'name':'fixture','provider':provider,'model':'window-fixture','api_key':'local-fixture','base_url':f'http://127.0.0.1:{server.server_port}','context_window':window,'max_output_tokens':65536,'context_source':'provider_metadata'}
         (state/'routes.json').write_text(json.dumps([route]),encoding='utf-8')
-        (state/'cognitive-os-agent.json').write_text(json.dumps({'llm.'+k:v for k,v in route.items() if k in ('provider','model','base_url','api_key')}|{'reasoning.max_rounds':-1}),encoding='utf-8')
+        (state/'cognitive-os-agent.json').write_text(json.dumps({'llm.'+k:v for k,v in route.items() if k in ('provider','model','base_url','api_key')}|{'reasoning.max_rounds':-1,'context.observation_budget':budget}),encoding='utf-8')
         with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
         def request(path,body=None):
             req=urllib.request.Request(f'http://127.0.0.1:{port}'+path,data=json.dumps(body).encode() if body is not None else None,headers={'Content-Type':'application/json'})
             with urllib.request.urlopen(req,timeout=5) as response:return json.load(response)
-        with (build/f'observation-budget-{provider}-{window}.log').open('w',encoding='utf-8') as log:
+        with (build/f'observation-budget-{provider}-{window}-{budget}.log').open('w',encoding='utf-8') as log:
             process=subprocess.Popen([str(build/('cognitive-os-agent.exe' if os.name=='nt' else 'cognitive-os-agent')),'--state',folder,'--workspace',folder,'serve',str(port)],cwd=backend,stdout=log,stderr=log,env={**os.environ,'COA_TOOL_PROTOCOL':'native'},creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
             try:
                 for _ in range(100):
@@ -54,7 +58,7 @@ for provider in ('openai','anthropic'):
                     assert time.monotonic()<deadline;time.sleep(.03)
                 assert not errors, errors
                 assert task['status']=='DONE' and task['tool_calls']==30,(task['status'],task['tool_calls'])
-                print('PASS:',provider,window,'30 reads; correct retention and bounded request',flush=True)
+                print('PASS:',provider,window,'observation ceiling',budget or 98304,'30 reads; correct retention and bounded request',flush=True)
             finally:
                 process.terminate()
                 try:process.wait(timeout=5)

@@ -1,0 +1,14 @@
+name: Container isolation smoke
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+jobs:
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build and test actual isolated container
+        run: python3 backend/tests/test_container_smoke.py

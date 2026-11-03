@@ -74,6 +74,25 @@ static void task_done(task *t, void *ud) {
         flow_store_mark(ctx->flowstore, t->id, st);
 }
 
+static void checkpoint_progress(task *t,void *ud) {
+    runtime_ctx *ctx=ud;
+    /* All scheduler allocation paths initialize progress_mtx. Hold it through
+     * the bounded checkpoint write so concurrent Flow observers serialize. */
+    mutex_lock(&t->progress_mtx);
+    cJSON *o=t->progress_json?cJSON_Parse(t->progress_json):NULL;
+    cJSON *calls=cJSON_GetObjectItemCaseSensitive(o,"model_call"),*tools=cJSON_GetObjectItemCaseSensitive(o,"tool_calls");
+    int c=cJSON_IsNumber(calls)?calls->valueint:0,k=cJSON_IsNumber(tools)?tools->valueint:0;
+    int64_t now=time_now_ms();
+    if(!t->checkpoint_seq || now-t->checkpoint_ms>=1000 || c!=t->checkpoint_calls || k!=t->checkpoint_tools) {
+        char *trace=t->trace_json?xstrdup(t->trace_json):NULL;
+        if(!tasklog_checkpoint(ctx->tasklog,t->id,t->checkpoint_seq+1,trace)) {
+            t->checkpoint_seq++;t->checkpoint_ms=now;t->checkpoint_calls=c;t->checkpoint_tools=k;
+        }
+        free(trace);
+    }
+    cJSON_Delete(o);
+    mutex_unlock(&t->progress_mtx);
+}
 static int task_http_cancel(void *context){return task_should_abort((task *)context);}
 
 /* ---------- process/state snapshot (architecture v1.0 §9) ---------- */
@@ -195,7 +214,7 @@ static void lane_wait_progress(task *t, const char *activity) {
     cJSON_AddStringToObject(o,"stage","waiting_for_executor");
     cJSON_AddStringToObject(o,"activity",activity);
     char *json=cJSON_PrintUnformatted(o);cJSON_Delete(o);
-    if(json){task_set_progress(t,json);task_trace_add(t,json);free(json);}
+    if(json){task_set_progress(t,json);free(json);}
 }
 static int lane_lock_wait(mutex_t *m, task *t, const char *activity) {
     int reported=0;
@@ -279,7 +298,7 @@ static void chat_progress(const char *json, void *ud) {
     cJSON_AddNumberToObject(o, "run_id", (double)b->t->id);
     cJSON_AddStringToObject(o, "session_id", b->t->tag ? b->t->tag : "default");
     char *text = cJSON_PrintUnformatted(o);
-    if (text) { task_set_progress(b->t, text); task_trace_add(b->t, text); free(text); }
+    if (text) { task_set_progress(b->t, text); free(text); }
     if (b->ctx->bus) event_bus_publish(b->ctx->bus, EV_MODEL, "task.progress", o);
     else cJSON_Delete(o);
 }
@@ -358,7 +377,7 @@ static void im_run_status(runtime_ctx *ctx, int64_t room_id, int64_t task_id,
     if (agent) cJSON_AddStringToObject(progress, "agent", agent);
     if (reason) cJSON_AddStringToObject(progress, "reason", reason);
     char *snapshot = cJSON_PrintUnformatted(progress);
-    if (t && snapshot) { task_set_progress(t, snapshot); task_trace_add(t, snapshot); }
+    if (t && snapshot) { task_set_progress(t, snapshot); }
     free(snapshot); cJSON_Delete(progress);
     scheduler_release(ctx->scheduler, t);
     cJSON *o = cJSON_CreateObject();
@@ -617,6 +636,7 @@ static void sched_trampoline(task *t, scheduler *s, void *ud) {
     }
 
     tasklog_record_access(ctx->tasklog,t->id,"RUNNING",t->tag,t->input,NULL,NULL,NULL,t->permission_mode);
+    t->checkpoint=checkpoint_progress;t->checkpoint_ud=ctx;
     scheduler_yield(); /* cooperative fairness: let another task start first */
     http_set_cancel_check(task_http_cancel,t);
     if (t->userdata) {

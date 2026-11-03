@@ -16,6 +16,7 @@
 #include "runtime/scheduler.h"
 #include "llm/llm.h"
 #include "action/tools.h"
+#include "api/attachment.h"
 #include "action/skill.h"
 #include "plugin_intelligence/generator.h"
 #include "memory/memory.h"
@@ -132,6 +133,7 @@ struct sess_store {
 
 /* One executed action of the current/most recent run (step registry). */
 struct run_step {
+    char *image_preview;
     char *evidence_path; /* canonical tool target, independent of UI argument caps */
     uint64_t evidence_version;
     unsigned id;
@@ -270,8 +272,10 @@ struct reasoning {
     size_t observation_budget_cap;
     /* Independent of the bounded prompt log/cache: folding observations must
      * not make alternating old reads look like newly discovered evidence. */
-    struct { char path[2048]; uint64_t version, digest; } artifact_seen[128];
+    struct { char path[2048]; uint64_t version, digest; unsigned producer_step; } artifact_seen[128];
     int artifact_seen_n;
+    uint64_t action_output_versions_before[16];
+    int action_outputs_captured;
     /* Pre-work fingerprint per accepted artifact, captured when the
      * obligation is first merged. A later version change proves the run
      * itself produced the current bytes, so script-mediated artifacts
@@ -317,6 +321,7 @@ struct reasoning {
     int planner_output_escalated; /* one bounded 32K -> 64K retry after truncation */
     int completion_review_required; /* legacy review must make an explicit decision */
     cJSON *acceptance; /* monotonic structured obligations, never inferred from prose */
+    cJSON *tool_images; /* bounded session-scoped visual observations, never tool text */
     char *default_acceptance_json;
     int acceptance_invalid;
     char last_model_error[1024];
@@ -612,7 +617,7 @@ static void merge_acceptance(reasoning *r,const cJSON *input) {
                 if(!found) {
                     cJSON *entry=cJSON_CreateString(full);
                     if(cJSON_GetArraySize(paths)>=64||!entry||!cJSON_AddItemToArray(paths,entry)){cJSON_Delete(entry);cJSON_Delete(next);r->acceptance_invalid=1;return;}
-                    artifact_baseline_of(r,full); /* pre-work fingerprint at obligation time */
+                    if(!strcmp(field->string,"artifacts"))artifact_baseline_of(r,full);
                 }
             }
         }
@@ -813,6 +818,18 @@ static void progress_emit(reasoning *r, const char *stage) {
     cJSON_AddBoolToObject(o, "usage_available", reports > r->run_usage_reports);
     cJSON_AddNumberToObject(o, "tokens_in", (double)tin);
     cJSON_AddNumberToObject(o, "tokens_out", (double)tout);
+    if(cJSON_GetArraySize(r->tool_images)) {
+        cJSON *images=cJSON_AddArrayToObject(o,"images"),*image;
+        cJSON_ArrayForEach(image,r->tool_images) {
+            cJSON *item=cJSON_CreateObject();
+            const char *keys[]={"id","name","session"};
+            for(int k=0;k<3;k++) {
+                cJSON *value=cJSON_GetObjectItemCaseSensitive(image,keys[k]);
+                if(cJSON_IsString(value))cJSON_AddStringToObject(item,keys[k],value->valuestring);
+            }
+            cJSON_AddItemToArray(images,item);
+        }
+    }
     char *steps = reasoning_steps_json(r);
     cJSON *arr = steps ? cJSON_Parse(steps) : NULL;
     free(steps);
@@ -2187,6 +2204,16 @@ static char *build_context(reasoning *r, const char *prompt) {
 static uint64_t plan_action_signature(const planned_action *actions, int n_actions);
 static uint64_t observation_json_hash(const cJSON *item);
 
+static char *planning_images(reasoning *r) {
+    const char *original=r->run_task?r->run_task->attachments_json:NULL;
+    if(!cJSON_GetArraySize(r->tool_images))return original?xstrdup(original):NULL;
+    cJSON *all=cJSON_Duplicate(r->tool_images,1),*base=original?cJSON_Parse(original):NULL,*item;
+    cJSON_ArrayForEach(item,base) {
+        if(cJSON_GetArraySize(all)>=4)break;
+        cJSON_AddItemToArray(all,cJSON_Duplicate(item,1));
+    }
+    char *text=cJSON_PrintUnformatted(all);cJSON_Delete(base);cJSON_Delete(all);return text;
+}
 /* REASON: ask the LLM for a plan (JSON array of actions, or plain text). */
 static int h_reason(state_machine *sm, void *ud, const char *input, char **out) {
     reasoning *r = ud;
@@ -2216,11 +2243,13 @@ static int h_reason(state_machine *sm, void *ud, const char *input, char **out) 
     planner_model_diagnostic diagnostic = {0};
     char *completion_json=NULL;
     int review_requested=r->completion_review_required;
+    char *images=planning_images(r);
     int rc = planner_plan_turn_diagnostic(r->llm, r->tools, r->skills, r->policy,
                                  aug ? aug : input, &r->actions, &r->n_actions,
-                                 &raw, &plan_err, r->run_task ? r->run_task->attachments_json : NULL,
+                                 &raw, &plan_err, images,
                                  &r->planner_response_truncated, output_override, &r->planner_native_end_turn, &diagnostic,
                                  r->completion_review_required,&completion_json);
+    free(images);
     if(rc==0 && r->planner_native_end_turn==3) {
         cJSON *control=cJSON_Parse(completion_json?completion_json:"{}");
         merge_acceptance(r,cJSON_GetObjectItemCaseSensitive(control,"acceptance"));cJSON_Delete(control);
@@ -2345,7 +2374,7 @@ static void utf8_head_copy(char *dst, size_t cap, const char *src) {
 
 /* Record one executed action in the step registry (Claude-Code style
  * "● Tool(args) ⎿ out-head" display; args/out are truncated heads). */
-static void step_strings_free(struct run_step *step) { free(step->args); free(step->out); free(step->evidence_path); }
+static void step_strings_free(struct run_step *step) { free(step->image_preview); free(step->args); free(step->out); free(step->evidence_path); }
 static void run_step_add(reasoning *r, const char *tool, const char *args, const char *out, int ok, int ms) {
     struct run_step *st;
 
@@ -2381,7 +2410,7 @@ static void run_step_add(reasoning *r, const char *tool, const char *args, const
         cJSON *path = parsed ? cJSON_GetObjectItemCaseSensitive(parsed, "path") : NULL;
         if (cJSON_IsString(path) && path->valuestring)
             utf8_head_copy(st->target, sizeof(st->target), path->valuestring);
-        if(ok==1 && cJSON_IsString(path) && (!strcmp(tool,"file_read") || !strcmp(tool,"file_write"))) {
+        if(ok==1 && cJSON_IsString(path) && (!strcmp(tool,"file_read") || !strcmp(tool,"file_write") || !strcmp(tool,"file_edit"))) {
             char canonical[2048];normalized_evidence_path(r,path->valuestring,canonical,sizeof(canonical));
             st->evidence_path=xstrdup(canonical);
             st->evidence_version=fs_file_version(canonical);
@@ -2503,6 +2532,20 @@ static void observation_sketch(struct opaque_observation *shape,const char *text
 /* Explicit tool effects, never command-name guessing. Small artifacts use
  * content fingerprints so touching/rewriting identical files is not progress;
  * large artifacts use the OS revision fingerprint without loading whole files. */
+static void capture_action_output_versions(reasoning *r,const char *args_json) {
+    r->action_outputs_captured=0;
+    cJSON *args=cJSON_Parse(args_json?args_json:"{}"),*item;
+    cJSON_ArrayForEach(item,cJSON_GetObjectItemCaseSensitive(args,"outputs")) {
+        if(r->action_outputs_captured==16)break;
+        uint64_t before=0;
+        if(cJSON_IsString(item)) {
+            char path[2048];normalized_evidence_path(r,item->valuestring,path,sizeof(path));
+            before=fs_file_version(path);
+        }
+        r->action_output_versions_before[r->action_outputs_captured++]=before;
+    }
+    cJSON_Delete(args);
+}
 static int declared_artifact_progress(reasoning *r,const char *args_json) {
     cJSON *args=cJSON_Parse(args_json?args_json:"{}");
     cJSON *outputs=cJSON_GetObjectItemCaseSensitive(args,"outputs"),*item;
@@ -2514,6 +2557,10 @@ static int declared_artifact_progress(reasoning *r,const char *args_json) {
         char path[2048];normalized_evidence_path(r,item->valuestring,path,sizeof(path));
         if(fs_is_dir(path))continue;
         uint64_t version=fs_file_version(path);if(!version)continue;
+        /* A declaration is not a production receipt. A successful command
+         * must actually change this version, not adopt another action's or
+         * another task's pre-existing output by listing it in outputs[]. */
+        if(checked>r->action_outputs_captured || r->action_output_versions_before[checked-1]==version)continue;
         int i=0;while(i<r->artifact_seen_n && strcmp(r->artifact_seen[i].path,path))i++;
         if(i<r->artifact_seen_n && r->artifact_seen[i].version==version)continue;
         long long size=fs_file_size(path);uint64_t digest=version;
@@ -2531,6 +2578,7 @@ static int declared_artifact_progress(reasoning *r,const char *args_json) {
             snprintf(r->artifact_seen[i].path,sizeof(r->artifact_seen[i].path),"%s",path);
         }
         r->artifact_seen[i].version=version;r->artifact_seen[i].digest=digest;
+        r->artifact_seen[i].producer_step=r->step_sequence;
         uint64_t revision=hash64(path,strlen(path)) ^ (digest*UINT64_C(0x9e3779b185ebca87));
         int known=0;
         for(int v=0;v<r->artifact_versions_seen_n;v++)if(r->artifact_versions_seen[v]==revision){known=1;break;}
@@ -2626,15 +2674,15 @@ static void observe_action_progress(reasoning *r,const planned_action *action,ui
  * anything with redirection, pipes, substitution or chaining re-flushes. */
 static int git_action_read_only(const char *args){
     static const char *const ok[] = {
-        "status","log","diff","show","branch","rev-parse","ls-files","ls-tree",
-        "blame","describe","tag","shortlog","remote","config --get","symbolic-ref",
-        "for-each-ref","cat-file","count-objects","version",NULL
+        "status","status --short","status --porcelain","log --oneline",
+        "log --oneline -3","rev-parse HEAD","ls-files","version",NULL
     };
     if (!args) return 1;
-    while (*args==' '||*args=='-') args++; /* e.g. "-C path status" won't match below: conservative */
+    while (*args==' '||*args=='\t') args++;
     for (const char *const *p=ok; *p; p++){
-        size_t n=strlen(*p);
-        if (strncmp(args,*p,n)==0 && (args[n]==0||args[n]==' '||args[n]=='\t'))
+        /* Options can write files (e.g. log --output), so matching only a
+         * subcommand prefix is insufficient. Unknown variants invalidate. */
+        if (!strcmp(args,*p))
             return 1;
     }
     return 0;
@@ -2642,8 +2690,8 @@ static int git_action_read_only(const char *args){
 static int shell_segment_read_only(const char *s){
     static const char *const ok[] = {
         "git","ls","dir","cat","type","head","tail","pwd","echo","where","which",
-        "wc","findstr","stat","du","df","file","whoami","hostname","date","env",
-        "printenv","uname","systeminfo","ver","set",NULL
+        "wc","findstr","stat","du","df","file","whoami",
+        "printenv","uname","systeminfo","ver",NULL
     };
     while (*s==' '||*s=='\t') s++;
     if (!*s) return 1;
@@ -2655,7 +2703,7 @@ static int shell_segment_read_only(const char *s){
                 while (*args==' '||*args=='\t') args++;
                 return git_action_read_only(args);
             }
-            return 1;
+            return s[n]==0; /* arguments may execute programs or alter state */
         }
     }
     return 0;
@@ -2666,7 +2714,7 @@ static int shell_command_read_only(const char *cmd){
     size_t n=strlen(cmd); if (n>=sizeof buf) return 0;
     memcpy(buf,cmd,n+1);
     for (char *p=buf; *p; p++)
-        if (*p=='>'||*p=='<'||*p=='|'||*p=='`'||*p=='$'||*p==';') return 0;
+        if (*p=='>'||*p=='<'||*p=='|'||*p=='`'||*p=='$'||*p==';'||*p=='\n'||*p=='\r') return 0;
     /* manual '&' split: strtok_r is not declared under strict -std=c11 on
      * every toolchain here (see note at line ~1414). Consecutive '&' (&&)
      * simply yields empty segments, which pass as no-ops. */
@@ -2681,6 +2729,39 @@ static int shell_command_read_only(const char *cmd){
     return 1;
 }
 
+static void remember_tool_image(reasoning *r,struct run_step *step) {
+    if(!step || step->ok!=1 || strcmp(step->tool,"file_read") || !step->out || !step->evidence_path)return;
+    const char *start=strchr(step->out,'{');cJSON *o=start?cJSON_Parse(start):NULL;
+    const char *kind=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(o,"kind"));
+    cJSON *preview=cJSON_GetObjectItemCaseSensitive(o,"image_preview");
+    const char *id=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(preview,"id"));
+    if(!kind || strcmp(kind,"image") || !id){cJSON_Delete(o);return;}
+    size_t n=0;int more=0;char *head=fs_read_file_slice(step->evidence_path,0,32,&n,&more);
+    const char *actual=head?tool_file_image_mime((unsigned char *)head,n):NULL;
+    const char *mime=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(o,"mime"));
+    if(!actual || !mime || strcmp(actual,mime)){free(head);cJSON_Delete(o);return;}
+    free(head);
+    const char *version=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(o,"file_version"));
+    if(version){mutex_lock(&r->progress_mtx);step->evidence_version=strtoull(version,NULL,10);mutex_unlock(&r->progress_mtx);}
+    cJSON *ids=cJSON_CreateArray();cJSON_AddItemToArray(ids,cJSON_CreateString(id));
+    char *snapshot=attachment_snapshot(r->state_root,r->cur?r->cur->id:"default",ids);cJSON_Delete(ids);
+    cJSON *images=snapshot?cJSON_Parse(snapshot):NULL;free(snapshot);
+    if(cJSON_GetArraySize(images)) {
+        char *descriptor=cJSON_PrintUnformatted(preview);
+        mutex_lock(&r->progress_mtx);step->image_preview=descriptor;mutex_unlock(&r->progress_mtx);
+        if(!r->tool_images)r->tool_images=cJSON_CreateArray();
+        int duplicate=0;cJSON *item;
+        cJSON_ArrayForEach(item,r->tool_images) {
+            const char *old=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(item,"id"));
+            if(old && !strcmp(old,id))duplicate=1;
+        }
+        if(!duplicate) {
+            if(cJSON_GetArraySize(r->tool_images)>=4)cJSON_DeleteItemFromArray(r->tool_images,0);
+            cJSON_AddItemToArray(r->tool_images,cJSON_Duplicate(cJSON_GetArrayItem(images,0),1));
+        }
+    }
+    cJSON_Delete(images);cJSON_Delete(o);
+}
 static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
     reasoning *r = ud;
     strbuf b;
@@ -2911,16 +2992,19 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
             if (!strcmp(r->actions[i].tool, "shell")) {
                 cJSON *sa = cJSON_Parse(r->actions[i].args_json);
                 probe_only = shell_command_read_only(cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(sa,"command")));
+                if(cJSON_GetArraySize(cJSON_GetObjectItemCaseSensitive(sa,"outputs")))probe_only=0;
                 cJSON_Delete(sa);
             } else if (!strcmp(r->actions[i].tool, "git")) {
                 cJSON *sa = cJSON_Parse(r->actions[i].args_json);
                 probe_only = git_action_read_only(cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(sa,"args")));
+                if(cJSON_GetArraySize(cJSON_GetObjectItemCaseSensitive(sa,"outputs")))probe_only=0;
                 cJSON_Delete(sa);
             }
             if (!probe_only) { r->search_seen_n = 0; r->grep_path_n = 0; }
         }
         r->prog_tool_calls++;
         long long t_tool0 = time_now_ms();
+        capture_action_output_versions(r,r->actions[i].args_json);
         char span_name[64] = "tool.";
         size_t span_len = strlen(span_name);
         const unsigned char *tool_name = (const unsigned char *)r->actions[i].tool;
@@ -3001,6 +3085,7 @@ static int h_act(state_machine *sm, void *ud, const char *input, char **out) {
         r->prog_tool_ms += time_now_ms() - t_tool0;
         run_step_add(r, r->actions[i].tool, r->actions[i].args_json, full_step_out ? full_step_out : step_out, rc == 0 ? 1 : 0,
                      (int)(time_now_ms() - t_tool0));
+        if(r->n_steps)remember_tool_image(r,&r->steps[r->n_steps-1]);
         if (rc == 0) record_discovered_read_paths(r, r->actions[i].tool, r->actions[i].args_json, full_step_out ? full_step_out : step_out);
         if(rc==0)observe_action_progress(r,&r->actions[i],output_hash,is_search,full_step_out?full_step_out:step_out);
         free(full_step_out);
@@ -3329,6 +3414,7 @@ void reasoning_free(reasoning *r) {
     free(r->obs_log);
     cJSON_Delete(r->file_equalities);
     cJSON_Delete(r->acceptance);free(r->default_acceptance_json);
+    cJSON_Delete(r->tool_images);
     attention_free(r->attention);
     state_machine_free(r->sm);
     evaluator_free(r->eval);
@@ -3466,9 +3552,9 @@ static uint64_t artifact_baseline_of(reasoning *r,const char *path) {
 /* A shell action declared this path in outputs[] and its recorded post-action
  * version equals the file's current version: the declared command produced
  * the current bytes. Explicit declarations only, never command-name guessing. */
-static int declared_output_current(reasoning *r,const char *path,uint64_t current) {
+static int declared_output_current(reasoning *r,const char *path,uint64_t current,unsigned read_step) {
     for(int i=0;i<r->artifact_seen_n;i++)
-        if(!strcmp(r->artifact_seen[i].path,path) && r->artifact_seen[i].version && r->artifact_seen[i].version==current)return 1;
+        if(!strcmp(r->artifact_seen[i].path,path) && r->artifact_seen[i].version && r->artifact_seen[i].version==current && r->artifact_seen[i].producer_step<read_step)return 1;
     return 0;
 }
 static int run_has_verified_artifact(reasoning *r,const char *target) {
@@ -3478,14 +3564,17 @@ static int run_has_verified_artifact(reasoning *r,const char *target) {
         if(!read->evidence_version || read->evidence_version!=fs_file_version(target) || fs_is_dir(target) || fs_file_size(target)<=0)return 0;
         for(int j=r->n_steps-1;j>=0;j--) {
             struct run_step *write=&r->steps[j];
-            if(write->ok==1 && !strcmp(write->tool,"file_write") && write->evidence_path && !strcmp(write->evidence_path,target))return j<i;
+            if(write->ok==1 && (!strcmp(write->tool,"file_write") || !strcmp(write->tool,"file_edit")) && write->evidence_path && !strcmp(write->evidence_path,target)) {
+                if(write->evidence_version==read->evidence_version)return j<i;
+                break; /* a later shell producer may own the current version */
+            }
         }
         /* Script-mediated artifact: a shell command that declared the path in
          * outputs[] produced the current bytes (the file changed after the
          * obligation was merged), and the version-matched read above proves
          * the agent verified the final content. Same evidence, different
          * producer — generated artifacts must not force fake file_write calls. */
-        if(artifact_baseline_of(r,target)!=read->evidence_version && declared_output_current(r,target,read->evidence_version))return 1;
+        if(artifact_baseline_of(r,target)!=read->evidence_version && declared_output_current(r,target,read->evidence_version,read->id))return 1;
         return 0;
     }
     return 0;
@@ -3957,6 +4046,8 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     r->last_model_failure_call=0;
     r->completion_review_required=1;
     cJSON_Delete(r->acceptance);r->acceptance=NULL;r->acceptance_invalid=0;
+    r->artifact_baseline_n=0; /* per-run obligations cannot inherit another task's baseline */
+    cJSON_Delete(r->tool_images);r->tool_images=NULL;
     r->prog_llm_ms = r->prog_tool_ms = 0;
     r->last_model_error[0]=0;
     r->planner_output_escalated = 0;
@@ -4095,11 +4186,12 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     int consec_fail = 0; /* consecutive stage failures → circuit breaker */
     int transport_fail_streak = 0;
     int fail_aborted = 0;
+    int provider_rate_limited = 0;
     int no_action_rounds = 0, no_action_stalled = 0;
     int unfinished = 0; /* text described future work, or requested write never ran */
     int output_repeated = 0;
     int search_only_rounds = 0;
-    int failure_recovery_nudges = 0, truncated_response_nudges = 0, visual_retry_nudges = 0;
+    int failure_recovery_nudges = 0, truncated_response_nudges = 0;
     int completion_reviewed = 0;
     int completion_grace = 0;
     const char *completion_reserve_note = "[system] Finalization-only reserve: the configured tool-execution budget is exhausted. Assess the ORIGINAL request against existing successful observations. Do not reread or execute extra checks solely for reassurance; no executable tool actions can run in this reserve. If the requested work is already delivered and verified, call complete_task(status=complete, requires_tools=false, answer=full_result). If essential work remains, call complete_task(status=blocked, requires_tools=false, answer=what_is_missing). This is the single reserved finalization request, not additional work budget.";
@@ -4209,7 +4301,8 @@ restart_planning:
              * a JSON suffix or misdiagnose this as a failed tool operation.
              * Empty reasoning-only responses need the same bounded recovery.
              * This shares the existing two-continuation allowance. */
-            if (!r->had_plan && r->planner_response_truncated && !r->visual_request_failed) {
+            if (!r->had_plan && r->planner_response_truncated &&
+                (!r->visual_request_failed || !strcmp(r->last_model_failure.stage,"response"))) {
                 if (truncated_response_nudges >= 2 || r->round_idx >= r->max_rounds) {
                     output_truncated_unresolved = fail_aborted = unfinished = 1;
                     break;
@@ -4220,25 +4313,13 @@ restart_planning:
                 continue;
             }
             if (r->visual_request_failed) {
-                /* A response-stage visual failure (hidden reasoning consumed
-                 * the output budget; no visible content or tool calls) is
-                 * transient: regenerate like the truncated path above.
-                 * Transport/http failures (endpoint down, no image support)
-                 * stay terminal — retrying those only burns latency. */
-                if (!strcmp(r->last_model_failure.stage,"response") &&
-                    visual_retry_nudges < 2 && r->round_idx < r->max_rounds) {
-                    visual_retry_nudges++;
-                    round_log_append(r,"[system] 图片请求的模型响应没有可见内容：输出预算被隐藏推理耗尽（finish=length）。"
-                        "请重新生成完整的下一步动作或最终答案，压缩推理开销，不要重复已完成的工具调用。最多两次重新生成机会。");
-                    progress_emit(r,"reconnecting");
-                    continue;
-                }
                 final_text=xstrdup(result && *result ? result:"图片模型请求失败");
                 fail_aborted = 1;
                 break;
             }
             if (!r->had_plan && r->last_model_failure.http_status==429 && r->last_model_failure_call==r->prog_llm_calls) {
                 round_log_append(r, "[system] 模型服务返回 HTTP 429（请求限额或速率限制）；停止自动重试，避免继续消耗请求额度。修复限额或等待重置后，可由用户重新发起任务。");
+                provider_rate_limited = 1;
                 fail_aborted = 1;
                 break;
             }
@@ -4574,7 +4655,8 @@ restart_planning:
         if (stalled) { strbuf_append(&out,cycle_aborted ?
             "\n原因：多轮交替读取或检查持续返回已有结果；循环恢复提示后仍无新增进展，已停止重复调用并保留记录。" :
             "\n原因：重复工具动作没有新增进展；需调整路径、分页参数或执行方案。"); explained=1; }
-        if (fail_aborted && !r->visual_request_failed) { strbuf_append(&out,"\n原因：模型规划或执行验证连续失败；请核对执行记录中的最后一条错误。"); explained=1; }
+        if (provider_rate_limited) { strbuf_append(&out,"\n原因：供应商返回 HTTP 429，当前模型请求被限流；等待额度或速率窗口恢复后可继续任务。已停止自动重试，避免额外消耗。"); explained=1; }
+        else if (fail_aborted && !r->visual_request_failed) { strbuf_append(&out,"\n原因：模型规划或执行验证连续失败；请核对执行记录中的最后一条错误。"); explained=1; }
         if (r->visual_request_failed) explained=1;
         if (r->round_idx>=r->max_rounds) { strbuf_appendf(&out,"\n原因：达到配置的最大规划轮数 %d；当前步骤未全部完成。",r->max_rounds); explained=1; }
         if (!explained) strbuf_append(&out,"\n原因：模型仍在描述待执行工作，尚未提交可验证的最终结果；请根据保留的执行记录继续任务。");
@@ -4797,6 +4879,7 @@ char *reasoning_steps_json(reasoning *r) {
         char *output = secret_redact_ssh_passwords(st->out ? st->out : "", st->out ? strlen(st->out) : 0, NULL);
         cJSON_AddStringToObject(o, "args", args ? args : "");
         cJSON_AddStringToObject(o, "out", output ? output : "");
+        if(st->image_preview)cJSON_AddItemToObject(o,"image_preview",cJSON_Parse(st->image_preview));
         if (st->target[0]) {
             char *target = secret_redact_ssh_passwords(st->target, strlen(st->target), NULL);
             cJSON_AddStringToObject(o, "target", target ? target : "");

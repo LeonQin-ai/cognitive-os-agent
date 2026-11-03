@@ -18,7 +18,9 @@ jobs:
       matrix:
         runner: [macos-15, macos-15-intel]
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 30
+    # Expanded integration coverage reaches the old cutoff on Intel runners.
+    # Keep all per-test/call bounds; only give that CI job time to finish.
+    timeout-minutes: ${{ matrix.runner == 'macos-15-intel' && 45 || 30 }}
     defaults:
       run:
         working-directory: backend
@@ -47,7 +49,9 @@ jobs:
       - name: Actual process crash recovery
         run: COA_BUILD_DIR=build-macos python3 tests/test_crash_recovery_e2e.py
       - name: Visual provider timeout and recovery regression
-        run: COA_BUILD_DIR=build-macos python3 tests/test_vision_wait_e2e.py
+        run: |
+          COA_BUILD_DIR=build-macos python3 tests/test_vision_wait_e2e.py
+          COA_BUILD_DIR=build-macos COA_VISION_TEST_PROTOCOL=native python3 tests/test_vision_wait_e2e.py
       - name: Durable session scale and cursor regression
         run: |
           ./build-macos/cognitive-os-agent-test --session-scale 300 state-test/session-scale-ci
@@ -58,6 +62,10 @@ jobs:
         run: COA_BUILD_DIR=build-macos python3 tests/test_model_capabilities_e2e.py
       - name: Native tool block continuation regression
         run: COA_BUILD_DIR=build-macos python3 tests/test_native_tool_loop.py
+      - name: Structured acceptance and cross-run artifact regression
+        run: COA_BUILD_DIR=build-macos python3 tests/test_structured_task_contract_e2e.py
+      - name: Generated image readback and vision delivery
+        run: COA_BUILD_DIR=build-macos python3 tests/test_generated_image_e2e.py
       - name: Model finalization and provider diagnostics regression
         run: COA_BUILD_DIR=build-macos python3 tests/test_model_finalization_e2e.py
       - name: Command execution Trace and persistence
@@ -131,6 +139,11 @@ jobs:
         run: make build/cognitive-os-agent-test-plan-cycle && ./build/cognitive-os-agent-test-plan-cycle
       - name: Source read completion API regressions
         run: python3 tests/test_source_read_e2e.py
+      - name: Linux folder chooser fallback and provider rate-limit diagnosis
+        run: |
+          python3 tests/test_folder_picker_linux_e2e.py
+          python3 tests/test_workspace_directory_e2e.py
+          python3 tests/test_rate_limit_e2e.py
       - name: Completion review delivery regression
         run: |
           python3 tests/test_completion_review_e2e.py
@@ -144,7 +157,9 @@ jobs:
       - name: Actual process crash recovery
         run: python3 tests/test_crash_recovery_e2e.py
       - name: Visual provider timeout and recovery regression
-        run: python3 tests/test_vision_wait_e2e.py
+        run: |
+          python3 tests/test_vision_wait_e2e.py
+          COA_VISION_TEST_PROTOCOL=native python3 tests/test_vision_wait_e2e.py
       - name: Durable session scale and cursor regression
         run: |
           ./build/cognitive-os-agent-test --session-scale 300 state-test/session-scale-ci
@@ -155,6 +170,10 @@ jobs:
         run: python tests/test_model_capabilities_e2e.py
       - name: Native tool block continuation regression
         run: python tests/test_native_tool_loop.py
+      - name: Structured acceptance and cross-run artifact regression
+        run: python tests/test_structured_task_contract_e2e.py
+      - name: Generated image readback and vision delivery
+        run: python tests/test_generated_image_e2e.py
       - name: Model finalization and provider diagnostics regression
         run: python tests/test_model_finalization_e2e.py
       - name: Command execution Trace and persistence
@@ -216,6 +235,10 @@ jobs:
           LD_PRELOAD=$(gcc -print-file-name=libasan.so) ASAN_OPTIONS=detect_leaks=0 ./build/cognitive-os-agent-test
       - name: Native tool block continuation under ASAN
         run: ASAN_OPTIONS=detect_leaks=0 python3 tests/test_native_tool_loop.py
+      - name: Structured acceptance under ASAN
+        run: ASAN_OPTIONS=detect_leaks=0 python3 tools/run_ci_regression.py tests/test_structured_task_contract_e2e.py
+      - name: Image readback under ASAN
+        run: ASAN_OPTIONS=detect_leaks=0 python3 tools/run_ci_regression.py tests/test_generated_image_e2e.py
       - name: ASAN completion review e2e
         run: ASAN_OPTIONS=detect_leaks=0 python3 tools/run_ci_regression.py tests/test_completion_review_e2e.py
       - name: ASAN embedded tool completion e2e
@@ -269,6 +292,10 @@ jobs:
           "$env:RUNNER_TEMP\zig\zig-x86_64-windows-0.14.1" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
       - name: Build
         run: ./build.sh
+      - name: Desktop watchdog process-liveness regression
+        run: |
+          zig c++ -std=c++17 -O1 -Wno-nullability-completeness -I third_party/webview -o build/desktop-watchdog-test.exe tests/test_desktop_watchdog.cc -lole32 -loleaut32 -luuid -lshlwapi -luser32 -lgdi32 -lws2_32 -lshell32 -lversion -ladvapi32
+          ./build/desktop-watchdog-test.exe
       - name: Unit tests
         run: ./build/cognitive-os-agent-test.exe
       - name: Independent todo-cli acceptance verifier regression
@@ -286,6 +313,10 @@ jobs:
           python tests/test_ssh_password_e2e.py
       - name: Source read completion API regressions
         run: python tests/test_source_read_e2e.py
+      - name: Provider rate-limit diagnosis
+        run: |
+          python tests/test_rate_limit_e2e.py
+          python tests/test_workspace_directory_e2e.py
       - name: Completion review delivery regression
         run: |
           python tests/test_completion_review_e2e.py
@@ -327,6 +358,10 @@ jobs:
         run: python tests/test_model_capabilities_e2e.py
       - name: Native tool block continuation regression
         run: python tests/test_native_tool_loop.py
+      - name: Structured acceptance and cross-run artifact regression
+        run: python tests/test_structured_task_contract_e2e.py
+      - name: Generated image readback and vision delivery
+        run: python tests/test_generated_image_e2e.py
       - name: Model finalization and provider diagnostics regression
         run: python tests/test_model_finalization_e2e.py
       - name: Command execution Trace and persistence
@@ -347,7 +382,9 @@ jobs:
       - name: Information answer completion regression
         run: python tests/test_information_answers_e2e.py
       - name: Visual provider timeout and recovery regression
-        run: python tests/test_vision_wait_e2e.py
+        run: |
+          python tests/test_vision_wait_e2e.py
+          COA_VISION_TEST_PROTOCOL=native python tests/test_vision_wait_e2e.py
       - name: Complete browser MCP results API regression
         run: python tests/test_browser_results_e2e.py
       - name: Actual process crash recovery
@@ -372,6 +409,7 @@ jobs:
           NODE_PATH="$PWD/webarena/node_modules" node tests/test_folder_picker_timeout_ui.cjs
           NODE_PATH="$PWD/webarena/node_modules" node tests/test_session_options_ui.cjs
           NODE_PATH="$PWD/webarena/node_modules" node tests/test_image_chat_ui.cjs
+          NODE_PATH="$PWD/webarena/node_modules" node tests/test_generated_image_ui.cjs
           NODE_PATH="$PWD/webarena/node_modules" node tests/test_answer_copy_ui.cjs
           NODE_PATH="$PWD/webarena/node_modules" node tests/test_chat_timestamps_ui.cjs
           NODE_PATH="$PWD/webarena/node_modules" COA_BROWSER_CHANNEL=msedge node tests/test_trace_render.cjs

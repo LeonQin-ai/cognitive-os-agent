@@ -1,0 +1,22 @@
+services:
+  cognitive:
+    build: .
+    image: cognitive-os-agent:local
+    ports:
+      - "127.0.0.1:18300:18300"
+    volumes:
+      - cognitive-state:/state
+      - cognitive-workspace:/workspace
+    read_only: true
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 256
+    mem_limit: 2g
+    cpus: 2
+    init: true
+    restart: unless-stopped
+volumes:
+  cognitive-state:
+  cognitive-workspace:
