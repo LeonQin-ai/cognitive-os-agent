@@ -913,14 +913,33 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
     /* Starting page first, then the boot watcher takes over. */
     {
         std::string starting=kStartingHtml;
+        bool animate=true;
         wchar_t local[MAX_PATH];
         if(GetEnvironmentVariableW(L"LOCALAPPDATA",local,MAX_PATH)>0){
             std::wstring setting=std::wstring(local)+L"\\cognitive-os-agent\\desktop-startup-animation";
             FILE *file=_wfopen(setting.c_str(),L"rb");
             if(file){int value=fgetc(file);fclose(file);if(value=='0'){
+                animate=false;
                 size_t head=starting.find("</head>");
                 if(head!=std::string::npos)starting.insert(head,"<style>*,*:before,*:after{animation:none!important}</style>");
             }}
+            std::wstring mediaPath=std::wstring(local)+L"\\cognitive-os-agent\\desktop-startup-media";
+            FILE *mediaFile=animate?_wfopen(mediaPath.c_str(),L"rb"):nullptr;
+            if(mediaFile){
+                std::string media;char chunk[4096];size_t count;
+                while((count=fread(chunk,1,sizeof chunk,mediaFile))>0 && media.size()+count<=4*1024*1024)media.append(chunk,count);
+                fclose(mediaFile);
+                bool video=media.rfind("data:video/mp4;base64,",0)==0||media.rfind("data:video/webm;base64,",0)==0;
+                bool image=media.rfind("data:image/gif;base64,",0)==0||media.rfind("data:image/webp;base64,",0)==0;
+                if((video||image) && media.find_first_not_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=",media.find(',')+1)==std::string::npos){
+                    size_t body=starting.find("</body>");
+                    std::string tag=video?"<video autoplay muted loop playsinline src=\"":"<img alt=\"\" src=\"";
+                    tag+=media+"\" style=\"position:fixed;inset:0;width:100%;height:100%;object-fit:contain;background:#141313;z-index:100\">";
+                    if(video)tag+="</video>";
+                    tag+="<div style=\"position:fixed;bottom:24px;left:0;right:0;text-align:center;color:white;z-index:101\">Cognitive OS 正在启动…</div>";
+                    if(body!=std::string::npos)starting.insert(body,tag);
+                }
+            }
         }
         std::string start8 = data_url(starting.c_str());
         std::wstring wstart(start8.begin(), start8.end());

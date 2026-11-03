@@ -13,7 +13,7 @@ with tempfile.TemporaryDirectory() as folder:
   assert response.status==status,(response.status,response.read())
   return json.load(response)
  def start():
-  proc=subprocess.Popen([str(root/'build/cognitive-os-agent.exe'),'--state',folder,'--workspace',folder,'serve',str(port)],cwd=root,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,env={**os.environ,'LOCALAPPDATA':folder},creationflags=subprocess.CREATE_NO_WINDOW)
+  proc=subprocess.Popen([str(root/os.environ.get('COA_BUILD_DIR','build')/'cognitive-os-agent.exe'),'--state',folder,'--workspace',folder,'serve',str(port)],cwd=root,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,env={**os.environ,'LOCALAPPDATA':folder},creationflags=subprocess.CREATE_NO_WINDOW)
   for _ in range(100):
    try:api();return proc
    except OSError:assert proc.poll() is None;time.sleep(.1)
@@ -24,10 +24,20 @@ with tempfile.TemporaryDirectory() as folder:
   assert api('PUT',{'enabled':False})['enabled'] is False
   api('PUT',{'enabled':'false'},400)
   assert api()['enabled'] is False
+  media='data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///w=='
+  api('PUT',{'enabled':True,'media':media})
+  assert (state/'cognitive-os-agent/desktop-startup-media').read_text()==media
+  api('PUT',{'enabled':True,'media':'data:text/html;base64,PHNjcmlwdD4='},400)
+  api('PUT',{'enabled':True,'media':'data:image/gif;base64,\" onerror=alert(1)'},400)
+  assert (state/'cognitive-os-agent/desktop-startup-media').read_text()==media
+  api('PUT',{'enabled':False})
  finally:proc.terminate();proc.wait(timeout=10)
  proc=start()
  try:
   assert api()['enabled'] is False
+  assert (state/'cognitive-os-agent/desktop-startup-media').read_text()==media
+  api('PUT',{'enabled':True,'media':''})
+  assert (state/'cognitive-os-agent/desktop-startup-media').read_text()==''
   assert api('PUT',{'enabled':True})['enabled'] is True
   assert (state/'cognitive-os-agent/desktop-startup-animation').read_text()=='1'
  finally:proc.terminate();proc.wait(timeout=10)

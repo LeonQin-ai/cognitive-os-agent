@@ -1231,6 +1231,19 @@ static int h_desktop_animation(const http_request *req,http_response *resp,void 
         char *body=body_str(req);cJSON *root=body?cJSON_Parse(body):NULL;free(body);
         cJSON *enabled=cJSON_GetObjectItemCaseSensitive(root,"enabled");
         if(!cJSON_IsBool(enabled)){cJSON_Delete(root);resp->status=400;http_resp_json(resp,"{\"error\":\"enabled must be boolean\"}");return 0;}
+        cJSON *media=cJSON_GetObjectItemCaseSensitive(root,"media");
+        char media_path[2200];path_join(media_path,sizeof media_path,dir,"desktop-startup-media");
+        if(media){
+            const char *s=cJSON_GetStringValue(media);size_t prefix=0;
+            const char *types[]={"data:image/gif;base64,","data:image/webp;base64,","data:video/mp4;base64,","data:video/webm;base64,"};
+            if(s)for(int i=0;i<4;i++)if(!strncmp(s,types[i],strlen(types[i])))prefix=strlen(types[i]);
+            int valid=s && (!*s || prefix);size_t length=s?strlen(s):0;
+            if(length>4*1024*1024)valid=0;
+            for(size_t i=prefix;valid && i<length;i++)if(!strchr("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=",s[i]))valid=0;
+            if(!valid){cJSON_Delete(root);resp->status=400;http_resp_json(resp,"{\"error\":\"Use GIF/WebP/MP4/WebM up to 3 MiB\"}");return 0;}
+            fs_mkdirs(dir);
+            if(fs_write_file(media_path,s,length)!=0){cJSON_Delete(root);resp->status=500;http_resp_json(resp,"{\"error\":\"could not save startup media\"}");return 0;}
+        }
         char value=cJSON_IsTrue(enabled)?'1':'0';cJSON_Delete(root);fs_mkdirs(dir);
         if(fs_write_file(path,&value,1)!=0){resp->status=500;http_resp_json(resp,"{\"error\":\"could not save startup preference\"}");return 0;}
     }
