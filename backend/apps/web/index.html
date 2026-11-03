@@ -157,6 +157,49 @@
     backdrop-filter:blur(16px);
     -webkit-backdrop-filter:blur(16px);
   }
+  /* 壁纸模式（所有主题）：聊天区结构容器与输入框必须完全透出背景图。
+     这些是大面积表面，任何填充或 backdrop-filter 都会在壁纸上形成白块/白雾，
+     所以统一置为完全透明并取消模糊与阴影；只有气泡和按钮保留轻微磨砂。 */
+  body.has-wallpaper .content,
+  body.has-wallpaper .content.chat-content,
+  body.has-wallpaper .chat-wrap,
+  body.has-wallpaper #chat-box,
+  body.has-wallpaper #chat-hero,
+  body.has-wallpaper .chat-message.bot,
+  body.has-wallpaper .run-card,
+  body.has-wallpaper #chat-settings,
+  body.has-wallpaper .run-files,
+  body.has-wallpaper .run-actions,
+  body.has-wallpaper .pillbar,
+  body.has-wallpaper .chat-toolbar{
+    background:transparent!important;
+    backdrop-filter:none!important;
+    -webkit-backdrop-filter:none!important;
+    box-shadow:none!important;
+  }
+  body.has-wallpaper .pillbar #chat-input,
+  body.has-wallpaper .pillbar textarea{
+    background:transparent!important;
+    backdrop-filter:none!important;
+    -webkit-backdrop-filter:none!important;
+  }
+  /* 输入框内部的小控件（权限下拉、模型下拉、工作区下拉、工具栏按钮、
+     复制按钮、推荐词 chip）在浅色调色板下仍是纯白实心块，会在输入条和
+     工具栏上留出白斑；壁纸模式下统一改为透明底、去模糊、去阴影。 */
+  body.has-wallpaper .composer-policy,
+  body.has-wallpaper .chat-toolbar #chat-model,
+  body.has-wallpaper #chat-workspace,
+  body.has-wallpaper .chat-toolbar .sec,
+  body.has-wallpaper .chat-toolbar button,
+  body.has-wallpaper .chat-tab,
+  body.has-wallpaper #chat-hero .chip,
+  body.has-wallpaper .chat-copy{
+    background:transparent!important;
+    backdrop-filter:none!important;
+    -webkit-backdrop-filter:none!important;
+    box-shadow:none!important;
+  }
+  body.has-wallpaper .chat-copy{background:color-mix(in srgb,var(--card) 55%,transparent)!important}
   /* 浅色主题的 --card 是纯白，任何仍直接用 var(--card) 的面板都会在壁纸模式下变成白块；
      这里整体把浅色调色板调成半透明，作为遗漏面板的兜底（不影响其它主题）。 */
   body[data-theme=light].has-wallpaper{
@@ -778,6 +821,135 @@
   body[data-theme=dragongirl] .chat-tab,
   body[data-theme=dragongirl] .market-entry,
   body[data-theme=dragongirl] .plaza .item{background:transparent!important;backdrop-filter:none!important;-webkit-backdrop-filter:none!important}
+
+  /* ---------- 壁纸模式最终兜底（用户要求整页呈现背景图） ----------
+     任何实体填充、磨砂(backdrop-filter)或投影都会在壁纸上糊出一片白雾，
+     也就是截图里的“聊天框/输入框留白”。这里以最高优先级覆盖全部历史规则，
+     只保留文字与必要的边框/主操作按钮。 */
+  body.has-wallpaper main,
+  body.has-wallpaper .content,
+  body.has-wallpaper .content.chat-content,
+  body.has-wallpaper .chat-wrap,
+  body.has-wallpaper #chat-box,
+  body.has-wallpaper #chat-hero,
+  body.has-wallpaper .chat-message,
+  body.has-wallpaper .run-card,
+  body.has-wallpaper .run-files,
+  body.has-wallpaper .run-actions,
+  body.has-wallpaper #chat-settings,
+  body.has-wallpaper .pillbar,
+  body.has-wallpaper .chat-toolbar,
+  body.has-wallpaper .top,
+  body.has-wallpaper aside,
+  body.has-wallpaper .side-foot,
+  body.has-wallpaper .usercard{
+    background:transparent!important;
+    background-image:none!important;
+    backdrop-filter:none!important;
+    -webkit-backdrop-filter:none!important;
+    box-shadow:none!important;
+    filter:none!important;
+  }
+  /* 输入条/工具栏/执行卡片内部的所有子控件同样不遮背景 */
+  body.has-wallpaper .pillbar *,
+  body.has-wallpaper .chat-toolbar *,
+  body.has-wallpaper .run-card *{
+    background-color:transparent!important;
+    background-image:none!important;
+    box-shadow:none!important;
+    backdrop-filter:none!important;
+    -webkit-backdrop-filter:none!important;
+  }
+  /* 保留可点击控件的轮廓，否则透明控件会看不出边界 */
+  body.has-wallpaper .pillbar select,
+  body.has-wallpaper .pillbar button,
+  body.has-wallpaper .chat-toolbar select,
+  body.has-wallpaper .chat-toolbar button{
+    border-color:color-mix(in srgb,var(--border) 65%,transparent)!important;
+  }
+  /* 气泡只保留极轻底色区分角色，不再有任何磨砂白雾 */
+  body.has-wallpaper .chat-message.user,
+  body.has-wallpaper .chat-copy{
+    background:color-mix(in srgb,var(--card) 26%,transparent)!important;
+    backdrop-filter:none!important;
+    -webkit-backdrop-filter:none!important;
+  }
+  /* 发送按钮等主操作必须有可见底色 */
+  body.has-wallpaper .pillbar .pill-send,
+  body.has-wallpaper .pillbar #chat-send,
+  body.has-wallpaper .pillbar button.primary{
+    background:var(--accent)!important;
+    color:#fff!important;
+  }
+  /* ===== 壁纸模式最终兜底（整页只呈现背景图）=====
+     用户要求切换背景图片后「界面全部呈现这个背景」。截图里的白色留白来自
+     面板/输入框/控件上仍然生效的实体填充、渐变、磨砂(backdrop-filter)与投影；
+     零散的白名单规则总会漏项，所以这里用通配选择器把壁纸模式下所有元素及其
+     伪元素的填充、渐变、模糊、投影一次性清空，再把必须可见的少量元素加回来。 */
+  body.has-wallpaper *{
+    background-color:transparent!important;
+    backdrop-filter:none!important;
+    -webkit-backdrop-filter:none!important;
+    box-shadow:none!important;
+  }
+  /* 上面这条通配规则只清 background-color / 磨砂 / 投影，绝不能把
+     background-image 也清掉，更不能作用到 body 的壁纸伪元素上：否则壁纸层
+     本身会被抹掉，只剩主题底色，看起来就成了“聊天框/输入框留白”。 */
+  body.has-wallpaper main,
+  body.has-wallpaper aside,
+  body.has-wallpaper .top,
+  body.has-wallpaper .content,
+  body.has-wallpaper .content.chat-content,
+  body.has-wallpaper .chat-wrap,
+  body.has-wallpaper #chat-box,
+  body.has-wallpaper #chat-hero,
+  body.has-wallpaper .pillbar,
+  body.has-wallpaper .chat-toolbar,
+  body.has-wallpaper .run-card,
+  body.has-wallpaper #chat-settings,
+  body.has-wallpaper .side-foot,
+  body.has-wallpaper .usercard,
+  body.has-wallpaper .card,
+  body.has-wallpaper .stat{
+    background-image:none!important;
+    filter:none!important;
+  }
+  /* 壁纸层必须始终按变量重新声明，保证任何历史规则都无法把它盖掉 */
+  body.has-wallpaper::before{
+    background-image:var(--wallpaper-image,none)!important;
+  }
+  /* 关键：主题自带的插画层(body[data-theme=dragongirl]::after，opacity:1)原先整个盖在
+     用户自选壁纸层之上，所以“更换背景图片”后用户看到的仍是主题原图，图片中部的浅色
+     区域就成了聊天框/输入框的留白。壁纸模式下必须关闭主题插画层。 */
+  body.has-wallpaper[data-theme=dragongirl]::after{
+    display:none!important;
+    opacity:0!important;
+  }
+  /* 角色区分：用户气泡保留极淡底色（不再有白雾/磨砂） */
+  body.has-wallpaper .chat-message.user,
+  body.has-wallpaper .chat-message.user::before,
+  body.has-wallpaper .chat-message.user::after,
+  body.has-wallpaper .chat-copy{
+    background-color:transparent!important;
+  }
+  /* 执行轨迹的时间轴圆点需要可见，否则步骤进度看不清 */
+  body.has-wallpaper .run-steps li::before,
+  body.has-wallpaper .run-outline>li::before{
+    background-color:var(--muted)!important;
+  }
+  /* 主操作按钮/开关必须有可见底色，否则无法点击 */
+  body.has-wallpaper .pill-send,
+  body.has-wallpaper #chat-send,
+  body.has-wallpaper #chat-cancel,
+  body.has-wallpaper button.primary,
+  body.has-wallpaper .pillbar button.primary{
+    background-color:var(--accent)!important;
+    color:#fff!important;
+  }
+  body.has-wallpaper .thinking-toggle.on{
+    background-color:var(--accent-soft)!important;
+    color:#6d28d9!important;
+  }
 </style>
 </head>
 <body>
@@ -4286,7 +4458,7 @@ function chatImageSource(value){
 }
 function chatImageButton(src,name){
   const button=document.createElement('button'); button.type='button'; button.className='chat-image-button';
-  const image=document.createElement('img'); image.className='chat-image'; image.alt=name || '聊天图片'; image.width=260; image.height=180; image.src=src; image.referrerPolicy='no-referrer';
+  const image=document.createElement('img'); image.className='chat-image'; image.alt=name || '聊天图片'; image.style.cssText='width:auto;height:auto'; image.src=src; image.referrerPolicy='no-referrer';
   button.append(image); button.title='点击放大图片';
   button.onclick=()=>{
     const dialog=document.createElement('dialog'); dialog.style.maxWidth='95vw';

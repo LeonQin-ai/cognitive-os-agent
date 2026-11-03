@@ -58,6 +58,19 @@ const http=require('node:http');
       assert.equal(style.backdrop,'none',`${selector} must not blur the Dragon Girl artwork`);
     }
     assert.equal(dragonTheme.artworkOpacity,'1','Dragon Girl artwork must render at full opacity');
+    await page.evaluate(()=>{
+      document.body.classList.add('has-wallpaper');
+      document.body.style.setProperty('--wallpaper-image','linear-gradient(red, blue)');
+      chatAddBubble('user','wallpaper transparency probe');
+    });
+    const wallpaper=await page.evaluate(()=>({
+      bubble:getComputedStyle(document.querySelector('#chat-box .chat-message.user')).backgroundColor,
+      themeLayer:getComputedStyle(document.body,'::after').display,
+      wallpaper:getComputedStyle(document.body,'::before').backgroundImage
+    }));
+    assert.equal(wallpaper.bubble,'rgba(0, 0, 0, 0)','user bubbles must not cover the chosen wallpaper');
+    assert.equal(wallpaper.themeLayer,'none','theme artwork must not cover the chosen wallpaper');
+    assert.ok(wallpaper.wallpaper.includes('linear-gradient'),'chosen wallpaper remains present');
     await page.locator('#chat-input').fill('请描述这张图片');
     const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aK1sAAAAASUVORK5CYII=','base64');
     await page.locator('#chat-file').setInputFiles({name:'fixture.png',mimeType:'image/png',buffer:png});

@@ -564,7 +564,16 @@ static void resolve_failed_tool(reasoning *r, const char *tool_name, const char 
             !strcmp(r->unresolved_failed_tools[i],"list_dir") &&
             !fs_exists(failed_scope) &&
             same_nested_workspace_path(r,failed_scope,scope);
-        if (retry || replacement || relocated_read || header_relocated || directory_relocated) {
+        /* Listing the immediate parent successfully proves that a guessed
+         * missing directory is absent. Do not waive existing/inaccessible paths,
+         * file reads, writes, or unrelated ancestor listings. */
+        const char *slash=strrchr(failed_scope,'/');
+        int absent_directory_verified = !strcmp(tool_name,"list_dir") &&
+            !strcmp(r->unresolved_failed_tools[i],"list_dir") && slash &&
+            strlen(scope)==(size_t)(slash-failed_scope) &&
+            !strncmp(scope,failed_scope,(size_t)(slash-failed_scope)) &&
+            !fs_exists(failed_scope);
+        if (retry || replacement || relocated_read || header_relocated || directory_relocated || absent_directory_verified) {
             --r->unresolved_failed_tool_count;
             if (i < r->unresolved_failed_tool_count) {
                 memmove(r->unresolved_failed_tools[i], r->unresolved_failed_tools[i + 1],

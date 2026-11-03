@@ -10,7 +10,12 @@ class Provider(BaseHTTPRequestHandler):
         body=json.loads(self.rfile.read(int(self.headers['Content-Length'])))
         text=body['messages'][-1]['content']
         current=text.split('## Current request\n',1)[-1].split('\n## ',1)[0]
-        if 'MALFORMED180' in current:
+        if 'PARENT252' in current:
+            n=counts.get('parent252',0);counts['parent252']=n+1
+            answer=(json.dumps([{'tool':'list_dir','args':{'path':'missing-probe'}}]) if n==0 else
+                    json.dumps([{'tool':'list_dir','args':{'path':'.'}}]) if n==1 else
+                    '目录检查结果：missing-probe 不存在，父目录已核实。')
+        elif 'MALFORMED180' in current:
             n=counts.get('bad180',0);counts['bad180']=n+1
             answer=('<tool_call>file_read\",\"args\":{\"path\":\"index180.html\"}</tool_call>' if n==0 else
                     json.dumps([{'tool':'file_write','args':{'path':'index180.html','content':'<html>verified</html>'}}]) if n==1 else
@@ -90,7 +95,7 @@ with tempfile.TemporaryDirectory(prefix='coa-completion-recovery-') as folder:
             headers={'Content-Type':'application/json'})
         with urllib.request.urlopen(req,timeout=5) as r: return json.load(r)
     with (backend/'build/completion-diagnostics-e2e.log').open('w',encoding='utf-8') as log:
-        process = subprocess.Popen([str(backend/'build/cognitive-os-agent.exe'),'--state',str(state),
+        process = subprocess.Popen([str(backend/os.environ.get('COA_BUILD_DIR','build')/('cognitive-os-agent.exe' if os.name=='nt' else 'cognitive-os-agent')),'--state',str(state),
             '--workspace',str(state),'serve',str(port)],cwd=backend,stdout=log,stderr=log,
             env={**os.environ,'COA_TOOL_PROTOCOL':'legacy'},
             creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
@@ -108,6 +113,10 @@ with tempfile.TemporaryDirectory(prefix='coa-completion-recovery-') as folder:
                     if t['status'] in ('DONE','FAILED','CANCELLED','TIMEOUT'): return t
                     assert time.monotonic()<deadline,t
                     time.sleep(.05)
+            parent=finished(request('/v1/tasks',{'prompt':'检查目录 PARENT252'})['id'])
+            assert parent['status']=='DONE',parent
+            assert any(st['tool']=='list_dir' and st['ok']==0 for st in parent['steps']),parent
+            print('PASS #252: successful parent listing verifies absent exploratory directory')
             repaired=finished(request('/v1/tasks',{'prompt':'生成HTML文档 MALFORMED180'})['id'])
             assert repaired['status']=='DONE' and counts['bad180']==5,repaired
             assert [st['tool'] for st in repaired['steps']]==['file_write','file_read'],repaired
