@@ -261,7 +261,7 @@ listener *listen_addr(const char *host, uint16_t port) {
         return NULL;
     }
 
-    if (listen(fd, 16) < 0) {
+    if (listen(fd, 128) < 0) {
         set_err("listen failed");
         CLOSEFD(fd);
         return NULL;
