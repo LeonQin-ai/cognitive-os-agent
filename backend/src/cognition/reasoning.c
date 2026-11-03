@@ -21,6 +21,8 @@
 #include "plugin_intelligence/generator.h"
 #include "memory/memory.h"
 #include "memory/service.h"
+#include "memory/runtime.h"
+#include "memory/record.h"
 #include "retrieval/engine.h"
 #include "os/os_fs.h"
 #include "os/os_thread.h"
@@ -169,6 +171,8 @@ struct reasoning {
     tool_registry *tools;
     memory *mem;
     memory_service *memsvc;
+    memory_runtime *memrt;
+    int memory_mmu_enabled;
     policy_engine *policy;
     snapshot *snap;
     event_bus *bus;
@@ -335,6 +339,31 @@ struct reasoning {
     long long usage_base_in, usage_base_out, usage_base_reason, usage_base_reports;
     long long run_usage_in, run_usage_out, run_usage_reports;
 };
+
+/* Context MMU already enforces its own token budget and representation level.
+ * Do not pass it through the legacy 300-byte-per-item renderer: that second
+ * truncation can keep a long task description while dropping the verified
+ * result at the end of the record. */
+static char *render_mmu_context(cJSON *arr, size_t cap) {
+    strbuf sb; strbuf_init(&sb);
+    if (!arr || !cJSON_IsArray(arr)) return strbuf_detach(&sb);
+    cJSON *it;
+    cJSON_ArrayForEach(it, arr) {
+        cJSON *text=cJSON_GetObjectItemCaseSensitive(it,"text");
+        cJSON *status=cJSON_GetObjectItemCaseSensitive(it,"status");
+        cJSON *scope=cJSON_GetObjectItemCaseSensitive(it,"scope");
+        const char *t=cJSON_GetStringValue(text);
+        if (!t || !*t || sb.len>=cap) continue;
+        strbuf_appendf(&sb,"[memory status=%s scope=%s]\n",
+            cJSON_GetStringValue(status)?cJSON_GetStringValue(status):"unknown",
+            cJSON_GetStringValue(scope)?cJSON_GetStringValue(scope):"unknown");
+        size_t left=cap>sb.len?cap-sb.len:0,n=strlen(t); if(n>left)n=left;
+        while(n>0 && ((unsigned char)t[n]&0xc0)==0x80)n--;
+        strbuf_append_n(&sb,t,n);strbuf_append(&sb,"\n");
+        if(n<strlen(t)){strbuf_append(&sb,"…[memory item truncated]\n");break;}
+    }
+    return strbuf_detach(&sb);
+}
 
 static int is_exploratory_tool(const char *name) {
     return !strcmp(name, "grep") || !strcmp(name, "glob") || !strcmp(name, "list_dir");
@@ -1976,7 +2005,7 @@ static char *build_context(reasoning *r, const char *prompt) {
      * answer passage; passage-to-passage similarity beats question-to-passage
      * for recall. */
     cold_mark = b.len;
-    if (r->mem && r->attention && atomic_load(&r->ss->shared_memory_global)) {
+    if ((r->memrt || r->mem) && r->attention && atomic_load(&r->ss->shared_memory_global)) {
         char hyde_query_buf[1024];
         const char *retrieval_query = prompt;
         if (r->hyde && r->llm) {
@@ -1987,7 +2016,11 @@ static char *build_context(reasoning *r, const char *prompt) {
                 retrieval_query = hyde_query_buf;
             }
         }
-        char *ctx_json = context_build(r->mem, retrieval_query, 12);
+        char scope[MEM_SCOPE_MAX];
+        snprintf(scope, sizeof(scope), "session/%.54s", r->cur && r->cur->id ? r->cur->id : "default");
+        char *ctx_json = r->memory_mmu_enabled && r->memrt
+            ? memory_runtime_recall(r->memrt, scope, retrieval_query, r->budget_cold)
+            : (r->mem ? context_build(r->mem, retrieval_query, 12) : xstrdup("[]"));
         if (ctx_json) {
             cJSON *arr = cJSON_Parse(ctx_json);
             if (arr && cJSON_IsArray(arr) && cJSON_GetArraySize(arr) > 0) {
@@ -2015,9 +2048,13 @@ static char *build_context(reasoning *r, const char *prompt) {
                         if (it)
                             cJSON_AddItemToArray(sel, cJSON_Duplicate(it, 1));
                     }
-                    char *sel_json = cJSON_PrintUnformatted(sel);
-                    rendered = context_render_text(sel_json);
-                    free(sel_json);
+                    if (r->memory_mmu_enabled && r->memrt)
+                        rendered = render_mmu_context(sel, (size_t)r->budget_cold);
+                    else {
+                        char *sel_json = cJSON_PrintUnformatted(sel);
+                        rendered = context_render_text(sel_json);
+                        free(sel_json);
+                    }
                     cJSON_Delete(sel);
                 } else {
                     rendered = context_render_text(ctx_json);
@@ -2123,8 +2160,9 @@ static char *build_context(reasoning *r, const char *prompt) {
     strbuf_append(&b, "## 重要约束\n"
                           "- 上面的会话摘要、Session notes、Conversation history、Retrieved context 都只是背景参考，"
                           "不代表当前请求已经完成。\n"
-                          "- 即使历史记录里出现过相似的任务，也必须针对「Current request」重新规划并实际执行动作，"
-                          "不允许凭历史记录直接回答\"已完成\"。\n"
+                          "- 当前请求若要求执行操作、修改文件、生成产物或验证环境，必须针对本轮重新执行并取得工具证据，"
+                          "不能凭历史记录声称操作已完成。当前请求若只是询问事实，则可以直接使用作用域匹配的 Retrieved context；"
+                          "记录过时、冲突或置信度不足时应明确说明不确定，不要把记忆伪装成本轮工具结果。\n"
                           "- 回答中声称对文件做过任何改动，必须以本轮实际出现的 [tool] 动作结果为依据；"
                           "没有实际执行过对应动作，就不得声称做过。\n"
                           "- 判断项目是否为 Git 仓库时，必须运行 `git rev-parse --show-toplevel` 或 `git status` 并使用准确路径；"
@@ -3297,15 +3335,28 @@ static void memory_record_completed_run(reasoning *r, const char *answer) {
     char *task_head;
     char *shaped;
 
-    if (!r || !r->mem || !atomic_load(&r->ss->shared_memory_global))
+    if (!r || (!r->mem && !r->memrt) || !atomic_load(&r->ss->shared_memory_global))
         return;
-    shaped = str_head(answer ? answer : "", LEARN_RESULT_CAP);
-    if (r->memsvc)
-        memory_service_remember(r->memsvc, MEM_EPISODIC,
-                                r->last_prompt ? r->last_prompt : "(task)", shaped ? shaped : "");
-    else
-        memory_record_experience(r->mem, r->last_prompt ? r->last_prompt : "(task)", shaped ? shaped : "");
-    free(shaped);
+    if (r->mem) {
+        shaped = str_head(answer ? answer : "", LEARN_RESULT_CAP);
+        if (r->memsvc)
+            memory_service_remember(r->memsvc, MEM_EPISODIC,
+                                    r->last_prompt ? r->last_prompt : "(task)", shaped ? shaped : "");
+        else
+            memory_record_experience(r->mem, r->last_prompt ? r->last_prompt : "(task)", shaped ? shaped : "");
+        free(shaped);
+    }
+    if (r->memrt) {
+        int successful_tools = 0;
+        char scope[MEM_SCOPE_MAX];
+        mutex_lock(&r->progress_mtx);
+        for (int i = 0; i < r->n_steps; i++) successful_tools += r->steps[i].ok == 1;
+        mutex_unlock(&r->progress_mtx);
+        snprintf(scope, sizeof(scope), "session/%.54s", r->cur && r->cur->id ? r->cur->id : "default");
+        memory_runtime_learn(r->memrt, scope, r->last_prompt ? r->last_prompt : "(task)",
+                             answer ? answer : "", successful_tools, r->all_actions_ok);
+    }
+    if (!r->mem) return;
     task_head = str_head(r->last_prompt ? r->last_prompt : "(task)", 80);
     mutex_lock(&r->progress_mtx);
     for (int i = 0; i < r->n_steps; i++) {
@@ -3343,6 +3394,8 @@ reasoning *reasoning_new(const reasoning_config *cfg) {
     r->tools = cfg->tools;
     r->mem = cfg->memory;
     r->memsvc = cfg->memory_service;
+    r->memrt = cfg->memory_runtime;
+    r->memory_mmu_enabled = cfg->memory_mmu_enabled;
     r->policy = cfg->policy;
     r->snap = cfg->snapshot;
     r->bus = cfg->bus;

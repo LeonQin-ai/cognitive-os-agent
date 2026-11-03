@@ -124,6 +124,12 @@ case "$TARGET" in
     echo "[build] bench-runtime"
     $CC $CFLAGS -o build/bench-runtime$EXE $SRCS tests/bench_runtime.c $LIBS
     ;;
+  memory-bench)
+    echo "[build] bench-memory-scale"
+    EXTRA_LIBS=""
+    if [[ "$EXE" == .exe ]]; then EXTRA_LIBS="-lpsapi"; fi
+    $CC $CFLAGS -o build/bench-memory-scale$EXE $SRCS tests/bench_memory_scale.c $LIBS $EXTRA_LIBS
+    ;;
   bench)
     echo "[build] cognitive-os-agent-bench"
     $CC $CFLAGS -o build/cognitive-os-agent-bench$EXE $SRCS tests/bench_agent.c $LIBS
@@ -148,7 +154,7 @@ case "$TARGET" in
     rm -rf build
     ;;
   *)
-    echo "usage: $0 [all|cli|test|mock|e2e|bench|bench-real|bench-bfcl|bench-gaia|test-plan-cycle|clean]" >&2
+    echo "usage: $0 [all|cli|test|mock|e2e|bench|memory-bench|bench-real|bench-bfcl|bench-gaia|test-plan-cycle|clean]" >&2
     exit 1
     ;;
 esac

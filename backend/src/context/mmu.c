@@ -341,6 +341,15 @@ static double scope_factor(const ctx_mmu_config *cfg, const char *scope) {
     return 0.4;
 }
 
+/* A score penalty is not an authorization boundary. Session/agent-private
+ * records must never enter another scope's candidate set. */
+static int scope_allowed(const ctx_mmu_config *cfg, const char *scope) {
+    if (!cfg->scope || !cfg->scope[0]) return 1;
+    if (!scope || !scope[0]) return 0;
+    return strcmp(scope, cfg->scope) == 0 || strcmp(scope, "global") == 0 ||
+           strcmp(scope, "user/global") == 0;
+}
+
 static double factor_score(const ctx_mmu_config *cfg, const ctx_factors *f) {
     double wsum = cfg->w_relevance + cfg->w_importance + cfg->w_confidence +
                   cfg->w_utility + cfg->w_recency + cfg->w_salience +
@@ -604,6 +613,8 @@ char *ctx_mmu_recall(ctx_mmu *mmu, mem_records *rs, void *vs,
     for (i = 0; i < mmu->count; i++) {
         ctx_page *pg = &mmu->pages[i];
         ctx_factors f;
+        if (!scope_allowed(&c, pg->scope))
+            continue;
         double age = (double)(now > pg->last_access_ms ? now - pg->last_access_ms : 0);
         f.relevance = pg->relevance;
         f.importance = pg->importance;
@@ -612,7 +623,7 @@ char *ctx_mmu_recall(ctx_mmu *mmu, mem_records *rs, void *vs,
         f.recency = exp2(-age / (c.recency_halflife_ms > 0 ? c.recency_halflife_ms : 1.0));
         f.salience = pg->salience;
         f.scope = scope_factor(&c, pg->scope);
-        scores[i] = factor_score(&c, &f);
+        scores[norder] = factor_score(&c, &f);
         order[norder++] = pg;
     }
     /* insertion sort by score desc (candidate pools are small) */

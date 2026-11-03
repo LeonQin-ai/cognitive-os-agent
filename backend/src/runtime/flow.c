@@ -493,6 +493,8 @@ static reasoning *flow_reasoning_new(runtime_ctx *ctx,const char *workspace) {
     rc.llm = ctx->llm;
     rc.tools = ctx->tools;
     rc.memory = ctx->memory;
+    rc.memory_runtime = ctx->memory_v3;
+    rc.memory_mmu_enabled = ctx->config ? (int)config_get_int(ctx->config, "context.mmu.enabled", 1) : 1;
     rc.policy = ctx->policy;
     rc.bus = ctx->bus;
     rc.metrics = ctx->metrics;
@@ -524,7 +526,9 @@ static void flow_worker(void *arg) {
         reasoning_set_completion_prompt(r,j->nd->task);
         reasoning_set_abort_parent(r,j->parent);
         flow_prog_node_attach(j->task_id, j->nd->id, r);
-        j->rc = prompt ? reasoning_run(r, prompt, &j->out) : -1;
+        char agent_session[192];
+        snprintf(agent_session,sizeof(agent_session),"agent:%s",j->nd->agent[0]?j->nd->agent:"default");
+        j->rc = prompt ? reasoning_run_ex(r, agent_session, prompt, &j->out) : -1;
         if (j->rc == 0 && !agent_pool_deliverable_valid(j->ctx->agents, j->nd->agent,
                                                            j->task, j->out, j->workspace)) {
             strbuf retry;
@@ -534,7 +538,7 @@ static void flow_worker(void *arg) {
             char *retry_prompt = agent_pool_task_prompt(j->ctx->agents, j->nd->agent, retry.buf);
             strbuf_free(&retry);
             free(j->out); j->out = NULL;
-            j->rc = retry_prompt ? reasoning_run(r, retry_prompt, &j->out) : -1;
+            j->rc = retry_prompt ? reasoning_run_ex(r, agent_session, retry_prompt, &j->out) : -1;
             free(retry_prompt);
             if (j->rc == 0 && !agent_pool_deliverable_valid(j->ctx->agents, j->nd->agent,
                                                                j->task, j->out, j->workspace)) {

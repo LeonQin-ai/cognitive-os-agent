@@ -6563,6 +6563,9 @@ static void test_mmu_v3(void) {
     cfg.l2_top_k = 2;
     cfg.now_ms = now + 1000;
 
+    /* Scope is an isolation boundary, not merely a ranking preference. */
+    cfg.scope = "agent/status";
+
     /* first recall: zig query surfaces the zig record */
     json = ctx_mmu_recall(mmu, rs, vs, "zig syntax check", &cfg);
     CHECK(json != NULL && json[0] == '[');
@@ -6591,6 +6594,16 @@ static void test_mmu_v3(void) {
     }
     cJSON_Delete(arr);
     arr = NULL;
+
+    free(json);
+    json = ctx_mmu_recall(mmu, rs, vs, "concise Chinese answers", &cfg);
+    CHECK(json && strstr(json, "User prefers concise answers in Chinese")); /* user/global is shared */
+    cfg.scope = "unrelated/session";
+    free(json);
+    json = ctx_mmu_recall(mmu, rs, vs, "zig syntax check", &cfg);
+    CHECK(json && !strstr(json, "zig toolchain"));
+    CHECK(json && strstr(json, "User prefers concise answers in Chinese"));
+    cfg.scope = NULL;
 
     /* budget respected */
     st = ctx_mmu_stats_json(mmu);
@@ -6641,6 +6654,60 @@ done:
     ctx_mmu_free(mmu);
     vectorstore_free(vs);
     mem_records_free(rs);
+}
+
+static void test_memory_runtime_bridge(void) {
+    section("production memory runtime bridge");
+    memory_runtime *rt = memory_runtime_new("state-test/runtime-memory-bridge");
+    CHECK(rt != NULL); if (!rt) return;
+    CHECK(memory_runtime_learn(rt, "session/A", "inspect alpha", "ALPHA_VERIFIED", 2, 1) == 1);
+    CHECK(memory_runtime_count(rt) >= 1);
+    char *a = memory_runtime_recall(rt, "session/A", "alpha verified", 4096);
+    char *b = memory_runtime_recall(rt, "session/B", "alpha verified", 4096);
+    CHECK(a && strstr(a, "ALPHA_VERIFIED"));
+    CHECK(b && !strstr(b, "ALPHA_VERIFIED"));
+    free(a); free(b); memory_runtime_free(rt);
+    rt = memory_runtime_new("state-test/runtime-memory-bridge");
+    CHECK(rt != NULL && memory_runtime_count(rt) >= 1);
+    a = rt ? memory_runtime_recall(rt, "session/A", "alpha verified", 4096) : NULL;
+    CHECK(a && strstr(a, "ALPHA_VERIFIED"));
+    free(a); memory_runtime_free(rt);
+}
+
+typedef struct mmu_agent_fixture { int saw_private; } mmu_agent_fixture;
+static int mmu_agent_chat(llm *provider, const llm_request *req, llm_response *resp) {
+    mmu_agent_fixture *f = provider->impl;
+    memset(resp, 0, sizeof(*resp));
+    for (size_t i = 0; i < req->num_messages; i++)
+        if (req->messages[i].content && strstr(req->messages[i].content, "AGENT_PATH_PRIVATE_FACT"))
+            f->saw_private = 1;
+    resp->content = xstrdup("The requested fact was handled.");
+    fixture_final_decision(req, resp, 1);
+    return 0;
+}
+
+static void test_memory_runtime_agent_path(void) {
+    section("Context MMU is injected into the real Agent task path");
+    static const llm_vtable vt = {.chat = mmu_agent_chat};
+    mmu_agent_fixture fixture = {0};
+    llm provider = {.vt=&vt,.provider="fixture",.model="fixture",.impl=&fixture};
+    tool_registry *tools = tool_registry_new();
+    memory_runtime *rt = memory_runtime_new("state-test/runtime-agent-path");
+    CHECK(tools && rt); if (!tools || !rt) goto done;
+    CHECK(memory_runtime_learn(rt, "session/scope-A", "remember private",
+                               "AGENT_PATH_PRIVATE_FACT", 1, 1) == 1);
+    reasoning_config cfg = {0}; cfg.llm=&provider; cfg.tools=tools;
+    cfg.memory_runtime=rt; cfg.memory_mmu_enabled=1; cfg.max_rounds=2;
+    reasoning *r = reasoning_new(&cfg); CHECK(r != NULL); if (!r) goto done;
+    char *answer=NULL;
+    CHECK(reasoning_run_ex(r,"scope-A","What is the private fact?",&answer)==0);
+    CHECK(fixture.saw_private==1); free(answer); answer=NULL;
+    fixture.saw_private=0;
+    CHECK(reasoning_run_ex(r,"scope-B","What is the private fact?",&answer)==0);
+    CHECK(fixture.saw_private==0); free(answer);
+    reasoning_free(r);
+done:
+    memory_runtime_free(rt); tool_registry_free(tools);
 }
 
 /* ---------- secret security: detection, redaction, modes, boundaries ------ */
@@ -9875,6 +9942,10 @@ int main(int argc, char **argv) {
     if(argc==2 && !strcmp(argv[1],"--journal")) {
         test_tasklog(); printf("%d passed, %d failed\n",g_pass,g_fail); return g_fail?1:0;
     }
+    if(argc==2 && !strcmp(argv[1],"--memory-v3-runtime")) {
+        test_mmu_v3(); test_memory_runtime_bridge(); test_memory_runtime_agent_path();
+        printf("%d passed, %d failed\n",g_pass,g_fail); return g_fail?1:0;
+    }
     if(argc==2 && !strcmp(argv[1],"--trace")) {
         test_trace();
         printf("%d passed, %d failed\n",g_pass,g_fail);return g_fail?1:0;
@@ -10006,7 +10077,7 @@ int main(int argc, char **argv) {
     test_memory_lifecycle();
     test_record_v3();
     test_promotion_v3();
-    test_mmu_v3();test_memory_cache_updates();test_memory_deleted_index();test_nested_run_cleanup();
+    test_mmu_v3();test_memory_runtime_bridge();test_memory_runtime_agent_path();test_memory_cache_updates();test_memory_deleted_index();test_nested_run_cleanup();
     test_ssh_only_redaction();
     test_security();
     test_context_budget();
