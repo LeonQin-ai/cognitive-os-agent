@@ -907,6 +907,11 @@ static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_act
                 strbuf_appendf(&diagnostic,"图片/视频帧模型输出达到 token 上限（模型 %s）：%s。未执行本次响应中的任何动作；需要重新生成完整响应。",
                     llm->model ? llm->model:"unknown",resp.error ? resp.error:"incomplete response");
                 *err_out=strbuf_detach(&diagnostic);
+            } else if(visual && resp.http_status==429) {
+                strbuf diagnostic; strbuf_init(&diagnostic);
+                strbuf_appendf(&diagnostic,"模型服务限流或账户配额不足（模型 %s，HTTP 429）：%s。请根据服务端返回的重置时间或限流说明恢复任务。",
+                    llm->model ? llm->model:"unknown",resp.error ? resp.error:"rate limit exceeded");
+                *err_out=strbuf_detach(&diagnostic);
             } else if(visual) {
                 strbuf diagnostic; strbuf_init(&diagnostic);
                 strbuf_appendf(&diagnostic,"图片/视频帧模型请求失败（模型 %s，HTTP 等待超时配置 %ld ms）：%s。请检查接口是否支持图片输入；慢响应可调整 COA_LLM_VISION_TIMEOUT_MS。",
