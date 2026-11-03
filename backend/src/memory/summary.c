@@ -190,6 +190,24 @@ int memory_summary_run(runtime_ctx *ctx,task *t,char **answer) {
     cJSON_AddNumberToObject(result,"longterm_count",cJSON_GetArraySize(cJSON_GetObjectItemCaseSensitive(source,"longterm")));cJSON_Delete(source);
     if(ok)cJSON_AddStringToObject(result,"text",resp.content);
     else cJSON_AddStringToObject(result,"error",resp.truncated?"模型摘要达到输出上限；未覆盖上次成功摘要":"摘要未完成；上次成功摘要已保留");
+    if(ok){
+        /* Persist before the terminal status becomes observable: a client
+         * that saw DONE must be able to recover the summary after a hard
+         * restart, even when the process dies between the scheduler's
+         * status flip and task_done()'s journal append. The GET path keeps
+         * its task_id dedupe and retries the append on a failure here. */
+        char path[800];summary_path(ctx,path,sizeof path,"summaries.jsonl");
+        char *row=cJSON_PrintUnformatted(result);
+        if(row){
+            strbuf line;strbuf_init(&line);
+            strbuf_append(&line,"\n");strbuf_append(&line,row);strbuf_append(&line,"\n");
+            mutex_lock(&ctx->summary_lock);
+            (void)fs_append_file(path,line.buf,line.len);
+            mutex_unlock(&ctx->summary_lock);
+            strbuf_free(&line);
+        }
+        free(row);
+    }
     *answer=cJSON_PrintUnformatted(result);
     p=cJSON_PrintUnformatted(result);if(p)task_set_progress(t,p);free(p);
     cJSON_Delete(result);free(resp.content);free(resp.error);free(resp.tool_actions_json);llm_destroy(l);cJSON_Delete(cfg);
