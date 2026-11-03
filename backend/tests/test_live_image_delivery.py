@@ -2,6 +2,7 @@
 import argparse,base64,json,os,socket,subprocess,tempfile,time,urllib.request
 from pathlib import Path
 root=Path(__file__).resolve().parents[1]
+build=root/os.environ.get('COA_BUILD_DIR','build')
 p=argparse.ArgumentParser(__doc__);p.add_argument('--config',type=Path,required=True);p.add_argument('--report',type=Path,default=root/'build/live-image-delivery.json');a=p.parse_args()
 cfg={k:v for k,v in json.loads(a.config.read_text(encoding='utf-8-sig')).items() if k.startswith('llm.')}
 cfg.update({'http.bind':'127.0.0.1','reasoning.max_rounds':12,'scheduler.workers':1})
@@ -14,7 +15,7 @@ with tempfile.TemporaryDirectory(prefix='coa-live-image-') as folder:
   with urllib.request.urlopen(request,timeout=10) as r:return json.load(r)
  a.report.parent.mkdir(parents=True,exist_ok=True)
  with a.report.with_suffix('.log').open('w',encoding='utf8') as log:
-  proc=subprocess.Popen([str(root/'build'/('cognitive-os-agent.exe' if os.name=='nt' else 'cognitive-os-agent')),'--state',folder,'--workspace',folder,'serve',str(port)],cwd=root,env={**os.environ,'COA_TOOL_PROTOCOL':'native'},stdout=log,stderr=log,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0));tid=None
+  proc=subprocess.Popen([str(build/('cognitive-os-agent.exe' if os.name=='nt' else 'cognitive-os-agent')),'--state',folder,'--workspace',folder,'serve',str(port)],cwd=root,env={**os.environ,'COA_TOOL_PROTOCOL':'native'},stdout=log,stderr=log,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0));tid=None
   try:
    for _ in range(150):
     try:api('GET','/v1/scheduler');break
@@ -43,7 +44,11 @@ with tempfile.TemporaryDirectory(prefix='coa-live-image-') as folder:
    image=Image.open(io.BytesIO(content)).convert('RGB')
    assert image.size==(240,120) and image.getpixel((30,60))==(255,0,0) and image.getpixel((210,60))==(0,0,255)
    assert 'image.png' in task.get('output','')
-   report['preview_bytes']=len(content);report['pixel_checks_passed']=True;report['passed']=True
+   report['preview_bytes']=len(content);report['pixel_checks_passed']=True
+   ui=subprocess.run(['node',str(root/'tests/test_live_image_ui.cjs'),f'http://127.0.0.1:{port}',str(tid)],capture_output=True,text=True,timeout=90)
+   report['ui_output']=ui.stdout+ui.stderr
+   assert ui.returncode==0,report['ui_output']
+   report['ui_passed']=True;report['passed']=True
   except Exception as e:report['error']=str(e)
   finally:
    try:
