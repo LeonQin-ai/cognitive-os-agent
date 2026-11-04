@@ -41,6 +41,11 @@ def exercise(protocol,mode,prompt='Verify the requested result.'):
         if mode=='full':replies += [action('file_read',path=path,offset_bytes=4000),action('file_read',path=path,offset_bytes=8000)]
         replies += [done];expected='FAILED' if mode=='partial' else 'DONE'
     elif mode=='api_missing':acceptance={'artifacts':['report.any']};replies=[done];expected='FAILED'
+    elif mode=='batch50':
+        outputs=[f'chapter{i:02d}.md' for i in range(1,51)]
+        replies=[declare(artifacts=outputs),action('shell',command='python produce50.py',outputs=outputs)]
+        replies += [[action('file_read',path=p) for p in outputs[i:i+8]] for i in range(0,50,8)]
+        replies += [done];expected='DONE'
     elif mode in ('script_output','script_reuse'):
         # Shell-declared artifact: the command writes the file and declares it
         # in outputs[]; the version-matched read back must satisfy acceptance.
@@ -111,6 +116,8 @@ def exercise(protocol,mode,prompt='Verify the requested result.'):
             if mode in ('edit','edit_failed','edit_stale','preexisting','stale','script_unchanged','baseline_capacity'):(work/'report.any').write_text('OLD_ARTIFACT',encoding='utf8')
             if mode=='baseline_capacity':
                 for path in sources:(work/path).write_text('SOURCE',encoding='utf8')
+            if mode=='batch50':
+                (work/'produce50.py').write_text("from pathlib import Path\nfor i in range(1,51): Path(f'chapter{i:02d}.md').write_text(f'CHAPTER {i} VERIFIED CONTENT',encoding='utf8')\n",encoding='utf8')
             (work/'cognitive-os-agent.json').write_text(json.dumps({'llm.provider':'openai','llm.model':'contract-fixture','llm.api_key':'fixture','llm.base_url':f'http://127.0.0.1:{server.server_port}','reasoning.max_rounds':16}))
             with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
             def api(path,body=None):
@@ -133,7 +140,7 @@ def exercise(protocol,mode,prompt='Verify the requested result.'):
                         if task['status'] not in ('RUNNING','QUEUED'):break
                         assert time.monotonic()<deadline,task;time.sleep(.02)
                     assert task['status']==expected,(protocol,mode,task)
-                    assert calls<=(16 if mode=='baseline_capacity' else 10),(mode,calls,task)
+                    assert calls<=(16 if mode=='baseline_capacity' else 12 if mode=='batch50' else 10),(mode,calls,task)
                     if expected=='DONE':
                         assert task['output']==FINAL,task
                         if mode=='artifact':assert (work/'report.any').read_text()==CONTENT
@@ -171,6 +178,7 @@ def exercise(protocol,mode,prompt='Verify the requested result.'):
     finally:server.shutdown();server.server_close()
 
 if __name__=='__main__':
+    for protocol in ('native','legacy'):exercise(protocol,'batch50')
     for protocol in ('native','legacy'):
         for mode in ('edit','edit_failed','edit_stale'):exercise(protocol,mode)
     exercise('native','plain_final')

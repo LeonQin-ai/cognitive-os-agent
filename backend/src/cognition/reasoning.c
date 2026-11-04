@@ -278,7 +278,7 @@ struct reasoning {
      * not make alternating old reads look like newly discovered evidence. */
     struct { char path[2048]; uint64_t version, digest; unsigned producer_step; } artifact_seen[128];
     int artifact_seen_n;
-    uint64_t action_output_versions_before[16];
+    uint64_t action_output_versions_before[128];
     int action_outputs_captured;
     /* Pre-work fingerprint per accepted artifact, captured when the
      * obligation is first merged. A later version change proves the run
@@ -2583,7 +2583,7 @@ static void capture_action_output_versions(reasoning *r,const char *args_json) {
     r->action_outputs_captured=0;
     cJSON *args=cJSON_Parse(args_json?args_json:"{}"),*item;
     cJSON_ArrayForEach(item,cJSON_GetObjectItemCaseSensitive(args,"outputs")) {
-        if(r->action_outputs_captured==16)break;
+        if(r->action_outputs_captured==(int)(sizeof(r->action_output_versions_before)/sizeof(r->action_output_versions_before[0])))break;
         uint64_t before=0;
         if(cJSON_IsString(item)) {
             char path[2048];normalized_evidence_path(r,item->valuestring,path,sizeof(path));
@@ -2599,7 +2599,7 @@ static int declared_artifact_progress(reasoning *r,const char *args_json) {
     int changed=0,checked=0;
     int declared=cJSON_IsArray(outputs) && cJSON_GetArraySize(outputs)>0;
     cJSON_ArrayForEach(item,outputs) {
-        if(++checked>16)break;
+        if(++checked>(int)(sizeof(r->action_output_versions_before)/sizeof(r->action_output_versions_before[0])))break;
         if(!cJSON_IsString(item))continue;
         char path[2048];normalized_evidence_path(r,item->valuestring,path,sizeof(path));
         if(fs_is_dir(path))continue;
