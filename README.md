@@ -40,7 +40,7 @@ Document generation, browser access, and multimodal tasks depend on the selected
 
 ### 1. Install or build
 
-Download a Windows installer, Linux portable archive, or macOS package from **[Releases](https://github.com/LeonQin-ai/cognitive-os-agent/releases/latest)**. Open the desktop app, or run the server in the extracted Linux package:
+Download a Windows installer, Linux **x64 / ARM64 (AArch64)** portable archive, or macOS package from **[Releases](https://github.com/LeonQin-ai/cognitive-os-agent/releases/latest)**. Open the desktop app, or run the server in the extracted Linux package:
 
 ```bash
 ./cognitive-os-agent serve 18300

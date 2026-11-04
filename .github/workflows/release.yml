@@ -6,29 +6,43 @@ on:
 
 permissions:
   contents: write
+  actions: read
 
 jobs:
   linux:
-    name: Linux x64 package
-    runs-on: ubuntu-latest
+    name: Linux ${{ matrix.arch }} package
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            arch: x64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
     defaults:
       run:
         working-directory: backend
     steps:
       - uses: actions/checkout@v5
       - name: Build release binary
-        run: make -j"$(nproc)" build/cognitive-os-agent
+        run: make -j"$(nproc)" build/cognitive-os-agent build/cognitive-os-agent-test
+      - name: Native architecture and runtime smoke
+        run: |
+          file build/cognitive-os-agent
+          ./build/cognitive-os-agent --version
+          ./build/cognitive-os-agent-test --memory-v3-runtime
+          ./build/cognitive-os-agent-test --flow
       - name: Create portable package
         run: |
-          mkdir -p release/cognitive-os-agent-linux-x64
-          cp build/cognitive-os-agent release/cognitive-os-agent-linux-x64/
-          cp README.md release/cognitive-os-agent-linux-x64/
-          cp ../LICENSE ../NOTICE release/cognitive-os-agent-linux-x64/
-          tar -C release -czf cognitive-os-agent-linux-x64.tar.gz cognitive-os-agent-linux-x64
+          PACKAGE=cognitive-os-agent-linux-${{ matrix.arch }}
+          mkdir -p "release/$PACKAGE"
+          cp build/cognitive-os-agent README.md ../LICENSE ../NOTICE "release/$PACKAGE/"
+          tar -C release -czf "$PACKAGE.tar.gz" "$PACKAGE"
       - uses: actions/upload-artifact@v4
         with:
-          name: linux-x64
-          path: backend/cognitive-os-agent-linux-x64.tar.gz
+          name: linux-${{ matrix.arch }}
+          path: backend/cognitive-os-agent-linux-${{ matrix.arch }}.tar.gz
 
   windows:
     name: Windows installer
@@ -99,6 +113,17 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # Publish only after main CI for this exact release commit succeeds.
+          SHA=$(git rev-list -n 1 "$GITHUB_REF_NAME")
+          for attempt in $(seq 1 90); do
+            RESULT=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --commit "$SHA" --branch main --limit 1 --json status,conclusion --jq '.[0] | if .status == "completed" then .conclusion else "pending" end')
+            if [ "$RESULT" = success ]; then break; fi
+            if [ "$RESULT" != pending ] && [ -n "$RESULT" ] && [ "$RESULT" != null ]; then
+              echo "Release blocked by CI: $RESULT"; exit 1
+            fi
+            sleep 30
+          done
+          test "$RESULT" = success
           NOTES="backend/docs/releases/${GITHUB_REF_NAME}.md"
           test -f "$NOTES"
           gh release create "${GITHUB_REF_NAME}" release-assets/* \
