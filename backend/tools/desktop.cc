@@ -639,6 +639,16 @@ static void draw_caption_button(HWND hwnd, const DRAWITEMSTRUCT *item) {
 
 static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
+    case WM_NCPAINT:
+        return 0; /* Custom chrome paints the full client area, including edges. */
+    case WM_NCACTIVATE:
+        return TRUE; /* Prevent the default thick-frame activation border. */
+    case WM_ERASEBKGND: {
+        RECT client;GetClientRect(hwnd,&client);
+        HBRUSH brush=CreateSolidBrush(RGB(248,250,252));
+        FillRect((HDC)wp,&client,brush);DeleteObject(brush);
+        return 1;
+    }
     case WM_NCCALCSIZE:
         /* Keep WS_THICKFRAME for native resize/snap behavior, but make the
          * custom chrome and WebView occupy the whole window. DefWindowProc
@@ -811,6 +821,16 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
         MessageBoxW(nullptr, L"Failed to create the main window.",
                     L"cognitive-os-agent", MB_ICONERROR);
         return 1;
+    }
+    /* Windows 11 adds a DWM border even to a custom thick-frame window.
+     * Disable that border while retaining resize/snap hit testing. */
+    HMODULE dwm=LoadLibraryW(L"dwmapi.dll");
+    if(dwm){
+        typedef HRESULT (WINAPI *SetAttribute)(HWND,DWORD,LPCVOID,DWORD);
+        auto setAttribute=(SetAttribute)GetProcAddress(dwm,"DwmSetWindowAttribute");
+        const COLORREF noBorder=0xfffffffe;
+        if(setAttribute)setAttribute(g_hwnd,34,&noBorder,sizeof(noBorder));
+        FreeLibrary(dwm);
     }
     /* WNDCLASS only supplies a fallback icon. Set both window slots
      * explicitly so the installed app, taskbar and Alt+Tab use the same

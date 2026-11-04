@@ -35,6 +35,11 @@ const http=require('node:http');
     });
     await page.goto(`http://127.0.0.1:${server.address().port}`);
     await page.waitForTimeout(250);
+    await page.evaluate(()=>{document.body.classList.add('desktop-shell');showAppearance();});
+    await page.locator('#appearance-theme').selectOption('ocean');
+    assert.equal(await page.evaluate(()=>document.body.dataset.theme),'ocean','desktop theme selector remains accessible with the web top bar hidden');
+    assert.equal(await page.evaluate(()=>localStorage.getItem('cognitive-os-agent-theme')),'ocean');
+    await page.evaluate(()=>closeAppearance());
     const dragonTheme=await page.evaluate(()=>{
       document.body.dataset.theme='dragongirl';
       const selectors=['aside','.top','.pillbar','.card','#chat-hero'];

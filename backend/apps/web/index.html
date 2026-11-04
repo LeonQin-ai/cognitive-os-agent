@@ -1093,6 +1093,12 @@
     <button class="icon-btn" onclick="closeAppearance()" aria-label="关闭外观设置">✕</button>
   </div>
   <div class="appearance-body">
+    <label for="appearance-theme">界面主题</label>
+    <select id="appearance-theme" onchange="applyTheme(this.value)" aria-label="界面主题">
+      <option value="dark">Dark</option><option value="light">Light</option>
+      <option value="ocean">Ocean</option><option value="forest">Forest</option>
+      <option value="sunset">Sunset</option><option value="dragongirl">Dragon Girl</option>
+    </select>
     <label><input id="startup-animation" type="checkbox" disabled onchange="saveStartupAnimation(this)"> 启动主题动画（Windows 桌面版）</label>
     <div id="startup-animation-status" class="hint" role="status">下次启动生效；关闭后仍显示静态启动状态。</div>
     <div class="appearance-actions"><button onclick="$('startup-media').click()">自定义开机动画</button><button class="sec" onclick="saveStartupMedia(null)">恢复默认动画</button></div>
@@ -1211,6 +1217,7 @@ async function appearanceClear(){
   catch(e){ toast('移除失败：' + e.message); }
 }
 function showAppearance(){
+  $('appearance-theme').value=document.body.dataset.theme || 'dark';
   const dialog = $('appearance-dialog');
   if(!dialog.open) dialog.showModal();
   call('GET','/v1/desktop/startup-animation').then(r=>{const box=$('startup-animation');box.disabled=r.status!==200||!r.obj?.available;box.checked=!!r.obj?.enabled;});
