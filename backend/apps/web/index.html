@@ -1044,6 +1044,13 @@
     <div id="side-recent"></div>
   </nav>
   <div class="side-foot">
+    <label for="sidebar-theme" style="display:flex;align-items:center;gap:10px;padding:6px 10px;color:var(--fg);font-size:13px">切换主题
+      <select id="sidebar-theme" aria-label="切换主题" onchange="applyTheme(this.value)" style="flex:1;min-width:0;padding:6px">
+        <option value="dark">深色</option><option value="light">浅色</option>
+        <option value="ocean">海洋</option><option value="forest">森林</option>
+        <option value="sunset">落日</option><option value="dragongirl">Dragon Girl</option>
+      </select>
+    </label>
     <button class="appearance-entry" onclick="showAppearance()" title="设置界面主题和背景图片" aria-label="外观与背景">
       <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8" cy="8" r="1.5"/><path d="m3 17 5-5 4 4 3-3 6 6"/></svg>
       外观与背景
@@ -5847,6 +5854,7 @@ function applyTheme(t){
   document.body.dataset.theme = t;
   try { localStorage.setItem('cognitive-os-agent-theme', t); } catch(e) {}
   const sel = $('theme'); if(sel) sel.value = t;
+  for(const id of ['sidebar-theme','appearance-theme']){const el=$(id);if(el)el.value=t;}
 }
 $('theme').addEventListener('change', e => applyTheme(e.target.value));
 /* Task-local presentation. No model reasoning or raw planner logs are rendered. */

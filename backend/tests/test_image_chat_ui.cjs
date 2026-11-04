@@ -40,6 +40,9 @@ const http=require('node:http');
     assert.equal(await page.evaluate(()=>document.body.dataset.theme),'ocean','desktop theme selector remains accessible with the web top bar hidden');
     assert.equal(await page.evaluate(()=>localStorage.getItem('cognitive-os-agent-theme')),'ocean');
     await page.evaluate(()=>closeAppearance());
+    await page.locator('#sidebar-theme').selectOption('forest');
+    assert.equal(await page.evaluate(()=>document.body.dataset.theme),'forest');
+    assert.equal(await page.locator('#appearance-theme').inputValue(),'forest','theme controls stay synchronized');
     const dragonTheme=await page.evaluate(()=>{
       document.body.dataset.theme='dragongirl';
       const selectors=['aside','.top','.pillbar','.card','#chat-hero'];
