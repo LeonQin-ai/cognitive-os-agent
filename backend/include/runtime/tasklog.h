@@ -33,6 +33,8 @@ int tasklog_permission_mode(tasklog *tl,int64_t id);
 
 /* Last `limit` records as a JSON array (caller frees). NULL tl → "[]". */
 char *tasklog_json(tasklog *tl, int limit);
+/* Complete session history, retaining the latest transition of each task. */
+char *tasklog_session_json(tasklog *tl,const char *session);
 /* Compact latest status per session; cached after one journal scan. */
 char *tasklog_session_states_json(tasklog *tl);
 

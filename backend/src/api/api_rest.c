@@ -1557,7 +1557,7 @@ static int h_chat_history(const http_request *req, http_response *resp, void *ud
     const char *sp = strstr(req->query, "session=");
     if (sp)
         sanitize_upload_name(sp + 8, sid, sizeof(sid));
-    turns = ctx->reasoning ? reasoning_history_json_ex(ctx->reasoning, sid[0] ? sid : NULL, 200) : xstrdup("[]");
+    turns = ctx->reasoning ? reasoning_history_json_ex(ctx->reasoning, sid[0] ? sid : NULL, 2147483647) : xstrdup("[]");
     turn_list = turns ? cJSON_Parse(turns) : NULL;
     free(turns);
     if (!cJSON_IsArray(turn_list)) {
@@ -1580,7 +1580,7 @@ static int h_chat_history(const http_request *req, http_response *resp, void *ud
     /* Task progress lives in the durable journal, not browser sessionStorage.
      * Expose only records for the requested session so a desktop restart can
      * reconstruct both completed and failed execution cards. */
-    journal = tasklog_json(ctx->tasklog, 0);
+    journal = tasklog_session_json(ctx->tasklog, sid[0] ? sid : "default");
     records = journal ? cJSON_Parse(journal) : NULL;
     free(journal);
     cJSON_ArrayForEach(record, records) {
@@ -1601,8 +1601,6 @@ static int h_chat_history(const http_request *req, http_response *resp, void *ud
                 cJSON_AddItemToObject(run, fields[i], cJSON_Duplicate(v, 1));
         }
         cJSON_AddItemToArray(runs, run);
-        if (cJSON_GetArraySize(runs) > 200)
-            cJSON_Delete(cJSON_DetachItemFromArray(runs, 0));
     }
     cJSON_Delete(records);
     text = cJSON_PrintUnformatted(result);

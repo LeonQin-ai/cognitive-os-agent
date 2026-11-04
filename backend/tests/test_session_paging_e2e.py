@@ -12,6 +12,13 @@ with tempfile.TemporaryDirectory(prefix='coa-session-paging-') as tmp:
   rows[0]['last_active_ms']=4000
   raw=json.dumps(rows);assert len(raw)>512*1024
   (legacy/'sessions.json').write_text(raw,encoding='utf-8')
+  (legacy/'legacy-00000000.jsonl').write_text(''.join(json.dumps({'q':f'question-{i}','a':f'answer-{i}'})+'\n' for i in range(250)),encoding='utf8')
+  journal_dir=state/'journal';journal_dir.mkdir()
+  records=[]
+  for i in range(250):
+   for status in ('RUNNING','DONE'):
+    records.append({'id':10000+i,'session':'legacy-00000000','status':status,'input':f'question-{i}','output':f'answer-{i}','ts':i+1})
+  (journal_dir/'tasks.jsonl').write_text(''.join(json.dumps(row)+'\n' for row in records),encoding='utf8')
  config={'llm.provider':'mock','scheduler.workers':1,'reasoning.max_rounds':-1}
  if a.config:
   source=json.loads(a.config.read_text(encoding='utf-8'));config.update({k:v for k,v in source.items() if k.startswith('llm.')})
@@ -54,6 +61,10 @@ with tempfile.TemporaryDirectory(prefix='coa-session-paging-') as tmp:
   if not a.state:
    assert before==3000,'legacy index larger than 512 KiB must migrate without loss'
    assert req('/v1/chat/sessions?limit=12')['sessions'][0]['id']=='legacy-00000000','migration preserves last activity order'
+   complete=req('/v1/chat/history?session=legacy-00000000')
+   assert len(complete['turns'])==250 and len(complete['runs'])==250,(len(complete['turns']),len(complete['runs']))
+   assert all(row['status']=='DONE' for row in complete['runs'])
+   print('PASS: all 250 turns and latest task records load without the old 200-record truncation',flush=True)
   ids=[req('/v1/chat/sessions',{})['id'] for _ in range(160)]
   assert len(set(ids))==160
   first=req('/v1/chat/sessions?limit=12');assert first['total']==before+160 and len(first['sessions'])==12

@@ -150,7 +150,7 @@ void tasklog_record_access(tasklog *tl,int64_t id,const char *status,const char 
 
 /* Parse up to `limit` (0 = all) newest records; returns a cJSON array or
  * NULL. `pick` (optional) filters by task id (any status). */
-static cJSON *journal_parse(const char *path, int limit, int64_t pick_id) {
+static cJSON *journal_parse_session(const char *path, int limit, int64_t pick_id,const char *session) {
     FILE *f=fopen(path,"rb");
     if(!f)return NULL;
     cJSON *arr=cJSON_CreateArray();
@@ -176,6 +176,15 @@ static cJSON *journal_parse(const char *path, int limit, int64_t pick_id) {
         char *valid=str_utf8_sanitize(buf);
         cJSON *o=valid?cJSON_Parse(valid):NULL;free(valid);
         if(!o)continue;
+        if(session){
+            const char *tag=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(o,"session"));
+            if(strcmp(tag&&*tag?tag:"default",session)){cJSON_Delete(o);continue;}
+            cJSON *id=cJSON_GetObjectItemCaseSensitive(o,"id");
+            if(cJSON_IsNumber(id))for(int i=cJSON_GetArraySize(arr)-1;i>=0;i--){
+                cJSON *previous=cJSON_GetObjectItemCaseSensitive(cJSON_GetArrayItem(arr,i),"id");
+                if(cJSON_IsNumber(previous)&&previous->valuedouble==id->valuedouble){cJSON_DeleteItemFromArray(arr,i);break;}
+            }
+        }
         if(pick_id!=INT64_MIN){
             cJSON *id=cJSON_GetObjectItemCaseSensitive(o,"id");
             if(!cJSON_IsNumber(id) || (int64_t)id->valuedouble!=pick_id){cJSON_Delete(o);continue;}
@@ -187,6 +196,12 @@ static cJSON *journal_parse(const char *path, int limit, int64_t pick_id) {
     return arr;
 }
 
+static cJSON *journal_parse(const char *path,int limit,int64_t pick_id){return journal_parse_session(path,limit,pick_id,NULL);}
+char *tasklog_session_json(tasklog *tl,const char *session){
+    if(!tl)return xstrdup("[]");
+    mutex_lock(&tl->mtx);cJSON *arr=journal_parse_session(tl->path,0,INT64_MIN,session&&*session?session:"default");mutex_unlock(&tl->mtx);
+    char *text=arr?cJSON_PrintUnformatted(arr):xstrdup("[]");cJSON_Delete(arr);return text;
+}
 char *tasklog_json(tasklog *tl, int limit) {
     cJSON *arr;
     char *s;

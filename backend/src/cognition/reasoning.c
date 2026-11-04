@@ -3726,6 +3726,23 @@ char *reasoning_history_json_ex(reasoning *r, const char *session_id, int max_tu
     }
     if (!known)
         return xstrdup("[]");
+    /* UI history is an archive read, independent of the bounded model context.
+     * Replaying only the working-memory ring silently hid older saved turns. */
+    if(r->state_root && max_turns==2147483647){
+        char path[700];chat_file_path(path,sizeof(path),r->state_root,want);
+        char *saved=fs_read_file(path);
+        if(saved){
+            cJSON *history=cJSON_CreateArray();char *line=saved;
+            while(*line){
+                char *end=strchr(line,'\n');if(end)*end=0;
+                cJSON *turn=cJSON_Parse(line);
+                if(cJSON_IsString(cJSON_GetObjectItemCaseSensitive(turn,"q"))&&cJSON_IsString(cJSON_GetObjectItemCaseSensitive(turn,"a")))cJSON_AddItemToArray(history,turn);
+                else cJSON_Delete(turn);
+                if(!end)break;line=end+1;
+            }
+            free(saved);char *result=cJSON_PrintUnformatted(history);cJSON_Delete(history);return result;
+        }
+    }
     s = session_get(r, session_id);
     if (!s)
         return xstrdup("[]");
