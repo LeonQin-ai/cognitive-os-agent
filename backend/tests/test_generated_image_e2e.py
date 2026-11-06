@@ -35,7 +35,7 @@ def exercise(protocol,mode):
                 if protocol=='anthropic':reply={'content':[{'type':'tool_use','id':f'c{n}','name':name,'input':args}],'stop_reason':'tool_use'}
                 else:
                     message={'content':json.dumps([{'tool':name,'args':args}])}
-                    if protocol=='native':message={'content':'','tool_calls':[{'id':f'c{n}','type':'function','function':{'name':name,'arguments':json.dumps(args)}}]}
+                    if protocol=='native':message={'content':'正在读取图片以核实交付内容。','tool_calls':[{'id':f'c{n}','type':'function','function':{'name':name,'arguments':json.dumps(args)}}]}
                     reply={'choices':[{'message':message,'finish_reason':'stop'}]}
                 respond_json(self,json.dumps(reply).encode())
             except Exception as e:errors.append(repr(e));self.send_error(500)
@@ -64,6 +64,9 @@ def exercise(protocol,mode):
                         assert time.monotonic()<deadline,task;time.sleep(.02)
                     assert not errors,errors
                     assert task['status']==expected,task
+                    if protocol=='native':
+                        history=api('/v1/chat/history?session=image-test')
+                        assert any(event.get('commentary')=='正在读取图片以核实交付内容。' for run in history['runs'] for event in run.get('trace',[])),history
                     if expected=='DONE':
                         previews=[s['image_preview'] for s in task['steps'] if s.get('image_preview')]
                         assert previews and len({p['id'] for p in previews})==1,task

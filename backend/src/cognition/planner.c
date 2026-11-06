@@ -887,6 +887,8 @@ static int plan_with(llm *llm, char *sys_prompt, const char *prompt, planned_act
         diagnostic->max_tokens = req.max_tokens;
         diagnostic->truncated = resp.truncated;
         diagnostic->has_content = resp.visible_content_bytes > 0 || (resp.content && *resp.content);
+        if(resp.tool_actions_json && resp.content && !strstr(resp.content,"<think") && !strstr(resp.content,"</think") && !strstr(resp.content,"<tool"))
+            snprintf(diagnostic->commentary,sizeof(diagnostic->commentary),"%.1000s",resp.content);
         diagnostic->has_tool_calls = resp.tool_call_count > 0 || resp.tool_actions_json != NULL;
         snprintf(diagnostic->stop_reason, sizeof(diagnostic->stop_reason), "%s", resp.stop_reason);
         snprintf(diagnostic->stage, sizeof(diagnostic->stage), "%s",

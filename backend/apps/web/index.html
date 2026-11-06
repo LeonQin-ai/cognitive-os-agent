@@ -2735,6 +2735,10 @@ async function loadDashboard(){
         }).join('')
       : '<span class="muted">（尚无用量记录 — 完成一次对话后显示）</span>';
   }
+  if(tk && Array.isArray(usg.obj?.breakdown) && usg.obj.breakdown.length){
+    const details=document.createElement('details');const summary=document.createElement('summary');summary.textContent='按天 / 任务 / 模型统计（UTC，已持久化）';details.append(summary);
+    for(const row of usg.obj.breakdown){const line=document.createElement('div');line.className='hint';line.textContent=`${row.day} · 任务 #${row.task_id} · ${row.model} · 输入 ${row.prompt} / 可见输出 ${row.completion} / 推理 ${row.reasoning} · ${row.calls} 次`;details.append(line);}tk.append(details);
+  }
   const el = $('dash-out');
   if(el){
     const payload = {
@@ -5904,6 +5908,7 @@ function progressLabel(p){
   if(['completed','failed','cancelled','timed_out','interrupted'].includes(p.stage)) return STAGE_LABELS[p.stage];
   if(p.stage === 'planning') return '正在规划下一步';
   if(p.stage === 'executing' && p.cur_tool) return '正在' + toolLabel(p.cur_tool);
+  if(p.commentary) return p.commentary;
   if(p.activity) return p.activity;
   if(p.stage === 'planning' || p.stage === 'preparing_context'){
     return (p.round > 0 ? '第 ' + p.round + ' 轮 · ' : '') + STAGE_LABELS[p.stage];
@@ -5920,6 +5925,7 @@ function progressNarrative(p){
     if(steps.length) return '任务已完成，执行了 ' + steps.length + ' 个工具动作；结果已整理。';
   }
   if(['completed','failed','cancelled','timed_out','interrupted'].includes(p.stage)) return STAGE_NOTES[p.stage];
+  if(p.commentary) return p.commentary;
   if(p.activity) return p.activity;
   let note = STAGE_NOTES[p.stage] || '正在推进任务。';
   if(p.stage === 'executing' && p.cur_tool) note = '正在' + toolLabel(p.cur_tool) + '（' + p.cur_tool + '），完成后会继续下一步。';

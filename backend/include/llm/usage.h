@@ -10,6 +10,8 @@ extern "C" {
 typedef struct usage usage;
 
 usage *usage_new(void);
+void usage_set_state(usage *u,const char *state_root);
+void usage_add_task(usage *u,const char *model,long prompt,long completion,long reasoning,long long task_id);
 void usage_free(usage *u);
 
 /* Record a completion for a model. */

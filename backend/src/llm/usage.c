@@ -2,6 +2,9 @@
 #include "llm/usage.h"
 #include "os/os_thread.h"
 #include "infra/util.h"
+#include "os/os_fs.h"
+#include <stdio.h>
+#include <time.h>
 
 #include <stdlib.h>
 #include <string.h>
@@ -18,6 +21,8 @@ struct usage {
     model_entry *models;
     size_t count, cap;
     long prompt_total, completion_total, reasoning_total;
+    cJSON *breakdown;
+    char ledger[2048];
 };
 
 usage *usage_new(void) {
@@ -25,6 +30,7 @@ usage *usage_new(void) {
     if (!u)
         return NULL;
     mutex_init(&u->mtx);
+    u->breakdown=cJSON_CreateArray();
     return u;
 }
 
@@ -35,6 +41,7 @@ void usage_free(usage *u) {
     for (size_t i = 0; i < u->count; i++)
         free(u->models[i].model);
     free(u->models);
+    cJSON_Delete(u->breakdown);
     mutex_unlock(&u->mtx);
     mutex_destroy(&u->mtx);
     free(u);
@@ -84,6 +91,42 @@ void usage_add_ex(usage *u, const char *model, long prompt_tokens, long completi
     mutex_unlock(&u->mtx);
 }
 
+static void usage_event(usage *u,const char *model,long prompt,long completion,long reasoning,long long task_id,const char *day){
+    usage_add_ex(u,model,prompt,completion,reasoning);
+    mutex_lock(&u->mtx);cJSON *row=NULL,*it;
+    cJSON_ArrayForEach(it,u->breakdown){
+        const char *d=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(it,"day")),*m=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(it,"model"));
+        if(d&&m&&!strcmp(d,day)&&!strcmp(m,model)&&cJSON_GetNumberValue(cJSON_GetObjectItemCaseSensitive(it,"task_id"))==(double)task_id){row=it;break;}
+    }
+    if(!row){row=cJSON_CreateObject();cJSON_AddStringToObject(row,"day",day);cJSON_AddStringToObject(row,"model",model);cJSON_AddNumberToObject(row,"task_id",(double)task_id);cJSON_AddItemToArray(u->breakdown,row);}
+    const char *names[]={"prompt","completion","reasoning","calls"};long values[]={prompt,completion,reasoning,1};
+    for(int i=0;i<4;i++){cJSON *n=cJSON_GetObjectItemCaseSensitive(row,names[i]);double before=cJSON_IsNumber(n)?n->valuedouble:0;cJSON_DeleteItemFromObject(row,names[i]);cJSON_AddNumberToObject(row,names[i],before+values[i]);}
+    if(u->ledger[0]){
+        cJSON *event=cJSON_CreateObject();cJSON_AddStringToObject(event,"day",day);cJSON_AddStringToObject(event,"model",model);cJSON_AddNumberToObject(event,"task_id",(double)task_id);
+        for(int i=0;i<3;i++)cJSON_AddNumberToObject(event,names[i],values[i]);
+        char *text=cJSON_PrintUnformatted(event);FILE *f=fopen(u->ledger,"ab");if(f&&text){fputs(text,f);fputc('\n',f);}if(f)fclose(f);free(text);cJSON_Delete(event);
+    }
+    mutex_unlock(&u->mtx);
+}
+void usage_add_task(usage *u,const char *model,long prompt,long completion,long reasoning,long long task_id){
+    if(!u||!model)return;time_t now=time(NULL);struct tm date;
+#ifdef _WIN32
+    gmtime_s(&date,&now);
+#else
+    gmtime_r(&now,&date);
+#endif
+    char day[16];strftime(day,sizeof(day),"%Y-%m-%d",&date);usage_event(u,model,prompt,completion,reasoning,task_id,day);
+}
+void usage_set_state(usage *u,const char *root){
+    if(!u||!root)return;char path[2048];path_join(path,sizeof(path),root,"usage.jsonl");
+    FILE *f=fopen(path,"rb");char line[8192];
+    while(f&&fgets(line,sizeof(line),f)){
+        cJSON *o=cJSON_Parse(line);const char *day=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(o,"day")),*model=cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(o,"model"));
+        if(day&&model)usage_event(u,model,(long)cJSON_GetNumberValue(cJSON_GetObjectItemCaseSensitive(o,"prompt")),(long)cJSON_GetNumberValue(cJSON_GetObjectItemCaseSensitive(o,"completion")),(long)cJSON_GetNumberValue(cJSON_GetObjectItemCaseSensitive(o,"reasoning")),(long long)cJSON_GetNumberValue(cJSON_GetObjectItemCaseSensitive(o,"task_id")),day);
+        cJSON_Delete(o);
+    }
+    if(f)fclose(f);snprintf(u->ledger,sizeof(u->ledger),"%s",path);
+}
 long usage_prompt_total(usage *u) {
     long v;
 
@@ -113,6 +156,8 @@ char *usage_json(usage *u) {
 
     if (u) {
         mutex_lock(&u->mtx);
+        cJSON_AddStringToObject(root,"day_timezone","UTC");
+        cJSON_AddItemToObject(root,"breakdown",cJSON_Duplicate(u->breakdown,1));
         for (size_t i = 0; i < u->count; i++) {
             model_entry *e = &u->models[i];
             cJSON *o = cJSON_CreateObject();

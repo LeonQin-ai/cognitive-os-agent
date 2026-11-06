@@ -311,6 +311,7 @@ struct reasoning {
     long long prog_started_ms;
     int prog_tool_calls;
     char prog_tool[64];
+    char public_commentary[1024];
     long long prog_llm_ms;   /* cumulative planner LLM latency (issue #6) */
     int prog_llm_calls;
     long long prog_tool_ms;  /* cumulative tool execution latency */
@@ -762,9 +763,9 @@ static void usage_book_round(reasoning *r) {
                 /* visible completion = total completion minus invisible
                  * thinking tokens (issue #7) */
                 long long vd = (to - r->usage_base_out) - rd;
-                usage_add_ex(r->usage_acc, r->llm->model ? r->llm->model : "?",
+                usage_add_task(r->usage_acc, r->llm->model ? r->llm->model : "?",
                              (long)(ti - r->usage_base_in), (long)(vd > 0 ? vd : 0),
-                             (long)rd);
+                             (long)rd,r->run_task?r->run_task->id:r->trace_task_id);
             }
             r->usage_base_in = ti;
             r->usage_base_out = to;
@@ -810,6 +811,7 @@ static void progress_emit(reasoning *r, const char *stage) {
         snprintf(activity, sizeof(activity), "正在推进任务阶段：%s", stage ? stage : "unknown");
     cJSON_AddStringToObject(o, "stage", stage);
     cJSON_AddStringToObject(o, "activity", activity);
+    if(r->public_commentary[0])cJSON_AddStringToObject(o,"commentary",r->public_commentary);
     cJSON_AddStringToObject(o, "model", model);
     cJSON_AddStringToObject(o,"tool_protocol",planner_uses_native_tools(r->llm)?"native":"legacy");
     cJSON_AddStringToObject(o,"completion_declaration",r->planner_native_end_turn==1?"complete":r->planner_native_end_turn==2?"blocked":r->planner_native_end_turn==3?"contract":r->planner_native_end_turn==4?"commentary":"none");
@@ -2242,7 +2244,7 @@ static char *build_context(reasoning *r, const char *prompt) {
         strbuf_free(&b);
         b = tail;
     }
-    strbuf_append(&b, "## Current request\n");
+    strbuf_append(&b, "Prior turns are reference only, not pending instructions. Execute only the current request and its explicit continuations. Do not resume an earlier task unless requested. When using tools, include a brief public progress update describing observed facts and the next action; do not disclose hidden reasoning.\n## Current request\n");
     strbuf_append(&b, prompt);
     if(continuation){strbuf_append(&b,continuation);free(continuation);}
     return strbuf_detach(&b);
@@ -2347,6 +2349,7 @@ static int h_reason(state_machine *sm, void *ud, const char *input, char **out) 
     r->prog_llm_calls++;
     if(rc==0 && completion_json)verify_completion_files(r,completion_json);
     free(completion_json);
+    if(rc==0)snprintf(r->public_commentary,sizeof(r->public_commentary),"%s",diagnostic.commentary);
     if (rc == 0 && raw)
         progress_emit(r, r->n_actions ? "plan_ready" : r->planner_native_end_turn==4?"continuing":"response_ready");
     free(aug);
@@ -4180,6 +4183,7 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     r->usage_base_reports = r->run_usage_reports;
     r->run_usage_in = r->usage_base_in;
     r->run_usage_out = r->usage_base_out;
+    r->public_commentary[0]=0;
     progress_emit(r, "analyzing");
 
     free(r->last_prompt);

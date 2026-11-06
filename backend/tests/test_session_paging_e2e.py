@@ -32,6 +32,7 @@ with tempfile.TemporaryDirectory(prefix='coa-session-paging-') as tmp:
     markers=re.findall(r'(?:FIRST|SECOND)-[0-9]+',body['messages'][-1]['content'])
     answer=markers[-1] if markers else 'fixture answer'
     reply={'choices':[{'message':{'content':None,'tool_calls':[{'id':'finish','type':'function','function':{'name':'complete_task','arguments':json.dumps({'status':'complete','requires_tools':False,'answer':answer})}}]},'finish_reason':'tool_calls'}]}
+    reply['usage']={'prompt_tokens':100,'completion_tokens':20,'completion_tokens_details':{'reasoning_tokens':5}}
     raw=json.dumps(reply).encode();self.send_response(200);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(raw)));self.end_headers();self.wfile.write(raw)
   fixture=ThreadingHTTPServer(('127.0.0.1',0),Provider);threading.Thread(target=fixture.serve_forever,daemon=True).start()
   config.update({'llm.provider':'openai','llm.model':'local-native-fixture','llm.api_key':'fixture-only','llm.base_url':f'http://127.0.0.1:{fixture.server_port}'})
@@ -98,6 +99,9 @@ with tempfile.TemporaryDirectory(prefix='coa-session-paging-') as tmp:
   text1=json.dumps(h1,ensure_ascii=False);text2=json.dumps(h2,ensure_ascii=False)
   assert 'FIRST-' in text1 and 'SECOND-' not in text1 and 'SECOND-' in text2 and 'FIRST-' not in text2
   report['histories_isolated']=True
+  usage_before=req('/v1/usage')
+  assert len(usage_before['breakdown'])>=2,usage_before
+  assert sum(row['prompt'] for row in usage_before['breakdown'])==usage_before['total']['prompt']
  finally:
   stop(child,log)
   (state/'paging-report.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
@@ -110,6 +114,9 @@ with tempfile.TemporaryDirectory(prefix='coa-session-paging-') as tmp:
   after_tail=req('/v1/chat/sessions',{})['id']
   assert after_tail not in ids
   report['restart_verified']=True
+  usage_after=req('/v1/usage')
+  assert usage_after['breakdown']==usage_before['breakdown'],(usage_before,usage_after)
+  assert usage_after['total']==usage_before['total']
  finally:stop(child,log)
  child,log=start()
  try:

@@ -1009,6 +1009,7 @@ int init(runtime_ctx *ctx, const config *cfg) {
     ctx->trace = trace_new(1024);
     ctx->router = router_new();
     ctx->usage = usage_new();
+    usage_set_state(ctx->usage,ctx->state_root);
     ctx->registry = plugin_registry_new();
     plugin_registry_load(ctx->registry, ctx->state_root);
     ctx->skills = skill_registry_new();
