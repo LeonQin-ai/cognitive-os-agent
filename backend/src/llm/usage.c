@@ -1,3 +1,8 @@
+#ifndef _WIN32
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 200809L
+#endif
+#endif
 /* usage.c — per-model token accounting. */
 #include "llm/usage.h"
 #include "os/os_thread.h"
