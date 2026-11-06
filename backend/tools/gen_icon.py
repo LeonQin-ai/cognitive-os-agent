@@ -97,6 +97,7 @@ def main():
             return image.read()
     pngs = [(size, raster(size)) for size in (16,32,64,128,256)]
     write_ico(os.path.join(dist, "cognitive-os-agent.ico"), pngs)
+    write_ico(os.path.join(dist, "cognitive-os-logo.ico"), pngs)
     write_icns(os.path.join(dist, "CognitiveOS.icns"), raster(256), raster(512))
     print("wrote logo.png application icons to %s" % dist)
 

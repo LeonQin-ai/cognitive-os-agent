@@ -29,8 +29,8 @@ DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 OutputDir=..\dist
 OutputBaseFilename=cognitive-os-agent-setup
-SetupIconFile=..\dist\cognitive-os-agent.ico
-UninstallDisplayIcon={app}\cognitive-os-agent.ico
+SetupIconFile=..\dist\cognitive-os-logo.ico
+UninstallDisplayIcon={app}\cognitive-os-logo.ico
 Compression=lzma
 SolidCompression=yes
 WizardStyle=modern
@@ -43,11 +43,12 @@ Source: "..\..\NOTICE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\build\cognitive-os-agent.exe";         DestDir: "{app}"; DestName: "cognitive-os-agent.exe";          Flags: ignoreversion
 Source: "..\build\cognitive-os-agent-desktop.exe"; DestDir: "{app}";                                   Flags: ignoreversion
 Source: "..\dist\cognitive-os-agent.ico";         DestDir: "{app}";                                   Flags: ignoreversion
+Source: "..\dist\cognitive-os-logo.ico";          DestDir: "{app}";                                   Flags: ignoreversion
 Source: "..\README.md";                DestDir: "{app}"; DestName: "README.txt";           Flags: ignoreversion
 
 [Icons]
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\cognitive-os-agent.ico"; WorkingDir: "{app}"
-Name: "{group}\{#MyAppName}";       Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\cognitive-os-agent.ico"; WorkingDir: "{app}"
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\cognitive-os-logo.ico"; WorkingDir: "{app}"
+Name: "{group}\{#MyAppName}";       Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\cognitive-os-logo.ico"; WorkingDir: "{app}"
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent

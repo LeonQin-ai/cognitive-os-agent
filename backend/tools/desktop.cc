@@ -804,7 +804,8 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
     wc.hCursor = LoadCursorA(nullptr, MAKEINTRESOURCEA(32512));
     /* Keep the native title/taskbar mark aligned with the web console and
      * installer shortcut. The ICO is installed next to the desktop shell. */
-    std::wstring icon = dir + L"\\cognitive-os-agent.ico";
+    std::wstring icon = dir + L"\\cognitive-os-logo.ico";
+    if(GetFileAttributesW(icon.c_str())==INVALID_FILE_ATTRIBUTES)icon=dir+L"\\cognitive-os-agent.ico";
     g_icon_big = (HICON)LoadImageW(nullptr, icon.c_str(), IMAGE_ICON, 256, 256,
                                    LR_LOADFROMFILE);
     g_icon_small = (HICON)LoadImageW(nullptr, icon.c_str(), IMAGE_ICON, 32, 32,
