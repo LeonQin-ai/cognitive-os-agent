@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="logo.png" alt="Cognitive OS 标识" width="128">
+
 # Cognitive OS · 认知操作系统
 
 ### 让 AI 从回答问题，走向执行任务。

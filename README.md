@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="logo.png" alt="Cognitive OS logo" width="128">
+
 # Cognitive OS
 
 ### Give AI agents a runtime, not just a conversation.

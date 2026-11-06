@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate Cognitive OS brain icons without third-party image libraries."""
+"""Package committed logo.png raster sizes into native platform icons."""
 import math
 import os
 import struct
@@ -91,10 +91,14 @@ def write_icns(path, png256, png512):
 def main():
     dist = os.path.join(os.path.dirname(__file__), "..", "dist")
     os.makedirs(dist, exist_ok=True)
-    pngs = [(size, png_bytes(build_pixels(size))) for size in (32, 64, 128, 256)]
+    assets=os.path.join(os.path.dirname(__file__), '..', 'assets', 'logo')
+    def raster(size):
+        with open(os.path.join(assets, str(size)+'.png'),'rb') as image:
+            return image.read()
+    pngs = [(size, raster(size)) for size in (16,32,64,128,256)]
     write_ico(os.path.join(dist, "cognitive-os-agent.ico"), pngs)
-    write_icns(os.path.join(dist, "CognitiveOS.icns"), pngs[-1][1], png_bytes(build_pixels(512)))
-    print("wrote brain icons to %s" % dist)
+    write_icns(os.path.join(dist, "CognitiveOS.icns"), raster(256), raster(512))
+    print("wrote logo.png application icons to %s" % dist)
 
 
 if __name__ == "__main__":
