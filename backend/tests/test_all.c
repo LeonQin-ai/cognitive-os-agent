@@ -6705,6 +6705,30 @@ static void test_memory_runtime_agent_path(void) {
     fixture.saw_private=0;
     CHECK(reasoning_run_ex(r,"scope-B","What is the private fact?",&answer)==0);
     CHECK(fixture.saw_private==0); free(answer);
+    char long_a[100],long_b[100],scope[160];
+    memset(long_a,'x',80);long_a[80]='A';long_a[81]=0;
+    strcpy(long_b,long_a);long_b[80]='B';
+    snprintf(scope,sizeof(scope),"session/%s",long_a);
+    CHECK(memory_runtime_learn(rt,scope,"remember private","AGENT_PATH_PRIVATE_FACT",1,1)==1);
+    fixture.saw_private=0;answer=NULL;
+    CHECK(reasoning_run_ex(r,long_a,"What is the private fact?",&answer)==0);
+    CHECK(fixture.saw_private==1);free(answer);answer=NULL;
+    fixture.saw_private=0;
+    CHECK(reasoning_run_ex(r,long_b,"What is the private fact?",&answer)==0);
+    CHECK(fixture.saw_private==0);free(answer);
+    for(int i=0;i<100;i++){
+        char name[64],fact[64];snprintf(name,sizeof(name),"session/isolation-%03d",i);snprintf(fact,sizeof(fact),"PRIVATE_SCOPE_%03d_FACT",i);
+        CHECK(memory_runtime_learn(rt,name,"private isolation fact",fact,1,1)==1);
+    }
+    for(int i=0;i<100;i++){
+        char name[64],fact[64];snprintf(name,sizeof(name),"session/isolation-%03d",i);
+        char *result=memory_runtime_recall(rt,name,"private isolation fact",4096);CHECK(result!=NULL);
+        for(int j=0;j<100;j++){
+            snprintf(fact,sizeof(fact),"PRIVATE_SCOPE_%03d_FACT",j);
+            CHECK(result && (!!strstr(result,fact)==(i==j)));
+        }
+        free(result);
+    }
     reasoning_free(r);
 done:
     memory_runtime_free(rt); tool_registry_free(tools);
@@ -8881,7 +8905,7 @@ static void test_http_skill_install_async(void) {
             }
             CHECK(reply.status == (ok ? 200 : 502));
             CHECK(strstr(reply.body, ok ? "\"ok\":true" : "fetch failed") != NULL);
-            char result[2048]; snprintf(result, sizeof(result), "%s", reply.body);
+            char result[2048]; snprintf(result, sizeof(result), "%.2047s", reply.body);
             CHECK(raw_http_request(18224, "GET", poll, NULL, &reply) == 0 && !strcmp(reply.body, result));
             CHECK(raw_http_request(18224, "GET", "/v1/config/llm", NULL, &reply) == 0 && reply.status == 200);
         }
@@ -9214,7 +9238,7 @@ static void test_http_api(void) {
         for (int i = 0; i < 100; i++) {
             char section[64];
             snprintf(section, sizeof(section), "evidence-section-%04d-value-%08d", i, i*i);
-            snprintf(prompt + 13 + i*50, 51, "%-50s", section);
+            snprintf(prompt + 13 + i*50, 51, "%-50.50s", section);
         }
         prompt[5013] = '\0';
         snprintf(session, sizeof session, "long-history-%lld", (long long)time_now_ms());
@@ -9724,7 +9748,8 @@ static void test_complete_tool_result(void) {
     tool_result *page=tool_execute(reg,"file_read",arg_json,&ctx);
     CHECK(page && page->ok && strstr(page->output,"BROWSER_MIDDLE_PROOF"));
     tool_result_free(page); free(arg_json); free(stored);
-    if(file) fs_remove(file); cJSON_Delete(meta); free(json); tool_result_free(result);
+    if(file) fs_remove(file);
+    cJSON_Delete(meta); free(json); tool_result_free(result);
     fs_remove("state-complete-tool-test/.tool-results"); fs_remove(ctx.workspace);
     fs_write_file("state-complete-tool-test-blocked","x",1);
     ctx.workspace="state-complete-tool-test-blocked";

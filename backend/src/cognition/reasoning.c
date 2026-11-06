@@ -2028,7 +2028,7 @@ static char *build_context(reasoning *r, const char *prompt) {
             }
         }
         char scope[MEM_SCOPE_MAX];
-        snprintf(scope, sizeof(scope), "session/%.54s", r->cur && r->cur->id ? r->cur->id : "default");
+        snprintf(scope, sizeof(scope), "session/%.127s", r->cur && r->cur->id ? r->cur->id : "default");
         char *ctx_json = r->memory_mmu_enabled && r->memrt
             ? memory_runtime_recall(r->memrt, scope, retrieval_query, r->budget_cold)
             : (r->mem ? context_build(r->mem, retrieval_query, 12) : xstrdup("[]"));
@@ -3364,7 +3364,7 @@ static void memory_record_completed_run(reasoning *r, const char *answer) {
         mutex_lock(&r->progress_mtx);
         for (int i = 0; i < r->n_steps; i++) successful_tools += r->steps[i].ok == 1;
         mutex_unlock(&r->progress_mtx);
-        snprintf(scope, sizeof(scope), "session/%.54s", r->cur && r->cur->id ? r->cur->id : "default");
+        snprintf(scope, sizeof(scope), "session/%.127s", r->cur && r->cur->id ? r->cur->id : "default");
         memory_runtime_learn(r->memrt, scope, r->last_prompt ? r->last_prompt : "(task)",
                              answer ? answer : "", successful_tools, r->all_actions_ok);
     }

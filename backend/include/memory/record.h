@@ -51,7 +51,7 @@ typedef enum {
 } mem_outcome_t;
 
 #define MEM_ID_MAX 40
-#define MEM_SCOPE_MAX 64
+#define MEM_SCOPE_MAX 256
 #define MEM_SOURCE_MAX 32
 #define MEM_EVIDENCE_MAX 160
 #define MEM_TITLE_MAX 128
