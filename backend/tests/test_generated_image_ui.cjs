@@ -27,6 +27,7 @@ const data='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAA
    await page.waitForFunction(()=>imageFixture.el.querySelector('.chat-images img')?.naturalWidth===1);
    assert.equal(await page.evaluate(()=>imageFixture.el.querySelectorAll('.chat-images img').length),1,'deduplicate root/step previews');
    assert.equal(await page.evaluate(()=>imageFixture.el.querySelectorAll('.chat-answer .chat-images img').length),1,'verified image is inside the reply text container, not above the trace');
+   assert.equal(await page.evaluate(()=>getComputedStyle(imageFixture.el.querySelector('.chat-answer')).maxHeight),'none','long answer must not clip its delivery image');
    await page.evaluate(()=>imageFixture.el.querySelector('.chat-image-button').click());
    assert.equal(await page.locator('dialog[open] img').count(),1);await page.locator('dialog[open] button').click();
    await page.evaluate(()=>{imageFixture.images=undefined;imageFixture.progress.steps=[];renderChatEntry(imageFixture);chatPersist();});
