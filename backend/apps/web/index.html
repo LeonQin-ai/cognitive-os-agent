@@ -4042,7 +4042,7 @@ function chatSessionTip(info, id){
   bits.push((info.title || id) + '（' + (info.turns || 0) + ' 轮）');
   if(info.created_ms) bits.push('创建 ' + new Date(info.created_ms).toLocaleString());
   if(info.total_ms) bits.push('累计执行 ' + fmtDur(info.total_ms));
-  bits.push(info.shared_memory === false ? '记忆：私有' : '记忆：共享');
+  bits.push(info.shared_memory === true ? '记忆：共享' : '记忆：私有');
   return bits.join(' · ');
 }
 
@@ -4234,7 +4234,7 @@ async function sshCredentialClear(){
 function syncChatSettings(){
   const info = CHAT_TABS_CACHE.find(s => (s.id || 'default') === CHAT_SESSION);
   const cb = $('chat-shared');
-  if(cb) cb.checked = !(CHAT_TABS_CACHE[0] && CHAT_TABS_CACHE[0].shared_memory === false);
+  if(cb) cb.checked = CHAT_TABS_CACHE[0]?.shared_memory === true;
   syncChatThinkingToggle();syncChatPermission();void fillChatModelSelect();
   const meta = $('chat-session-meta');
   if(meta){

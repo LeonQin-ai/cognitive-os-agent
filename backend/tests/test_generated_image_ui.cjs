@@ -16,6 +16,8 @@ const data='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAA
    return r.fulfill({status:200,contentType,body:JSON.stringify(obj)});
   });
   await page.goto('http://ui.test/');
+  await page.evaluate(()=>{CHAT_TABS_CACHE=[];syncChatSettings();});
+  assert.equal(await page.locator('#chat-shared').isChecked(),false,'missing settings default to private memory');
   for(const width of [1280,390]){
    await page.setViewportSize({width,height:850});
    await page.evaluate(()=>{

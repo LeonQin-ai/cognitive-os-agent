@@ -66,7 +66,7 @@ struct session {
     char title[128];      /* display title = head of the first user message */
     long long created_ms; /* session creation time */
     long long total_ms;   /* accumulated execution duration across runs */
-    int shared_memory;    /* 1 = share the Memory OS across sessions (default) */
+    int shared_memory;    /* opt-in shared recall; private memory remains enabled */
     volatile int in_run;  /* >0 while a lane run executes on this session
                            * (reasoning_session_delete refuses to free it) */
 };
@@ -84,7 +84,7 @@ static struct session *session_new(const char *id) {
     mutex_init(&s->mtx);
     s->last_active_ms = (long long)time_now_ms();
     s->created_ms = s->last_active_ms;
-    s->shared_memory = 1;
+    s->shared_memory = 0;
     return s;
 }
 
@@ -1268,7 +1268,7 @@ static void meta_load_legacy(reasoning *r) {
             m->total_ms = (long long)to->valuedouble;
         if (la && cJSON_IsNumber(la))
             m->last_active_ms = (long long)la->valuedouble;
-        m->shared_memory = sh ? cJSON_IsTrue(sh) : 1;
+        m->shared_memory = sh ? cJSON_IsTrue(sh) : 0;
     }
     /* self-heal 1: entries with an empty title get it back from the first
      * user message of their persisted transcript (a degraded in-memory index
@@ -1307,7 +1307,7 @@ static void meta_load_legacy(reasoning *r) {
                 memset(m, 0, sizeof(*m));
                 snprintf(m->id, sizeof(m->id), "%s", sid);
                 title_recover_from_transcript(r->state_root, m->id, m->title, sizeof(m->title));
-                m->shared_memory = 1; /* same default as session_new */
+                m->shared_memory = 0; /* same default as session_new */
                 healed = 1;
             }
         }
@@ -1344,7 +1344,7 @@ static void meta_load(reasoning *r){
                 v=cJSON_GetObjectItemCaseSensitive(o,"created_ms");m->created_ms=cJSON_IsNumber(v)?(long long)v->valuedouble:0;
                 v=cJSON_GetObjectItemCaseSensitive(o,"total_ms");m->total_ms=cJSON_IsNumber(v)?(long long)v->valuedouble:0;
                 v=cJSON_GetObjectItemCaseSensitive(o,"last_active_ms");m->last_active_ms=cJSON_IsNumber(v)?(long long)v->valuedouble:0;
-                m->shared_memory=1;m->deleted=cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(o,"deleted"));
+                m->shared_memory=0;m->deleted=cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(o,"deleted"));
                 if(!was && m->deleted)r->ss->meta_live--;
                 if(was && !m->deleted)r->ss->meta_live++;
                 meta_touch(r->ss,m);
@@ -1375,7 +1375,7 @@ sess_store *sess_store_new(void) {
     if (!ss)
         return NULL;
     mutex_init(&ss->sess_mtx);
-    atomic_init(&ss->shared_memory_global, 1);
+    atomic_init(&ss->shared_memory_global, 0);
     return ss;
 }
 
@@ -3400,7 +3400,7 @@ reasoning *reasoning_new(const reasoning_config *cfg) {
     r->ss = &r->own_store_; /* embedded store until a shared one is attached */
     r->trace_task_id = -1;
     mutex_init(&r->own_store_.sess_mtx);
-    atomic_init(&r->own_store_.shared_memory_global, 1);
+    atomic_init(&r->own_store_.shared_memory_global, 0);
     r->cur = session_get(r, NULL); /* default session, always present */
     r->llm = cfg->llm;
     r->default_acceptance_json=cfg->acceptance_json?xstrdup(cfg->acceptance_json):NULL;

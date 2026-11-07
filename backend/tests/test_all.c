@@ -6699,6 +6699,7 @@ static void test_memory_runtime_agent_path(void) {
     reasoning_config cfg = {0}; cfg.llm=&provider; cfg.tools=tools;
     cfg.memory_runtime=rt; cfg.memory_mmu_enabled=1; cfg.max_rounds=2;
     reasoning *r = reasoning_new(&cfg); CHECK(r != NULL); if (!r) goto done;
+    CHECK(reasoning_shared_memory_enabled(r)==0);
     char *answer=NULL;
     CHECK(reasoning_run_ex(r,"scope-A","What is the private fact?",&answer)==0);
     CHECK(fixture.saw_private==1); free(answer); answer=NULL;
