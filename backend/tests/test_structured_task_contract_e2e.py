@@ -41,6 +41,11 @@ def exercise(protocol,mode,prompt='Verify the requested result.'):
         if mode=='full':replies += [action('file_read',path=path,offset_bytes=4000),action('file_read',path=path,offset_bytes=8000)]
         replies += [done];expected='FAILED' if mode=='partial' else 'DONE'
     elif mode=='api_missing':acceptance={'artifacts':['report.any']};replies=[done];expected='FAILED'
+    elif mode in ('rollover','rollover_stale'):
+        replies=[declare(artifacts=['report.any']),write,read]
+        replies += [[action('file_write',path=f'noise-{i}.txt',content=str(i)) for i in range(start,start+32)] for start in range(0,288,32)]
+        if mode=='rollover_stale':replies += [action('file_write',path='report.any',content='changed after verification')]
+        replies += [done];expected='DONE' if mode=='rollover' else 'FAILED'
     elif mode=='batch50':
         outputs=[f'chapter{i:02d}.md' for i in range(1,51)]
         replies=[declare(artifacts=outputs),action('shell',command='python produce50.py',outputs=outputs)]
@@ -126,7 +131,7 @@ def exercise(protocol,mode,prompt='Verify the requested result.'):
             with (BUILD/f'contract-{protocol}-{mode}.log').open('w',encoding='utf8') as log:
                 proc=subprocess.Popen([str(BINARY),'--state',folder,'--workspace',folder,'serve',str(port)],cwd=ROOT,env={**os.environ,'COA_TOOL_PROTOCOL':protocol},stdout=log,stderr=log,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
                 try:
-                    deadline=time.monotonic()+25
+                    deadline=time.monotonic()+(120 if mode.startswith('rollover') else 25)
                     for _ in range(150):
                         try:api('/v1/scheduler');break
                         except OSError:assert proc.poll() is None;time.sleep(.05)
@@ -140,7 +145,7 @@ def exercise(protocol,mode,prompt='Verify the requested result.'):
                         if task['status'] not in ('RUNNING','QUEUED'):break
                         assert time.monotonic()<deadline,task;time.sleep(.02)
                     assert task['status']==expected,(protocol,mode,task)
-                    assert calls<=(16 if mode=='baseline_capacity' else 12 if mode=='batch50' else 10),(mode,calls,task)
+                    assert calls<=(20 if mode.startswith('rollover') else 16 if mode=='baseline_capacity' else 12 if mode=='batch50' else 10),(mode,calls,task)
                     if expected=='DONE':
                         assert task['output']==FINAL,task
                         if mode=='artifact':assert (work/'report.any').read_text()==CONTENT
@@ -178,6 +183,8 @@ def exercise(protocol,mode,prompt='Verify the requested result.'):
     finally:server.shutdown();server.server_close()
 
 if __name__=='__main__':
+    for protocol in ('native','legacy'):
+        for mode in ('rollover','rollover_stale'):exercise(protocol,mode)
     for protocol in ('native','legacy'):exercise(protocol,'batch50')
     for protocol in ('native','legacy'):
         for mode in ('edit','edit_failed','edit_stale'):exercise(protocol,mode)

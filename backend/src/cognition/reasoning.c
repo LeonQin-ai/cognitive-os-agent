@@ -278,6 +278,8 @@ struct reasoning {
      * not make alternating old reads look like newly discovered evidence. */
     struct { char path[2048]; uint64_t version, digest; unsigned producer_step; } artifact_seen[128];
     int artifact_seen_n;
+    struct file_receipt { char path[2048]; uint64_t written, verified; } *file_receipts;
+    int file_receipts_n, file_receipts_cap;
     uint64_t action_output_versions_before[128];
     int action_outputs_captured;
     /* Pre-work fingerprint per accepted artifact, captured when the
@@ -2465,6 +2467,22 @@ static void run_step_add(reasoning *r, const char *tool, const char *args, const
             char canonical[2048];normalized_evidence_path(r,path->valuestring,canonical,sizeof(canonical));
             st->evidence_path=xstrdup(canonical);
             st->evidence_version=fs_file_version(canonical);
+            int ri=0;
+            while(ri<r->file_receipts_n && strcmp(r->file_receipts[ri].path,canonical))ri++;
+            if(strcmp(tool,"file_read")) {
+                if(ri==r->file_receipts_cap){
+                    int cap=r->file_receipts_cap?r->file_receipts_cap*2:16;
+                    struct file_receipt *grown=realloc(r->file_receipts,(size_t)cap*sizeof(*grown));
+                    if(grown){r->file_receipts=grown;r->file_receipts_cap=cap;}
+                }
+                if(ri<r->file_receipts_cap){
+                    if(ri==r->file_receipts_n){r->file_receipts_n++;snprintf(r->file_receipts[ri].path,sizeof(r->file_receipts[ri].path),"%s",canonical);}
+                    r->file_receipts[ri].written=st->evidence_version;
+                    r->file_receipts[ri].verified=0;
+                }
+            } else if(ri<r->file_receipts_n && r->file_receipts[ri].written==st->evidence_version) {
+                r->file_receipts[ri].verified=st->evidence_version;
+            }
         }
         cJSON_Delete(parsed);
     }
@@ -3472,6 +3490,7 @@ void reasoning_free(reasoning *r) {
     }
     for (int i=0;i<r->n_steps;++i) step_strings_free(&r->steps[i]);
     free(r->steps);
+    free(r->file_receipts);
     free(r->progress_json);
     mutex_destroy(&r->progress_mtx);
     free(r->last_plan_raw);
@@ -3624,6 +3643,9 @@ static int declared_output_current(reasoning *r,const char *path,uint64_t curren
     return 0;
 }
 static int run_has_verified_artifact(reasoning *r,const char *target) {
+    for(int ri=0;ri<r->file_receipts_n;ri++)
+        if(!strcmp(r->file_receipts[ri].path,target) && r->file_receipts[ri].verified &&
+           r->file_receipts[ri].verified==fs_file_version(target) && !fs_is_dir(target) && fs_file_size(target)>0)return 1;
     for(int i=r->n_steps-1;i>=0;i--) {
         struct run_step *read=&r->steps[i];
         if(read->ok!=1 || strcmp(read->tool,"file_read") || !read->evidence_path || strcmp(read->evidence_path,target))continue;
@@ -4264,7 +4286,7 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     r->grep_path_n = 0;
     r->round_search_skips = 0;
     r->observation_seen_n = 0;
-    r->opaque_seen_n = 0;r->artifact_seen_n=0;r->artifact_versions_seen_n=0;
+    r->opaque_seen_n = 0;r->artifact_seen_n=0;r->artifact_versions_seen_n=0;r->file_receipts_n=0;
     r->round_new_observations = r->round_repeat_reads = 0;
     r->progress_cycle_warning_active = 0;
     pending_reads_clear(r);
@@ -4318,7 +4340,7 @@ restart_planning:
             no_progress_rounds = cycle_reads = cycle_nudged = cycle_aborted = 0;
             no_action_rounds = no_action_stalled = 0;
             r->observation_seen_n = 0;
-            r->opaque_seen_n = 0;r->artifact_seen_n=0;r->artifact_versions_seen_n=0;
+            r->opaque_seen_n = 0;r->artifact_seen_n=0;r->artifact_versions_seen_n=0;r->file_receipts_n=0;
             free(r->prev_plan); r->prev_plan = NULL;
             /* A steering message defines a revised task and needs a fresh
              * planning budget. Without resetting the per-plan counter, an
