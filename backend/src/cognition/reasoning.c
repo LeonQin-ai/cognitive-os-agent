@@ -2016,7 +2016,7 @@ static char *build_context(reasoning *r, const char *prompt) {
      * answer passage; passage-to-passage similarity beats question-to-passage
      * for recall. */
     cold_mark = b.len;
-    if ((r->memrt || r->mem) && r->attention && atomic_load(&r->ss->shared_memory_global)) {
+    if ((r->memrt || (r->mem && atomic_load(&r->ss->shared_memory_global))) && r->attention) {
         char hyde_query_buf[1024];
         const char *retrieval_query = prompt;
         if (r->hyde && r->llm) {
@@ -2030,8 +2030,9 @@ static char *build_context(reasoning *r, const char *prompt) {
         char scope[MEM_SCOPE_MAX];
         snprintf(scope, sizeof(scope), "session/%.127s", r->cur && r->cur->id ? r->cur->id : "default");
         char *ctx_json = r->memory_mmu_enabled && r->memrt
-            ? memory_runtime_recall(r->memrt, scope, retrieval_query, r->budget_cold)
-            : (r->mem ? context_build(r->mem, retrieval_query, 12) : xstrdup("[]"));
+            ? memory_runtime_recall_ex(r->memrt, scope, retrieval_query, r->budget_cold,atomic_load(&r->ss->shared_memory_global))
+            : (r->mem && atomic_load(&r->ss->shared_memory_global)
+                ? context_build(r->mem, retrieval_query, 12) : xstrdup("[]"));
         if (ctx_json) {
             cJSON *arr = cJSON_Parse(ctx_json);
             if (arr && cJSON_IsArray(arr) && cJSON_GetArraySize(arr) > 0) {
@@ -3347,9 +3348,9 @@ static void memory_record_completed_run(reasoning *r, const char *answer) {
     char *task_head;
     char *shaped;
 
-    if (!r || (!r->mem && !r->memrt) || !atomic_load(&r->ss->shared_memory_global))
+    if (!r || (!r->mem && !r->memrt))
         return;
-    if (r->mem) {
+    if (r->mem && atomic_load(&r->ss->shared_memory_global)) {
         shaped = str_head(answer ? answer : "", LEARN_RESULT_CAP);
         if (r->memsvc)
             memory_service_remember(r->memsvc, MEM_EPISODIC,
@@ -3368,7 +3369,7 @@ static void memory_record_completed_run(reasoning *r, const char *answer) {
         memory_runtime_learn(r->memrt, scope, r->last_prompt ? r->last_prompt : "(task)",
                              answer ? answer : "", successful_tools, r->all_actions_ok);
     }
-    if (!r->mem) return;
+    if (!r->mem || !atomic_load(&r->ss->shared_memory_global)) return;
     task_head = str_head(r->last_prompt ? r->last_prompt : "(task)", 80);
     mutex_lock(&r->progress_mtx);
     for (int i = 0; i < r->n_steps; i++) {
@@ -4113,6 +4114,11 @@ int reasoning_run_ex(reasoning *r, const char *session_id, const char *prompt, c
     mutex_unlock(&r->ss->sess_mtx);
     if (r->cur)
         r->cur->last_active_ms = (long long)time_now_ms();
+    if(r->cur){
+        mutex_lock(&r->cur->mtx);
+        if(!r->cur->loaded){r->cur->loaded=1;session_load_persisted(r,r->cur);}
+        mutex_unlock(&r->cur->mtx);
+    }
 
     /* fresh step registry for this run (keep the buffer) */
     mutex_lock(&r->progress_mtx);

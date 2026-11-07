@@ -6705,6 +6705,18 @@ static void test_memory_runtime_agent_path(void) {
     fixture.saw_private=0;
     CHECK(reasoning_run_ex(r,"scope-B","What is the private fact?",&answer)==0);
     CHECK(fixture.saw_private==0); free(answer);
+    char *private=memory_runtime_recall_ex(rt,"session/scope-A","private fact",4096,0);
+    CHECK(private && strstr(private,"AGENT_PATH_PRIVATE_FACT"));free(private);
+    CHECK(memory_runtime_learn(rt,"global","shared fact","GLOBAL_ONLY_TEST_FACT",1,1)==1);
+    private=memory_runtime_recall_ex(rt,"session/scope-A","shared fact",4096,0);
+    CHECK(private && !strstr(private,"GLOBAL_ONLY_TEST_FACT"));free(private);
+    fs_mkdirs("state-test/runtime-agent-restart/chat");
+    const char *saved_turn="{\"q\":\"remember my task\",\"a\":\"AGENT_PATH_PRIVATE_FACT\"}\n";
+    CHECK(fs_write_file("state-test/runtime-agent-restart/chat/restart-private.jsonl",saved_turn,strlen(saved_turn))==0);
+    reasoning_config restart_cfg=cfg;restart_cfg.state_root="state-test/runtime-agent-restart";restart_cfg.memory_runtime=NULL;
+    reasoning *restarted=reasoning_new(&restart_cfg);CHECK(restarted!=NULL);
+    fixture.saw_private=0;answer=NULL;
+    if(restarted){CHECK(reasoning_run_ex(restarted,"restart-private","Continue my task.",&answer)==0);CHECK(fixture.saw_private==1);free(answer);reasoning_free(restarted);}
     char long_a[100],long_b[100],scope[160];
     memset(long_a,'x',80);long_a[80]='A';long_a[81]=0;
     strcpy(long_b,long_a);long_b[80]='B';

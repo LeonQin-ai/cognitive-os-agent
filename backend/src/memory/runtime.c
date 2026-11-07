@@ -51,8 +51,8 @@ void memory_runtime_free(memory_runtime *rt) {
     free(rt);
 }
 
-char *memory_runtime_recall(memory_runtime *rt, const char *scope,
-                            const char *query, int char_budget) {
+char *memory_runtime_recall_ex(memory_runtime *rt, const char *scope,
+                            const char *query, int char_budget,int include_shared) {
     ctx_mmu_config cfg;
     ctx_mmu *mmu;
     char *json;
@@ -61,6 +61,7 @@ char *memory_runtime_recall(memory_runtime *rt, const char *scope,
     scoped(scope_buf, scope);
     ctx_mmu_config_default(&cfg);
     cfg.scope = scope_buf;
+    cfg.private_only=!include_shared;
     if (char_budget > 0) cfg.token_budget = (size_t)char_budget / 4u;
     if (cfg.token_budget < 64u) cfg.token_budget = 64u;
     /* Residency is scoped to one recall. This prevents a shared lane from
@@ -77,6 +78,7 @@ char *memory_runtime_recall(memory_runtime *rt, const char *scope,
     return json ? json : xstrdup("[]");
 }
 
+char *memory_runtime_recall(memory_runtime *rt,const char *scope,const char *query,int char_budget){return memory_runtime_recall_ex(rt,scope,query,char_budget,1);}
 int memory_runtime_learn(memory_runtime *rt, const char *scope,
                          const char *task, const char *answer,
                          int successful_tools, int all_actions_ok) {

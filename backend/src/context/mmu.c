@@ -346,6 +346,7 @@ static double scope_factor(const ctx_mmu_config *cfg, const char *scope) {
 static int scope_allowed(const ctx_mmu_config *cfg, const char *scope) {
     if (!cfg->scope || !cfg->scope[0]) return 1;
     if (!scope || !scope[0]) return 0;
+    if(cfg->private_only)return strcmp(scope,cfg->scope)==0;
     return strcmp(scope, cfg->scope) == 0 || strcmp(scope, "global") == 0 ||
            strcmp(scope, "user/global") == 0;
 }

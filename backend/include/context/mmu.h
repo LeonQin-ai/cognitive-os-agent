@@ -44,6 +44,7 @@ typedef struct ctx_mmu_config {
     int l2_top_k;             /* records promoted to HOT/L2 per recall */
     int candidate_k;          /* vector candidate pool size */
     const char *scope;        /* optional scope filter for scope_match */
+    int private_only;         /* exclude global/shared records */
     long long now_ms;         /* <=0 -> time_now_ms() */
 } ctx_mmu_config;
 

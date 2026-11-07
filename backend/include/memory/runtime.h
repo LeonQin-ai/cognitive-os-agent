@@ -8,6 +8,7 @@ extern "C" {
 typedef struct memory_runtime memory_runtime;
 
 memory_runtime *memory_runtime_new(const char *state_root);
+char *memory_runtime_recall_ex(memory_runtime *rt,const char *scope,const char *query,int char_budget,int include_shared);
 void memory_runtime_free(memory_runtime *rt);
 
 /* Returns Context-MMU JSON for the requested isolation scope. */
