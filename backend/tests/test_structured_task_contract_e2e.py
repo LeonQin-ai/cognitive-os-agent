@@ -41,6 +41,8 @@ def exercise(protocol,mode,prompt='Verify the requested result.'):
         if mode=='full':replies += [action('file_read',path=path,offset_bytes=4000),action('file_read',path=path,offset_bytes=8000)]
         replies += [done];expected='FAILED' if mode=='partial' else 'DONE'
     elif mode=='api_missing':acceptance={'artifacts':['report.any']};replies=[done];expected='FAILED'
+    elif mode=='artifact_recovery':
+        acceptance={'artifacts':['report.any']};replies=[read,done,write,read,done];expected='DONE'
     elif mode in ('rollover','rollover_stale'):
         replies=[declare(artifacts=['report.any']),write,read]
         replies += [[action('file_write',path=f'noise-{i}.txt',content=str(i)) for i in range(start,start+32)] for start in range(0,288,32)]
@@ -99,7 +101,9 @@ def exercise(protocol,mode,prompt='Verify the requested result.'):
         def log_message(self,*_):pass
         def do_POST(self):
             nonlocal calls
-            self.rfile.read(int(self.headers['Content-Length'])) # Fixed responses, no prompt matching.
+            request=self.rfile.read(int(self.headers['Content-Length']))
+            if mode=='artifact_recovery' and calls==2:
+                assert b'Previous completion was rejected:' in request and b'report.any' in request
             reply=replies[min(calls,len(replies)-1)];calls+=1
             actions=reply if isinstance(reply,list) else [reply]
             message={'content':reply if isinstance(reply,str) else json.dumps(actions,ensure_ascii=False)}
@@ -118,7 +122,7 @@ def exercise(protocol,mode,prompt='Verify the requested result.'):
                 else:
                     subprocess.run(['git','init','-q',str(work)],check=True)
                     subprocess.run(['git','-C',str(work),'-c','user.name=Fixture','-c','user.email=fixture@example.invalid','-c','commit.gpgsign=false','commit','--allow-empty','-qm','fixture'],check=True)
-            if mode in ('edit','edit_failed','edit_stale','preexisting','stale','script_unchanged','baseline_capacity'):(work/'report.any').write_text('OLD_ARTIFACT',encoding='utf8')
+            if mode in ('edit','edit_failed','edit_stale','preexisting','stale','script_unchanged','baseline_capacity','artifact_recovery'):(work/'report.any').write_text('OLD_ARTIFACT',encoding='utf8')
             if mode=='baseline_capacity':
                 for path in sources:(work/path).write_text('SOURCE',encoding='utf8')
             if mode=='batch50':
@@ -148,7 +152,7 @@ def exercise(protocol,mode,prompt='Verify the requested result.'):
                     assert calls<=(20 if mode.startswith('rollover') else 16 if mode=='baseline_capacity' else 12 if mode=='batch50' else 10),(mode,calls,task)
                     if expected=='DONE':
                         assert task['output']==FINAL,task
-                        if mode=='artifact':assert (work/'report.any').read_text()==CONTENT
+                        if mode in ('artifact','artifact_recovery'):assert (work/'report.any').read_text()==CONTENT
                         if mode=='script_output':assert (work/'report.any').read_text()==CONTENT
                     else:assert not api('/v1/chat/history?session=contract')['turns']
                     if mode=='prefixed':assert task['tool_calls']==1 and task['model_failures']==0,task
@@ -183,6 +187,7 @@ def exercise(protocol,mode,prompt='Verify the requested result.'):
     finally:server.shutdown();server.server_close()
 
 if __name__=='__main__':
+    for protocol in ('native','legacy'):exercise(protocol,'artifact_recovery')
     for protocol in ('native','legacy'):
         for mode in ('rollover','rollover_stale'):exercise(protocol,mode)
     for protocol in ('native','legacy'):exercise(protocol,'batch50')

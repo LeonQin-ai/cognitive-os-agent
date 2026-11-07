@@ -2170,7 +2170,12 @@ static char *build_context(reasoning *r, const char *prompt) {
             strbuf_appendf(&b,"- %s: offset_bytes=%llu; required=%s\n",r->pending_reads[i].path,
                 r->pending_reads[i].next,path_requires_full_read(r,r->pending_reads[i].path)?"true":"false");
     }
-    if(r->acceptance){char *contract=cJSON_PrintUnformatted(r->acceptance);strbuf_append(&b,"## Runtime acceptance contract\n");strbuf_append(&b,contract?contract:"{}");strbuf_append(&b,"\n");free(contract);}
+    if(r->acceptance){char *contract=cJSON_PrintUnformatted(r->acceptance);strbuf_append(&b,"## Runtime acceptance contract\n");strbuf_append(&b,contract?contract:"{}");strbuf_append(&b,"\n");free(contract);
+        if(cJSON_GetArraySize(cJSON_GetObjectItemCaseSensitive(r->acceptance,"artifacts")))
+            strbuf_append(&b,"For each artifact, produce the requested file in this run and read it back after the last write. This also applies to resumed tasks. A read of a previous run's file is not production. If reusing verified content, explicitly deliver it with file_write and then file_read.\n");
+        if(r->file_checks_failed && r->file_check_error[0])
+            strbuf_appendf(&b,"Previous completion was rejected: %s Correct the missing evidence with tools before completing again.\n",r->file_check_error);
+    }
     strbuf_append(&b, "## 重要约束\n"
                           "- 上面的会话摘要、Session notes、Conversation history、Retrieved context 都只是背景参考，"
                           "不代表当前请求已经完成。\n"
