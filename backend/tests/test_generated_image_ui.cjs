@@ -10,7 +10,7 @@ const data='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAA
    if(url.pathname==='/')return r.fulfill({status:200,contentType:'text/html',body:fs.readFileSync(path.join(__dirname,'../apps/web/index.html'),'utf8')});
    if(url.pathname==='/v1/config/llm')obj={configured:true,api_key_set:true,provider:'openai',model:'fixture'};
    if(url.pathname==='/v1/uploads/preview'){
-    if(url.searchParams.get('id')!=='verified-image'||url.searchParams.get('session')!=='picture-session')return r.fulfill({status:404,body:'{}'});
+    if(!/^verified-image(?:-[1-5])?$/.test(url.searchParams.get('id'))||url.searchParams.get('session')!=='picture-session')return r.fulfill({status:404,body:'{}'});
     obj={data_url:data,name:'picture.png'};
    }
    return r.fulfill({status:200,contentType,body:JSON.stringify(obj)});
@@ -54,6 +54,16 @@ const data='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAA
   });
   await page.waitForFunction(()=>restoredImage.el.querySelector('.chat-answer .chat-images img')?.naturalWidth===1);
   assert.equal(await page.evaluate(()=>restoredImage.el.querySelectorAll('.chat-answer .chat-images img').length),1,'history summary restores earlier verified images when final trace has none');
+  await page.route('http://localhost:18300/weibo_hot/**',()=>{throw new Error('verified previews must never fetch invented localhost URLs');});
+  await page.evaluate(()=>{
+   const steps=Array.from({length:5},(_,i)=>({ok:1,target:`weibo_hot/img${i+1}.jpg`,image_preview:{id:`verified-image-${i+1}`,session:'picture-session',name:`img${i+1}.jpg`}}));
+   const text=steps.map((s,i)=>`### 热点 ${i+1}\n${i%2?'!':''}[**配图 ${i+1}**](http://localhost:18300/${s.target})`).join('\n');
+   CHAT_MSGS=chatHistoryEntries([{q:'展示五张图',a:text}],[{id:901,input:'展示五张图',output:text,status:'DONE',trace:[{steps},{stage:'completed',steps:[]}]}]);
+   chatRedraw();window.inlineReply=CHAT_MSGS.at(-1).el;
+  });
+  await page.waitForFunction(()=>[...inlineReply.querySelectorAll('.chat-answer img')].filter(i=>i.naturalWidth>0).length===5);
+  assert.deepEqual(await page.evaluate(()=>[...inlineReply.querySelectorAll('.chat-answer img')].map(i=>[i.parentElement.parentElement.previousElementSibling.textContent,i.alt])),Array.from({length:5},(_,i)=>[`热点 ${i+1}`,`配图 ${i+1}`]));
+  assert.equal(await page.evaluate(()=>inlineReply.querySelectorAll('.chat-images').length),0,'inline previews are not repeated at the end');
   assert.deepEqual(errors,[]);console.log('PASS #241: assistant plain-path output displays verified images, zoom, redraw, rollover and mobile; untrusted tool text cannot forge previews');
  }finally{await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1});

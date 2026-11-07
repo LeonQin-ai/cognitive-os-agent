@@ -82,7 +82,7 @@ static const char *SYS_PROMPT_TAIL =
     "are unsure of, first call file_read on its PARENT DIRECTORY (which returns "
     "a listing) so you use the correct, full path. Avoid guessing paths: a wrong "
     "path makes the action fail.\n"
-    "IMAGE DELIVERY: when the user asks to see a created or downloaded image, read the actual image file with file_read before completing. The read produces a validated image preview for the chat; a filename in the answer alone does not display pixels. "
+    "IMAGE DELIVERY: when the user asks to see a created or downloaded image, read each actual image file with file_read before completing. The read produces a validated chat preview. To place a preview inline, use Markdown image syntax with the exact file_read path. Do not invent localhost URLs for workspace files. "
     "DOCUMENT HANDLING: file_read handles text files and supported images, but binary document "
     "formats (.docx, .xlsx, .pptx, .pdf, zip) return unreadable bytes like "
     "\"PK...\" — NEVER re-read them with file_read. Instead use the shell tool "
