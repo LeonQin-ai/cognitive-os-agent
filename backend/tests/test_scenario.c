@@ -157,6 +157,8 @@ static void s1_project_workflow(void) {
     base_cfg(&cfg, root, 0);
     cfg.workspace = "state-scen-1/w";
     CHECK(init(&ctx, &cfg) == 0);
+    /* This scenario explicitly verifies legacy shared graph learning. */
+    CHECK(reasoning_session_set_shared(ctx.reasoning, "default", 1) == 0);
 
     char *ans = NULL;
     CHECK(run(&ctx, "创建文件 src/main.cpp 写入内容为 hello-main", &ans) == 0);

@@ -4300,7 +4300,9 @@ static void test_edit_search(void) {
     tool_result_free(r);
     /* Real project-style discovery must descend into docs with **. */
     tool_ctx docs_ctx = tctx;
-    docs_ctx.workspace = ".";
+    docs_ctx.workspace = "state-test/docs-glob";
+    CHECK(fs_mkdirs("state-test/docs-glob/docs") == 0);
+    CHECK(fs_write_file("state-test/docs-glob/docs/COGNITIVE_OS_ARCHITECTURE_BASELINE_V3.0.md", "fixture", 7) == 0);
     r = tool_execute(reg, "glob", "{\"pattern\":\"docs/**/*\"}", &docs_ctx);
     CHECK(r && r->ok && r->output &&
           strstr(r->output, "docs/COGNITIVE_OS_ARCHITECTURE_BASELINE_V3.0.md"));
@@ -5113,6 +5115,8 @@ static void test_chat_upload_evolve(void) {
         config cfg;
         memset(&cfg, 0, sizeof(cfg));
         cfg.state_root = "state-test/chat-hist";
+        /* Restart restoration now correctly replays old fixture turns. */
+        fs_remove("state-test/chat-hist/chat/default.jsonl");
         cfg.workspace = "state-test/loop-w";
         cfg.provider = "mock";
         cfg.http_port = 0;
