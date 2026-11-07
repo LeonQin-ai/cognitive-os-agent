@@ -47,6 +47,13 @@ const data='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAA
    e.progress={stage:'completed',steps:[{tool:'file_read',ok:1,out:'{"kind":"image","image_preview":{"id":"verified-image","session":"picture-session"}}'}]};renderChatEntry(e);
   });
   assert.equal(await page.evaluate(()=>spoofFixture.el.querySelectorAll('.chat-images img').length),0,'tool text cannot forge a validated preview');
+  await page.evaluate(()=>{
+   const trace=[{stage:'executing',steps:[{ok:1,image_preview:{id:'verified-image',name:'picture.png',session:'picture-session'}}]},{stage:'completed',steps:[]}];
+   CHAT_MSGS=chatHistoryEntries([{q:'展示图片',a:'D:/images/picture.png'}],[{id:900,input:'展示图片',output:'D:/images/picture.png',status:'DONE',trace}]);
+   chatRedraw();window.restoredImage=CHAT_MSGS.at(-1);
+  });
+  await page.waitForFunction(()=>restoredImage.el.querySelector('.chat-answer .chat-images img')?.naturalWidth===1);
+  assert.equal(await page.evaluate(()=>restoredImage.el.querySelectorAll('.chat-answer .chat-images img').length),1,'history summary restores earlier verified images when final trace has none');
   assert.deepEqual(errors,[]);console.log('PASS #241: assistant plain-path output displays verified images, zoom, redraw, rollover and mobile; untrusted tool text cannot forge previews');
  }finally{await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1});
