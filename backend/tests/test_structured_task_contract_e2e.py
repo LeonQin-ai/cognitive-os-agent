@@ -1,5 +1,5 @@
 """#236: task prose never substitutes for structured decisions or receipts."""
-import json, os, socket, subprocess, tempfile, threading, time, urllib.request
+import base64, json, os, socket, subprocess, tempfile, threading, time, urllib.request
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from fixture_http_response import respond_json
@@ -43,6 +43,8 @@ def exercise(protocol,mode,prompt='Verify the requested result.'):
     elif mode=='api_missing':acceptance={'artifacts':['report.any']};replies=[done];expected='FAILED'
     elif mode=='artifact_recovery':
         acceptance={'artifacts':['report.any']};replies=[read,done,write,read,done];expected='DONE'
+    elif mode=='image_history':
+        replies=[action('file_read',path='preview.png'),done];expected='DONE'
     elif mode in ('rollover','rollover_stale'):
         replies=[declare(artifacts=['report.any']),write,read]
         replies += [[action('file_write',path=f'noise-{i}.txt',content=str(i)) for i in range(start,start+32)] for start in range(0,288,32)]
@@ -115,6 +117,9 @@ def exercise(protocol,mode,prompt='Verify the requested result.'):
     try:
         with tempfile.TemporaryDirectory(prefix='coa-contract-') as folder:
             work=Path(folder);(work/'tiny').write_text('TINY_SOURCE_PROOF',encoding='utf8');(work/'long.dat').write_text('x'*9001,encoding='utf8')
+            if mode=='image_history':
+                png=base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=')
+                (work/'preview.png').write_bytes(png)
             if mode.startswith('cache_'):
                 if mode=='cache_shell_env':
                     (work/'cache-target').write_text('before',encoding='utf8')
@@ -154,6 +159,13 @@ def exercise(protocol,mode,prompt='Verify the requested result.'):
                         assert task['output']==FINAL,task
                         if mode in ('artifact','artifact_recovery'):assert (work/'report.any').read_text()==CONTENT
                         if mode=='script_output':assert (work/'report.any').read_text()==CONTENT
+                        if mode=='image_history':
+                            runs=api('/v1/chat/history?session=contract')['runs']
+                            preview=next(s['image_preview'] for r in runs for event in r['trace']
+                                         for s in event.get('steps',[]) if s.get('target')=='preview.png' and 'image_preview' in s)
+                            assert set(preview)=={'id','name','session'} and preview['session']=='contract',preview
+                            result=api('/v1/uploads/preview?id='+preview['id']+'&session=contract')
+                            assert base64.b64decode(result['data_url'].split(',',1)[1])==png
                     else:assert not api('/v1/chat/history?session=contract')['turns']
                     if mode=='prefixed':assert task['tool_calls']==1 and task['model_failures']==0,task
                     if mode=='quoted_commentary':assert task['tool_calls']==1 and task['model_failures']==0,task
@@ -187,6 +199,7 @@ def exercise(protocol,mode,prompt='Verify the requested result.'):
     finally:server.shutdown();server.server_close()
 
 if __name__=='__main__':
+    exercise('native','image_history')
     for protocol in ('native','legacy'):exercise(protocol,'artifact_recovery')
     for protocol in ('native','legacy'):
         for mode in ('rollover','rollover_stale'):exercise(protocol,mode)
