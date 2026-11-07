@@ -7780,10 +7780,12 @@ static void test_task(void) {
     task_transition(t, TS_DONE, 0);
     CHECK(t->finished_ms > 0);
     CHECK(t->status == TS_DONE);
-    task_trace_add(t, "{\"stage\":\"executing\",\"seq\":1,\"steps\":[{\"tool\":\"file_edit\",\"target\":\"src/main.c\",\"args\":\"secret content\",\"out\":\"private output\",\"ok\":1,\"ms\":12}]}");
+    task_trace_add(t, "{\"stage\":\"executing\",\"seq\":1,\"steps\":[{\"tool\":\"file_edit\",\"target\":\"src/main.c\",\"args\":\"secret content\",\"out\":\"private output\",\"ok\":1,\"ms\":12},"
+                      "{\"tool\":\"file_read\",\"target\":\"weibo_hot/img1.jpg\",\"ok\":1,\"image_preview\":{\"id\":\"verified-preview\",\"name\":\"img1.jpg\",\"session\":\"fixture\",\"data_url\":\"private bytes\"}}]}");
     char *timeline = task_trace_copy(t);
     CHECK(timeline && strstr(timeline, "src/main.c") != NULL);
     CHECK(timeline && strstr(timeline, "secret content") == NULL && strstr(timeline, "private output") == NULL);
+    CHECK(timeline && strstr(timeline, "verified-preview") && strstr(timeline, "weibo_hot/img1.jpg") && !strstr(timeline, "private bytes"));
     free(timeline);
     char *j = task_to_json(t);
     CHECK(j && strstr(j, "hello task") != NULL && strstr(j, "done") != NULL);

@@ -145,6 +145,16 @@ void task_trace_add(task *t, const char *json) {
                 if (cJSON_IsString(target)) cJSON_AddItemToObject(safe, "target", cJSON_Duplicate(target, 1));
                 if (ok) cJSON_AddItemToObject(safe, "ok", cJSON_Duplicate(ok, 1));
                 if (ms) cJSON_AddItemToObject(safe, "ms", cJSON_Duplicate(ms, 1));
+                cJSON *preview = cJSON_GetObjectItemCaseSensitive(step, "image_preview");
+                const char *id = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(preview, "id"));
+                const char *session = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(preview, "session"));
+                if (cJSON_IsNumber(ok) && ok->valueint == 1 && id && session) {
+                    cJSON *attachment = cJSON_AddObjectToObject(safe, "image_preview");
+                    cJSON_AddStringToObject(attachment, "id", id);
+                    cJSON_AddStringToObject(attachment, "session", session);
+                    const char *name = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(preview, "name"));
+                    if (name) cJSON_AddStringToObject(attachment, "name", name);
+                }
                 cJSON_AddItemToArray(safe_steps, safe);
             }
             cJSON_AddItemToObject(event, "steps", safe_steps);

@@ -64,6 +64,29 @@ const data='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAA
   await page.waitForFunction(()=>[...inlineReply.querySelectorAll('.chat-answer img')].filter(i=>i.naturalWidth>0).length===5);
   assert.deepEqual(await page.evaluate(()=>[...inlineReply.querySelectorAll('.chat-answer img')].map(i=>[i.parentElement.parentElement.previousElementSibling.textContent,i.alt])),Array.from({length:5},(_,i)=>[`热点 ${i+1}`,`配图 ${i+1}`]));
   assert.equal(await page.evaluate(()=>inlineReply.querySelectorAll('.chat-images').length),0,'inline previews are not repeated at the end');
+  await page.evaluate(()=>{
+   const entry=CHAT_MSGS.at(-1);
+   for(const event of entry.progressEvents)for(const step of event.steps || []){
+    step.tool='file_read';step.target='D:/WORK/'+step.target;delete step.image_preview;
+   }
+   chatRedraw();window.inlineReply=entry.el;
+  });
+  await page.waitForFunction(()=>[...inlineReply.querySelectorAll('.chat-answer img')].filter(i=>i.naturalWidth>0).length===5);
+  assert.equal(await page.evaluate(()=>inlineReply.querySelectorAll('.chat-images').length),0,'legacy cached previews use their recorded read paths');
+  await page.setViewportSize({width:1280,height:850});
+  await page.evaluate(()=>chatInitResize());
+  await page.waitForFunction(()=>$('sidebar').getBoundingClientRect().left===0);
+  for(const [handle,target,dx,dy,axis] of [['chat-sidebar-resize','sidebar',72,0,'width'],['chat-composer-resize','chat-input',0,-70,'height']]){
+   const before=(await page.locator('#'+target).boundingBox())[axis];
+   const box=await page.locator('#'+handle).boundingBox();
+   assert.equal(await page.evaluate(({x,y})=>document.elementFromPoint(x,y)?.id,{x:box.x+box.width/2,y:box.y+box.height/2}),handle);
+   await page.mouse.move(box.x+box.width/2,box.y+box.height/2);await page.mouse.down();
+   await page.mouse.move(box.x+box.width/2+dx,box.y+box.height/2+dy,{steps:5});await page.mouse.up();
+   assert.ok((await page.locator('#'+target).boundingBox())[axis]>=before+65,`drag resizes ${target}`);
+  }
+  const sizes=await page.evaluate(()=>['sidebar','chat-input'].map((id,i)=>$(id).getBoundingClientRect()[i?'height':'width']));
+  await page.reload();await page.evaluate(()=>chatInitResize());
+  assert.deepEqual(await page.evaluate(()=>['sidebar','chat-input'].map((id,i)=>$(id).getBoundingClientRect()[i?'height':'width'])),sizes,'sizes persist across reload');
   assert.deepEqual(errors,[]);console.log('PASS #241: assistant plain-path output displays verified images, zoom, redraw, rollover and mobile; untrusted tool text cannot forge previews');
  }finally{await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1});

@@ -36,6 +36,10 @@ with tempfile.TemporaryDirectory(prefix='coa-live-image-') as folder:
    assert task['status']=='DONE',task.get('output')
    previews=[s['image_preview'] for s in task.get('steps',[]) if s.get('image_preview')]
    assert previews,'no verified image read receipt'
+   history=api('GET','/v1/chat/history?session=live-image')
+   run=next(r for r in history['runs'] if r['id']==tid)
+   assert any(s.get('image_preview',{}).get('id')==previews[-1]['id']
+              for event in run['trace'] for s in event.get('steps',[])), 'history lost the verified image receipt'
    preview=api('GET','/v1/uploads/preview?id='+previews[-1]['id']+'&session=live-image')
    content=base64.b64decode(preview['data_url'].split(',',1)[1]);assert content==(state/'image.png').read_bytes()
    a.report.with_suffix('.png').write_bytes(content)
