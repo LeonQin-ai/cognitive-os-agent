@@ -20,6 +20,7 @@ const http=require('node:http');
   });
   await page.goto(`http://127.0.0.1:${server.address().port}`);
   await page.waitForFunction(()=>CHAT_SESSION==='timestamp-session');
+  await page.evaluate(()=>chatLoadHistory());
   const start=Date.UTC(2026,9,29,1,2,3),finish=start+5000;
   await page.evaluate(({start,finish})=>{
    CHAT_MSGS=chatHistoryEntries([{q:'日期测试',a:'完成答复'}],[{id:234,input:'日期测试',output:'完成答复',status:'DONE',ts:finish,trace:[{started_ms:start,elapsed_ms:5000,stage:'completed'}]}]);

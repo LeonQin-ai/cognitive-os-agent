@@ -6039,6 +6039,13 @@ function renderChatEntry(entry){
     if(d.open) expandedSteps.add(d.dataset.step); else expandedSteps.delete(d.dataset.step);
   }
   el.replaceChildren();
+  const updates=[...(entry.progressEvents||[]),entry.progress||{}].map(p=>p.commentary).filter(Boolean);
+  if(updates.length){
+    const log=document.createElement('div');log.className='chat-stage-updates';log.setAttribute('role','log');log.setAttribute('aria-label','阶段性结论');
+    log.style.cssText='color:var(--muted);font-size:13px;line-height:1.7;border-left:2px solid var(--border);padding:8px 14px;margin-bottom:14px;white-space:pre-wrap';
+    let previous='';for(const text of updates){if(text===previous)continue;previous=text;const row=document.createElement('div');row.textContent=text;row.style.marginBottom='8px';log.append(row);}
+    el.append(log);
+  }
   const p = entry.progress;
   if(p){
     const panel = document.createElement('section'); panel.className = 'run-card';
